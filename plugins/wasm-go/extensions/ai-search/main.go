@@ -201,7 +201,7 @@ func parseConfig(json gjson.Result, config *Config) error {
 			config.engine = append(config.engine, searchEngine)
 			internetExists = true
 		default:
-			return fmt.Errorf("unkown search engine:%s", e.Get("type").String())
+			return fmt.Errorf("unknown search engine:%s", e.Get("type").String())
 		}
 	}
 	searchRewriteJson := json.Get("searchRewrite")
@@ -271,7 +271,7 @@ func parseConfig(json gjson.Result, config *Config) error {
 		config.searchRewrite = searchRewrite
 	}
 	if len(config.engine) == 0 {
-		return fmt.Errorf("no avaliable search engine found")
+		return fmt.Errorf("no available search engine found")
 	}
 	log.Debugf("ai search enabled, config: %#v", config)
 	return nil

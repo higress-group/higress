@@ -16,12 +16,12 @@ Plugin Priority: `300`
 ## Configuration
 | Name | Type | Requirement | Default | Description |
 | ------------ | ------------ | ------------ | ------------ | ------------ |
-| `serviceName` | string | requried | - | service name |
-| `servicePort` | string | requried | - | service port |
-| `serviceHost` | string | requried | - | Host of Aliyun content security service endpoint |
-| `accessKey` | string | requried | - | Aliyun accesskey |
-| `secretKey` | string | requried | - | Aliyun secretkey |
-| `action` | string | requried | - | Aliyun ai guardrails business interface |
+| `serviceName` | string | required | - | service name |
+| `servicePort` | string | required | - | service port |
+| `serviceHost` | string | required | - | Host of Aliyun content security service endpoint |
+| `accessKey` | string | required | - | Aliyun accesskey |
+| `secretKey` | string | required | - | Aliyun secretkey |
+| `action` | string | required | - | Aliyun ai guardrails business interface |
 | `checkRequest` | bool | optional | false | check if the input is legal |
 | `checkResponse` | bool | optional | false | check if the output is legal |
 | `requestCheckService` | string | optional | llm_query_moderation | Aliyun yundun service name for input check |
