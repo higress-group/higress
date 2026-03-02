@@ -32,12 +32,12 @@ The configuration fields for each item in `conditionGroups` are described as fol
 ---
 The configuration fields for each item in `conditions` are described as follows:
 
-| Field Name        | Type               | Default Value | Required | Description                                                       |
-|-------------------|-------------------|---------------|----------|-------------------------------------------------------------------|
-| `conditionType`   | string            | -             | Yes      | Condition type, supports `header`, `parameter`, `cookie`.              |
-| `key`             | string            | -             | Yes      | The key of the condition.                                        |
-| `operator`        | string            | -             | Yes      | Operator, supports `equal`, `not_equal`, `prefix`, `in`, `not_in`, `regex`, `percentage`.  |
-| `value`           | array of string    | -             | Yes      | The value of the condition. **Only when** the operator is `in` and `not_in` multiple values are supported. |
+| Field Name        | Type               | Default Value | Required | Description                                                                                                      |
+|-------------------|-------------------|---------------|----------|------------------------------------------------------------------------------------------------------------------|
+| `conditionType`   | string            | -             | Yes      | Condition type, supports `header`, `parameter`, `cookie`.                                                        |
+| `key`             | string            | -             | Yes      | The key of the condition.                                                                                        |
+| `operator`        | string            | -             | Yes      | Operator, supports `equal`, `not_equal`, `prefix`, `in`, `not_in`, `regex`, `percentage`, `exists`, not_exists`. |
+| `value`           | array of string    | -             | Yes      | The value of the condition. **Only when** the operator is `in` and `not_in` multiple values are supported.       |
 
 > **Note: When the `operator` is `regex`, the regular expression engine used is [RE2](https://github.com/google/re2). For details, please refer to the [RE2 Official Documentation](https://github.com/google/re2/wiki/Syntax).**
 
@@ -51,15 +51,17 @@ The configuration fields for each item in `weightGroups` are described as follow
 | `weight`         | integer           | -             | Yes      | Traffic weight percentage.                                       |
 
 ### Operator Description
-| Operator      | Description                                        |
-|---------------|----------------------------------------------------|
-| `equal`       | Exact match, values must be identical.             |
-| `not_equal`   | Not equal match, condition met when values are different. |
-| `prefix`      | Prefix match, condition met when the specified value is a prefix of the actual value. |
-| `in`          | Inclusion match, actual value must be in the specified list. |
-| `not_in`      | Exclusion match, condition met when actual value is not in the specified list. |
-| `regex`       | Regular expression match, matched according to regex rules. |
+| Operator       | Description                                                                           |
+|----------------|---------------------------------------------------------------------------------------|
+| `equal`        | Exact match, values must be identical.                                                |
+| `not_equal`    | Not equal match, condition met when values are different.                             |
+| `prefix`       | Prefix match, condition met when the specified value is a prefix of the actual value. |
+| `in`           | Inclusion match, actual value must be in the specified list.                          |
+| `not_in`       | Exclusion match, condition met when actual value is not in the specified list.        |
+| `regex`        | Regular expression match, matched according to regex rules.                           |
 | `percentage`   | Percentage match, principle: `hash(get(key)) % 100 < value`, condition met when true. |
+| `exists`       | Exist match，condition met when values exists, no value needed                         |
+| `not_exists`   | Exist match，condition met when values not exists, no value needed                     |
 
 > **Tip: About the difference between `percentage` and `weight`**
 >
