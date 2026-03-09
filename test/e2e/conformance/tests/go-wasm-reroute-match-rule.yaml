@@ -1,0 +1,99 @@
+# Copyright (c) 2022 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This test reproduces the bug described in https://github.com/alibaba/higress/issues/3571
+# When plugin A (transformer) modifies headers causing a reroute, plugin B (custom-response)
+# should see the NEW route name in its matchRule evaluation. Due to a bug in ROUTE_NAME
+# property resolution, the stale old route name is returned after clearRouteCache().
+
+# Default ingress: matches requests to reroute-match.com without x-user-id header
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: reroute-match-default
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "reroute-match.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+# Target ingress: matches requests to reroute-match.com WITH x-user-id: 1 header
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    higress.io/exact-match-header-x-user-id: "1"
+  name: reroute-match-target
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "reroute-match.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+# Transformer plugin (priority 400, runs first):
+# Maps query param "userId" to header "x-user-id", triggering a reroute
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: reroute-transformer
+  namespace: higress-system
+spec:
+  priority: 400
+  matchRules:
+    - ingress:
+        - higress-conformance-infra/reroute-match-default
+      config:
+        reqRules:
+          - operate: map
+            mapSource: querys
+            headers:
+              - fromKey: userId
+                toKey: x-user-id
+  url: file:///opt/plugins/wasm-go/extensions/transformer/plugin.wasm
+---
+# Custom-response plugin (priority 200, runs after transformer):
+# Should activate on the rerouted target route and return custom response
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: reroute-custom-response
+  namespace: higress-system
+spec:
+  priority: 200
+  matchRules:
+    - ingress:
+        - higress-conformance-infra/reroute-match-target
+      config:
+        headers:
+          - x-matched=rerouted
+        "body": '{"hello":"world"}'
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/go-custom-response:2.0.0
