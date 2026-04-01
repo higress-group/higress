@@ -13,7 +13,6 @@ import (
 type ClaudeToOpenAIConverter struct {
 	// State tracking for streaming conversion
 	messageStartSent bool
-	messageStopSent  bool
 	messageId        string
 	// Cache stop_reason until we get usage info
 	pendingStopReason *string
@@ -470,19 +469,16 @@ func (c *ClaudeToOpenAIConverter) ConvertOpenAIStreamResponseToClaude(ctx wrappe
 					c.pendingStopReason = nil
 				}
 
-				if c.messageStartSent && !c.messageStopSent {
-					c.messageStopSent = true
-					log.Debugf("[OpenAI->Claude] Sending final message_stop event")
-					messageStopEvent := &claudeTextGenStreamResponse{
-						Type: "message_stop",
-					}
-					stopData, _ := json.Marshal(messageStopEvent)
-					result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", messageStopEvent.Type, stopData))
+				// Send message_stop after stream DONE
+				log.Debugf("[OpenAI->Claude] Sending final message_stop event")
+				messageStopEvent := &claudeTextGenStreamResponse{
+					Type: "message_stop",
 				}
+				stopData, _ := json.Marshal(messageStopEvent)
+				result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", messageStopEvent.Type, stopData))
 
 				// Reset all state for next request
 				c.messageStartSent = false
-				c.messageStopSent = false
 				c.messageId = ""
 				c.pendingStopReason = nil
 				c.nextContentIndex = 0
@@ -1012,15 +1008,6 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 		log.Debugf("[OpenAI->Claude] Generated message_delta event with usage and stop_reason")
 		responses = append(responses, messageDelta)
 
-		// Send message_stop only when this usage chunk carries a real stop_reason.
-		// Some providers report incremental usage in every chunk before finishing.
-		if stopReasonIncluded && !c.messageStopSent {
-			c.messageStopSent = true
-			log.Debugf("[OpenAI->Claude] Generated message_stop event")
-			responses = append(responses, &claudeTextGenStreamResponse{
-				Type: "message_stop",
-			})
-		}
 	}
 
 	return responses
