@@ -678,12 +678,35 @@ func (c *ProviderConfig) isFailoverEnabled() bool {
 }
 
 func (c *ProviderConfig) resetSharedData() {
-	_ = proxywasm.SetSharedData(c.failover.ctxVmLease, nil, 0)
-	_ = proxywasm.SetSharedData(c.failover.ctxApiTokens, nil, 0)
-	_ = proxywasm.SetSharedData(c.failover.ctxUnavailableApiTokens, nil, 0)
-	_ = proxywasm.SetSharedData(c.failover.ctxApiTokenRequestSuccessCount, nil, 0)
-	_ = proxywasm.SetSharedData(c.failover.ctxApiTokenRequestFailureCount, nil, 0)
-	_ = proxywasm.SetSharedData(c.failover.ctxApiTokenUnavailableSince, nil, 0)
+	clearSharedData(c.failover.ctxVmLease)
+	clearSharedData(c.failover.ctxApiTokens)
+	clearSharedData(c.failover.ctxUnavailableApiTokens)
+	clearSharedData(c.failover.ctxApiTokenRequestSuccessCount)
+	clearSharedData(c.failover.ctxApiTokenRequestFailureCount)
+	clearSharedData(c.failover.ctxApiTokenUnavailableSince)
+	clearSharedData(c.failover.ctxHealthCheckEndpoint)
+}
+
+func clearSharedData(key string) {
+	for attempt := 1; attempt <= casMaxRetries; attempt++ {
+		_, cas, err := proxywasm.GetSharedData(key)
+		if err != nil {
+			if errors.Is(err, types.ErrorStatusNotFound) {
+				return
+			}
+			log.Errorf("Failed to get %s before reset: %v", key, err)
+			return
+		}
+
+		if err := proxywasm.SetSharedData(key, nil, cas); err == nil {
+			return
+		} else if !errors.Is(err, types.ErrorStatusCasMismatch) {
+			log.Errorf("Failed to reset %s after %d attempts: %v", key, attempt, err)
+			return
+		}
+
+		log.Errorf("CAS mismatch when resetting %s, retrying...", key)
+	}
 }
 
 func (c *ProviderConfig) OnRequestFailed(activeProvider Provider, ctx wrapper.HttpContext, apiTokenInUse string, apiTokens []string, status string) types.Action {
