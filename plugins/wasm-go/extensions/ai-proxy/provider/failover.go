@@ -138,7 +138,8 @@ func parseConfig(json gjson.Result, config *any) error {
 
 func (c *ProviderConfig) SetApiTokensFailover(activeProvider Provider) error {
 	c.initVariable()
-	// Reset shared data in case plugin configuration is updated
+	// Reset failover shared data on config updates so stale cooldown/health-check
+	// state from the previous config does not leak into the new one.
 	log.Debugf("ai-proxy plugin configuration is updated, reset shared data")
 	c.resetSharedData()
 
@@ -678,35 +679,16 @@ func (c *ProviderConfig) isFailoverEnabled() bool {
 }
 
 func (c *ProviderConfig) resetSharedData() {
-	clearSharedData(c.failover.ctxVmLease)
-	clearSharedData(c.failover.ctxApiTokens)
-	clearSharedData(c.failover.ctxUnavailableApiTokens)
-	clearSharedData(c.failover.ctxApiTokenRequestSuccessCount)
-	clearSharedData(c.failover.ctxApiTokenRequestFailureCount)
-	clearSharedData(c.failover.ctxApiTokenUnavailableSince)
-	clearSharedData(c.failover.ctxHealthCheckEndpoint)
-}
-
-func clearSharedData(key string) {
-	for attempt := 1; attempt <= casMaxRetries; attempt++ {
-		_, cas, err := proxywasm.GetSharedData(key)
-		if err != nil {
-			if errors.Is(err, types.ErrorStatusNotFound) {
-				return
-			}
-			log.Errorf("Failed to get %s before reset: %v", key, err)
-			return
-		}
-
-		if err := proxywasm.SetSharedData(key, nil, cas); err == nil {
-			return
-		} else if !errors.Is(err, types.ErrorStatusCasMismatch) {
-			log.Errorf("Failed to reset %s after %d attempts: %v", key, attempt, err)
-			return
-		}
-
-		log.Errorf("CAS mismatch when resetting %s, retrying...", key)
-	}
+	// In the real proxy-wasm host, cas=0 means "ignore CAS and overwrite"
+	// instead of "match CAS=0". We rely on that behavior here so config updates
+	// can unconditionally clear previous shared data state.
+	_ = proxywasm.SetSharedData(c.failover.ctxVmLease, nil, 0)
+	_ = proxywasm.SetSharedData(c.failover.ctxApiTokens, nil, 0)
+	_ = proxywasm.SetSharedData(c.failover.ctxUnavailableApiTokens, nil, 0)
+	_ = proxywasm.SetSharedData(c.failover.ctxApiTokenRequestSuccessCount, nil, 0)
+	_ = proxywasm.SetSharedData(c.failover.ctxApiTokenRequestFailureCount, nil, 0)
+	_ = proxywasm.SetSharedData(c.failover.ctxApiTokenUnavailableSince, nil, 0)
+	_ = proxywasm.SetSharedData(c.failover.ctxHealthCheckEndpoint, nil, 0)
 }
 
 func (c *ProviderConfig) OnRequestFailed(activeProvider Provider, ctx wrapper.HttpContext, apiTokenInUse string, apiTokens []string, status string) types.Action {
