@@ -67,6 +67,26 @@ const (
 	DefaultTextModerationPlusTextOutputCheckService = "llm_response_moderation"
 )
 
+var (
+	// Keep these defaults aligned with previous hardcoded fallback extraction behavior.
+	defaultResponseFallbackJsonPaths = []string{
+		"choices.0.message.content",
+		`content.#(type=="text")#.text`,
+	}
+	defaultStreamingResponseFallbackJsonPaths = []string{
+		"choices.0.delta.content",
+		"delta.text",
+	}
+)
+
+func DefaultResponseFallbackJsonPaths() []string {
+	return append([]string(nil), defaultResponseFallbackJsonPaths...)
+}
+
+func DefaultStreamingResponseFallbackJsonPaths() []string {
+	return append([]string(nil), defaultStreamingResponseFallbackJsonPaths...)
+}
+
 // api types
 
 const (
@@ -143,38 +163,40 @@ func (m *Matcher) match(consumer string) bool {
 }
 
 type AISecurityConfig struct {
-	Client                        wrapper.HttpClient
-	Host                          string
-	AK                            string
-	SK                            string
-	Token                         string
-	Action                        string
-	CheckRequest                  bool
-	CheckRequestImage             bool
-	RequestCheckService           string
-	RequestImageCheckService      string
-	RequestContentJsonPath        string
-	CheckResponse                 bool
-	ResponseCheckService          string
-	ResponseImageCheckService     string
-	ResponseContentJsonPath       string
-	ResponseStreamContentJsonPath string
-	DenyCode                      int64
-	DenyMessage                   string
-	ProtocolOriginal              bool
-	RiskLevelBar                  string
-	ContentModerationLevelBar     string
-	PromptAttackLevelBar          string
-	SensitiveDataLevelBar         string
-	MaliciousUrlLevelBar          string
-	ModelHallucinationLevelBar    string
-	CustomLabelLevelBar           string
-	Timeout                       uint32
-	BufferLimit                   int
-	Metrics                       map[string]proxywasm.MetricCounter
-	ConsumerRequestCheckService   []map[string]interface{}
-	ConsumerResponseCheckService  []map[string]interface{}
-	ConsumerRiskLevel             []map[string]interface{}
+	Client                                 wrapper.HttpClient
+	Host                                   string
+	AK                                     string
+	SK                                     string
+	Token                                  string
+	Action                                 string
+	CheckRequest                           bool
+	CheckRequestImage                      bool
+	RequestCheckService                    string
+	RequestImageCheckService               string
+	RequestContentJsonPath                 string
+	CheckResponse                          bool
+	ResponseCheckService                   string
+	ResponseImageCheckService              string
+	ResponseContentJsonPath                string
+	ResponseStreamContentJsonPath          string
+	ResponseContentFallbackJsonPaths       []string
+	ResponseStreamContentFallbackJsonPaths []string
+	DenyCode                               int64
+	DenyMessage                            string
+	ProtocolOriginal                       bool
+	RiskLevelBar                           string
+	ContentModerationLevelBar              string
+	PromptAttackLevelBar                   string
+	SensitiveDataLevelBar                  string
+	MaliciousUrlLevelBar                   string
+	ModelHallucinationLevelBar             string
+	CustomLabelLevelBar                    string
+	Timeout                                uint32
+	BufferLimit                            int
+	Metrics                                map[string]proxywasm.MetricCounter
+	ConsumerRequestCheckService            []map[string]interface{}
+	ConsumerResponseCheckService           []map[string]interface{}
+	ConsumerRiskLevel                      []map[string]interface{}
 	// text_generation, image_generation, etc.
 	ApiType string
 	// openai, qwen, comfyui, etc.
@@ -286,6 +308,16 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 	}
 	if obj := json.Get("responseStreamContentJsonPath"); obj.Exists() {
 		config.ResponseStreamContentJsonPath = obj.String()
+	}
+	if paths, exists, err := parseOptionalStringArrayConfig(json, "responseContentFallbackJsonPaths"); err != nil {
+		return err
+	} else if exists {
+		config.ResponseContentFallbackJsonPaths = paths
+	}
+	if paths, exists, err := parseOptionalStringArrayConfig(json, "responseStreamContentFallbackJsonPaths"); err != nil {
+		return err
+	} else if exists {
+		config.ResponseStreamContentFallbackJsonPaths = paths
 	}
 	if obj := json.Get("contentModerationLevelBar"); obj.Exists() {
 		config.ContentModerationLevelBar = obj.String()
@@ -448,6 +480,29 @@ func parseDimensionAction(json gjson.Result, fieldName string) (string, error) {
 	return "", nil
 }
 
+func parseOptionalStringArrayConfig(json gjson.Result, fieldName string) ([]string, bool, error) {
+	obj := json.Get(fieldName)
+	if !obj.Exists() {
+		return nil, false, nil
+	}
+	if !obj.IsArray() {
+		return nil, true, fmt.Errorf("invalid %s, value must be an array of non-empty strings", fieldName)
+	}
+	items := obj.Array()
+	paths := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Type != gjson.String {
+			return nil, true, fmt.Errorf("invalid %s, value must be an array of non-empty strings", fieldName)
+		}
+		path := strings.TrimSpace(item.String())
+		if path == "" {
+			return nil, true, fmt.Errorf("invalid %s, value must be an array of non-empty strings", fieldName)
+		}
+		paths = append(paths, path)
+	}
+	return paths, true, nil
+}
+
 func (config *AISecurityConfig) SetDefaultValues() {
 	switch config.Action {
 	case TextModerationPlus:
@@ -463,6 +518,8 @@ func (config *AISecurityConfig) SetDefaultValues() {
 	config.RequestContentJsonPath = DefaultRequestJsonPath
 	config.ResponseContentJsonPath = DefaultResponseJsonPath
 	config.ResponseStreamContentJsonPath = DefaultStreamingResponseJsonPath
+	config.ResponseContentFallbackJsonPaths = DefaultResponseFallbackJsonPaths()
+	config.ResponseStreamContentFallbackJsonPaths = DefaultStreamingResponseFallbackJsonPaths()
 	config.ContentModerationLevelBar = MaxRisk
 	config.PromptAttackLevelBar = MaxRisk
 	config.SensitiveDataLevelBar = S4Sensitive

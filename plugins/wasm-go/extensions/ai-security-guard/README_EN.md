@@ -29,6 +29,8 @@ Plugin Priority: `300`
 | `requestContentJsonPath` | string | optional | `messages.@reverse.0.content` | Specify the jsonpath of the content to be detected in the request body |
 | `responseContentJsonPath` | string | optional | `choices.0.message.content` | Specify the jsonpath of the content to be detected in the response body |
 | `responseStreamContentJsonPath` | string | optional | `choices.0.delta.content` | Specify the jsonpath of the content to be detected in the streaming response body |
+| `responseContentFallbackJsonPaths` | array | optional | [`choices.0.message.content`, `content.#(type=="text")#.text`] | Fallback paths tried in order when `responseContentJsonPath` extracts empty content; entries equal to the primary path are skipped automatically; set to `[]` to disable fallback explicitly |
+| `responseStreamContentFallbackJsonPaths` | array | optional | [`choices.0.delta.content`, `delta.text`] | Streaming fallback paths tried in order when `responseStreamContentJsonPath` extracts empty content; entries equal to the primary path are skipped automatically; set to `[]` to disable fallback explicitly |
 | `denyCode` | int | optional | 200 | Response status code when the specified content is illegal |
 | `denyMessage` | string | optional | Drainage/non-streaming response in openai format, the answer content is the suggested answer from Alibaba Cloud content security | Response content when the specified content is illegal |
 | `protocol` | string | optional | openai | protocol format, `openai` or `original` |
@@ -127,6 +129,34 @@ accessKey: "XXXXXXXXX"
 secretKey: "XXXXXXXXXXXXXXX"
 checkRequest: true
 checkResponse: true
+```
+
+### Configure response fallback extraction paths
+
+When primary extraction paths are empty, you can configure ordered fallback paths to support multiple response formats:
+
+```yaml
+serviceName: safecheck.dns
+servicePort: 443
+serviceHost: green-cip.cn-shanghai.aliyuncs.com
+accessKey: "XXXXXXXXX"
+secretKey: "XXXXXXXXXXXXXXX"
+checkResponse: true
+responseContentJsonPath: "choices.0.message.content"
+responseStreamContentJsonPath: "choices.0.delta.content"
+responseContentFallbackJsonPaths:
+  - "output.text"
+  - 'content.#(type=="text")#.text'
+responseStreamContentFallbackJsonPaths:
+  - "payload.delta"
+  - "delta.text"
+```
+
+To enforce strict mode (no fallback), configure both fields as empty arrays:
+
+```yaml
+responseContentFallbackJsonPaths: []
+responseStreamContentFallbackJsonPaths: []
 ```
 
 ## Observability
