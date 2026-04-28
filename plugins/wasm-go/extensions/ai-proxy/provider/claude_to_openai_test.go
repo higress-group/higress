@@ -859,6 +859,22 @@ func TestClaudeToOpenAIConverter_ConvertReasoningResponseToClaude(t *testing.T) 
 	}
 }
 
+func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_WithCachedTokens(t *testing.T) {
+	converter := &ClaudeToOpenAIConverter{}
+
+	streamChunk := "data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\n"
+
+	result, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(streamChunk))
+	require.NoError(t, err)
+
+	resultStr := string(result)
+	assert.Contains(t, resultStr, "\"type\":\"message_delta\"")
+	assert.Contains(t, resultStr, "\"input_tokens\":100")
+	assert.Contains(t, resultStr, "\"output_tokens\":20")
+	assert.Contains(t, resultStr, "\"cache_read_input_tokens\":60")
+}
+
 func TestClaudeToOpenAIConverter_StripCchFromSystemMessage(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
 

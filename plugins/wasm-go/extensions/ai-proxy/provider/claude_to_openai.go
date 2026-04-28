@@ -788,16 +788,21 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 		log.Debugf("[OpenAI->Claude] Processing usage info - input: %d, output: %d",
 			openaiResponse.Usage.PromptTokens, openaiResponse.Usage.CompletionTokens)
 
+		usage := &claudeTextGenUsage{
+			InputTokens:  openaiResponse.Usage.PromptTokens,
+			OutputTokens: openaiResponse.Usage.CompletionTokens,
+		}
+		if openaiResponse.Usage.PromptTokensDetails != nil {
+			usage.CacheReadInputTokens = openaiResponse.Usage.PromptTokensDetails.CachedTokens
+		}
+
 		// Send message_delta with both stop_reason and usage (Claude protocol requirement)
 		messageDelta := &claudeTextGenStreamResponse{
 			Type: "message_delta",
 			Delta: &claudeTextGenDelta{
 				StopSequence: json.RawMessage("null"), // Explicit null per Claude spec
 			},
-			Usage: &claudeTextGenUsage{
-				InputTokens:  openaiResponse.Usage.PromptTokens,
-				OutputTokens: openaiResponse.Usage.CompletionTokens,
-			},
+			Usage: usage,
 		}
 
 		// Include cached stop_reason if available
