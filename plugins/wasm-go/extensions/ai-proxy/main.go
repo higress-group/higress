@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/config"
@@ -25,11 +26,14 @@ import (
 const (
 	pluginName = "ai-proxy"
 
-	defaultMaxBodyBytes uint32 = 100 * 1024 * 1024
+	defaultMaxBodyBytes             uint32 = 100 * 1024 * 1024
+	errorResponseBodyBufferLimit    uint32 = 64 * 1024
+	maxLoggedErrorResponseBodyBytes        = 16 * 1024
 
-	ctxOriginalPath = "original_path"
-	ctxOriginalHost = "original_host"
-	ctxOriginalAuth = "original_auth"
+	ctxOriginalPath                = "original_path"
+	ctxOriginalHost                = "original_host"
+	ctxOriginalAuth                = "original_auth"
+	ctxUpstreamErrorResponseStatus = "upstream_error_response_status"
 )
 
 type pair[K, V any] struct {
@@ -345,8 +349,15 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginCo
 		if err != nil {
 			log.Errorf("unable to load :status header from response: %v", err)
 		}
+		action := providerConfig.OnRequestFailed(activeProvider, ctx, apiTokenInUse, apiTokens, status)
+		if action == types.ActionContinue && shouldLogUpstreamErrorResponse(status) {
+			ctx.SetContext(ctxUpstreamErrorResponseStatus, status)
+			ctx.BufferResponseBody()
+			ctx.SetResponseBodyBufferLimit(errorResponseBodyBufferLimit)
+			return action
+		}
 		ctx.DontReadResponseBody()
-		return providerConfig.OnRequestFailed(activeProvider, ctx, apiTokenInUse, apiTokens, status)
+		return action
 	}
 
 	// Reset ctxApiTokenRequestFailureCount if the request is successful,
@@ -500,6 +511,11 @@ func onHttpResponseBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfi
 
 	log.Debugf("[onHttpResponseBody] provider=%s", activeProvider.GetProviderType())
 
+	if status := ctx.GetStringContext(ctxUpstreamErrorResponseStatus, ""); status != "" {
+		logUpstreamErrorResponse(ctx, activeProvider, status, body)
+		return types.ActionContinue
+	}
+
 	var finalBody []byte
 
 	if handler, ok := activeProvider.(provider.TransformResponseBodyHandler); ok {
@@ -535,6 +551,52 @@ func onHttpResponseBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfi
 		_ = util.ErrorHandler("ai-proxy.replace_resp_body_failed", fmt.Errorf("failed to replace response body: %v", err))
 	}
 	return types.ActionContinue
+}
+
+func shouldLogUpstreamErrorResponse(status string) bool {
+	code, err := strconv.Atoi(status)
+	if err != nil {
+		return false
+	}
+	return code >= 400
+}
+
+func logUpstreamErrorResponse(ctx wrapper.HttpContext, activeProvider provider.Provider, status string, body []byte) {
+	apiName, _ := ctx.GetContext(provider.CtxKeyApiName).(provider.ApiName)
+	requestID := responseHeaderValue("x-request-id")
+	if requestID == "" {
+		requestID = responseHeaderValue("X-Request-Id")
+	}
+	bodyText, truncated := errorResponseBodyForLog(body)
+	log.Warnf("[upstream_error_response] provider=%s apiName=%s status=%s request_id=%s original_model=%s final_model=%s body_truncated=%v body=%s",
+		activeProvider.GetProviderType(),
+		apiName,
+		status,
+		requestID,
+		ctx.GetStringContext("originalRequestModel", ""),
+		ctx.GetStringContext("finalRequestModel", ""),
+		truncated,
+		bodyText,
+	)
+}
+
+func responseHeaderValue(name string) string {
+	value, err := proxywasm.GetHttpResponseHeader(name)
+	if err != nil {
+		return ""
+	}
+	return value
+}
+
+func errorResponseBodyForLog(body []byte) (string, bool) {
+	truncated := len(body) > maxLoggedErrorResponseBodyBytes
+	if truncated {
+		body = body[:maxLoggedErrorResponseBodyBytes]
+	}
+	text := strings.ToValidUTF8(string(body), "?")
+	text = strings.ReplaceAll(text, "\r", "\\r")
+	text = strings.ReplaceAll(text, "\n", "\\n")
+	return text, truncated
 }
 
 // Helper function to check if Claude response conversion is needed

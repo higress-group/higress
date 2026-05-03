@@ -66,6 +66,9 @@ type claudeChatMessageContentSource struct {
 type claudeChatMessageContent struct {
 	Type         string                          `json:"type"`
 	Text         string                          `json:"text,omitempty"`
+	Thinking     string                          `json:"thinking,omitempty"`
+	Signature    string                          `json:"signature,omitempty"`
+	Data         string                          `json:"data,omitempty"`
 	Source       *claudeChatMessageContentSource `json:"source,omitempty"`
 	CacheControl map[string]interface{}          `json:"cache_control,omitempty"`
 	// Tool use fields

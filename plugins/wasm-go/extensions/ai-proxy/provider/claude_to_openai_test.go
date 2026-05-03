@@ -323,6 +323,330 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 		assert.Equal(t, float64(5), args["max_results"])
 	})
 
+	t.Run("convert_thinking_and_tool_use_to_reasoning_content", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "assistant",
+				"content": [{
+					"type": "thinking",
+					"thinking": "The user needs current weather, so I should call the search tool.",
+					"signature": "signature-value"
+				}, {
+					"type": "tool_use",
+					"id": "toolu_weather",
+					"name": "web_search",
+					"input": {
+						"query": "today weather",
+						"max_results": 3
+					}
+				}]
+			}],
+			"thinking": {"type": "enabled", "budget_tokens": 8192},
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAIWithOptions([]byte(claudeRequest), ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: true,
+		})
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		assert.Equal(t, "medium", openaiRequest.ReasoningEffort)
+		require.Len(t, openaiRequest.Messages, 1)
+		assistantMsg := openaiRequest.Messages[0]
+		assert.Equal(t, "assistant", assistantMsg.Role)
+		assert.Nil(t, assistantMsg.Content)
+		assert.Equal(t, "The user needs current weather, so I should call the search tool.", assistantMsg.ReasoningContent)
+		require.Len(t, assistantMsg.ToolCalls, 1)
+		assert.Equal(t, "toolu_weather", assistantMsg.ToolCalls[0].Id)
+		assert.Equal(t, "web_search", assistantMsg.ToolCalls[0].Function.Name)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		rawAssistant := messages[0].(map[string]interface{})
+		assert.Equal(t, "The user needs current weather, so I should call the search tool.", rawAssistant["reasoning_content"])
+		assert.NotContains(t, rawAssistant, "thinking")
+	})
+
+	t.Run("convert_multiple_thinking_blocks_without_tool_use", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "assistant",
+				"content": [{
+					"type": "thinking",
+					"thinking": "First reasoning step.",
+					"signature": "signature-1"
+				}, {
+					"type": "thinking",
+					"thinking": "Second reasoning step.",
+					"signature": "signature-2"
+				}, {
+					"type": "text",
+					"text": "Final visible answer."
+				}]
+			}],
+			"thinking": {"type": "enabled", "budget_tokens": 2048},
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAIWithOptions([]byte(claudeRequest), ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: true,
+		})
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		rawAssistant := messages[0].(map[string]interface{})
+		assert.Equal(t, "assistant", rawAssistant["role"])
+		assert.Equal(t, "First reasoning step.\n\nSecond reasoning step.", rawAssistant["reasoning_content"])
+		assert.NotContains(t, rawAssistant, "thinking")
+		assert.NotContains(t, rawAssistant, "signature")
+
+		content := rawAssistant["content"].([]interface{})
+		require.Len(t, content, 1)
+		textContent := content[0].(map[string]interface{})
+		assert.Equal(t, "text", textContent["type"])
+		assert.Equal(t, "Final visible answer.", textContent["text"])
+	})
+
+	t.Run("omit_empty_content_array_for_thinking_only_message", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "assistant",
+				"content": [{
+					"type": "thinking",
+					"thinking": "Only private reasoning is present."
+				}]
+			}],
+			"thinking": {"type": "enabled", "budget_tokens": 2048},
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAIWithOptions([]byte(claudeRequest), ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: true,
+		})
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		rawAssistant := messages[0].(map[string]interface{})
+		assert.Equal(t, "assistant", rawAssistant["role"])
+		assert.Equal(t, "Only private reasoning is present.", rawAssistant["reasoning_content"])
+		assert.NotContains(t, rawAssistant, "content")
+		assert.NotContains(t, rawAssistant, "thinking")
+	})
+
+	t.Run("omit_signature_only_thinking_with_tool_use_from_reasoning_content", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "assistant",
+				"content": [{
+					"type": "thinking",
+					"thinking": "",
+					"signature": "signature-only"
+				}, {
+					"type": "text",
+					"text": "Visible answer without reasoning text."
+				}, {
+					"type": "tool_use",
+					"id": "toolu_signature",
+					"name": "web_search",
+					"input": {
+						"query": "today weather"
+					}
+				}]
+			}],
+			"thinking": {"type": "enabled", "budget_tokens": 2048},
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAIWithOptions([]byte(claudeRequest), ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: true,
+		})
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		rawAssistant := messages[0].(map[string]interface{})
+		assert.NotContains(t, rawAssistant, "reasoning_content")
+		assert.NotContains(t, rawAssistant, "thinking")
+		assert.NotContains(t, rawAssistant, "signature")
+
+		assert.Equal(t, "Visible answer without reasoning text.", rawAssistant["content"])
+		toolCalls := rawAssistant["tool_calls"].([]interface{})
+		require.Len(t, toolCalls, 1)
+		toolCall := toolCalls[0].(map[string]interface{})
+		assert.Equal(t, "toolu_signature", toolCall["id"])
+	})
+
+	t.Run("omit_redacted_thinking_data_from_reasoning_content", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "assistant",
+				"content": [{
+					"type": "redacted_thinking",
+					"data": "opaque-redacted-thinking-data"
+				}, {
+					"type": "tool_use",
+					"id": "toolu_redacted",
+					"name": "web_search",
+					"input": {
+						"query": "latest weather"
+					}
+				}]
+			}],
+			"thinking": {"type": "enabled", "budget_tokens": 8192},
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAIWithOptions([]byte(claudeRequest), ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: true,
+		})
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		rawAssistant := messages[0].(map[string]interface{})
+		assert.NotContains(t, rawAssistant, "reasoning_content")
+		assert.NotContains(t, rawAssistant, "redacted_thinking")
+		assert.NotContains(t, rawAssistant, "data")
+		require.Len(t, rawAssistant["tool_calls"].([]interface{}), 1)
+	})
+
+	t.Run("default_converter_omits_message_reasoning_content", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "assistant",
+				"content": [{
+					"type": "thinking",
+					"thinking": "This should not be sent by the strict default converter."
+				}, {
+					"type": "text",
+					"text": "Visible answer."
+				}]
+			}],
+			"thinking": {"type": "enabled", "budget_tokens": 2048},
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		rawAssistant := messages[0].(map[string]interface{})
+		assert.NotContains(t, rawAssistant, "reasoning_content")
+		assert.NotContains(t, rawAssistant, "thinking")
+	})
+
+	t.Run("default_converter_degrades_reasoning_only_messages_to_empty_content", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			content string
+		}{
+			{
+				name: "thinking only",
+				content: `{
+					"type": "thinking",
+					"thinking": "Hidden chain of thought."
+				}`,
+			},
+			{
+				name: "redacted thinking only",
+				content: `{
+					"type": "redacted_thinking",
+					"data": "opaque-redacted-thinking-data"
+				}`,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				claudeRequest := `{
+					"model": "anthropic/claude-sonnet-4",
+					"messages": [{
+						"role": "assistant",
+						"content": [` + tt.content + `]
+					}],
+					"thinking": {"type": "enabled", "budget_tokens": 2048},
+					"max_tokens": 1000
+				}`
+
+				result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+				require.NoError(t, err)
+
+				var rawJSON map[string]interface{}
+				err = json.Unmarshal(result, &rawJSON)
+				require.NoError(t, err)
+				messages := rawJSON["messages"].([]interface{})
+				require.Len(t, messages, 1)
+				rawAssistant := messages[0].(map[string]interface{})
+				assert.Equal(t, "assistant", rawAssistant["role"])
+				assert.Equal(t, "", rawAssistant["content"])
+				assert.NotContains(t, rawAssistant, "reasoning_content")
+			})
+		}
+	})
+
+	t.Run("omit_reasoning_content_when_message_reasoning_is_not_supported", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "assistant",
+				"content": [{
+					"type": "thinking",
+					"thinking": "Do not send this non-standard field to strict providers.",
+					"signature": "signature-value"
+				}, {
+					"type": "tool_use",
+					"id": "toolu_strict",
+					"name": "web_search",
+					"input": {
+						"query": "today weather"
+					}
+				}]
+			}],
+			"thinking": {"type": "enabled", "budget_tokens": 8192},
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAIWithOptions([]byte(claudeRequest), ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: false,
+		})
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		rawAssistant := messages[0].(map[string]interface{})
+		assert.NotContains(t, rawAssistant, "reasoning_content")
+		assert.NotContains(t, rawAssistant, "thinking")
+		assert.NotContains(t, rawAssistant, "signature")
+		require.Len(t, rawAssistant["tool_calls"].([]interface{}), 1)
+	})
+
 	t.Run("convert_tool_result_to_tool_message", func(t *testing.T) {
 		// Test Claude tool_result conversion to OpenAI tool message format
 		claudeRequest := `{
@@ -431,6 +755,48 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 		userMsg := openaiRequest.Messages[1]
 		assert.Equal(t, "user", userMsg.Role)
 		assert.Equal(t, "继续", userMsg.Content)
+	})
+
+	t.Run("omit_reasoning_content_on_tool_result_companion_text_message", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "user",
+				"content": [{
+					"type": "thinking",
+					"thinking": "Malformed thinking attached to a tool result turn."
+				}, {
+					"type": "tool_result",
+					"tool_use_id": "toolu_result",
+					"content": "Search result"
+				}, {
+					"type": "text",
+					"text": "continue"
+				}]
+			}],
+			"thinking": {"type": "enabled", "budget_tokens": 2048},
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAIWithOptions([]byte(claudeRequest), ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: true,
+		})
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		require.Len(t, messages, 2)
+
+		rawTool := messages[0].(map[string]interface{})
+		assert.Equal(t, "tool", rawTool["role"])
+		assert.NotContains(t, rawTool, "reasoning_content")
+
+		rawCompanionText := messages[1].(map[string]interface{})
+		assert.Equal(t, "user", rawCompanionText["role"])
+		assert.Equal(t, "continue", rawCompanionText["content"])
+		assert.NotContains(t, rawCompanionText, "reasoning_content")
 	})
 
 	t.Run("convert_multiple_tool_calls", func(t *testing.T) {
@@ -637,6 +1003,28 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIResponseToClaude(t *testing.T) {
 		require.NotNil(t, toolContent.Input)
 		assert.Equal(t, "/Users/zhangty/git/higress/README.md", (*toolContent.Input)["file_path"])
 	})
+}
+
+func TestProviderConfigSupportsMessageReasoningContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      string
+		expected bool
+	}{
+		{name: "qwen", typ: providerTypeQwen, expected: true},
+		{name: "openrouter", typ: providerTypeOpenRouter, expected: true},
+		{name: "zhipuai", typ: providerTypeZhipuAi, expected: true},
+		{name: "openai", typ: providerTypeOpenAI, expected: false},
+		{name: "azure", typ: providerTypeAzure, expected: false},
+		{name: "generic", typ: providerTypeGeneric, expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &ProviderConfig{typ: tt.typ}
+			assert.Equal(t, tt.expected, config.supportsMessageReasoningContent())
+		})
+	}
 }
 
 func TestClaudeToOpenAIConverter_ConvertThinkingConfig(t *testing.T) {

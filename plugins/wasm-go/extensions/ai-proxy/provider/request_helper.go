@@ -174,7 +174,15 @@ func mergeConsecutiveMessages(body []byte) ([]byte, error) {
 			result[len(result)-1].Role == msg.Role &&
 			(msg.Role == roleUser || msg.Role == roleAssistant) {
 			last := &result[len(result)-1]
+			if msg.Role == roleAssistant &&
+				(len(last.ToolCalls) > 0 || len(msg.ToolCalls) > 0 || last.FunctionCall != nil || msg.FunctionCall != nil) {
+				// Assistant tool-calling turns are structurally sensitive. Keep them split
+				// rather than trying to merge content/reasoning and risking dropped calls.
+				result = append(result, msg)
+				continue
+			}
 			last.Content = mergeMessageContent(last.Content, msg.Content)
+			last.ReasoningContent = mergeReasoningContent(last.ReasoningContent, msg.ReasoningContent)
 			merged = true
 			continue
 		}
@@ -200,6 +208,17 @@ func mergeMessageContent(prev, curr any) any {
 	prevParts := (&chatMessage{Content: prev}).ParseContent()
 	currParts := (&chatMessage{Content: curr}).ParseContent()
 	return append(prevParts, currParts...)
+}
+
+func mergeReasoningContent(prev, curr string) string {
+	switch {
+	case prev == "":
+		return curr
+	case curr == "":
+		return prev
+	default:
+		return prev + "\n\n" + curr
+	}
 }
 
 func ReplaceResponseBody(body []byte) error {
