@@ -38,6 +38,7 @@ metadata:
   namespace: higress-system
 spec:
   defaultConfigDisable: true
+  fail_strategy: FAIL_OPEN
   matchRules:
   - config:
       ip_source_type: header
