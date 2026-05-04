@@ -124,8 +124,9 @@ func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContex
 		chatChoice.Delta.Content = nil
 		chatChoice.Delta.ToolCalls = []toolCall{
 			{
-				Id:   bedrockEvent.Start.ToolUse.ToolUseID,
-				Type: "function",
+				Index: bedrockEvent.ContentBlockIndex,
+				Id:    bedrockEvent.Start.ToolUse.ToolUseID,
+				Type:  "function",
 				Function: functionCall{
 					Name:      bedrockEvent.Start.ToolUse.Name,
 					Arguments: "",
@@ -154,7 +155,8 @@ func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContex
 		if bedrockEvent.Delta.ToolUse != nil {
 			chatChoice.Delta.ToolCalls = []toolCall{
 				{
-					Type: "function",
+					Index: bedrockEvent.ContentBlockIndex,
+					Type:  "function",
 					Function: functionCall{
 						Arguments: bedrockEvent.Delta.ToolUse.Input,
 					},
@@ -876,7 +878,9 @@ func (b *bedrockProvider) buildBedrockTextGenerationRequest(origRequest *chatCom
 			request.ToolConfig.ToolChoice.Auto = &struct{}{}
 		} else if choice_type, ok := origRequest.ToolChoice.(string); ok {
 			switch choice_type {
-			case "required":
+			// "any" is accepted for direct Anthropic-compatible callers; OpenAI
+			// uses "required" for the same "must call at least one tool" behavior.
+			case "required", "any":
 				request.ToolConfig.ToolChoice.Any = &struct{}{}
 			case "auto":
 				request.ToolConfig.ToolChoice.Auto = &struct{}{}
