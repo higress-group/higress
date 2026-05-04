@@ -1669,6 +1669,95 @@ func RunBedrockOnStreamingResponseBodyTests(t *testing.T) {
 			require.Equal(t, "", payload)
 		})
 
+		t.Run("bedrock streaming parallel tool calls should preserve content block index", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockApiTokenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+				"model": "gpt-4",
+				"messages": [{"role": "user", "content": "Run three independent searches."}],
+				"stream": true,
+				"tools": [{
+					"type": "function",
+					"function": {
+						"name": "web_search",
+						"description": "Search the web.",
+						"parameters": {
+							"type": "object",
+							"properties": {"query": {"type": "string"}},
+							"required": ["query"]
+						}
+					}
+				}]
+			}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "application/vnd.amazon.eventstream"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			extractFirstToolCallIndex := func(body []byte) int {
+				dataPayload := extractFirstDataPayload(body)
+				require.NotEmpty(t, dataPayload, "streaming chunk should contain one SSE data payload")
+
+				var responseMap map[string]interface{}
+				err := json.Unmarshal([]byte(dataPayload), &responseMap)
+				require.NoError(t, err)
+
+				choices := responseMap["choices"].([]interface{})
+				require.Len(t, choices, 1, "streaming chunk should contain one choice")
+				delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+				toolCalls := delta["tool_calls"].([]interface{})
+				require.Len(t, toolCalls, 1, "streaming chunk should contain one tool call delta")
+
+				index, ok := toolCalls[0].(map[string]interface{})["index"].(float64)
+				require.True(t, ok, "tool call delta should include an index")
+				return int(index)
+			}
+
+			for index, toolUseId := range []string{"tooluse_first", "tooluse_second", "tooluse_third"} {
+				toolCallStart := buildBedrockEventStreamMessage(t, map[string]interface{}{
+					"contentBlockIndex": index,
+					"start": map[string]interface{}{
+						"toolUse": map[string]interface{}{
+							"toolUseId": toolUseId,
+							"name":      "web_search",
+						},
+					},
+				})
+				action = host.CallOnHttpStreamingResponseBody(toolCallStart, false)
+				require.Equal(t, types.ActionContinue, action)
+				require.Equal(t, index, extractFirstToolCallIndex(host.GetResponseBody()))
+			}
+
+			for index, query := range []string{"first synthetic query", "second synthetic query", "third synthetic query"} {
+				toolCallDelta := buildBedrockEventStreamMessage(t, map[string]interface{}{
+					"contentBlockIndex": index,
+					"delta": map[string]interface{}{
+						"toolUse": map[string]interface{}{
+							"input": "{\"query\":\"" + query + "\"}",
+						},
+					},
+				})
+				action = host.CallOnHttpStreamingResponseBody(toolCallDelta, false)
+				require.Equal(t, types.ActionContinue, action)
+				require.Equal(t, index, extractFirstToolCallIndex(host.GetResponseBody()))
+			}
+		})
+
 		t.Run("bedrock streaming usage should map cached_tokens", func(t *testing.T) {
 			host, status := test.NewTestHost(bedrockApiTokenConfig)
 			defer host.Reset()
