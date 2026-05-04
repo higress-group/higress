@@ -1365,6 +1365,53 @@ func RunBedrockToolCallTests(t *testing.T) {
 			require.Equal(t, "call_002", secondResult["toolUseId"])
 		})
 
+		t.Run("bedrock maps any tool choice to converse any tool choice", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockApiTokenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+				"model": "gpt-4",
+				"messages": [{"role": "user", "content": "Run a search."}],
+				"tool_choice": "any",
+				"tools": [{
+					"type": "function",
+					"function": {
+						"name": "web_search",
+						"description": "Search the web.",
+						"parameters": {
+							"type": "object",
+							"properties": {"query": {"type": "string"}},
+							"required": ["query"]
+						}
+					}
+				}]
+			}`
+
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+
+			var bodyMap map[string]interface{}
+			err := json.Unmarshal(processedBody, &bodyMap)
+			require.NoError(t, err)
+
+			toolConfig := bodyMap["toolConfig"].(map[string]interface{})
+			toolChoice := toolConfig["toolChoice"].(map[string]interface{})
+			require.Contains(t, toolChoice, "any")
+			require.Equal(t, map[string]interface{}{}, toolChoice["any"])
+		})
+
 		// Test tool call with text content mixed
 		t.Run("bedrock tool call with text content mixed", func(t *testing.T) {
 			host, status := test.NewTestHost(bedrockApiTokenConfig)
