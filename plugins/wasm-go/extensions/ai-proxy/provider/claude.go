@@ -672,11 +672,30 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 		claudeRequest.Tools = append(claudeRequest.Tools, claudeTool)
 	}
 
-	if tc := origRequest.getToolChoiceObject(); tc != nil {
-		claudeRequest.ToolChoice = &claudeToolChoice{
-			Name:                   tc.Function.Name,
-			Type:                   tc.Type,
-			DisableParallelToolUse: !origRequest.ParallelToolCalls,
+	if origRequest.ToolChoice != nil {
+		parallelToolCalls := true
+		if origRequest.ParallelToolCalls != nil {
+			parallelToolCalls = *origRequest.ParallelToolCalls
+		}
+
+		choiceType := origRequest.getToolChoiceType()
+		if tc := origRequest.getToolChoiceObject(); tc != nil && tc.Type == "function" && tc.Function.Name != "" {
+			claudeRequest.ToolChoice = &claudeToolChoice{
+				Name:                   tc.Function.Name,
+				Type:                   "tool",
+				DisableParallelToolUse: !parallelToolCalls,
+			}
+		} else if choiceType != "" {
+			switch choiceType {
+			case "required":
+				choiceType = "any"
+			}
+			claudeRequest.ToolChoice = &claudeToolChoice{
+				Type: choiceType,
+			}
+			if choiceType != "none" {
+				claudeRequest.ToolChoice.DisableParallelToolUse = !parallelToolCalls
+			}
 		}
 	}
 

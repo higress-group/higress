@@ -178,12 +178,19 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAI(body []byte) ([]b
 				},
 			}
 		} else {
-			// For other types like "auto", "none", etc.
-			openaiRequest.ToolChoice = claudeRequest.ToolChoice.Type
+			// Anthropic's "any" means the model must call at least one tool.
+			// OpenAI-compatible requests express the same behavior as "required".
+			if claudeRequest.ToolChoice.Type == "any" {
+				openaiRequest.ToolChoice = "required"
+			} else {
+				// For other types like "auto", "none", etc.
+				openaiRequest.ToolChoice = claudeRequest.ToolChoice.Type
+			}
 		}
 
 		// Handle parallel tool calls
-		openaiRequest.ParallelToolCalls = !claudeRequest.ToolChoice.DisableParallelToolUse
+		parallelToolCalls := !claudeRequest.ToolChoice.DisableParallelToolUse
+		openaiRequest.ParallelToolCalls = &parallelToolCalls
 	}
 
 	// Convert thinking configuration if present

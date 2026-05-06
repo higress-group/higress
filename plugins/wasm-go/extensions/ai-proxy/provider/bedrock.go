@@ -47,6 +47,8 @@ const (
 	bedrockCachePointPositionSystemPrompt    = "systemPrompt"
 	bedrockCachePointPositionLastUserMessage = "lastUserMessage"
 	bedrockCachePointPositionLastMessage     = "lastMessage"
+
+	ctxKeyBedrockToolCallState = "bedrock_tool_call_state"
 )
 
 var (
@@ -121,11 +123,13 @@ func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContex
 		chatChoice.Delta.Role = *bedrockEvent.Role
 	}
 	if bedrockEvent.Start != nil {
+		toolCallIndex := getBedrockOpenAIToolCallIndex(ctx, bedrockEvent.ContentBlockIndex)
 		chatChoice.Delta.Content = nil
 		chatChoice.Delta.ToolCalls = []toolCall{
 			{
-				Id:   bedrockEvent.Start.ToolUse.ToolUseID,
-				Type: "function",
+				Index: toolCallIndex,
+				Id:    bedrockEvent.Start.ToolUse.ToolUseID,
+				Type:  "function",
 				Function: functionCall{
 					Name:      bedrockEvent.Start.ToolUse.Name,
 					Arguments: "",
@@ -152,9 +156,11 @@ func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContex
 			chatChoice.Delta = &chatMessage{Content: &content}
 		}
 		if bedrockEvent.Delta.ToolUse != nil {
+			toolCallIndex := getBedrockOpenAIToolCallIndex(ctx, bedrockEvent.ContentBlockIndex)
 			chatChoice.Delta.ToolCalls = []toolCall{
 				{
-					Type: "function",
+					Index: toolCallIndex,
+					Type:  "function",
 					Function: functionCall{
 						Arguments: bedrockEvent.Delta.ToolUse.Input,
 					},
@@ -190,6 +196,28 @@ func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContex
 	openAIChunk.WriteString(string(openAIFormattedChunkBytes))
 	openAIChunk.WriteString("\n\n")
 	return []byte(openAIChunk.String()), nil
+}
+
+type bedrockToolCallState struct {
+	indexes map[int]int
+	next    int
+}
+
+func getBedrockOpenAIToolCallIndex(ctx wrapper.HttpContext, contentBlockIndex int) int {
+	state, _ := ctx.GetContext(ctxKeyBedrockToolCallState).(*bedrockToolCallState)
+	if state == nil {
+		state = &bedrockToolCallState{indexes: make(map[int]int)}
+		ctx.SetContext(ctxKeyBedrockToolCallState, state)
+	}
+
+	if toolCallIndex, ok := state.indexes[contentBlockIndex]; ok {
+		return toolCallIndex
+	}
+
+	toolCallIndex := state.next
+	state.indexes[contentBlockIndex] = toolCallIndex
+	state.next++
+	return toolCallIndex
 }
 
 type ConverseStreamEvent struct {
@@ -870,22 +898,25 @@ func (b *bedrockProvider) buildBedrockTextGenerationRequest(origRequest *chatCom
 		}
 	}
 
-	if origRequest.Tools != nil {
+	if origRequest.Tools != nil && origRequest.getToolChoiceType() != "none" {
 		request.ToolConfig = &bedrockToolConfig{}
-		if origRequest.ToolChoice == nil {
-			request.ToolConfig.ToolChoice.Auto = &struct{}{}
-		} else if choice_type, ok := origRequest.ToolChoice.(string); ok {
+		request.ToolConfig.ToolChoice.Auto = &struct{}{}
+		if choice_type := origRequest.getToolChoiceType(); choice_type != "" {
 			switch choice_type {
-			case "required":
+			// "any" is accepted for direct Anthropic-compatible callers; OpenAI
+			// uses "required" for the same "must call at least one tool" behavior.
+			case "required", "any":
+				request.ToolConfig.ToolChoice.Auto = nil
 				request.ToolConfig.ToolChoice.Any = &struct{}{}
 			case "auto":
 				request.ToolConfig.ToolChoice.Auto = &struct{}{}
-			case "none":
-				request.ToolConfig.ToolChoice.Auto = &struct{}{}
-			}
-		} else if choice, ok := origRequest.ToolChoice.(toolChoice); ok {
-			request.ToolConfig.ToolChoice.Tool = &bedrockToolSpecification{
-				Name: choice.Function.Name,
+			case "function":
+				if choice := origRequest.getToolChoiceObject(); choice != nil && choice.Function.Name != "" {
+					request.ToolConfig.ToolChoice.Auto = nil
+					request.ToolConfig.ToolChoice.Tool = &bedrockSpecificToolChoice{
+						Name: choice.Function.Name,
+					}
+				}
 			}
 		}
 		request.ToolConfig.Tools = []bedrockTool{}
@@ -1151,9 +1182,13 @@ type bedrockTool struct {
 }
 
 type bedrockToolChoice struct {
-	Any  *struct{}                 `json:"any,omitempty"`
-	Auto *struct{}                 `json:"auto,omitempty"`
-	Tool *bedrockToolSpecification `json:"tool,omitempty"`
+	Any  *struct{}                  `json:"any,omitempty"`
+	Auto *struct{}                  `json:"auto,omitempty"`
+	Tool *bedrockSpecificToolChoice `json:"tool,omitempty"`
+}
+
+type bedrockSpecificToolChoice struct {
+	Name string `json:"name"`
 }
 
 type bedrockToolSpecification struct {

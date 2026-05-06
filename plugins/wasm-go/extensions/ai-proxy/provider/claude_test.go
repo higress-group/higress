@@ -183,6 +183,87 @@ func TestClaudeProvider_BuildClaudeTextGenRequest_StandardMode(t *testing.T) {
 		assert.False(t, claudeReq.System.IsArray)
 		assert.Equal(t, "You are a helpful assistant.", claudeReq.System.StringValue)
 	})
+
+	t.Run("maps_openai_function_tool_choice_to_claude_tool_choice", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 8192,
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Search."},
+			},
+			Tools: []tool{{
+				Type: "function",
+				Function: function{
+					Name:        "web_search",
+					Description: "Search the web.",
+					Parameters:  map[string]interface{}{"type": "object"},
+				},
+			}},
+			ToolChoice: map[string]interface{}{
+				"type": "function",
+				"function": map[string]interface{}{
+					"name": "web_search",
+				},
+			},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.ToolChoice)
+		assert.Equal(t, "tool", claudeReq.ToolChoice.Type)
+		assert.Equal(t, "web_search", claudeReq.ToolChoice.Name)
+	})
+
+	t.Run("maps_openai_string_required_tool_choice_to_claude_any", func(t *testing.T) {
+		parallelToolCalls := false
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 8192,
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Search."},
+			},
+			Tools: []tool{{
+				Type: "function",
+				Function: function{
+					Name:       "web_search",
+					Parameters: map[string]interface{}{"type": "object"},
+				},
+			}},
+			ToolChoice:        "required",
+			ParallelToolCalls: &parallelToolCalls,
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.ToolChoice)
+		assert.Equal(t, "any", claudeReq.ToolChoice.Type)
+		assert.Empty(t, claudeReq.ToolChoice.Name)
+		assert.True(t, claudeReq.ToolChoice.DisableParallelToolUse)
+	})
+
+	t.Run("maps_openai_string_none_tool_choice_to_claude_none", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 8192,
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Answer without tools."},
+			},
+			Tools: []tool{{
+				Type: "function",
+				Function: function{
+					Name:       "web_search",
+					Parameters: map[string]interface{}{"type": "object"},
+				},
+			}},
+			ToolChoice: "none",
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.ToolChoice)
+		assert.Equal(t, "none", claudeReq.ToolChoice.Type)
+		assert.Empty(t, claudeReq.ToolChoice.Name)
+	})
 }
 
 func TestClaudeProvider_BuildClaudeTextGenRequest_ClaudeCodeMode(t *testing.T) {

@@ -35,6 +35,66 @@ func init() {
 func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
 
+	t.Run("convert_tool_choice_any_to_required", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1000,
+			"messages": [{"role": "user", "content": "Run a search."}],
+			"tools": [{
+				"name": "web_search",
+				"description": "Search the web.",
+				"input_schema": {
+					"type": "object",
+					"properties": {"query": {"type": "string"}},
+					"required": ["query"]
+				}
+			}],
+			"tool_choice": {"type": "any"}
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Equal(t, "required", openaiRequest.ToolChoice)
+		require.NotNil(t, openaiRequest.ParallelToolCalls)
+		require.True(t, *openaiRequest.ParallelToolCalls)
+		require.Contains(t, string(result), `"parallel_tool_calls":true`)
+	})
+
+	t.Run("convert_tool_choice_any_preserves_disable_parallel_tool_use", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1000,
+			"messages": [{"role": "user", "content": "Run a search."}],
+			"tools": [{
+				"name": "web_search",
+				"description": "Search the web.",
+				"input_schema": {
+					"type": "object",
+					"properties": {"query": {"type": "string"}},
+					"required": ["query"]
+				}
+			}],
+			"tool_choice": {"type": "any", "disable_parallel_tool_use": true}
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Equal(t, "required", openaiRequest.ToolChoice)
+		require.NotNil(t, openaiRequest.ParallelToolCalls)
+		require.False(t, *openaiRequest.ParallelToolCalls)
+		require.Contains(t, string(result), `"parallel_tool_calls":false`)
+	})
+
 	t.Run("convert_multiple_text_content_blocks", func(t *testing.T) {
 		// Test case: multiple text content blocks should remain as separate array elements with cache control support
 		// Both system and user messages should handle array content format
