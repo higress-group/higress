@@ -344,7 +344,7 @@ func (c *DBClient) Query(sql string, args ...interface{}) ([]map[string]interfac
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
+		return nil, fmt.Errorf("failed to iterate table rows in Query: %w", err)
 	}
 
 	return results, nil
