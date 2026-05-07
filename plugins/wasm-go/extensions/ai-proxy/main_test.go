@@ -342,3 +342,23 @@ func TestOpenRouter(t *testing.T) {
 func TestZhipuAI(t *testing.T) {
 	test.RunZhipuAIClaudeAutoConversionTests(t)
 }
+
+func TestDeepSeek(t *testing.T) {
+	test.RunDeepSeekParseConfigTests(t)
+	test.RunDeepSeekOnHttpRequestHeadersTests(t)
+}
+
+func TestDoubao(t *testing.T) {
+	test.RunDoubaoParseConfigTests(t)
+	test.RunDoubaoOnHttpRequestHeadersTests(t)
+}
+
+func TestGroq(t *testing.T) {
+	test.RunGroqParseConfigTests(t)
+	test.RunGroqOnHttpRequestHeadersTests(t)
+}
+
+func TestMistral(t *testing.T) {
+	test.RunMistralParseConfigTests(t)
+	test.RunMistralOnHttpRequestHeadersTests(t)
+}
