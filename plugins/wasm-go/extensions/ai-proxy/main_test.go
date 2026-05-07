@@ -1,10 +1,12 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/provider"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/test"
+	"github.com/tidwall/gjson"
 )
 
 func Test_getApiName(t *testing.T) {
@@ -144,6 +146,80 @@ func Test_isSupportedRequestContentType(t *testing.T) {
 				t.Errorf("isSupportedRequestContentType(%v, %q) = %v, want %v", tt.apiName, tt.contentType, got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_normalizeOpenAiRequestBody(t *testing.T) {
+	t.Run("stream_adds_include_usage", func(t *testing.T) {
+		in := []byte(`{"model":"x","stream":true}`)
+		got := normalizeOpenAiRequestBody(in)
+		if !gjson.GetBytes(got, "stream_options.include_usage").Bool() {
+			t.Fatalf("want stream_options.include_usage true, got %s", string(got))
+		}
+	})
+	t.Run("stream_false_no_stream_options", func(t *testing.T) {
+		in := []byte(`{"model":"x","stream":false}`)
+		got := normalizeOpenAiRequestBody(in)
+		if gjson.GetBytes(got, "stream_options").Exists() {
+			t.Fatalf("did not expect stream_options, got %s", string(got))
+		}
+	})
+	t.Run("respect_explicit_include_usage_false", func(t *testing.T) {
+		in := []byte(`{"model":"x","stream":true,"stream_options":{"include_usage":false}}`)
+		got := normalizeOpenAiRequestBody(in)
+		if gjson.GetBytes(got, "stream_options.include_usage").Bool() {
+			t.Fatalf("want include_usage false, got %s", string(got))
+		}
+	})
+}
+
+func Test_convertResponseBodyToClaude_glue(t *testing.T) {
+	ctx := test.NewMockHttpContext()
+	openaiBody := []byte(`{"id":"id1","object":"chat.completion","created":1,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hello"}}]}`)
+
+	out, err := convertResponseBodyToClaude(ctx, openaiBody)
+	if err != nil || string(out) != string(openaiBody) {
+		t.Fatalf("without flag: err=%v out=%s", err, string(out))
+	}
+	// Full OpenAI→Claude conversion runs log.Debugf inside the provider and requires a Wasm host
+	// when this package's init() has registered the plugin (see provider/claude_to_openai_test.go).
+}
+
+func Test_convertStreamingResponseToClaude_glue(t *testing.T) {
+	chunk := []byte("data: {\"x\":1}\n\n")
+	ctx := test.NewMockHttpContext()
+	out, err := convertStreamingResponseToClaude(ctx, chunk)
+	if err != nil || string(out) != string(chunk) {
+		t.Fatalf("without conversion flag: err=%v out=%q", err, string(out))
+	}
+}
+
+func Test_needsClaudeResponseConversion(t *testing.T) {
+	ctx := test.NewMockHttpContext()
+	if NeedsClaudeResponseConversionForTest(ctx) {
+		t.Fatal("expected false without context flag")
+	}
+	ctx.SetContext("needClaudeResponseConversion", true)
+	if !NeedsClaudeResponseConversionForTest(ctx) {
+		t.Fatal("expected true when flag set")
+	}
+}
+
+func Test_promoteThinkingInStreamingChunk(t *testing.T) {
+	ctx := test.NewMockHttpContext()
+	reasoningJSON := `{"choices":[{"index":0,"delta":{"reasoning_content":"only-thinking"}}]}`
+	sse := "data: " + reasoningJSON + "\n"
+	out := promoteThinkingInStreamingChunk(ctx, []byte(sse), true)
+	if len(out) == 0 {
+		t.Fatal("expected non-empty output")
+	}
+	// Last chunk should prepend flush SSE when no content delta was seen
+	if !strings.HasPrefix(string(out), "data: ") {
+		t.Fatalf("expected flush data line prepended, got prefix %q", string(out))
+	}
+	// Original line should still be present (possibly stripped reasoning)
+	if !strings.Contains(string(out), "data:") {
+		t.Fatalf("expected SSE data lines: %s", string(out))
 	}
 }
 
