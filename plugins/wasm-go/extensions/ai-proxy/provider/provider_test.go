@@ -544,6 +544,19 @@ func TestFailover_FromJson_FailoverOnStatus(t *testing.T) {
 	})
 }
 
+func TestFailover_Validate(t *testing.T) {
+	t.Run("missing_healthCheckModel", func(t *testing.T) {
+		f := &failover{}
+		f.FromJson(gjson.Parse(`{"enabled":true}`))
+		assert.Error(t, f.Validate())
+	})
+	t.Run("ok_with_healthCheckModel", func(t *testing.T) {
+		f := &failover{}
+		f.FromJson(gjson.Parse(`{"enabled":true,"healthCheckModel":"gpt-4o-mini"}`))
+		assert.NoError(t, f.Validate())
+	})
+}
+
 func TestHealthCheckEndpoint_Struct(t *testing.T) {
 	t.Run("health_check_endpoint_fields", func(t *testing.T) {
 		endpoint := HealthCheckEndpoint{

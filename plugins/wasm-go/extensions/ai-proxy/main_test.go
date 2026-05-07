@@ -171,6 +171,20 @@ func Test_normalizeOpenAiRequestBody(t *testing.T) {
 			t.Fatalf("want include_usage false, got %s", string(got))
 		}
 	})
+	t.Run("stream_missing_no_stream_options", func(t *testing.T) {
+		in := []byte(`{"model":"x"}`)
+		got := normalizeOpenAiRequestBody(in)
+		if gjson.GetBytes(got, "stream_options").Exists() {
+			t.Fatalf("unexpected stream_options: %s", string(got))
+		}
+	})
+	t.Run("stream_non_bool_treated_as_false", func(t *testing.T) {
+		in := []byte(`{"model":"x","stream":"yes"}`)
+		got := normalizeOpenAiRequestBody(in)
+		if gjson.GetBytes(got, "stream_options").Exists() {
+			t.Fatalf("unexpected stream_options for non-bool stream: %s", string(got))
+		}
+	})
 }
 
 func Test_convertResponseBodyToClaude_glue(t *testing.T) {
@@ -286,6 +300,10 @@ func TestUtil(t *testing.T) {
 	test.RunMapRequestPathByCapabilityTests(t)
 }
 
+func TestMainEdgeCases(t *testing.T) {
+	test.RunMainEdgeCaseTests(t)
+}
+
 func TestApiPathRegression(t *testing.T) {
 	test.RunApiPathRegressionTests(t)
 }
@@ -386,4 +404,20 @@ func TestGithub(t *testing.T) {
 func TestGrok(t *testing.T) {
 	test.RunGrokParseConfigTests(t)
 	test.RunGrokOnHttpRequestHeadersTests(t)
+}
+
+func TestProviderWasmSmoke(t *testing.T) {
+	test.RunBaichuanWasmSmokeTests(t)
+	test.RunYiWasmSmokeTests(t)
+	test.RunOllamaWasmSmokeTests(t)
+	test.RunBaiduWasmSmokeTests(t)
+	test.RunHunyuanWasmSmokeTests(t)
+	test.RunStepfunWasmSmokeTests(t)
+	test.RunCloudflareWasmSmokeTests(t)
+	test.RunDeeplWasmSmokeTests(t)
+	test.RunCohereWasmSmokeTests(t)
+	test.RunCozeWasmSmokeTests(t)
+	test.RunDifyWasmSmokeTests(t)
+	test.RunTritonWasmSmokeTests(t)
+	test.RunVllmWasmSmokeTests(t)
 }
