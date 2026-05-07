@@ -11,6 +11,7 @@
 [![Build Status](https://github.com/alibaba/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/alibaba/higress/actions)
 [![license](https://img.shields.io/github/license/alibaba/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
 [![discord](https://img.shields.io/discord/1364956090566971515?color=5865F2&label=discord&labelColor=black&logo=discord&logoColor=white&style=flat-square)](https://discord.gg/tSbww9VDaM)
+[![CNCF Sandbox](https://img.shields.io/badge/CNCF-Sandbox-30638E?logo=linuxfoundation&logoColor=white)](https://www.cncf.io/projects/)
 
 <a href="https://trendshift.io/repositories/10918" target="_blank"><img src="https://trendshift.io/api/badge/repositories/10918" alt="alibaba%2Fhigress | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a> <a href="https://www.producthunt.com/posts/higress?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-higress" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=951287&theme=light&t=1745492822283" alt="Higress - Global&#0032;APIs&#0032;as&#0032;MCP&#0032;powered&#0032;by&#0032;AI&#0032;Gateway | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
 
@@ -183,6 +184,25 @@ Join our Discord community! This is where you can connect with developers and ot
 
 [![discord](https://img.shields.io/discord/1364956090566971515?color=5865F2&label=discord&labelColor=black&logo=discord&logoColor=white&style=for-the-badge)](https://discord.gg/tSbww9VDaM)
 
+### Code of Conduct
+
+The Higress community follows the
+[**CNCF Code of Conduct**](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
+The project's adopted Code of Conduct is documented in
+[`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md). Please review it before
+participating in the community.
+
+### Governance & Maintainers
+
+Project governance, the maintainer roster, and the contribution model are
+described in [`GOVERNANCE.md`](./GOVERNANCE.md) and
+[`MAINTAINERS.md`](./MAINTAINERS.md). New contributors are encouraged to start
+with [`CONTRIBUTING_EN.md`](./CONTRIBUTING_EN.md).
+
+### Security
+
+Please report security vulnerabilities following the process described in
+[`SECURITY.md`](./SECURITY.md).
 
 ### Thanks
 
@@ -204,6 +224,23 @@ Higress would not be possible without the valuable open-source work of projects 
 ### Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=alibaba/higress&type=Date)](https://star-history.com/#alibaba/higress&Date)
+
+---
+
+## Cloud Native Computing Foundation
+
+<a href="https://www.cncf.io/projects/" target="_blank">
+  <img src="https://raw.githubusercontent.com/cncf/artwork/master/other/cncf/horizontal/color/cncf-color.svg" alt="Cloud Native Computing Foundation" width="300"/>
+</a>
+
+We are a [Cloud Native Computing Foundation](https://www.cncf.io/) sandbox project.
+
+The Linux Foundation® (TLF) has registered trademarks and uses trademarks. For
+a list of TLF trademarks, see [Trademark Usage](https://www.linuxfoundation.org/legal/trademark-usage).
+
+Copyright Higress a Series of LF Projects, LLC. For website terms of use,
+trademark policy and other project policies please see
+[https://lfprojects.org/policies/](https://lfprojects.org/policies/).
 
 <p align="right" style="font-size: 14px; color: #555; margin-top: 20px;">
     <a href="#readme-top" style="text-decoration: none; color: #007bff; font-weight: bold;">
