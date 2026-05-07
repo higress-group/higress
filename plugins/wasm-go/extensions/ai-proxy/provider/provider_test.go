@@ -678,3 +678,29 @@ func TestProviderConfig_SetDefaultCapabilities(t *testing.T) {
 		assert.Equal(t, "/v1/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
 	})
 }
+
+func TestCreateProvider(t *testing.T) {
+	t.Run("generic_success", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}`))
+		p, err := CreateProvider(pc)
+		assert.NoError(t, err)
+		assert.Equal(t, providerTypeGeneric, p.GetProviderType())
+	})
+
+	t.Run("openai_minimal_success", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"openai","apiTokens":["sk-test"]}`))
+		p, err := CreateProvider(pc)
+		assert.NoError(t, err)
+		assert.Equal(t, providerTypeOpenAI, p.GetProviderType())
+	})
+
+	t.Run("unknown_type", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"no-such-provider-xyz","apiTokens":["t"]}`))
+		_, err := CreateProvider(pc)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown provider type")
+	})
+}
