@@ -362,3 +362,28 @@ func TestMistral(t *testing.T) {
 	test.RunMistralParseConfigTests(t)
 	test.RunMistralOnHttpRequestHeadersTests(t)
 }
+
+func TestMoonshot(t *testing.T) {
+	test.RunMoonshotParseConfigTests(t)
+	test.RunMoonshotOnHttpRequestHeadersTests(t)
+}
+
+func TestSpark(t *testing.T) {
+	test.RunSparkParseConfigTests(t)
+	test.RunSparkOnHttpRequestHeadersTests(t)
+}
+
+func TestTogetherAI(t *testing.T) {
+	test.RunTogetherAIParseConfigTests(t)
+	test.RunTogetherAIOnHttpRequestHeadersTests(t)
+}
+
+func TestGithub(t *testing.T) {
+	test.RunGithubParseConfigTests(t)
+	test.RunGithubOnHttpRequestHeadersTests(t)
+}
+
+func TestGrok(t *testing.T) {
+	test.RunGrokParseConfigTests(t)
+	test.RunGrokOnHttpRequestHeadersTests(t)
+}
