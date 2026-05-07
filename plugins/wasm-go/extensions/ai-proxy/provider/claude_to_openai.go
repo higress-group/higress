@@ -178,12 +178,19 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAI(body []byte) ([]b
 				},
 			}
 		} else {
-			// For other types like "auto", "none", etc.
-			openaiRequest.ToolChoice = claudeRequest.ToolChoice.Type
+			// Anthropic's "any" means the model must call at least one tool.
+			// OpenAI-compatible requests express the same behavior as "required".
+			if claudeRequest.ToolChoice.Type == "any" {
+				openaiRequest.ToolChoice = "required"
+			} else {
+				// For other types like "auto", "none", etc.
+				openaiRequest.ToolChoice = claudeRequest.ToolChoice.Type
+			}
 		}
 
 		// Handle parallel tool calls
-		openaiRequest.ParallelToolCalls = !claudeRequest.ToolChoice.DisableParallelToolUse
+		parallelToolCalls := !claudeRequest.ToolChoice.DisableParallelToolUse
+		openaiRequest.ParallelToolCalls = &parallelToolCalls
 	}
 
 	// Convert thinking configuration if present
@@ -788,16 +795,21 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 		log.Debugf("[OpenAI->Claude] Processing usage info - input: %d, output: %d",
 			openaiResponse.Usage.PromptTokens, openaiResponse.Usage.CompletionTokens)
 
+		usage := &claudeTextGenUsage{
+			InputTokens:  openaiResponse.Usage.PromptTokens,
+			OutputTokens: openaiResponse.Usage.CompletionTokens,
+		}
+		if openaiResponse.Usage.PromptTokensDetails != nil {
+			usage.CacheReadInputTokens = openaiResponse.Usage.PromptTokensDetails.CachedTokens
+		}
+
 		// Send message_delta with both stop_reason and usage (Claude protocol requirement)
 		messageDelta := &claudeTextGenStreamResponse{
 			Type: "message_delta",
 			Delta: &claudeTextGenDelta{
 				StopSequence: json.RawMessage("null"), // Explicit null per Claude spec
 			},
-			Usage: &claudeTextGenUsage{
-				InputTokens:  openaiResponse.Usage.PromptTokens,
-				OutputTokens: openaiResponse.Usage.CompletionTokens,
-			},
+			Usage: usage,
 		}
 
 		// Include cached stop_reason if available

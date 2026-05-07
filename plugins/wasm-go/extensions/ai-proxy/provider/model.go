@@ -70,7 +70,7 @@ type chatCompletionRequest struct {
 	TopP                 float64                `json:"top_p,omitempty"`
 	Tools                []tool                 `json:"tools,omitempty"`
 	ToolChoice           interface{}            `json:"tool_choice,omitempty"`
-	ParallelToolCalls    bool                   `json:"parallel_tool_calls,omitempty"`
+	ParallelToolCalls    *bool                  `json:"parallel_tool_calls,omitempty"`
 	User                 string                 `json:"user,omitempty"`
 }
 
@@ -92,15 +92,33 @@ func (c *chatCompletionRequest) getToolChoiceString() string {
 	return ""
 }
 
-func (c *chatCompletionRequest) getToolChoiceObject() *toolChoice {
-	if c.ToolChoice == nil {
-		return nil
-	}
-
-	if tc, ok := c.ToolChoice.(*toolChoice); ok {
+func (c *chatCompletionRequest) getToolChoiceType() string {
+	if tc := c.getToolChoiceString(); tc != "" {
 		return tc
 	}
-	return nil
+	if tc := c.getToolChoiceObject(); tc != nil {
+		return tc.Type
+	}
+	return ""
+}
+
+func (c *chatCompletionRequest) getToolChoiceObject() *toolChoice {
+	switch tc := c.ToolChoice.(type) {
+	case nil, string:
+		return nil
+	case *toolChoice:
+		return tc
+	}
+
+	body, err := json.Marshal(c.ToolChoice)
+	if err != nil {
+		return nil
+	}
+	var parsed toolChoice
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 type CompletionRequest struct {
@@ -474,7 +492,7 @@ type toolCall struct {
 
 type functionCall struct {
 	Id        string `json:"id,omitempty"`
-	Name      string `json:"name"`
+	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments"`
 }
 

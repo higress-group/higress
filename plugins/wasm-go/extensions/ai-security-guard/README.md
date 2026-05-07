@@ -29,6 +29,8 @@ description: 阿里云内容安全检测
 | `requestContentJsonPath` | string | optional | `messages.@reverse.0.content` | 指定要检测内容在请求body中的jsonpath |
 | `responseContentJsonPath` | string | optional | `choices.0.message.content` | 指定要检测内容在响应body中的jsonpath |
 | `responseStreamContentJsonPath` | string | optional | `choices.0.delta.content` | 指定要检测内容在流式响应body中的jsonpath |
+| `responseContentFallbackJsonPaths` | array | optional | [`choices.0.message.content`, `content.#(type=="text")#.text`] | 当 `responseContentJsonPath` 提取为空时，按顺序尝试这些兜底路径；与主路径相同的项会自动跳过；显式配置为空数组 `[]` 可禁用兜底 |
+| `responseStreamContentFallbackJsonPaths` | array | optional | [`choices.0.delta.content`, `delta.text`] | 当 `responseStreamContentJsonPath` 提取为空时，按顺序尝试这些流式兜底路径；与主路径相同的项会自动跳过；显式配置为空数组 `[]` 可禁用兜底 |
 | `denyCode` | int | optional | 200 | 指定内容非法时的响应状态码 |
 | `denyMessage` | string | optional | openai格式的流式/非流式响应 | 指定内容非法时的响应内容 |
 | `protocol` | string | optional | openai | 协议格式，非openai协议填`original` |
@@ -209,6 +211,34 @@ responseContentJsonPath: "output.text"
 denyCode: 200
 denyMessage: "很抱歉，我无法回答您的问题"
 protocol: original
+```
+
+### 配置响应内容兜底提取路径
+
+当主路径提取不到内容时，可按优先级顺序配置兜底路径，兼容多种返回协议：
+
+```yaml
+serviceName: safecheck.dns
+servicePort: 443
+serviceHost: "green-cip.cn-shanghai.aliyuncs.com"
+accessKey: "XXXXXXXXX"
+secretKey: "XXXXXXXXXXXXXXX"
+checkResponse: true
+responseContentJsonPath: "choices.0.message.content"
+responseStreamContentJsonPath: "choices.0.delta.content"
+responseContentFallbackJsonPaths:
+  - "output.text"
+  - 'content.#(type=="text")#.text'
+responseStreamContentFallbackJsonPaths:
+  - "payload.delta"
+  - "delta.text"
+```
+
+如需严格模式（主路径未命中即跳过，不走兜底），可显式关闭兜底：
+
+```yaml
+responseContentFallbackJsonPaths: []
+responseStreamContentFallbackJsonPaths: []
 ```
 
 ## 可观测

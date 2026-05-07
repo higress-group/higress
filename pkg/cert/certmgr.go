@@ -17,14 +17,12 @@ package cert
 import (
 	"context"
 	"fmt"
-	"os"
 	"reflect"
 	"sync"
 
 	"github.com/caddyserver/certmagic"
 	"github.com/mholt/acmez"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	istiomodel "istio.io/istio/pilot/pkg/model"
 	"k8s.io/client-go/kubernetes"
 )
@@ -60,11 +58,7 @@ func InitCertMgr(opts *Option, clientSet kubernetes.Interface, config *Config, X
 	var storage certmagic.Storage
 	storage, _ = NewConfigmapStorage(opts.Namespace, clientSet)
 	renewalWindowRatio := float64(config.RenewBeforeDays) / float64(RenewMaxDays)
-	logger := zap.New(zapcore.NewCore(
-		zapcore.NewConsoleEncoder(zap.NewProductionEncoderConfig()),
-		os.Stderr,
-		zap.DebugLevel,
-	))
+	logger := zap.L()
 	magicConfig := certmagic.Config{
 		RenewalWindowRatio: renewalWindowRatio,
 		Storage:            storage,
