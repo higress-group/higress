@@ -251,6 +251,35 @@ func TestBedrockRequestPreservesClaudeNativeThinkingAndToolResult(t *testing.T) 
 	assert.Equal(t, "failed", *request.Messages[1].Content[0].ToolResult.Content[0].Text)
 }
 
+func TestBedrockRequestPreservesClaudeNoArgToolUseInput(t *testing.T) {
+	provider := &bedrockProvider{}
+	openaiBody, err := (&ClaudeToOpenAIConverter{}).ConvertClaudeRequestToOpenAI([]byte(`{
+		"model":"claude",
+		"messages":[{
+			"role":"assistant",
+			"content":[
+				{"type":"thinking","thinking":"reasoning","signature":"sig"},
+				{"type":"tool_use","id":"toolu_1","name":"list_items","input":{}}
+			]
+		}]
+	}`))
+	require.NoError(t, err)
+
+	var openaiRequest chatCompletionRequest
+	require.NoError(t, json.Unmarshal(openaiBody, &openaiRequest))
+
+	body, err := provider.buildBedrockTextGenerationRequest(&openaiRequest, nil)
+	require.NoError(t, err)
+
+	require.Contains(t, string(body), `"input":{}`)
+	var request bedrockTextGenRequest
+	require.NoError(t, json.Unmarshal(body, &request))
+	require.Len(t, request.Messages, 1)
+	require.Len(t, request.Messages[0].Content, 2)
+	require.NotNil(t, request.Messages[0].Content[1].ToolUse)
+	assert.Empty(t, request.Messages[0].Content[1].ToolUse.Input)
+}
+
 func TestBedrockRequestToolResultWithTrailingTextDoesNotDuplicateToolResult(t *testing.T) {
 	provider := &bedrockProvider{}
 	openaiBody, err := (&ClaudeToOpenAIConverter{}).ConvertClaudeRequestToOpenAI([]byte(`{

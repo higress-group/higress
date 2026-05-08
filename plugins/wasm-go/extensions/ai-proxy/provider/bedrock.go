@@ -1506,7 +1506,7 @@ func claudeContentBlocksToBedrockContents(blocks []claudeChatMessageContent) []b
 			}
 		case "tool_use":
 			result = append(result, bedrockMessageContent{ToolUse: &toolUseBlock{
-				Input:     block.Input,
+				Input:     claudeToolUseInput(block.Input),
 				Name:      block.Name,
 				ToolUseId: block.Id,
 			}})
@@ -1523,6 +1523,13 @@ func claudeContentBlocksToBedrockContents(blocks []claudeChatMessageContent) []b
 		}
 	}
 	return result
+}
+
+func claudeToolUseInput(input *map[string]interface{}) map[string]interface{} {
+	if input == nil {
+		return map[string]interface{}{}
+	}
+	return *input
 }
 
 func bedrockThinkingFromClaudeConfig(thinking *claudeThinkingConfig) map[string]interface{} {

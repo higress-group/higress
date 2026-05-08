@@ -70,9 +70,9 @@ type claudeChatMessageContent struct {
 	Source       *claudeChatMessageContentSource `json:"source,omitempty"`
 	CacheControl map[string]interface{}          `json:"cache_control,omitempty"`
 	// Tool use fields
-	Id    string                 `json:"id,omitempty"`    // For tool_use
-	Name  string                 `json:"name,omitempty"`  // For tool_use
-	Input map[string]interface{} `json:"input,omitempty"` // For tool_use
+	Id    string                  `json:"id,omitempty"`    // For tool_use
+	Name  string                  `json:"name,omitempty"`  // For tool_use
+	Input *map[string]interface{} `json:"input,omitempty"` // For tool_use
 	// Tool result fields
 	ToolUseId string                      `json:"tool_use_id,omitempty"` // For tool_result
 	Content   *claudeChatMessageContentWr `json:"content,omitempty"`     // For tool_result - can be string or array
@@ -622,7 +622,7 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 					Type:  "tool_use",
 					Id:    tc.Id,
 					Name:  tc.Function.Name,
-					Input: inputMap,
+					Input: &inputMap,
 				})
 			}
 
