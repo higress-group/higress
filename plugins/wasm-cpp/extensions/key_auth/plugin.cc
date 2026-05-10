@@ -51,7 +51,14 @@ void deniedInvalidCredentials(const std::string& realm) {
 
 void deniedUnauthorizedConsumer(const std::string& realm) {
   sendLocalResponse(403, "Request denied by Key Auth check. Unauthorized consumer", "",
-                    {{"WWW-Authenticate", absl::StrCat("Basic realm=", realm)}});
+                    {{"WWW-Authenticate", absl::StrCat("Key realm=", realm)}});
+}
+
+std::string maskCredential(const std::string& credential) {
+  if (credential.size() <= 3) {
+    return "***";
+  }
+  return credential.substr(0, 3) + "***";
 }
 
 }  // namespace
@@ -101,6 +108,7 @@ bool PluginRootContext::parsePluginConfig(const json& configuration,
     if (it != configuration.end()) {
       auto realm_string = JsonValueAs<std::string>(it.value());
       if (realm_string.second != Wasm::Common::JsonParserResultDetail::OK) {
+        LOG_WARN("failed to parse 'realm' field in filter configuration.");
         return false;
       }
       rule.realm = realm_string.first.value();
@@ -290,6 +298,31 @@ bool PluginRootContext::parsePluginConfig(const json& configuration,
   return true;
 }
 
+// Helper: check allow_set and return true if allowed, false if denied
+static bool checkAllowSet(
+    const std::optional<std::unordered_set<std::string>>& allow_set,
+    const std::string& consumer_name, const std::string& realm) {
+  if (allow_set) {
+    if (allow_set->empty()) {
+      LOG_DEBUG("allow set is empty, nobody is allowed");
+      deniedUnauthorizedConsumer(realm);
+      return false;
+    }
+    if (allow_set->find(consumer_name) == allow_set->end()) {
+      deniedUnauthorizedConsumer(realm);
+      LOG_DEBUG("unauthorized consumer: " + consumer_name);
+      return false;
+    }
+  }
+  return true;
+}
+
+// Helper: check if a consumer has per-consumer key configuration
+static bool hasPerConsumerKeyConfig(const Consumer& consumer) {
+  return consumer.keys.has_value() || consumer.in_header.has_value() ||
+         consumer.in_query.has_value();
+}
+
 bool PluginRootContext::checkPlugin(
     const KeyAuthConfigRule& rule,
     const std::optional<std::unordered_set<std::string>>& allow_set) {
@@ -304,79 +337,144 @@ bool PluginRootContext::checkPlugin(
 
       auto auth_credential_iter = rule.credentials.find(credential);
       if (auth_credential_iter == rule.credentials.end()) {
-        LOG_DEBUG("api key not found: " + credential);
+        LOG_DEBUG("api key not found: " + maskCredential(credential));
         continue;
       }
 
       auto credential_to_name_iter = rule.credential_to_name.find(credential);
       if (credential_to_name_iter != rule.credential_to_name.end()) {
         addRequestHeader("X-Mse-Consumer", credential_to_name_iter->second);
-        if (allow_set && !allow_set->empty()) {
-          if (allow_set->find(credential_to_name_iter->second) ==
-              allow_set->end()) {
-            deniedUnauthorizedConsumer(rule.realm);
-            LOG_DEBUG("unauthorized consumer: " +
-                      credential_to_name_iter->second);
-            return false;
-          }
+        if (!checkAllowSet(allow_set, credential_to_name_iter->second,
+                           rule.realm)) {
+          return false;
         }
       }
       return true;
     }
   } else {
+    // Collect consumers that have per-consumer key configuration
+    std::vector<const Consumer*> perConsumerKeyConsumers;
     for (const auto& consumer : rule.consumers) {
-      std::vector<std::string> keys_to_check =
-          consumer.keys.value_or(rule.keys);
-      bool in_query = consumer.in_query.value_or(rule.in_query);
-      bool in_header = consumer.in_header.value_or(rule.in_header);
+      if (hasPerConsumerKeyConfig(consumer)) {
+        perConsumerKeyConsumers.push_back(&consumer);
+      }
+    }
 
-      for (const auto& key : keys_to_check) {
-        auto credential = extractCredential(in_header, in_query, key);
+    // Fast path: no per-consumer key consumers, use O(1) credential_to_name
+    // lookup
+    if (perConsumerKeyConsumers.empty()) {
+      for (const auto& key : rule.keys) {
+        auto credential = extractCredential(rule.in_header, rule.in_query, key);
         if (credential.empty()) {
           LOG_DEBUG("empty credential for key: " + key);
           continue;
         }
 
-        if (consumer.credentials.find(credential) == consumer.credentials.end()) {
-          LOG_DEBUG("credential " + credential + " does not match the consumer " + consumer.name);
+        auto iter = rule.credential_to_name.find(credential);
+        if (iter == rule.credential_to_name.end()) {
+          LOG_DEBUG("api key not found: " + maskCredential(credential));
           continue;
         }
 
-        auto auth_credential_iter = rule.credentials.find(credential);
-        if (auth_credential_iter == rule.credentials.end()) {
-          LOG_DEBUG("api key not found: " + credential);
+        addRequestHeader("X-Mse-Consumer", iter->second);
+        if (!checkAllowSet(allow_set, iter->second, rule.realm)) {
+          return false;
+        }
+        return true;
+      }
+      LOG_DEBUG("No valid credentials were found (fast path).");
+      deniedInvalidCredentials(rule.realm);
+      return false;
+    }
+
+    // Build a set of per-consumer key consumer names for quick lookup
+    std::unordered_set<std::string> perConsumerNames;
+    for (const auto* consumer : perConsumerKeyConsumers) {
+      perConsumerNames.insert(consumer->name);
+    }
+
+    // Try O(1) fast path first for consumers without per-consumer keys
+    for (const auto& key : rule.keys) {
+      auto credential = extractCredential(rule.in_header, rule.in_query, key);
+      if (credential.empty()) {
+        LOG_DEBUG("empty credential for key: " + key);
+        continue;
+      }
+
+      auto iter = rule.credential_to_name.find(credential);
+      if (iter == rule.credential_to_name.end()) {
+        LOG_DEBUG("api key not found: " + maskCredential(credential));
+        continue;
+      }
+
+      // Skip if this credential belongs to a per-consumer key consumer
+      if (perConsumerNames.count(iter->second) > 0) {
+        continue;
+      }
+
+      addRequestHeader("X-Mse-Consumer", iter->second);
+      if (!checkAllowSet(allow_set, iter->second, rule.realm)) {
+        return false;
+      }
+      return true;
+    }
+
+    // Slow path: check per-consumer key consumers with cached credentials
+    std::unordered_map<std::string, std::string> credentialCache;
+    for (const auto* consumer : perConsumerKeyConsumers) {
+      std::vector<std::string> keys_to_check =
+          consumer->keys.value_or(rule.keys);
+      bool in_query = consumer->in_query.value_or(rule.in_query);
+      bool in_header = consumer->in_header.value_or(rule.in_header);
+
+      for (const auto& key : keys_to_check) {
+        // Cache key includes extraction source to avoid cross-contamination
+        // between consumers with different in_header/in_query settings
+        std::string cache_key = absl::StrCat(
+            key, ":", in_header ? "h" : "", in_query ? "q" : "");
+        if (credentialCache.find(cache_key) == credentialCache.end()) {
+          credentialCache[cache_key] =
+              extractCredential(in_header, in_query, key);
+        }
+        const auto& credential = credentialCache[cache_key];
+        if (credential.empty()) {
+          LOG_DEBUG("empty credential for key: " + key);
           continue;
         }
 
-        auto credential_to_name_iter = rule.credential_to_name.find(credential);
-        if (credential_to_name_iter != rule.credential_to_name.end()) {
-          addRequestHeader("X-Mse-Consumer", credential_to_name_iter->second);
-          if (allow_set) {
-            if (allow_set->empty()) {
-              LOG_DEBUG("allow set is empty, nobody is allowed");
-              deniedUnauthorizedConsumer(rule.realm);
-              return false;
-            }
-            if (allow_set->find(credential_to_name_iter->second) == allow_set->end()) {
-              deniedUnauthorizedConsumer(rule.realm);
-              LOG_DEBUG("unauthorized consumer: " +
-                        credential_to_name_iter->second);
-              return false;
-            }
-          }
+        if (consumer->credentials.find(credential) ==
+            consumer->credentials.end()) {
+          LOG_DEBUG("credential " + maskCredential(credential) +
+                    " does not match the consumer " + consumer->name);
+          continue;
+        }
+
+        auto iter = rule.credential_to_name.find(credential);
+        if (iter == rule.credential_to_name.end()) {
+          LOG_DEBUG("api key not found: " + maskCredential(credential));
+          continue;
+        }
+
+        addRequestHeader("X-Mse-Consumer", iter->second);
+        if (!checkAllowSet(allow_set, iter->second, rule.realm)) {
+          return false;
         }
         return true;
       }
     }
+
+    LOG_DEBUG("No valid credentials were found after checking all consumers.");
+    deniedInvalidCredentials(rule.realm);
+    return false;
   }
 
-  LOG_DEBUG("No valid credentials were found after checking all consumers.");
+  LOG_DEBUG("No valid credentials were found after checking all keys.");
   deniedInvalidCredentials(rule.realm);
   return false;
 }
 
 std::string PluginRootContext::extractCredential(bool in_header, bool in_query,
-                                                 const std::string& key) {
+                                                 const std::string& key) const {
   if (in_header) {
     auto header = getRequestHeader(key);
     if (header->size() != 0) {
