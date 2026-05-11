@@ -32,7 +32,7 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/v2/vo"
 	"go.uber.org/atomic"
 	"istio.io/api/networking/v1alpha3"
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 
 	apiv1 "github.com/alibaba/higress/v2/api/networking/v1"
 	"github.com/alibaba/higress/v2/pkg/common"

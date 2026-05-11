@@ -16,7 +16,7 @@ package client
 
 import (
 	"github.com/hudl/fargo"
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 )
 
 type Handler func(application *fargo.Application) error

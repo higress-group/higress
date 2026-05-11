@@ -678,3 +678,35 @@ func TestProviderConfig_SetDefaultCapabilities(t *testing.T) {
 		assert.Equal(t, "/v1/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
 	})
 }
+
+func TestStripClaudeInternalMessageFields(t *testing.T) {
+	body := []byte(`{
+		"model":"claude",
+		"claude_thinking":{"type":"adaptive"},
+		"claude_output_config":{"effort":"high"},
+		"claude_anthropic_beta":["effort-2025-11-24"],
+		"messages":[{
+			"role":"assistant",
+			"content":"answer",
+			"reasoning_content":"reasoning",
+			"reasoning_signature":"sig",
+			"reasoning_redacted_content":"opaque",
+			"claude_content_blocks":[{"type":"thinking","thinking":"","signature":"sig"}],
+			"claude_content_block_index":1,
+			"claude_content_block_stop":1
+		}]
+	}`)
+
+	result := stripClaudeInternalMessageFields(body)
+
+	assert.False(t, gjson.GetBytes(result, "claude_thinking").Exists())
+	assert.False(t, gjson.GetBytes(result, "claude_output_config").Exists())
+	assert.False(t, gjson.GetBytes(result, "claude_anthropic_beta").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.reasoning_content").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.reasoning_signature").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.reasoning_redacted_content").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_blocks").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_block_index").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_block_stop").Exists())
+	assert.Equal(t, "answer", gjson.GetBytes(result, "messages.0.content").String())
+}

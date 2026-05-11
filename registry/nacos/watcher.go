@@ -27,7 +27,7 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/model"
 	"github.com/nacos-group/nacos-sdk-go/vo"
 	"istio.io/api/networking/v1alpha3"
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 
 	apiv1 "github.com/alibaba/higress/v2/api/networking/v1"
 	"github.com/alibaba/higress/v2/pkg/common"

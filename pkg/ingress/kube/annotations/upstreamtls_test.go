@@ -17,8 +17,10 @@ package annotations
 import (
 	"testing"
 
+	"github.com/golang/protobuf/ptypes/wrappers"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"google.golang.org/protobuf/testing/protocmp"
 	networking "istio.io/api/networking/v1alpha3"
 )
 
@@ -129,6 +131,9 @@ func TestApplyTrafficPolicy(t *testing.T) {
 				Tls: &networking.ClientTLSSettings{
 					Mode: networking.ClientTLSSettings_SIMPLE,
 					Sni:  "SNI",
+					InsecureSkipVerify: &wrappers.BoolValue{
+						Value: true,
+					},
 				},
 			},
 		},
@@ -158,7 +163,9 @@ func TestApplyTrafficPolicy(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run("", func(t *testing.T) {
 			parser.ApplyTrafficPolicy(nil, testCase.input, testCase.config)
-			if diff := cmp.Diff(testCase.expect, testCase.input, cmpopts.IgnoreUnexported(unexportedIgnoredTypes...)); diff != "" {
+			if diff := cmp.Diff(testCase.expect, testCase.input, protocmp.Transform(),
+				cmpopts.IgnoreUnexported(unexportedIgnoredTypes...),
+			); diff != "" {
 				t.Fatalf("TestApplyTrafficPolicy() mismatch (-want +got): \n%s", diff)
 			}
 		})
