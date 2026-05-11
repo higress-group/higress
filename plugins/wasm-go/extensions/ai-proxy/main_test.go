@@ -239,3 +239,9 @@ func TestOpenRouter(t *testing.T) {
 func TestZhipuAI(t *testing.T) {
 	test.RunZhipuAIClaudeAutoConversionTests(t)
 }
+
+func TestCooldown(t *testing.T) {
+	test.RunCooldownParseConfigTests(t)
+	test.RunCooldownOnHttpResponseHeadersTests(t)
+	test.RunCooldownRecoveryTests(t)
+}

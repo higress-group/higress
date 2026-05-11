@@ -517,6 +517,50 @@ func TestFailover_FromJson_Defaults(t *testing.T) {
 		assert.Equal(t, int64(8000), f.healthCheckTimeout)
 		assert.Equal(t, "test-model", f.healthCheckModel)
 	})
+
+	t.Run("cooldown_duration_default", func(t *testing.T) {
+		f := &failover{}
+		jsonStr := `{"enabled": true}`
+		f.FromJson(gjson.Parse(jsonStr))
+		assert.Equal(t, int64(0), f.cooldownDuration)
+	})
+
+	t.Run("cooldown_duration_custom", func(t *testing.T) {
+		f := &failover{}
+		jsonStr := `{"enabled": true, "cooldownDuration": 60000}`
+		f.FromJson(gjson.Parse(jsonStr))
+		assert.Equal(t, int64(60000), f.cooldownDuration)
+	})
+}
+
+func TestFailover_Validate(t *testing.T) {
+	t.Run("only_healthCheckModel", func(t *testing.T) {
+		f := &failover{healthCheckModel: "gpt-3.5-turbo"}
+		assert.NoError(t, f.Validate())
+	})
+
+	t.Run("only_cooldownDuration", func(t *testing.T) {
+		f := &failover{cooldownDuration: 60000}
+		assert.NoError(t, f.Validate())
+	})
+
+	t.Run("both_healthCheckModel_and_cooldownDuration", func(t *testing.T) {
+		f := &failover{healthCheckModel: "gpt-3.5-turbo", cooldownDuration: 60000}
+		assert.NoError(t, f.Validate())
+	})
+
+	t.Run("neither_healthCheckModel_nor_cooldownDuration", func(t *testing.T) {
+		f := &failover{}
+		err := f.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "either healthCheckModel or cooldownDuration")
+	})
+
+	t.Run("negative_cooldownDuration", func(t *testing.T) {
+		f := &failover{cooldownDuration: -1}
+		err := f.Validate()
+		assert.Error(t, err)
+	})
 }
 
 func TestFailover_FromJson_FailoverOnStatus(t *testing.T) {
