@@ -12,7 +12,7 @@ sources:
 dependencies:
 - name: higress-core
   repository: "file://../core"
-  version: 2.2.0
+  version: 2.2.1
 - name: higress-console
   repository: "https://higress.io/helm-charts/"
   version: 2.2.1

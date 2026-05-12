@@ -71,6 +71,7 @@ const (
 	ApiNameQwenAsyncAIGC               ApiName = "qwen/v1/services/aigc"
 	ApiNameQwenAsyncTask               ApiName = "qwen/v1/tasks"
 	ApiNameQwenV1Rerank                ApiName = "qwen/v1/rerank"
+	ApiNameQwenV1Conversations         ApiName = "qwen/v1/conversations"
 	ApiNameGeminiGenerateContent       ApiName = "gemini/v1beta/generatecontent"
 	ApiNameGeminiStreamGenerateContent ApiName = "gemini/v1beta/streamgeneratecontent"
 	ApiNameAnthropicMessages           ApiName = "anthropic/v1/messages"
@@ -117,6 +118,10 @@ const (
 
 	// Cohere
 	PathCohereV1Rerank = "/v1/rerank"
+
+	// Qwen
+	PathQwenV1Reranks       = "/v1/reranks"
+	PathQwenV1Conversations = "/v1/conversations"
 
 	providerTypeMoonshot   = "moonshot"
 	providerTypeAzure      = "azure"
@@ -487,6 +492,9 @@ type ProviderConfig struct {
 	// @Title zh-CN HiClaw 模式
 	// @Description zh-CN 开启后同时启用 mergeConsecutiveMessages 和 promoteThinkingOnEmpty，适用于 HiClaw 多 Agent 协作场景。
 	hiclawMode bool `required:"false" yaml:"hiclawMode" json:"hiclawMode"`
+	// @Title zh-CN Provider 基础路径
+	// @Description zh-CN 当配置了此值时，各个 Provider 在改写请求路径时会将其添加到路径前面，例如配置"/api/ai"后，请求路径"/v1/chat/completions"会被改写为"/api/ai/v1/chat/completions"
+	providerBasePath string `required:"false" yaml:"providerBasePath" json:"providerBasePath"`
 }
 
 func (c *ProviderConfig) GetId() string {
@@ -499,20 +507,6 @@ func (c *ProviderConfig) GetType() string {
 
 func (c *ProviderConfig) GetProtocol() string {
 	return c.protocol
-}
-
-// resolveDomain resolves the domain to use based on priority:
-// 1. providerDomain (generic override for all providers)
-// 2. provider-specific domain config (e.g., geminiDomain, doubaoDomain)
-// 3. default hardcoded domain
-func (c *ProviderConfig) resolveDomain(providerSpecificDomain, defaultDomain string) string {
-	if c.providerDomain != "" {
-		return c.providerDomain
-	}
-	if providerSpecificDomain != "" {
-		return providerSpecificDomain
-	}
-	return defaultDomain
 }
 
 func (c *ProviderConfig) GetVllmCustomUrl() string {
@@ -733,6 +727,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 		c.mergeConsecutiveMessages = true
 		c.promoteThinkingOnEmpty = true
 	}
+	c.providerBasePath = json.Get("providerBasePath").String()
 }
 
 func (c *ProviderConfig) Validate() error {
@@ -867,6 +862,10 @@ func (c *ProviderConfig) IsOriginal() bool {
 	return c.protocol == protocolOriginal
 }
 
+func (c *ProviderConfig) IsGeneric() bool {
+	return c.typ == providerTypeGeneric
+}
+
 func (c *ProviderConfig) GetPromoteThinkingOnEmpty() bool {
 	return c.promoteThinkingOnEmpty
 }
@@ -881,6 +880,14 @@ func CreateProvider(pc ProviderConfig) (Provider, error) {
 		return nil, errors.New("unknown provider type: " + pc.typ)
 	}
 	return initializer.CreateProvider(pc)
+}
+
+// applyProviderBasePath prepends the ProviderBasePath to the given path if configured.
+func (c *ProviderConfig) applyProviderBasePath(path string) string {
+	if c.providerBasePath != "" && !strings.HasPrefix(path, c.providerBasePath) {
+		return c.providerBasePath + path
+	}
+	return path
 }
 
 func (c *ProviderConfig) parseRequestAndMapModel(ctx wrapper.HttpContext, request interface{}, body []byte) error {
@@ -1214,12 +1221,20 @@ func (c *ProviderConfig) handleRequestBody(
 		}
 	}
 
+	if needClaudeConversion && provider.GetProviderType() != providerTypeBedrock && provider.GetProviderType() != providerTypeClaude {
+		body = stripClaudeInternalMessageFields(body)
+	}
+
 	// use openai protocol (either original openai or converted from claude)
 	if handler, ok := provider.(TransformRequestBodyHandler); ok {
 		body, err = handler.TransformRequestBody(ctx, apiName, body)
 	} else if handler, ok := provider.(TransformRequestBodyHeadersHandler); ok {
 		headers := util.GetRequestHeaders()
 		body, err = handler.TransformRequestBodyHeaders(ctx, apiName, body, headers)
+		// Apply providerBasePath if configured
+		if c.providerBasePath != "" {
+			headers.Set(":path", c.applyProviderBasePath(headers.Get(":path")))
+		}
 		util.ReplaceRequestHeaders(headers)
 	} else {
 		body, err = c.defaultTransformRequestBody(ctx, apiName, body)
@@ -1241,6 +1256,38 @@ func (c *ProviderConfig) handleRequestBody(
 		return types.ActionContinue, err
 	}
 	return types.ActionContinue, replaceRequestBody(body)
+}
+
+func stripClaudeInternalMessageFields(body []byte) []byte {
+	result := body
+	for _, field := range []string{"claude_thinking", "claude_output_config", "claude_anthropic_beta"} {
+		if updated, err := sjson.DeleteBytes(result, field); err == nil {
+			result = updated
+		}
+	}
+
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return result
+	}
+
+	for _, field := range []string{
+		"reasoning",
+		"reasoning_content",
+		"reasoning_signature",
+		"reasoning_redacted_content",
+		"claude_content_blocks",
+		"claude_content_block_index",
+		"claude_content_block_stop",
+	} {
+		messages.ForEach(func(key, _ gjson.Result) bool {
+			if updated, err := sjson.DeleteBytes(result, fmt.Sprintf("messages.%d.%s", key.Int(), field)); err == nil {
+				result = updated
+			}
+			return true
+		})
+	}
+	return result
 }
 
 func (c *ProviderConfig) handleRequestHeaders(provider Provider, ctx wrapper.HttpContext, apiName ApiName) {
@@ -1276,6 +1323,18 @@ func (c *ProviderConfig) handleRequestHeaders(provider Provider, ctx wrapper.Htt
 	if c.basePath != "" && c.basePathHandling == basePathHandlingPrepend && !strings.HasPrefix(headers.Get(":path"), c.basePath) {
 		headers.Set(":path", path.Join(c.basePath, headers.Get(":path")))
 	}
+
+	// Apply providerBasePath if configured
+	currentPath := headers.Get(":path")
+	if c.providerBasePath != "" {
+		headers.Set(":path", c.applyProviderBasePath(currentPath))
+	}
+
+	// Apply providerDomain if configured (overrides any domain set by the provider)
+	if c.providerDomain != "" {
+		util.OverwriteRequestHostHeader(headers, c.providerDomain)
+	}
+
 	util.ReplaceRequestHeaders(headers)
 }
 

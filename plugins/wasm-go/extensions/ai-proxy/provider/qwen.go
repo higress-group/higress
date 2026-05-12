@@ -27,10 +27,12 @@ const (
 	qwenChatCompletionPath                = "/api/v1/services/aigc/text-generation/generation"
 	qwenTextEmbeddingPath                 = "/api/v1/services/embeddings/text-embedding/text-embedding"
 	qwenTextRerankPath                    = "/api/v1/services/rerank/text-rerank/text-rerank"
+	qwenCompatibleTextRerankPath          = "/compatible-api/v1/reranks"
 	qwenCompatibleChatCompletionPath      = "/compatible-mode/v1/chat/completions"
 	qwenCompatibleCompletionsPath         = "/compatible-mode/v1/completions"
 	qwenCompatibleTextEmbeddingPath       = "/compatible-mode/v1/embeddings"
-	qwenCompatibleResponsesPath           = "/api/v2/apps/protocols/compatible-mode/v1/responses"
+	qwenCompatibleConversationsPath       = "/compatible-mode/v1/conversations"
+	qwenCompatibleResponsesPath           = "/compatible-mode/v1/responses"
 	qwenCompatibleFilesPath               = "/compatible-mode/v1/files"
 	qwenCompatibleRetrieveFilePath        = "/compatible-mode/v1/files/{file_id}"
 	qwenCompatibleRetrieveFileContentPath = "/compatible-mode/v1/files/{file_id}/content"
@@ -78,7 +80,8 @@ func (m *qwenProviderInitializer) DefaultCapabilities(qwenEnableCompatible bool)
 			string(ApiNameRetrieveBatch):       qwenCompatibleRetrieveBatchPath,
 			string(ApiNameQwenAsyncAIGC):       qwenAsyncAIGCPath,
 			string(ApiNameQwenAsyncTask):       qwenAsyncTaskPath,
-			string(ApiNameQwenV1Rerank):        qwenTextRerankPath,
+			string(ApiNameQwenV1Rerank):        qwenCompatibleTextRerankPath,
+			string(ApiNameQwenV1Conversations): qwenCompatibleConversationsPath,
 			string(ApiNameAnthropicMessages):   qwenAnthropicMessagesPath,
 		}
 	} else {
@@ -715,8 +718,11 @@ func (m *qwenProvider) GetApiName(path string) ApiName {
 		return ApiNameQwenAsyncAIGC
 	case strings.Contains(path, qwenAsyncTaskPath):
 		return ApiNameQwenAsyncTask
-	case strings.Contains(path, qwenTextRerankPath):
+	case strings.Contains(path, qwenTextRerankPath),
+		strings.Contains(path, qwenCompatibleTextRerankPath):
 		return ApiNameQwenV1Rerank
+	case strings.Contains(path, qwenCompatibleConversationsPath):
+		return ApiNameQwenV1Conversations
 	default:
 		return ""
 	}

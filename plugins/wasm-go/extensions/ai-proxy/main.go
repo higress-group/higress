@@ -69,6 +69,9 @@ var (
 		{provider.PathAnthropicComplete, provider.ApiNameAnthropicComplete},
 		// Cohere style
 		{provider.PathCohereV1Rerank, provider.ApiNameCohereV1Rerank},
+		// Qwen style
+		{provider.PathQwenV1Reranks, provider.ApiNameQwenV1Rerank},
+		{provider.PathQwenV1Conversations, provider.ApiNameQwenV1Conversations},
 	}
 	pathPatternToApiName = []pair[*regexp.Regexp, provider.ApiName]{
 		// OpenAI style
@@ -300,7 +303,8 @@ func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig
 			log.Errorf("failed to replace request body by custom settings: %v", settingErr)
 		}
 		// 仅 /v1/chat/completions 和 /v1/completions 接口支持 stream_options 参数
-		if providerConfig.IsOpenAIProtocol() && (apiName == provider.ApiNameChatCompletion || apiName == provider.ApiNameCompletion) {
+		// generic provider 不做能力映射，不添加 stream_options
+		if providerConfig.IsOpenAIProtocol() && !providerConfig.IsGeneric() && (apiName == provider.ApiNameChatCompletion || apiName == provider.ApiNameCompletion) {
 			newBody = normalizeOpenAiRequestBody(newBody)
 		}
 		log.Debugf("[onHttpRequestBody] newBody=%s", newBody)

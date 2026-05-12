@@ -792,22 +792,36 @@ func (m *MilvusProvider) ListDocs(ctx context.Context, limit int) ([]schema.Docu
 			fieldName := strings.ToLower(fieldMapping.StandardName)
 			switch fieldName {
 			case "id":
-				if v, err := col.(*entity.ColumnVarChar).Get(i); err == nil {
-					id = v.(string)
+				if typedCol, ok := col.(*entity.ColumnVarChar); ok {
+					if v, err := typedCol.Get(i); err == nil {
+						if s, ok := v.(string); ok {
+							id = s
+						}
+					}
 				}
 			case "content":
-				if v, err := col.(*entity.ColumnVarChar).Get(i); err == nil {
-					content = v.(string)
+				if typedCol, ok := col.(*entity.ColumnVarChar); ok {
+					if v, err := typedCol.Get(i); err == nil {
+						if s, ok := v.(string); ok {
+							content = s
+						}
+					}
 				}
 			case "metadata":
-				if v, err := col.(*entity.ColumnJSONBytes).Get(i); err == nil {
-					if bytes, ok := v.([]byte); ok {
-						_ = json.Unmarshal(bytes, &metadata)
+				if typedCol, ok := col.(*entity.ColumnJSONBytes); ok {
+					if v, err := typedCol.Get(i); err == nil {
+						if bytes, ok := v.([]byte); ok {
+							_ = json.Unmarshal(bytes, &metadata)
+						}
 					}
 				}
 			case "created_at":
-				if v, err := col.(*entity.ColumnInt64).Get(i); err == nil {
-					createdAt = v.(int64)
+				if typedCol, ok := col.(*entity.ColumnInt64); ok {
+					if v, err := typedCol.Get(i); err == nil {
+						if ts, ok := v.(int64); ok {
+							createdAt = ts
+						}
+					}
 				}
 			}
 		}

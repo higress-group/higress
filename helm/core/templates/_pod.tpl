@@ -20,6 +20,11 @@ template:
       {{- end }}
       {{- include "gateway.selectorLabels" . | nindent 6 }}
   spec:
+    {{- if .Values.gateway.imagePullPolicy }}
+    imagePullPolicy: {{ .Values.gateway.imagePullPolicy }}
+    {{- else if .Values.global.imagePullPolicy }}
+    imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+    {{- end }}
     {{- with .Values.gateway.imagePullSecrets }}
     imagePullSecrets:
       {{- toYaml . | nindent 6 }}

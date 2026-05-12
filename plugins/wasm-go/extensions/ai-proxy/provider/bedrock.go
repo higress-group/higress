@@ -47,6 +47,8 @@ const (
 	bedrockCachePointPositionSystemPrompt    = "systemPrompt"
 	bedrockCachePointPositionLastUserMessage = "lastUserMessage"
 	bedrockCachePointPositionLastMessage     = "lastMessage"
+
+	ctxKeyBedrockToolCallState = "bedrock_tool_call_state"
 )
 
 var (
@@ -113,6 +115,7 @@ func (b *bedrockProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name 
 }
 
 func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContext, bedrockEvent ConverseStreamEvent) ([]byte, error) {
+	needClaudeResponseConversion, _ := ctx.GetContext("needClaudeResponseConversion").(bool)
 	choices := make([]chatCompletionChoice, 0)
 	chatChoice := chatCompletionChoice{
 		Delta: &chatMessage{},
@@ -120,41 +123,53 @@ func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContex
 	if bedrockEvent.Role != nil {
 		chatChoice.Delta.Role = *bedrockEvent.Role
 	}
+	if bedrockEvent.ContentBlockStop != nil {
+		if !needClaudeResponseConversion {
+			return []byte{}, nil
+		}
+		index := bedrockEvent.ContentBlockStop.ContentBlockIndex
+		chatChoice.Delta.ClaudeContentBlockStop = &index
+	}
 	if bedrockEvent.Start != nil {
+		if bedrockEvent.Start.ToolUse == nil {
+			return nil, nil
+		}
+		toolCallIndex := getBedrockOpenAIToolCallIndex(ctx, bedrockEvent.ContentBlockIndex)
 		chatChoice.Delta.Content = nil
 		chatChoice.Delta.ToolCalls = []toolCall{
 			{
-				Id:   bedrockEvent.Start.ToolUse.ToolUseID,
-				Type: "function",
+				Index: toolCallIndex,
+				Id:    bedrockEvent.Start.ToolUse.ToolUseID,
+				Type:  "function",
 				Function: functionCall{
 					Name:      bedrockEvent.Start.ToolUse.Name,
 					Arguments: "",
 				},
 			},
 		}
+		if needClaudeResponseConversion {
+			index := bedrockEvent.ContentBlockIndex
+			chatChoice.Delta.ClaudeContentBlockIndex = &index
+		}
 	}
 	if bedrockEvent.Delta != nil {
 		if bedrockEvent.Delta.ReasoningContent != nil {
-			var content string
-			if ctx.GetContext("thinking_start") == nil {
-				content += reasoningStartTag
-				ctx.SetContext("thinking_start", true)
-			}
-			content += bedrockEvent.Delta.ReasoningContent.Text
-			chatChoice.Delta = &chatMessage{Content: &content}
+			chatChoice.Delta.ReasoningContent = bedrockEvent.Delta.ReasoningContent.Text
+			chatChoice.Delta.ReasoningSignature = bedrockEvent.Delta.ReasoningContent.Signature
+			chatChoice.Delta.ReasoningRedactedContent = bedrockEvent.Delta.ReasoningContent.RedactedContent
 		} else if bedrockEvent.Delta.Text != nil {
-			var content string
-			if ctx.GetContext("thinking_start") != nil && ctx.GetContext("thinking_end") == nil {
-				content += reasoningEndTag
-				ctx.SetContext("thinking_end", true)
-			}
-			content += *bedrockEvent.Delta.Text
-			chatChoice.Delta = &chatMessage{Content: &content}
+			chatChoice.Delta.Content = *bedrockEvent.Delta.Text
+		}
+		if needClaudeResponseConversion {
+			index := bedrockEvent.ContentBlockIndex
+			chatChoice.Delta.ClaudeContentBlockIndex = &index
 		}
 		if bedrockEvent.Delta.ToolUse != nil {
+			toolCallIndex := getBedrockOpenAIToolCallIndex(ctx, bedrockEvent.ContentBlockIndex)
 			chatChoice.Delta.ToolCalls = []toolCall{
 				{
-					Type: "function",
+					Index: toolCallIndex,
+					Type:  "function",
 					Function: functionCall{
 						Arguments: bedrockEvent.Delta.ToolUse.Input,
 					},
@@ -192,6 +207,28 @@ func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContex
 	return []byte(openAIChunk.String()), nil
 }
 
+type bedrockToolCallState struct {
+	indexes map[int]int
+	next    int
+}
+
+func getBedrockOpenAIToolCallIndex(ctx wrapper.HttpContext, contentBlockIndex int) int {
+	state, _ := ctx.GetContext(ctxKeyBedrockToolCallState).(*bedrockToolCallState)
+	if state == nil {
+		state = &bedrockToolCallState{indexes: make(map[int]int)}
+		ctx.SetContext(ctxKeyBedrockToolCallState, state)
+	}
+
+	if toolCallIndex, ok := state.indexes[contentBlockIndex]; ok {
+		return toolCallIndex
+	}
+
+	toolCallIndex := state.next
+	state.indexes[contentBlockIndex] = toolCallIndex
+	state.next++
+	return toolCallIndex
+}
+
 type ConverseStreamEvent struct {
 	ContentBlockIndex int                                   `json:"contentBlockIndex,omitempty"`
 	Delta             *converseStreamEventContentBlockDelta `json:"delta,omitempty"`
@@ -199,6 +236,11 @@ type ConverseStreamEvent struct {
 	StopReason        *string                               `json:"stopReason,omitempty"`
 	Usage             *tokenUsage                           `json:"usage,omitempty"`
 	Start             *contentBlockStart                    `json:"start,omitempty"`
+	ContentBlockStop  *contentBlockStop                     `json:"contentBlockStop,omitempty"`
+}
+
+type contentBlockStop struct {
+	ContentBlockIndex int `json:"contentBlockIndex"`
 }
 
 type converseStreamEventContentBlockDelta struct {
@@ -221,8 +263,9 @@ type toolUseBlockDelta struct {
 }
 
 type reasoningContentDelta struct {
-	Text      string `json:"text,omitempty"`
-	Signature string `json:"signature,omitempty"`
+	Text            string `json:"text,omitempty"`
+	Signature       string `json:"signature,omitempty"`
+	RedactedContent string `json:"redactedContent,omitempty"`
 }
 
 type bedrockImageGenerationResponse struct {
@@ -318,6 +361,9 @@ func extractAmazonEventStreamEvents(ctx wrapper.HttpContext, chunk []byte) []Con
 		}
 		var event ConverseStreamEvent
 		if err = json.Unmarshal(msg.Payload, &event); err == nil {
+			if eventType, ok := amazonEventType(msg.Headers); ok && eventType == "contentBlockStop" {
+				event.ContentBlockStop = &contentBlockStop{ContentBlockIndex: event.ContentBlockIndex}
+			}
 			events = append(events, event)
 		}
 		lastRead = r.Size() - int64(r.Len())
@@ -328,6 +374,16 @@ func extractAmazonEventStreamEvents(ctx wrapper.HttpContext, chunk []byte) []Con
 		ctx.SetContext(ctxKeyStreamingBody, nil)
 	}
 	return events
+}
+
+func amazonEventType(headers headers) (string, bool) {
+	for _, header := range headers {
+		if header.Name == ":event-type" {
+			value, ok := header.Value.Get().(string)
+			return value, ok
+		}
+	}
+	return "", false
 }
 
 type bedrockStreamMessage struct {
@@ -793,7 +849,6 @@ func (b *bedrockProvider) onChatCompletionRequestBody(ctx wrapper.HttpContext, b
 	if err != nil {
 		return nil, err
 	}
-
 	streaming := request.Stream
 	headers.Set("Accept", "*/*")
 	if streaming {
@@ -813,13 +868,16 @@ func (b *bedrockProvider) buildBedrockTextGenerationRequest(origRequest *chatCom
 		case roleSystem:
 			systemMessages = append(systemMessages, systemContentBlock{Text: msg.StringContent()})
 		case roleTool:
-			toolResultContent := chatToolMessage2BedrockToolResultContent(msg)
+			toolResultContents := []bedrockMessageContent{chatToolMessage2BedrockToolResultContent(msg)}
+			if len(msg.ClaudeContentBlocks) > 0 {
+				toolResultContents = claudeContentBlocksToBedrockContents(msg.ClaudeContentBlocks)
+			}
 			if len(messages) > 0 && messages[len(messages)-1].Role == roleUser && messages[len(messages)-1].Content[0].ToolResult != nil {
-				messages[len(messages)-1].Content = append(messages[len(messages)-1].Content, toolResultContent)
+				messages[len(messages)-1].Content = append(messages[len(messages)-1].Content, toolResultContents...)
 			} else {
 				messages = append(messages, bedrockMessage{
 					Role:    roleUser,
-					Content: []bedrockMessageContent{toolResultContent},
+					Content: toolResultContents,
 				})
 			}
 		default:
@@ -854,7 +912,13 @@ func (b *bedrockProvider) buildBedrockTextGenerationRequest(origRequest *chatCom
 		log.Warnf("skip prompt cache injection for unsupported model: %s", origRequest.Model)
 	}
 
-	if origRequest.ReasoningEffort != "" {
+	thinking := bedrockThinkingFromClaudeConfig(origRequest.ClaudeThinking)
+	if thinking != nil {
+		if origRequest.ClaudeThinking.Type == "adaptive" && origRequest.ClaudeOutputConfig != nil && bedrockSupportsAdaptiveEffort(origRequest.ClaudeOutputConfig.Effort) {
+			thinking["effort"] = origRequest.ClaudeOutputConfig.Effort
+		}
+		request.AdditionalModelRequestFields["thinking"] = thinking
+	} else if origRequest.ReasoningEffort != "" {
 		thinkingBudget := 1024 // default
 		switch origRequest.ReasoningEffort {
 		case "low":
@@ -869,23 +933,34 @@ func (b *bedrockProvider) buildBedrockTextGenerationRequest(origRequest *chatCom
 			"budget_tokens": thinkingBudget,
 		}
 	}
+	if outputConfig := origRequest.ClaudeOutputConfig; outputConfig != nil {
+		if len(outputConfig.Format) > 0 {
+			request.OutputConfig = &bedrockOutputConfig{TextFormat: outputConfig.Format}
+		}
+	}
 
-	if origRequest.Tools != nil {
+	if origRequest.Tools != nil && origRequest.getToolChoiceType() != "none" {
+		hasThinking := thinking != nil || origRequest.ReasoningEffort != ""
 		request.ToolConfig = &bedrockToolConfig{}
-		if origRequest.ToolChoice == nil {
-			request.ToolConfig.ToolChoice.Auto = &struct{}{}
-		} else if choice_type, ok := origRequest.ToolChoice.(string); ok {
+		request.ToolConfig.ToolChoice.Auto = &struct{}{}
+		if choice_type := origRequest.getToolChoiceType(); choice_type != "" {
 			switch choice_type {
-			case "required":
-				request.ToolConfig.ToolChoice.Any = &struct{}{}
+			// "any" is accepted for direct Anthropic-compatible callers; OpenAI
+			// uses "required" for the same "must call at least one tool" behavior.
+			case "required", "any":
+				if !hasThinking {
+					request.ToolConfig.ToolChoice.Auto = nil
+					request.ToolConfig.ToolChoice.Any = &struct{}{}
+				}
 			case "auto":
 				request.ToolConfig.ToolChoice.Auto = &struct{}{}
-			case "none":
-				request.ToolConfig.ToolChoice.Auto = &struct{}{}
-			}
-		} else if choice, ok := origRequest.ToolChoice.(toolChoice); ok {
-			request.ToolConfig.ToolChoice.Tool = &bedrockToolSpecification{
-				Name: choice.Function.Name,
+			case "function":
+				if choice := origRequest.getToolChoiceObject(); !hasThinking && choice != nil && choice.Function.Name != "" {
+					request.ToolConfig.ToolChoice.Auto = nil
+					request.ToolConfig.ToolChoice.Tool = &bedrockSpecificToolChoice{
+						Name: choice.Function.Name,
+					}
+				}
 			}
 		}
 		request.ToolConfig.Tools = []bedrockTool{}
@@ -908,25 +983,62 @@ func (b *bedrockProvider) buildBedrockTextGenerationRequest(origRequest *chatCom
 }
 
 func (b *bedrockProvider) buildChatCompletionResponse(ctx wrapper.HttpContext, bedrockResponse *bedrockConverseResponse) *chatCompletionResponse {
-	var outputContent, reasoningContent, normalContent string
+	var reasoningContent, normalContent string
+	var claudeContent []claudeTextGenContent
 	for _, content := range bedrockResponse.Output.Message.Content {
 		if content.ReasoningContent != nil {
-			reasoningContent = content.ReasoningContent.ReasoningText.Text
+			if content.ReasoningContent.ReasoningText != nil {
+				text := content.ReasoningContent.ReasoningText.Text
+				signature := content.ReasoningContent.ReasoningText.Signature
+				if text != "" || signature != "" {
+					reasoningContent += text
+					claudeContent = append(claudeContent, claudeTextGenContent{
+						Type:      "thinking",
+						Thinking:  &text,
+						Signature: &signature,
+					})
+				}
+			}
+			if content.ReasoningContent.RedactedContent != "" {
+				claudeContent = append(claudeContent, claudeTextGenContent{
+					Type: "redacted_thinking",
+					Data: content.ReasoningContent.RedactedContent,
+				})
+			}
+		}
+		if content.ToolUse != nil {
+			input := content.ToolUse.Input
+			if input == nil {
+				input = map[string]interface{}{}
+			}
+			claudeContent = append(claudeContent, claudeTextGenContent{
+				Type:  "tool_use",
+				Id:    content.ToolUse.ToolUseId,
+				Name:  content.ToolUse.Name,
+				Input: &input,
+			})
 		}
 		if content.Text != "" {
-			normalContent = content.Text
+			normalContent += content.Text
+			text := content.Text
+			claudeContent = append(claudeContent, claudeTextGenContent{
+				Type: "text",
+				Text: &text,
+			})
 		}
 	}
-	if reasoningContent != "" {
-		outputContent = reasoningStartTag + reasoningContent + reasoningEndTag + normalContent
-	} else {
-		outputContent = normalContent
+	if ctx != nil {
+		needClaudeResponseConversion, _ := ctx.GetContext("needClaudeResponseConversion").(bool)
+		if needClaudeResponseConversion && len(claudeContent) > 0 {
+			ctx.SetContext(ctxKeyClaudeNativeResponseContent, claudeContent)
+		}
 	}
 	choice := chatCompletionChoice{
 		Index: 0,
 		Message: &chatMessage{
-			Role:    bedrockResponse.Output.Message.Role,
-			Content: outputContent,
+			Role:             bedrockResponse.Output.Message.Role,
+			Content:          normalContent,
+			ReasoningContent: reasoningContent,
 		},
 		FinishReason: util.Ptr(stopReasonBedrock2OpenAI(bedrockResponse.StopReason)),
 	}
@@ -1132,9 +1244,14 @@ type bedrockTextGenRequest struct {
 	Messages                     []bedrockMessage         `json:"messages"`
 	System                       []systemContentBlock     `json:"system,omitempty"`
 	InferenceConfig              bedrockInferenceConfig   `json:"inferenceConfig,omitempty"`
+	OutputConfig                 *bedrockOutputConfig     `json:"outputConfig,omitempty"`
 	AdditionalModelRequestFields map[string]interface{}   `json:"additionalModelRequestFields,omitempty"`
 	PerformanceConfig            PerformanceConfiguration `json:"performanceConfig,omitempty"`
 	ToolConfig                   *bedrockToolConfig       `json:"toolConfig,omitempty"`
+}
+
+type bedrockOutputConfig struct {
+	TextFormat json.RawMessage `json:"textFormat,omitempty"`
 }
 
 type bedrockToolConfig struct {
@@ -1151,9 +1268,13 @@ type bedrockTool struct {
 }
 
 type bedrockToolChoice struct {
-	Any  *struct{}                 `json:"any,omitempty"`
-	Auto *struct{}                 `json:"auto,omitempty"`
-	Tool *bedrockToolSpecification `json:"tool,omitempty"`
+	Any  *struct{}                  `json:"any,omitempty"`
+	Auto *struct{}                  `json:"auto,omitempty"`
+	Tool *bedrockSpecificToolChoice `json:"tool,omitempty"`
+}
+
+type bedrockSpecificToolChoice struct {
+	Name string `json:"name"`
 }
 
 type bedrockToolSpecification struct {
@@ -1172,11 +1293,12 @@ type bedrockMessage struct {
 }
 
 type bedrockMessageContent struct {
-	Text       string             `json:"text,omitempty"`
-	Image      *imageBlock        `json:"image,omitempty"`
-	ToolResult *toolResultBlock   `json:"toolResult,omitempty"`
-	ToolUse    *toolUseBlock      `json:"toolUse,omitempty"`
-	CachePoint *bedrockCachePoint `json:"cachePoint,omitempty"`
+	Text             string             `json:"text,omitempty"`
+	Image            *imageBlock        `json:"image,omitempty"`
+	ToolResult       *toolResultBlock   `json:"toolResult,omitempty"`
+	ToolUse          *toolUseBlock      `json:"toolUse,omitempty"`
+	ReasoningContent *reasoningContent  `json:"reasoningContent,omitempty"`
+	CachePoint       *bedrockCachePoint `json:"cachePoint,omitempty"`
 }
 
 type systemContentBlock struct {
@@ -1205,7 +1327,8 @@ type toolResultBlock struct {
 }
 
 type toolResultContentBlock struct {
-	Text string `json:"text"`
+	Text  *string     `json:"text,omitempty"`
+	Image *imageBlock `json:"image,omitempty"`
 }
 
 type toolUseBlock struct {
@@ -1248,11 +1371,12 @@ type contentBlock struct {
 }
 
 type reasoningContent struct {
-	ReasoningText reasoningText `json:"reasoningText"`
+	ReasoningText   *reasoningText `json:"reasoningText,omitempty"`
+	RedactedContent string         `json:"redactedContent,omitempty"`
 }
 
 type reasoningText struct {
-	Text      string `json:"text,omitempty"`
+	Text      string `json:"text"`
 	Signature string `json:"signature,omitempty"`
 }
 
@@ -1280,7 +1404,7 @@ func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMe
 	if text, ok := chatMessage.Content.(string); ok {
 		toolResultContent.Content = []toolResultContentBlock{
 			{
-				Text: text,
+				Text: util.Ptr(text),
 			},
 		}
 	} else if contentList, ok := chatMessage.Content.([]any); ok {
@@ -1289,7 +1413,7 @@ func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMe
 			if ok && contentMap["type"] == contentTypeText {
 				if text, ok := contentMap[contentTypeText].(string); ok {
 					toolResultContent.Content = append(toolResultContent.Content, toolResultContentBlock{
-						Text: text,
+						Text: util.Ptr(text),
 					})
 				}
 			}
@@ -1304,6 +1428,12 @@ func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMe
 
 func chatMessage2BedrockMessage(chatMessage chatMessage) bedrockMessage {
 	var result bedrockMessage
+	if len(chatMessage.ClaudeContentBlocks) > 0 {
+		return bedrockMessage{
+			Role:    chatMessage.Role,
+			Content: claudeContentBlocksToBedrockContents(chatMessage.ClaudeContentBlocks),
+		}
+	}
 	if len(chatMessage.ToolCalls) > 0 {
 		contents := make([]bedrockMessageContent, 0, len(chatMessage.ToolCalls))
 		for _, toolCall := range chatMessage.ToolCalls {
@@ -1357,6 +1487,102 @@ func chatMessage2BedrockMessage(chatMessage chatMessage) bedrockMessage {
 			Role:    chatMessage.Role,
 			Content: contents,
 		}
+	}
+	return result
+}
+
+func claudeContentBlocksToBedrockContents(blocks []claudeChatMessageContent) []bedrockMessageContent {
+	result := make([]bedrockMessageContent, 0, len(blocks))
+	for _, block := range blocks {
+		switch block.Type {
+		case "text":
+			result = append(result, bedrockMessageContent{Text: block.Text})
+		case "image":
+			if block.Source != nil && block.Source.Type == "base64" {
+				result = append(result, bedrockMessageContent{Image: &imageBlock{
+					Format: strings.TrimPrefix(block.Source.MediaType, "image/"),
+					Source: imageSource{Bytes: block.Source.Data},
+				}})
+			}
+		case "tool_use":
+			result = append(result, bedrockMessageContent{ToolUse: &toolUseBlock{
+				Input:     claudeToolUseInput(block.Input),
+				Name:      block.Name,
+				ToolUseId: block.Id,
+			}})
+		case "tool_result":
+			result = append(result, bedrockMessageContent{ToolResult: claudeToolResultBlockToBedrock(block)})
+		case "thinking":
+			result = append(result, bedrockMessageContent{ReasoningContent: &reasoningContent{
+				ReasoningText: &reasoningText{Text: block.Thinking, Signature: block.Signature},
+			}})
+		case "redacted_thinking":
+			result = append(result, bedrockMessageContent{ReasoningContent: &reasoningContent{
+				RedactedContent: block.Data,
+			}})
+		}
+	}
+	return result
+}
+
+func claudeToolUseInput(input *map[string]interface{}) map[string]interface{} {
+	if input == nil {
+		return map[string]interface{}{}
+	}
+	return *input
+}
+
+func bedrockThinkingFromClaudeConfig(thinking *claudeThinkingConfig) map[string]interface{} {
+	if thinking == nil || thinking.Type == "" || thinking.Type == "disabled" {
+		return nil
+	}
+	result := map[string]interface{}{"type": thinking.Type}
+	if thinking.Display != "" {
+		result["display"] = thinking.Display
+	}
+	if thinking.Type == "enabled" && thinking.BudgetTokens > 0 {
+		result["budget_tokens"] = thinking.BudgetTokens
+	}
+	return result
+}
+
+func bedrockSupportsAdaptiveEffort(effort string) bool {
+	switch effort {
+	case "low", "medium", "high":
+		return true
+	default:
+		return false
+	}
+}
+
+func claudeToolResultBlockToBedrock(block claudeChatMessageContent) *toolResultBlock {
+	result := &toolResultBlock{ToolUseId: block.ToolUseId}
+	if block.IsError {
+		result.Status = "error"
+	}
+	if block.Content == nil {
+		result.Content = []toolResultContentBlock{{Text: util.Ptr("")}}
+		return result
+	}
+	if block.Content.IsString {
+		result.Content = append(result.Content, toolResultContentBlock{Text: util.Ptr(block.Content.StringValue)})
+		return result
+	}
+	for _, item := range block.Content.ArrayValue {
+		switch item.Type {
+		case "text":
+			result.Content = append(result.Content, toolResultContentBlock{Text: util.Ptr(item.Text)})
+		case "image":
+			if item.Source != nil && item.Source.Type == "base64" {
+				result.Content = append(result.Content, toolResultContentBlock{Image: &imageBlock{
+					Format: strings.TrimPrefix(item.Source.MediaType, "image/"),
+					Source: imageSource{Bytes: item.Source.Data},
+				}})
+			}
+		}
+	}
+	if len(result.Content) == 0 {
+		result.Content = []toolResultContentBlock{{Text: util.Ptr("")}}
 	}
 	return result
 }

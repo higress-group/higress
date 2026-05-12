@@ -46,6 +46,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | controller.env | object | `{}` |  |
 | controller.hub | string | `""` |  |
 | controller.image | string | `"higress"` |  |
+| controller.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | controller.imagePullSecrets | list | `[]` |  |
 | controller.labels | object | `{}` |  |
 | controller.name | string | `"higress-controller"` |  |
@@ -98,6 +99,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | gateway.httpsPort | int | `443` |  |
 | gateway.hub | string | `""` |  |
 | gateway.image | string | `"gateway"` |  |
+| gateway.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | gateway.kind | string | `"Deployment"` | Use a `DaemonSet` or `Deployment` |
 | gateway.labels | object | `{}` | Labels to apply to all resources |
 | gateway.metrics.enabled | bool | `false` | If true, create PodMonitor or VMPodScrape for gateway |
@@ -270,6 +272,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | pilot.traceSampling | float | `1` |  |
 | pluginServer.hub | string | `""` |  |
 | pluginServer.image | string | `"plugin-server"` |  |
+| pluginServer.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | pluginServer.imagePullSecrets | list | `[]` |  |
 | pluginServer.labels | object | `{}` |  |
 | pluginServer.name | string | `"higress-plugin-server"` |  |

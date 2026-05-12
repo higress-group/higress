@@ -366,6 +366,29 @@ func RunQwenOnHttpRequestHeadersTests(t *testing.T) {
 			require.Contains(t, authValue, "sk-qwen-test123456789", "Authorization should contain qwen API token")
 		})
 
+		// 测试qwen请求头处理（reranks接口）
+		t.Run("qwen reranks request headers", func(t *testing.T) {
+			host, status := test.NewTestHost(basicQwenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/reranks"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath)
+			require.Contains(t, pathValue, "/api/v1/services/rerank/text-rerank/text-rerank", "Path should be converted to qwen rerank path")
+		})
+
 		// 测试qwen自定义域名请求头处理
 		t.Run("qwen custom domain request headers", func(t *testing.T) {
 			host, status := test.NewTestHost(qwenCustomDomainConfig)
@@ -449,7 +472,53 @@ func RunQwenOnHttpRequestHeadersTests(t *testing.T) {
 
 			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
 			require.True(t, hasPath)
-			require.Contains(t, pathValue, "/api/v2/apps/protocols/compatible-mode/v1/responses", "Path should use compatible mode responses path")
+			require.Contains(t, pathValue, "/compatible-mode/v1/responses", "Path should use compatible mode responses path")
+		})
+
+		// 测试qwen兼容模式请求头处理（reranks接口）
+		t.Run("qwen compatible mode reranks request headers", func(t *testing.T) {
+			host, status := test.NewTestHost(qwenEnableCompatibleConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/reranks"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath)
+			require.Contains(t, pathValue, "/compatible-api/v1/reranks", "Path should use compatible API reranks path")
+		})
+
+		// 测试qwen兼容模式请求头处理（conversations接口）
+		t.Run("qwen compatible mode conversations request headers", func(t *testing.T) {
+			host, status := test.NewTestHost(qwenEnableCompatibleConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/conversations"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath)
+			require.Contains(t, pathValue, "/compatible-mode/v1/conversations", "Path should use compatible mode conversations path")
 		})
 	})
 }
@@ -581,6 +650,35 @@ func RunQwenOnHttpRequestBodyTests(t *testing.T) {
 				}
 			}
 			require.True(t, hasFileLogs, "Should have file processing logs")
+		})
+
+		// 测试qwen请求体处理（reranks接口）
+		t.Run("qwen reranks request body", func(t *testing.T) {
+			host, status := test.NewTestHost(qwenMultiModelConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/reranks"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"model":"qwen3-rerank",
+				"documents":["doc1","doc2"],
+				"query":"test query",
+				"top_n":1
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+			require.Contains(t, string(processedBody), "qwen3-rerank", "Reranks request model should be preserved")
+			require.Contains(t, string(processedBody), "documents", "Reranks request documents should be preserved")
 		})
 
 		// 测试qwen请求体处理（qwen-vl模型，多模态）
@@ -723,6 +821,63 @@ func RunQwenOnHttpRequestBodyTests(t *testing.T) {
 			require.Contains(t, string(processedBody), "qwen-turbo", "Model name should be preserved in responses request")
 		})
 
+		// 测试qwen请求体处理（兼容模式 reranks接口）
+		t.Run("qwen compatible mode reranks request body", func(t *testing.T) {
+			host, status := test.NewTestHost(qwenEnableCompatibleConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/reranks"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"model":"qwen3-rerank",
+				"documents":["doc1","doc2"],
+				"query":"test query",
+				"top_n":1
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+			require.Contains(t, string(processedBody), "qwen-turbo", "Reranks request model should be mapped by wildcard")
+			require.Contains(t, string(processedBody), "documents", "Reranks request documents should be preserved")
+		})
+
+		// 测试qwen请求体处理（兼容模式 conversations接口）
+		t.Run("qwen compatible mode conversations request body", func(t *testing.T) {
+			host, status := test.NewTestHost(qwenEnableCompatibleConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/conversations"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"metadata":{"topic":"demo"},
+				"items":[{"type":"message","role":"system","content":"test content"}]
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+			require.Contains(t, string(processedBody), "\"metadata\"", "Conversations metadata should be preserved")
+			require.Contains(t, string(processedBody), "\"items\"", "Conversations items should be preserved")
+			require.NotContains(t, string(processedBody), "\"model\":", "Conversations request should not inject model field")
+		})
+
 		// 测试qwen请求体处理（非兼容模式 responses接口应报不支持）
 		t.Run("qwen non-compatible mode responses request body unsupported", func(t *testing.T) {
 			host, status := test.NewTestHost(basicQwenConfig)
@@ -755,9 +910,11 @@ func RunQwenOnHttpRequestBodyTests(t *testing.T) {
 		// 覆盖 qwen.GetApiName 中以下分支：
 		// - qwenCompatibleTextEmbeddingPath => ApiNameEmbeddings
 		// - qwenCompatibleResponsesPath => ApiNameResponses
+		// - qwenCompatibleTextRerankPath => ApiNameQwenV1Rerank
+		// - qwenCompatibleConversationsPath => ApiNameQwenV1Conversations
 		// - qwenAsyncAIGCPath => ApiNameQwenAsyncAIGC
 		// - qwenAsyncTaskPath => ApiNameQwenAsyncTask
-		t.Run("qwen original protocol get api name coverage for compatible embeddings responses and async paths", func(t *testing.T) {
+		t.Run("qwen original protocol get api name coverage for compatible paths and async paths", func(t *testing.T) {
 			cases := []struct {
 				name string
 				path string
@@ -768,7 +925,15 @@ func RunQwenOnHttpRequestBodyTests(t *testing.T) {
 				},
 				{
 					name: "compatible responses path",
-					path: "/api/v2/apps/protocols/compatible-mode/v1/responses",
+					path: "/compatible-mode/v1/responses",
+				},
+				{
+					name: "compatible reranks path",
+					path: "/compatible-api/v1/reranks",
+				},
+				{
+					name: "compatible conversations path",
+					path: "/compatible-mode/v1/conversations",
 				},
 				{
 					name: "async aigc path",

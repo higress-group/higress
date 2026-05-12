@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
-	"github.com/higress-group/wasm-go/pkg/log"
-	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 )
 
@@ -196,6 +196,11 @@ func (c *ProviderConfig) transformRequestHeadersAndBody(ctx wrapper.HttpContext,
 	modifiedHeaders := util.SliceToHeader(headers)
 	if handler, ok := activeProvider.(TransformRequestHeadersHandler); ok {
 		handler.TransformRequestHeaders(ctx, ApiNameChatCompletion, modifiedHeaders)
+	}
+
+	// Apply providerBasePath if configured
+	if c.providerBasePath != "" {
+		modifiedHeaders.Set(":path", c.applyProviderBasePath(modifiedHeaders.Get(":path")))
 	}
 
 	var err error

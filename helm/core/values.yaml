@@ -423,6 +423,10 @@ gateway:
   replicas: 2
   image: gateway
 
+  # -- Specify image pull policy if default behavior isn't desired.
+  # Default behavior: latest images will be Always else IfNotPresent.
+  imagePullPolicy: ""
+
   # -- Use a `DaemonSet` or `Deployment`
   kind: Deployment
 
@@ -576,6 +580,10 @@ controller:
     initialDelaySeconds: 1
     periodSeconds: 3
     timeoutSeconds: 5
+
+  # -- Specify image pull policy if default behavior isn't desired.
+  # Default behavior: latest images will be Always else IfNotPresent.
+  imagePullPolicy: ""
 
   imagePullSecrets: []
 
@@ -785,6 +793,10 @@ pluginServer:
 
   hub: "" # Will use global.hub if not set
   tag: ""
+
+  # -- Specify image pull policy if default behavior isn't desired.
+  # Default behavior: latest images will be Always else IfNotPresent.
+  imagePullPolicy: ""
 
   imagePullSecrets: []
 

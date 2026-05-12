@@ -3,7 +3,9 @@ package test
 import (
 	"bytes"
 	"encoding/json"
+	"math/rand"
 	"mime/multipart"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -32,6 +34,17 @@ var vertexExpressModeConfig = func() json.RawMessage {
 		"provider": map[string]interface{}{
 			"type":      "vertex",
 			"apiTokens": []string{"test-api-key-123456789"},
+		},
+	})
+	return data
+}()
+
+// 测试配置：Vertex Express Mode 配置（多 API Token）
+var vertexExpressModeMultiTokensConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "vertex",
+			"apiTokens": []string{"test-api-key-express-a", "test-api-key-express-b"},
 		},
 	})
 	return data
@@ -162,6 +175,18 @@ var vertexRawModeWithBasePathConfig = func() json.RawMessage {
 			"protocol":         "original",
 			"basePath":         "/vertex-proxy",
 			"basePathHandling": "removePrefix",
+		},
+	})
+	return data
+}()
+
+// 测试配置：Vertex Raw 模式配置（Express Mode + 多 API Token）
+var vertexRawModeExpressMultiTokensConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "vertex",
+			"apiTokens": []string{"test-api-key-raw-a", "test-api-key-raw-b"},
+			"protocol":  "original",
 		},
 	})
 	return data
@@ -378,6 +403,149 @@ func RunVertexExpressModeOnHttpRequestBodyTests(t *testing.T) {
 				}
 			}
 			require.True(t, hasVertexLogs, "Should have vertex processing logs")
+		})
+
+		// 测试 Vertex Express Mode 请求体处理（多 token - Google 路径使用请求上下文中的 apiTokenInUse）
+		t.Run("vertex express mode chat completion should reuse api token in context", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeMultiTokensConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			tokens := []string{"test-api-key-express-a", "test-api-key-express-b"}
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			// 从 debug log 中提取请求头阶段固定的 apiTokenInUse
+			var apiTokenInUse string
+			for _, debugLog := range host.GetDebugLogs() {
+				const prefix = "Use apiToken "
+				const suffix = " to send request"
+				start := strings.Index(debugLog, prefix)
+				if start == -1 {
+					continue
+				}
+				start += len(prefix)
+				end := strings.Index(debugLog[start:], suffix)
+				if end == -1 {
+					continue
+				}
+				apiTokenInUse = debugLog[start : start+end]
+				break
+			}
+			require.Contains(t, tokens, apiTokenInUse, "apiTokenInUse should be selected from configured tokens")
+
+			// 强制设置随机种子，让旧实现（OnRequestBody 再次随机）必然选到不同 token
+			targetIndex := 0
+			if apiTokenInUse == tokens[0] {
+				targetIndex = 1
+			}
+			seed := int64(1)
+			for {
+				if rand.New(rand.NewSource(seed)).Intn(len(tokens)) == targetIndex {
+					break
+				}
+				seed++
+			}
+			rand.Seed(seed)
+
+			requestBody := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"token consistency test"}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			pathHeader := ""
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotEmpty(t, pathHeader, "Path header should not be empty")
+			require.Contains(t, pathHeader, "/v1/publishers/google/models/", "Path should use Google publisher endpoint")
+
+			parsedPath, err := url.ParseRequestURI(pathHeader)
+			require.NoError(t, err)
+			query := parsedPath.Query()
+			require.Len(t, query["key"], 1, "Path should contain exactly one key query parameter")
+			require.Equal(t, apiTokenInUse, query.Get("key"),
+				"Path key should use apiTokenInUse selected in request headers phase")
+		})
+
+		// 测试 Vertex Express Mode 请求体处理（多 token - Anthropic 路径使用请求上下文中的 apiTokenInUse）
+		t.Run("vertex express mode anthropic request should reuse api token in context", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeMultiTokensConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			tokens := []string{"test-api-key-express-a", "test-api-key-express-b"}
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			// 从 debug log 中提取请求头阶段固定的 apiTokenInUse
+			var apiTokenInUse string
+			for _, debugLog := range host.GetDebugLogs() {
+				const prefix = "Use apiToken "
+				const suffix = " to send request"
+				start := strings.Index(debugLog, prefix)
+				if start == -1 {
+					continue
+				}
+				start += len(prefix)
+				end := strings.Index(debugLog[start:], suffix)
+				if end == -1 {
+					continue
+				}
+				apiTokenInUse = debugLog[start : start+end]
+				break
+			}
+			require.Contains(t, tokens, apiTokenInUse, "apiTokenInUse should be selected from configured tokens")
+
+			// 强制设置随机种子，让旧实现（OnRequestBody 再次随机）必然选到不同 token
+			targetIndex := 0
+			if apiTokenInUse == tokens[0] {
+				targetIndex = 1
+			}
+			seed := int64(1)
+			for {
+				if rand.New(rand.NewSource(seed)).Intn(len(tokens)) == targetIndex {
+					break
+				}
+				seed++
+			}
+			rand.Seed(seed)
+
+			requestBody := `{"model":"claude-sonnet-4@20250514","messages":[{"role":"user","content":"hello anthropic"}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			pathHeader := ""
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotEmpty(t, pathHeader, "Path header should not be empty")
+			require.Contains(t, pathHeader, "/v1/publishers/anthropic/models/claude-sonnet-4@20250514:rawPredict",
+				"Path should use Anthropic publisher endpoint")
+
+			parsedPath, err := url.ParseRequestURI(pathHeader)
+			require.NoError(t, err)
+			query := parsedPath.Query()
+			require.Len(t, query["key"], 1, "Path should contain exactly one key query parameter")
+			require.Equal(t, apiTokenInUse, query.Get("key"),
+				"Path key should use apiTokenInUse selected in request headers phase")
 		})
 
 		// 测试 Vertex Express Mode structured outputs: json_schema 映射
@@ -2202,7 +2370,7 @@ func RunVertexRawModeOnHttpRequestHeadersTests(t *testing.T) {
 
 func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		// 测试 Vertex Raw 模式请求体处理（Express Mode - 透传请求体）
+		// 测试 Vertex Raw 模式请求体处理（Express Mode - 透传请求体 + API Key 认证）
 		t.Run("vertex raw mode express - request body passthrough", func(t *testing.T) {
 			host, status := test.NewTestHost(vertexRawModeExpressConfig)
 			defer host.Reset()
@@ -2214,6 +2382,7 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 				{":path", "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"},
 				{":method", "POST"},
 				{"Content-Type", "application/json"},
+				{"Authorization", "Bearer some-token"},
 			})
 
 			// 设置原生 Vertex 格式的请求体
@@ -2229,6 +2398,22 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 
 			// 请求体应该保持原样
 			require.Equal(t, requestBody, string(processedBody), "Request body should be passed through unchanged")
+
+			// 验证 API Key 被追加到 URL path 中
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Contains(t, pathHeader, "?key=test-api-key-for-raw-mode",
+				"API key should be appended to path as query parameter")
+
+			// 验证 Authorization header 被删除
+			require.False(t, test.HasHeaderWithValue(requestHeaders, "Authorization", "Bearer some-token"),
+				"Authorization header should be removed in Express Mode")
 		})
 
 		// 测试 Vertex Raw 模式请求体处理（标准模式 - 需要 OAuth token）
@@ -2304,13 +2489,13 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 			require.NotContains(t, pathHeader, "/vertex-proxy", "Path should have basePath prefix removed")
 		})
 
-		// 测试 Vertex Raw 模式请求体处理（流式请求）
+		// 测试 Vertex Raw 模式请求体处理（流式请求 - path 已含 ? 时用 & 拼接 API Key）
 		t.Run("vertex raw mode express - streaming request body passthrough", func(t *testing.T) {
 			host, status := test.NewTestHost(vertexRawModeExpressConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
-			// 先设置请求头（流式端点）
+			// 先设置请求头（流式端点，path 已含 ?alt=sse）
 			host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:streamGenerateContent?alt=sse"},
@@ -2328,6 +2513,194 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 			processedBody := host.GetRequestBody()
 			require.NotNil(t, processedBody)
 			require.Equal(t, requestBody, string(processedBody), "Request body should be passed through unchanged")
+
+			// 验证 API Key 使用 & 拼接（因为 path 已含 ?alt=sse）
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Contains(t, pathHeader, "?alt=sse&key=test-api-key-for-raw-mode",
+				"API key should be appended with & when path already contains ?")
+		})
+
+		// 测试 Vertex Raw 模式请求体处理（Express Mode + Anthropic 模型路径）
+		t.Run("vertex raw mode express - anthropic model request body with api key", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeExpressConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 使用 Anthropic 模型的原生 Vertex AI REST API 路径
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:rawPredict"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"anthropic_version":"vertex-2023-10-16","messages":[{"role":"user","content":"Hello"}],"max_tokens":1024}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.Equal(t, types.ActionContinue, action)
+
+			// 验证请求体被透传
+			processedBody := host.GetRequestBody()
+			require.Equal(t, requestBody, string(processedBody), "Request body should be passed through unchanged")
+
+			// 验证 API Key 被追加到 path
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Contains(t, pathHeader, "?key=test-api-key-for-raw-mode",
+				"API key should be appended to anthropic model path")
+		})
+
+		// 测试 Vertex Raw 模式请求体处理（Express Mode + basePath - API Key 正确追加）
+		t.Run("vertex raw mode with basePath express - request body with api key", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeWithBasePathConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 带 basePath 前缀的请求
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/vertex-proxy/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.Equal(t, types.ActionContinue, action)
+
+			// 验证路径：basePath 被移除 + API Key 被追加
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotContains(t, pathHeader, "/vertex-proxy",
+				"Path should have basePath prefix removed")
+			require.Contains(t, pathHeader, "?key=test-api-key-for-raw-mode",
+				"API key should be appended after basePath removal")
+		})
+
+		// 测试 Vertex Raw 模式请求体处理（Express Mode + 多 token，使用请求上下文中的 apiTokenInUse）
+		t.Run("vertex raw mode express - should reuse api token in context for query key", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeExpressMultiTokensConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 选择一个保证前两次 Intn(2) 结果不同的种子：
+			// 第一次用于 SetApiTokenInUse，第二次仅在旧实现中用于 OnRequestBody.GetRandomToken。
+			seed := int64(1)
+			for {
+				r := rand.New(rand.NewSource(seed))
+				if r.Intn(2) != r.Intn(2) {
+					break
+				}
+				seed++
+			}
+			rand.Seed(seed)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotEmpty(t, pathHeader, "Path header should not be empty")
+
+			parsedPath, err := url.ParseRequestURI(pathHeader)
+			require.NoError(t, err)
+			query := parsedPath.Query()
+			require.Len(t, query["key"], 1, "Path should contain exactly one key query parameter")
+			keyInPath := query.Get("key")
+			require.NotEmpty(t, keyInPath, "Path should contain key query parameter")
+
+			// 从 debug log 中提取本次请求固定的 apiTokenInUse
+			var apiTokenInUse string
+			for _, debugLog := range host.GetDebugLogs() {
+				const prefix = "Use apiToken "
+				const suffix = " to send request"
+				start := strings.Index(debugLog, prefix)
+				if start == -1 {
+					continue
+				}
+				start += len(prefix)
+				end := strings.Index(debugLog[start:], suffix)
+				if end == -1 {
+					continue
+				}
+				apiTokenInUse = debugLog[start : start+end]
+				break
+			}
+			require.NotEmpty(t, apiTokenInUse, "apiTokenInUse should be logged")
+			require.Equal(t, apiTokenInUse, keyInPath,
+				"Query key must use apiTokenInUse from request context")
+		})
+
+		// 测试 Vertex Raw 模式请求体处理（Express Mode + 已有 key 参数时应覆盖而不是追加重复）
+		t.Run("vertex raw mode express - should replace existing key query parameter", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeExpressConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=client-key&trace=1"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotEmpty(t, pathHeader, "Path header should not be empty")
+
+			parsedPath, err := url.ParseRequestURI(pathHeader)
+			require.NoError(t, err)
+			query := parsedPath.Query()
+
+			require.Len(t, query["key"], 1, "Path should contain exactly one key query parameter")
+			require.Equal(t, "test-api-key-for-raw-mode", query.Get("key"),
+				"Existing key query parameter should be replaced by configured API key")
+			require.Equal(t, "sse", query.Get("alt"), "Existing query parameter alt should be preserved")
+			require.Equal(t, "1", query.Get("trace"), "Existing query parameter trace should be preserved")
 		})
 	})
 }

@@ -23,7 +23,7 @@ Your interest in contributing to Higress is warmly welcomed. First, we encourage
 
 ## Reporting security issues
 
-Security issues are always treated seriously. As our usual principle, we discourage anyone to spread security issues. If you find a security issue of Higress, please do not discuss it in public and even do not open a public issue. Instead we encourage you to send us a private email to  [higress@googlegroups.com](mailto:higress@googlegroups.com) to report this.
+Security issues are always treated seriously. As our usual principle, we discourage anyone to spread security issues. If you find a security issue of Higress, please do not discuss it in public and even do not open a public issue. Instead please follow the process described in [`SECURITY.md`](./SECURITY.md) to report vulnerabilities privately.
 
 ## Reporting general issues
 
@@ -204,9 +204,18 @@ make prebuild && go mod tidy
 
 Any test case would be welcomed. Currently, Higress function test cases are high priority.
 
-* For unit test, you need to create a test file named `xxxTest.go` in the test directory of the same module.
-* For integration test, you can put the integration test in the test directory. 
-//TBD
+### Test requirements for new functionality
+
+- **New Wasm plugins**: MUST include unit tests with at least 30% code coverage (enforced by CI).
+- **New core features**: SHOULD include unit tests and, where applicable, E2E conformance test cases.
+- **Bug fixes**: SHOULD include a regression test that reproduces the bug.
+- **Patch coverage**: New or changed code must meet a 50% coverage target for the patch (enforced by Codecov via `codecov.yml`).
+
+### How to write tests
+
+* For unit tests, create a test file named `xxxTest.go` in the test directory of the same module.
+* For integration tests, you can put the integration test in the test directory.
+* For Wasm plugin E2E tests, add test cases in `test/e2e/conformance/tests/`. See [test/README.md](./test/README.md) for details.
 ## Engage to help anything
 
 We choose GitHub as the primary place for Higress to collaborate. So the latest updates of Higress are always here. Although contributions via PR is an explicit way to help, we still call for any other ways.

@@ -1,5 +1,5 @@
 apiVersion: v2
-appVersion: 2.2.0
+appVersion: 2.2.1
 description: Helm chart for deploying higress gateways
 icon: https://higress.io/img/higress_logo_small.png
 home: http://higress.io/
@@ -15,4 +15,4 @@ dependencies:
     repository: "file://../redis"
     version: 0.0.1
 type: application
-version: 2.2.0
+version: 2.2.1
