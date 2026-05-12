@@ -85,11 +85,14 @@ func parseConfig(json gjson.Result, config *QuotaConfig) error {
 	if config.AdminPath == "" {
 		config.AdminPath = "/quota"
 	}
-	pathSuffixes := json.Get("enable_path_suffixes").Array()
-	config.EnablePathSuffixes = make([]string, 0, len(pathSuffixes))
-	if !json.Get("enable_path_suffixes").Exists() {
+	suffixResult := json.Get("enable_path_suffixes")
+	if !suffixResult.Exists() {
 		config.EnablePathSuffixes = []string{"/v1/chat/completions", "/v1/messages"}
+	} else if !suffixResult.IsArray() {
+		return errors.New("enable_path_suffixes must be an array")
 	} else {
+		pathSuffixes := suffixResult.Array()
+		config.EnablePathSuffixes = make([]string, 0, len(pathSuffixes))
 		for _, suffix := range pathSuffixes {
 			suffixStr := strings.TrimSpace(suffix.String())
 			if suffixStr == "" {
