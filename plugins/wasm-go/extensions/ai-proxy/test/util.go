@@ -1,10 +1,18 @@
 package test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
 )
+
+// LegacyProviderPluginJSON builds the top-level plugin JSON with a single legacy "provider"
+// object, matching historical wasm integration tests (see test/openai.go).
+func LegacyProviderPluginJSON(provider map[string]interface{}) json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{"provider": provider})
+	return json.RawMessage(data)
+}
 
 func RunMapRequestPathByCapabilityTests(t *testing.T) {
 	testCases := []struct {

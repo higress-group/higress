@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"go.uber.org/atomic"
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 )
 
 const (

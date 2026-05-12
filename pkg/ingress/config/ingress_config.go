@@ -1759,7 +1759,7 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 			continue
 		}
 		if !proxyConfig.UpstreamProtocol.IsSupportedByProxy() {
-			IngressLog.Warnf("Proxy %s does not support upstream protocol %s, skipping EnvoyFilter construction for service %s")
+			IngressLog.Warnf("Proxy %s does not support upstream protocol %s, skipping EnvoyFilter construction for service %s", proxyConfig.ProxyName, proxyConfig.UpstreamProtocol, serviceWrapper.ServiceName)
 			continue
 		}
 		if proxyWrapper.EnvoyFilter == nil {
