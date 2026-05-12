@@ -9,6 +9,8 @@ global:
   xdsMaxRecvMsgSize: "104857600"
   defaultUpstreamConcurrencyThreshold: 10000
   enableSRDS: true
+  # -- Whether to enable Istio delta xDS, default is false.
+  enableDeltaXDS: true
   # -- Whether to enable Redis(redis-stack-server) for Higress, default is false.
   enableRedis: false
   enablePluginServer: false
@@ -68,10 +70,14 @@ global:
     #   cpu: 100m
     #   memory: 128Mi
 
-  # -- Default hub for Istio images.
-  # Releases are published to docker hub under 'istio' project.
-  # Dev builds from prow are on gcr.io
-  hub: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress
+  # -- Default hub (registry) for Higress images.
+  # For Higress deployments, images are pulled from: {hub}/higress/{image}
+  # For built-in plugins, images are pulled from: {hub}/{pluginNamespace}/{plugin-name}
+  # Change this to use a mirror registry closer to your deployment region for faster image pulls.
+  hub: higress-registry.cn-hangzhou.cr.aliyuncs.com
+  # -- Namespace for built-in plugin images. Default is "plugins".
+  # Used by higress-console to configure plugin image path.
+  pluginNamespace: "plugins"
 
   # -- Specify image pull policy if default behavior isn't desired.
   # Default behavior: latest images will be Always else IfNotPresent.
@@ -417,6 +423,10 @@ gateway:
   replicas: 2
   image: gateway
 
+  # -- Specify image pull policy if default behavior isn't desired.
+  # Default behavior: latest images will be Always else IfNotPresent.
+  imagePullPolicy: ""
+
   # -- Use a `DaemonSet` or `Deployment`
   kind: Deployment
 
@@ -571,6 +581,10 @@ controller:
     periodSeconds: 3
     timeoutSeconds: 5
 
+  # -- Specify image pull policy if default behavior isn't desired.
+  # Default behavior: latest images will be Always else IfNotPresent.
+  imagePullPolicy: ""
+
   imagePullSecrets: []
 
   rbac:
@@ -646,13 +660,6 @@ controller:
 
 ## -- Discovery Settings
 pilot:
-  autoscaleEnabled: false
-  autoscaleMin: 1
-  autoscaleMax: 5
-  replicaCount: 1
-  rollingMaxSurge: 100%
-  rollingMaxUnavailable: 25%
-
   hub: "" # Will use global.hub if not set
   tag: ""
 
@@ -680,20 +687,10 @@ pilot:
   # -- if protocol sniffing is enabled for inbound
   enableProtocolSniffingForInbound: true
 
-  nodeSelector: {}
-  podAnnotations: {}
-  serviceAnnotations: {}
-
   # -- You can use jwksResolverExtraRootCA to provide a root certificate
   # in PEM format. This will then be trusted by pilot when resolving
   # JWKS URIs.
   jwksResolverExtraRootCA: ""
-
-  # -- This is used to set the source of configuration for
-  # the associated address in configSource, if nothing is specified
-  # the default MCP is assumed.
-  configSource:
-    subscribedResources: []
 
   plugins: []
 
@@ -701,18 +698,6 @@ pilot:
   # to a pilot. It balances out load across pilot instances at the cost of
   # increasing system churn.
   keepaliveMaxServerConnectionAge: 30m
-
-  # -- Additional labels to apply to the deployment.
-  deploymentLabels: {}
-
-  ## Mesh config settings
-
-  # -- Install the mesh config map, generated from values.yaml.
-  # If false, pilot wil use default values (by default) or user-supplied values.
-  configMap: true
-
-  # -- Additional labels to apply on the pod level for monitoring and logging configuration.
-  podLabels: {}
 
 # Tracing config settings
 tracing:
@@ -808,6 +793,10 @@ pluginServer:
 
   hub: "" # Will use global.hub if not set
   tag: ""
+
+  # -- Specify image pull policy if default behavior isn't desired.
+  # Default behavior: latest images will be Always else IfNotPresent.
+  imagePullPolicy: ""
 
   imagePullSecrets: []
 

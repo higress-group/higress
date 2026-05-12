@@ -28,7 +28,7 @@ import (
 	"istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/schema/gvk"
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 
 	"github.com/alibaba/higress/v2/pkg/common"
 	higressconfig "github.com/alibaba/higress/v2/pkg/config"

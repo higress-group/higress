@@ -105,6 +105,7 @@ const (
 	BuiltinAnswerKey          = "answer"
 	BuiltinToolCallsKey       = "tool_calls"
 	BuiltinReasoningKey       = "reasoning"
+	BuiltinSystemKey          = "system"
 	BuiltinReasoningTokens    = "reasoning_tokens"
 	BuiltinCachedTokens       = "cached_tokens"
 	BuiltinInputTokenDetails  = "input_token_details"
@@ -115,6 +116,9 @@ const (
 	QuestionPathOpenAI = "messages.@reverse.0.content"
 	QuestionPathClaude = "messages.@reverse.0.content" // Claude uses same format
 
+	// System prompt paths (from request body)
+	SystemPathClaude = "system" // Claude /v1/messages has system as a top-level field
+
 	// Answer paths (from response body - non-streaming)
 	AnswerPathOpenAINonStreaming = "choices.0.message.content"
 	AnswerPathClaudeNonStreaming = "content.0.text"
@@ -123,9 +127,18 @@ const (
 	AnswerPathOpenAIStreaming = "choices.0.delta.content"
 	AnswerPathClaudeStreaming = "delta.text"
 
-	// Tool calls paths
+	// Tool calls paths (OpenAI format)
 	ToolCallsPathNonStreaming = "choices.0.message.tool_calls"
 	ToolCallsPathStreaming    = "choices.0.delta.tool_calls"
+
+	// Claude/Anthropic tool calls paths (streaming)
+	ClaudeEventType         = "type"
+	ClaudeContentBlockType  = "content_block.type"
+	ClaudeContentBlockID    = "content_block.id"
+	ClaudeContentBlockName  = "content_block.name"
+	ClaudeContentBlockInput = "content_block.input"
+	ClaudeDeltaPartialJSON  = "delta.partial_json"
+	ClaudeIndex             = "index"
 
 	// Reasoning paths
 	ReasoningPathNonStreaming = "choices.0.message.reasoning_content"
@@ -136,14 +149,15 @@ const (
 )
 
 // getDefaultAttributes returns the default attributes configuration for empty config
+// This includes all attributes but may consume significant memory for large conversations
 func getDefaultAttributes() []Attribute {
 	return []Attribute{
 		// Extract complete conversation history from request body
 		{
-			Key:        "messages",
+			Key:         "messages",
 			ValueSource: RequestBody,
-			Value:      "messages",
-			ApplyToLog: true,
+			Value:       "messages",
+			ApplyToLog:  true,
 		},
 		// Built-in attributes (no value_source needed, will be auto-extracted)
 		{
@@ -151,12 +165,18 @@ func getDefaultAttributes() []Attribute {
 			ApplyToLog: true,
 		},
 		{
+			Key:        BuiltinSystemKey,
+			ApplyToLog: true,
+		},
+		{
 			Key:        BuiltinAnswerKey,
 			ApplyToLog: true,
+			Rule:       RuleAppend, // Streaming responses need to append content from all chunks
 		},
 		{
 			Key:        BuiltinReasoningKey,
 			ApplyToLog: true,
+			Rule:       RuleAppend, // Streaming responses need to append content from all chunks
 		},
 		{
 			Key:        BuiltinToolCallsKey,
@@ -172,6 +192,34 @@ func getDefaultAttributes() []Attribute {
 			ApplyToLog: true,
 		},
 		// Detailed token information
+		{
+			Key:        BuiltinInputTokenDetails,
+			ApplyToLog: true,
+		},
+		{
+			Key:        BuiltinOutputTokenDetails,
+			ApplyToLog: true,
+		},
+	}
+}
+
+// getDefaultResponseAttributes returns a lightweight default attributes configuration
+// for production environments with high concurrency and high latency.
+// - Buffers request body for model extraction (small, essential field)
+// - Does NOT extract large fields like question, system, messages
+// - Does NOT buffer streaming response body (no answer, reasoning, tool_calls)
+// - Only extracts token statistics from response context
+func getDefaultResponseAttributes() []Attribute {
+	return []Attribute{
+		// Token statistics (extracted from context, no body buffering needed)
+		{
+			Key:        BuiltinReasoningTokens,
+			ApplyToLog: true,
+		},
+		{
+			Key:        BuiltinCachedTokens,
+			ApplyToLog: true,
+		},
 		{
 			Key:        BuiltinInputTokenDetails,
 			ApplyToLog: true,
@@ -211,10 +259,10 @@ func extractSessionId(customHeader string) string {
 
 // ToolCall represents a single tool call in the response
 type ToolCall struct {
-	Index    int                    `json:"index,omitempty"`
-	ID       string                 `json:"id,omitempty"`
-	Type     string                 `json:"type,omitempty"`
-	Function ToolCallFunction       `json:"function,omitempty"`
+	Index    int              `json:"index,omitempty"`
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
+	Function ToolCallFunction `json:"function,omitempty"`
 }
 
 // ToolCallFunction represents the function details in a tool call
@@ -225,14 +273,18 @@ type ToolCallFunction struct {
 
 // StreamingToolCallsBuffer holds the state for assembling streaming tool calls
 type StreamingToolCallsBuffer struct {
-	ToolCalls map[int]*ToolCall // keyed by index
+	ToolCalls       map[int]*ToolCall // keyed by index (OpenAI format)
+	InToolBlock     map[int]bool      // tracks which indices are in tool_use blocks (Claude format)
+	ArgumentsBuffer map[int]string    // buffers partial JSON arguments (Claude format)
 }
 
-// extractStreamingToolCalls extracts and assembles tool calls from streaming response chunks
+// extractStreamingToolCalls extracts and assembles tool calls from streaming response chunks (OpenAI format)
 func extractStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer) *StreamingToolCallsBuffer {
 	if buffer == nil {
 		buffer = &StreamingToolCallsBuffer{
-			ToolCalls: make(map[int]*ToolCall),
+			ToolCalls:       make(map[int]*ToolCall),
+			InToolBlock:     make(map[int]bool),
+			ArgumentsBuffer: make(map[int]string),
 		}
 	}
 
@@ -245,7 +297,7 @@ func extractStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer) *S
 
 		for _, tcResult := range toolCallsResult.Array() {
 			index := int(tcResult.Get("index").Int())
-			
+
 			// Get or create tool call entry
 			tc, exists := buffer.ToolCalls[index]
 			if !exists {
@@ -266,6 +318,86 @@ func extractStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer) *S
 			// Append arguments (they come in chunks)
 			if args := tcResult.Get("function.arguments").String(); args != "" {
 				tc.Function.Arguments += args
+			}
+		}
+	}
+
+	return buffer
+}
+
+// extractClaudeStreamingToolCalls extracts and assembles tool calls from Claude/Anthropic streaming response chunks
+// Claude format uses events: content_block_start, content_block_delta, content_block_stop
+func extractClaudeStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer) *StreamingToolCallsBuffer {
+	if buffer == nil {
+		buffer = &StreamingToolCallsBuffer{
+			ToolCalls:       make(map[int]*ToolCall),
+			InToolBlock:     make(map[int]bool),
+			ArgumentsBuffer: make(map[int]string),
+		}
+	}
+
+	chunks := bytes.Split(bytes.TrimSpace(wrapper.UnifySSEChunk(data)), []byte("\n\n"))
+	for _, chunk := range chunks {
+		// Get event type
+		eventType := gjson.GetBytes(chunk, ClaudeEventType)
+		if !eventType.Exists() {
+			continue
+		}
+
+		switch eventType.String() {
+		case "content_block_start":
+			// Check if this is a tool_use block
+			contentBlockType := gjson.GetBytes(chunk, ClaudeContentBlockType)
+			if contentBlockType.Exists() && contentBlockType.String() == "tool_use" {
+				index := int(gjson.GetBytes(chunk, ClaudeIndex).Int())
+
+				// Create tool call entry
+				tc := &ToolCall{Index: index}
+
+				// Extract id and name
+				if id := gjson.GetBytes(chunk, ClaudeContentBlockID).String(); id != "" {
+					tc.ID = id
+				}
+				if name := gjson.GetBytes(chunk, ClaudeContentBlockName).String(); name != "" {
+					tc.Function.Name = name
+				}
+				tc.Type = "tool_use"
+
+				buffer.ToolCalls[index] = tc
+				buffer.InToolBlock[index] = true
+				buffer.ArgumentsBuffer[index] = ""
+
+				// Try to extract initial input if present
+				if input := gjson.GetBytes(chunk, ClaudeContentBlockInput); input.Exists() {
+					if inputMap, ok := input.Value().(map[string]interface{}); ok {
+						if jsonBytes, err := json.Marshal(inputMap); err == nil {
+							buffer.ArgumentsBuffer[index] = string(jsonBytes)
+						}
+					}
+				}
+			}
+
+		case "content_block_delta":
+			// Check if we're in a tool block
+			index := int(gjson.GetBytes(chunk, ClaudeIndex).Int())
+			if buffer.InToolBlock[index] {
+				// Accumulate partial JSON arguments
+				partialJSON := gjson.GetBytes(chunk, ClaudeDeltaPartialJSON)
+				if partialJSON.Exists() {
+					buffer.ArgumentsBuffer[index] += partialJSON.String()
+				}
+			}
+
+		case "content_block_stop":
+			// Finalize the tool call if we were in a tool block
+			index := int(gjson.GetBytes(chunk, ClaudeIndex).Int())
+			if buffer.InToolBlock[index] {
+				buffer.InToolBlock[index] = false
+
+				// Parse accumulated arguments and set them
+				if tc, exists := buffer.ToolCalls[index]; exists {
+					tc.Function.Arguments = buffer.ArgumentsBuffer[index]
+				}
 			}
 		}
 	}
@@ -317,6 +449,8 @@ type AIStatisticsConfig struct {
 	attributes []Attribute
 	// If there exist attributes extracted from streaming body, chunks should be buffered
 	shouldBufferStreamingBody bool
+	// If there exist attributes extracted from request body, request body should be buffered
+	shouldBufferRequestBody bool
 	// If disableOpenaiUsage is true, model/input_token/output_token logs will be skipped
 	disableOpenaiUsage bool
 	valueLengthLimit   int
@@ -411,6 +545,8 @@ func isContentTypeEnabled(contentType string, enabledContentTypes []string) bool
 func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 	// Check if use_default_attributes is enabled
 	useDefaultAttributes := configJson.Get("use_default_attributes").Bool()
+	// Check if use_default_response_attributes is enabled (lightweight mode)
+	useDefaultResponseAttributes := configJson.Get("use_default_response_attributes").Bool()
 
 	// Parse tracing span attributes setting.
 	attributeConfigs := configJson.Get("attributes").Array()
@@ -419,7 +555,7 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 	if configJson.Get("value_length_limit").Exists() {
 		config.valueLengthLimit = int(configJson.Get("value_length_limit").Int())
 	} else {
-		config.valueLengthLimit = 4000
+		config.valueLengthLimit = 32000
 	}
 
 	// Parse attributes or use defaults
@@ -430,6 +566,13 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 			config.valueLengthLimit = 10485760 // 10MB
 		}
 		log.Infof("Using default attributes configuration")
+	} else if useDefaultResponseAttributes {
+		config.attributes = getDefaultResponseAttributes()
+		// Use a reasonable default for lightweight mode
+		if !configJson.Get("value_length_limit").Exists() {
+			config.valueLengthLimit = 4000
+		}
+		log.Infof("Using default response attributes configuration (lightweight mode)")
 	} else {
 		config.attributes = make([]Attribute, len(attributeConfigs))
 		for i, attributeConfig := range attributeConfigs {
@@ -439,13 +582,36 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 				log.Errorf("parse config failed, %v", err)
 				return err
 			}
-			if attribute.ValueSource == ResponseStreamingBody {
-				config.shouldBufferStreamingBody = true
-			}
 			if attribute.Rule != "" && attribute.Rule != RuleFirst && attribute.Rule != RuleReplace && attribute.Rule != RuleAppend {
 				return errors.New("value of rule must be one of [nil, first, replace, append]")
 			}
 			config.attributes[i] = attribute
+		}
+	}
+
+	// Check if any attribute needs request body or streaming body buffering
+	for _, attribute := range config.attributes {
+		// Check for request body buffering
+		if attribute.ValueSource == RequestBody {
+			config.shouldBufferRequestBody = true
+		}
+		// Check for streaming body buffering (explicitly configured)
+		if attribute.ValueSource == ResponseStreamingBody {
+			config.shouldBufferStreamingBody = true
+		}
+		// For built-in attributes without explicit ValueSource, check default sources
+		if attribute.ValueSource == "" && isBuiltinAttribute(attribute.Key) {
+			defaultSources := getBuiltinAttributeDefaultSources(attribute.Key)
+			for _, src := range defaultSources {
+				if src == RequestBody {
+					config.shouldBufferRequestBody = true
+				}
+				// Only answer/reasoning/tool_calls need actual body buffering
+				// Token-related attributes are extracted from context, not from body
+				if src == ResponseStreamingBody && needsBodyBuffering(attribute.Key) {
+					config.shouldBufferStreamingBody = true
+				}
+			}
 		}
 	}
 	// Metric settings
@@ -458,8 +624,8 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 	pathSuffixes := configJson.Get("enable_path_suffixes").Array()
 	config.enablePathSuffixes = make([]string, 0, len(pathSuffixes))
 
-	// If use_default_attributes is enabled and enable_path_suffixes is not configured, use default path suffixes
-	if useDefaultAttributes && !configJson.Get("enable_path_suffixes").Exists() {
+	// If use_default_attributes or use_default_response_attributes is enabled and enable_path_suffixes is not configured, use default path suffixes
+	if (useDefaultAttributes || useDefaultResponseAttributes) && !configJson.Get("enable_path_suffixes").Exists() {
 		config.enablePathSuffixes = []string{"/completions", "/messages"}
 		log.Infof("Using default path suffixes: /completions, /messages")
 	} else {
@@ -527,6 +693,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config AIStatisticsConfig) ty
 		ctx.SetContext(ConsumerKey, consumer)
 	}
 
+	// Always buffer request body to extract model field
+	// This is essential for metrics and logging
 	ctx.SetRequestBodyBufferLimit(defaultMaxBodyBytes)
 
 	// Extract session ID from headers
@@ -551,13 +719,21 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body 
 		return types.ActionContinue
 	}
 
-	// Set user defined log & span attributes.
-	setAttributeBySource(ctx, config, RequestBody, body)
-	// Set span attributes for ARMS.
+	// Only process request body if we need to extract attributes from it
+	if config.shouldBufferRequestBody && len(body) > 0 {
+		// Set user defined log & span attributes.
+		setAttributeBySource(ctx, config, RequestBody, body)
+	}
+
+	// Extract model from request body if available, otherwise try path
 	requestModel := "UNKNOWN"
-	if model := gjson.GetBytes(body, "model"); model.Exists() {
-		requestModel = model.String()
-	} else {
+	if len(body) > 0 {
+		if model := gjson.GetBytes(body, "model"); model.Exists() {
+			requestModel = model.String()
+		}
+	}
+	// If model not found in body, try to extract from path (Gemini style)
+	if requestModel == "UNKNOWN" {
 		requestPath := ctx.GetStringContext(RequestPath, "")
 		if strings.Contains(requestPath, "generateContent") || strings.Contains(requestPath, "streamGenerateContent") { // Google Gemini GenerateContent
 			reg := regexp.MustCompile(`^.*/(?P<api_version>[^/]+)/models/(?P<model>[^:]+):\w+Content$`)
@@ -569,21 +745,23 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body 
 	}
 	ctx.SetContext(tokenusage.CtxKeyRequestModel, requestModel)
 	setSpanAttribute(ArmsRequestModel, requestModel)
-	// Set the number of conversation rounds
 
+	// Set the number of conversation rounds (only if body is available)
 	userPromptCount := 0
-	if messages := gjson.GetBytes(body, "messages"); messages.Exists() && messages.IsArray() {
-		// OpenAI and Claude/Anthropic format - both use "messages" array with "role" field
-		for _, msg := range messages.Array() {
-			if msg.Get("role").String() == "user" {
-				userPromptCount += 1
+	if len(body) > 0 {
+		if messages := gjson.GetBytes(body, "messages"); messages.Exists() && messages.IsArray() {
+			// OpenAI and Claude/Anthropic format - both use "messages" array with "role" field
+			for _, msg := range messages.Array() {
+				if msg.Get("role").String() == "user" {
+					userPromptCount += 1
+				}
 			}
-		}
-	} else if contents := gjson.GetBytes(body, "contents"); contents.Exists() && contents.IsArray() {
-		// Google Gemini GenerateContent
-		for _, content := range contents.Array() {
-			if !content.Get("role").Exists() || content.Get("role").String() == "user" {
-				userPromptCount += 1
+		} else if contents := gjson.GetBytes(body, "contents"); contents.Exists() && contents.IsArray() {
+			// Google Gemini GenerateContent
+			for _, content := range contents.Array() {
+				if !content.Get("role").Exists() || content.Get("role").String() == "user" {
+					userPromptCount += 1
+				}
 			}
 		}
 	}
@@ -665,7 +843,7 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, dat
 			setSpanAttribute(ArmsModelName, usage.Model)
 			setSpanAttribute(ArmsInputToken, usage.InputToken)
 			setSpanAttribute(ArmsOutputToken, usage.OutputToken)
-			
+
 			// Set token details to context for later use in attributes
 			if len(usage.InputTokenDetails) > 0 {
 				ctx.SetContext(tokenusage.CtxKeyInputTokenDetails, usage.InputTokenDetails)
@@ -673,6 +851,9 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, dat
 			if len(usage.OutputTokenDetails) > 0 {
 				ctx.SetContext(tokenusage.CtxKeyOutputTokenDetails, usage.OutputTokenDetails)
 			}
+
+			// Write once
+			_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 		}
 	}
 	// If the end of the stream is reached, record metrics/logs/spans.
@@ -680,14 +861,14 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, dat
 		responseEndTime := time.Now().UnixMilli()
 		ctx.SetUserAttribute(LLMServiceDuration, responseEndTime-requestStartTime)
 
-		// Set user defined log & span attributes.
+		// Set user defined log & span attributes from streaming body.
+		// Always call setAttributeBySource even if shouldBufferStreamingBody is false,
+		// because token-related attributes are extracted from context (not buffered body).
+		var streamingBodyBuffer []byte
 		if config.shouldBufferStreamingBody {
-			streamingBodyBuffer, ok := ctx.GetContext(CtxStreamingBodyBuffer).([]byte)
-			if !ok {
-				return data
-			}
-			setAttributeBySource(ctx, config, ResponseStreamingBody, streamingBodyBuffer)
+			streamingBodyBuffer, _ = ctx.GetContext(CtxStreamingBodyBuffer).([]byte)
 		}
+		setAttributeBySource(ctx, config, ResponseStreamingBody, streamingBodyBuffer)
 
 		// Write log
 		debugLogAiLog(ctx)
@@ -729,7 +910,7 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body
 			setSpanAttribute(ArmsInputToken, usage.InputToken)
 			setSpanAttribute(ArmsOutputToken, usage.OutputToken)
 			setSpanAttribute(ArmsTotalToken, usage.TotalToken)
-			
+
 			// Set token details to context for later use in attributes
 			if len(usage.InputTokenDetails) > 0 {
 				ctx.SetContext(tokenusage.CtxKeyInputTokenDetails, usage.InputTokenDetails)
@@ -797,7 +978,7 @@ func setAttributeBySource(ctx wrapper.HttpContext, config AIStatisticsConfig, so
 		if (value == nil || value == "") && attribute.DefaultValue != "" {
 			value = attribute.DefaultValue
 		}
-		
+
 		// Format value for logging/span
 		var formattedValue interface{}
 		switch v := value.(type) {
@@ -816,7 +997,7 @@ func setAttributeBySource(ctx wrapper.HttpContext, config AIStatisticsConfig, so
 				formattedValue = fmt.Sprint(value)[:config.valueLengthLimit/2] + " [truncated] " + fmt.Sprint(value)[len(fmt.Sprint(value))-config.valueLengthLimit/2:]
 			}
 		}
-		
+
 		log.Debugf("[attribute] source type: %s, key: %s, value: %+v", source, key, formattedValue)
 		if attribute.ApplyToLog {
 			if attribute.AsSeparateLogField {
@@ -849,21 +1030,32 @@ func setAttributeBySource(ctx wrapper.HttpContext, config AIStatisticsConfig, so
 
 // isBuiltinAttribute checks if the given key is a built-in attribute
 func isBuiltinAttribute(key string) bool {
-	return key == BuiltinQuestionKey || key == BuiltinAnswerKey || key == BuiltinToolCallsKey || key == BuiltinReasoningKey ||
+	return key == BuiltinQuestionKey || key == BuiltinAnswerKey || key == BuiltinToolCallsKey || key == BuiltinReasoningKey || key == BuiltinSystemKey ||
 		key == BuiltinReasoningTokens || key == BuiltinCachedTokens ||
 		key == BuiltinInputTokenDetails || key == BuiltinOutputTokenDetails
 }
 
+// needsBodyBuffering checks if a built-in attribute needs body buffering
+// Token-related attributes are extracted from context (set by tokenusage.GetTokenUsage),
+// so they don't require buffering the response body.
+func needsBodyBuffering(key string) bool {
+	return key == BuiltinAnswerKey || key == BuiltinToolCallsKey || key == BuiltinReasoningKey
+}
+
 // getBuiltinAttributeDefaultSources returns the default value_source(s) for a built-in attribute
 // Returns nil if the key is not a built-in attribute
+// Note: Token-related attributes are extracted from context (set by tokenusage.GetTokenUsage),
+// so they don't require body buffering even though they're processed during response phase.
 func getBuiltinAttributeDefaultSources(key string) []string {
 	switch key {
-	case BuiltinQuestionKey:
+	case BuiltinQuestionKey, BuiltinSystemKey:
 		return []string{RequestBody}
 	case BuiltinAnswerKey, BuiltinToolCallsKey, BuiltinReasoningKey:
 		return []string{ResponseStreamingBody, ResponseBody}
 	case BuiltinReasoningTokens, BuiltinCachedTokens, BuiltinInputTokenDetails, BuiltinOutputTokenDetails:
-		// Token details are only available after response is received
+		// Token details are extracted from context (set by tokenusage.GetTokenUsage),
+		// not from body parsing. We use ResponseStreamingBody/ResponseBody to indicate
+		// they should be processed during response phase, but they don't require body buffering.
 		return []string{ResponseStreamingBody, ResponseBody}
 	default:
 		return nil
@@ -896,6 +1088,13 @@ func getBuiltinAttributeFallback(ctx wrapper.HttpContext, config AIStatisticsCon
 				return value
 			}
 		}
+	case BuiltinSystemKey:
+		if source == RequestBody {
+			// Try Claude /v1/messages format (system is a top-level field)
+			if value := gjson.GetBytes(body, SystemPathClaude).Value(); value != nil && value != "" {
+				return value
+			}
+		}
 	case BuiltinAnswerKey:
 		if source == ResponseStreamingBody {
 			// Try OpenAI format first
@@ -923,9 +1122,12 @@ func getBuiltinAttributeFallback(ctx wrapper.HttpContext, config AIStatisticsCon
 			if existingBuffer, ok := ctx.GetContext(CtxStreamingToolCallsBuffer).(*StreamingToolCallsBuffer); ok {
 				buffer = existingBuffer
 			}
+			// Try OpenAI format first
 			buffer = extractStreamingToolCalls(body, buffer)
+			// Also try Claude format (both formats can be checked)
+			buffer = extractClaudeStreamingToolCalls(body, buffer)
 			ctx.SetContext(CtxStreamingToolCallsBuffer, buffer)
-			
+
 			// Also set tool_calls to user attributes so they appear in ai_log
 			toolCalls := getToolCallsFromBuffer(buffer)
 			if len(toolCalls) > 0 {
@@ -1046,6 +1248,9 @@ func debugLogAiLog(ctx wrapper.HttpContext) {
 	// The actual attributes are stored internally, we log what we know
 	if question := ctx.GetUserAttribute("question"); question != nil {
 		userAttrs["question"] = question
+	}
+	if system := ctx.GetUserAttribute("system"); system != nil {
+		userAttrs["system"] = system
 	}
 	if answer := ctx.GetUserAttribute("answer"); answer != nil {
 		userAttrs["answer"] = answer

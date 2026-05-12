@@ -80,6 +80,7 @@ func parseConfig(json gjson.Result, config *ModelRouterConfig) error {
 			"/video-synthesis",
 			"/rerank",
 			"/messages",
+			"/responses",
 		}
 	}
 

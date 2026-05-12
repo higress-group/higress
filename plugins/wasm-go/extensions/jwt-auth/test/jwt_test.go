@@ -67,7 +67,7 @@ func genJWTs(keySets map[string]keySet) (jwts jwts) {
 			Expiry:    jwt.NewNumericDate(time.Date(2034, 1, 1, 0, 0, 0, 0, time.UTC)),
 			NotBefore: jwt.NewNumericDate(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)),
 		},
-		"expried": {
+		"expired": {
 			Issuer:    "higress-test",
 			Subject:   "higress-test",
 			Audience:  []string{"foo", "bar"},

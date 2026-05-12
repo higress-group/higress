@@ -183,6 +183,264 @@ func TestClaudeProvider_BuildClaudeTextGenRequest_StandardMode(t *testing.T) {
 		assert.False(t, claudeReq.System.IsArray)
 		assert.Equal(t, "You are a helpful assistant.", claudeReq.System.StringValue)
 	})
+
+	t.Run("preserves_bridge_thinking_blocks_and_output_config", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:          "claude-sonnet-4-5-20250929",
+			MaxTokens:      8192,
+			ClaudeThinking: &claudeThinkingConfig{Type: "adaptive", Display: "omitted"},
+			ClaudeOutputConfig: &claudeOutputConfig{
+				Effort: "high",
+				Format: json.RawMessage(`{
+					"type":"json_schema",
+					"schema":{"type":"object","properties":{"answer":{"type":"string"}}}
+				}`),
+			},
+			Messages: []chatMessage{{
+				Role: roleAssistant,
+				ClaudeContentBlocks: []claudeChatMessageContent{
+					{Type: "thinking", Thinking: "", Signature: "sig"},
+					{Type: "redacted_thinking", Data: "opaque-base64"},
+					{Type: "text", Text: "answer"},
+				},
+			}},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.Thinking)
+		assert.Equal(t, "adaptive", claudeReq.Thinking.Type)
+		assert.Equal(t, "omitted", claudeReq.Thinking.Display)
+		require.NotNil(t, claudeReq.OutputConfig)
+		assert.Equal(t, "high", claudeReq.OutputConfig.Effort)
+		require.NotEmpty(t, claudeReq.OutputConfig.Format)
+		assert.Contains(t, string(claudeReq.OutputConfig.Format), "json_schema")
+		require.Len(t, claudeReq.Messages, 1)
+		blocks := claudeReq.Messages[0].Content.GetArrayValue()
+		require.Len(t, blocks, 3)
+		assert.Equal(t, "thinking", blocks[0].Type)
+		assert.Equal(t, "sig", blocks[0].Signature)
+		assert.Equal(t, "redacted_thinking", blocks[1].Type)
+		assert.Equal(t, "opaque-base64", blocks[1].Data)
+		assert.Equal(t, "text", blocks[2].Type)
+		assert.Equal(t, "answer", blocks[2].Text)
+	})
+
+	t.Run("maps_openai_function_tool_choice_to_claude_tool_choice", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 8192,
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Search."},
+			},
+			Tools: []tool{{
+				Type: "function",
+				Function: function{
+					Name:        "web_search",
+					Description: "Search the web.",
+					Parameters:  map[string]interface{}{"type": "object"},
+				},
+			}},
+			ToolChoice: map[string]interface{}{
+				"type": "function",
+				"function": map[string]interface{}{
+					"name": "web_search",
+				},
+			},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.ToolChoice)
+		assert.Equal(t, "tool", claudeReq.ToolChoice.Type)
+		assert.Equal(t, "web_search", claudeReq.ToolChoice.Name)
+	})
+
+	t.Run("maps_openai_string_required_tool_choice_to_claude_any", func(t *testing.T) {
+		parallelToolCalls := false
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 8192,
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Search."},
+			},
+			Tools: []tool{{
+				Type: "function",
+				Function: function{
+					Name:       "web_search",
+					Parameters: map[string]interface{}{"type": "object"},
+				},
+			}},
+			ToolChoice:        "required",
+			ParallelToolCalls: &parallelToolCalls,
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.ToolChoice)
+		assert.Equal(t, "any", claudeReq.ToolChoice.Type)
+		assert.Empty(t, claudeReq.ToolChoice.Name)
+		assert.True(t, claudeReq.ToolChoice.DisableParallelToolUse)
+	})
+
+	t.Run("downgrades_forced_tool_choice_to_auto_when_thinking_enabled", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:          "claude-sonnet-4-5-20250929",
+			MaxTokens:      8192,
+			ClaudeThinking: &claudeThinkingConfig{Type: "enabled", BudgetTokens: 8192},
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Search."},
+			},
+			Tools: []tool{{
+				Type: "function",
+				Function: function{
+					Name:       "web_search",
+					Parameters: map[string]interface{}{"type": "object"},
+				},
+			}},
+			ToolChoice: "required",
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.ToolChoice)
+		assert.Equal(t, "auto", claudeReq.ToolChoice.Type)
+	})
+
+	t.Run("maps_openai_string_none_tool_choice_to_claude_none", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 8192,
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Answer without tools."},
+			},
+			Tools: []tool{{
+				Type: "function",
+				Function: function{
+					Name:       "web_search",
+					Parameters: map[string]interface{}{"type": "object"},
+				},
+			}},
+			ToolChoice: "none",
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.ToolChoice)
+		assert.Equal(t, "none", claudeReq.ToolChoice.Type)
+		assert.Empty(t, claudeReq.ToolChoice.Name)
+	})
+
+	t.Run("preserves_bridge_tool_result_blocks_before_role_tool_fallback", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 8192,
+			Messages: []chatMessage{{
+				Role: roleTool,
+				ClaudeContentBlocks: []claudeChatMessageContent{{
+					Type:      "tool_result",
+					ToolUseId: "toolu_1",
+					IsError:   true,
+					Content: &claudeChatMessageContentWr{
+						ArrayValue: []claudeChatMessageContent{{
+							Type: "image",
+							Source: &claudeChatMessageContentSource{
+								Type:      "base64",
+								MediaType: "image/png",
+								Data:      "AAAA",
+							},
+						}},
+					},
+				}},
+			}},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.Len(t, claudeReq.Messages, 1)
+		assert.Equal(t, roleUser, claudeReq.Messages[0].Role)
+		blocks := claudeReq.Messages[0].Content.GetArrayValue()
+		require.Len(t, blocks, 1)
+		assert.Equal(t, "tool_result", blocks[0].Type)
+		assert.True(t, blocks[0].IsError)
+		require.NotNil(t, blocks[0].Content)
+		require.Len(t, blocks[0].Content.ArrayValue, 1)
+		assert.Equal(t, "image", blocks[0].Content.ArrayValue[0].Type)
+	})
+}
+
+func TestClaudeProvider_ResponsePreservesNativeThinkingBlocksForClaudeConversion(t *testing.T) {
+	provider := &claudeProvider{}
+	ctx := newMockMultipartHttpContext()
+	ctx.SetContext("needClaudeResponseConversion", true)
+	thinking := "reasoning"
+	signature := "sig"
+	text := "answer"
+
+	response := provider.responseClaude2OpenAI(ctx, &claudeTextGenResponse{
+		Id:    "msg_1",
+		Model: "claude-sonnet-4-5-20250929",
+		Type:  "message",
+		Role:  roleAssistant,
+		Content: []claudeTextGenContent{
+			{Type: "thinking", Thinking: &thinking, Signature: &signature},
+			{Type: "redacted_thinking", Data: "opaque-base64"},
+			{Type: "text", Text: &text},
+		},
+	})
+	body, err := json.Marshal(response)
+	require.NoError(t, err)
+
+	converted, err := (&ClaudeToOpenAIConverter{}).ConvertOpenAIResponseToClaude(ctx, body)
+	require.NoError(t, err)
+
+	var claudeResponse claudeTextGenResponse
+	require.NoError(t, json.Unmarshal(converted, &claudeResponse))
+	require.Len(t, claudeResponse.Content, 3)
+	assert.Equal(t, "thinking", claudeResponse.Content[0].Type)
+	require.NotNil(t, claudeResponse.Content[0].Signature)
+	assert.Equal(t, "sig", *claudeResponse.Content[0].Signature)
+	assert.Equal(t, "redacted_thinking", claudeResponse.Content[1].Type)
+	assert.Equal(t, "opaque-base64", claudeResponse.Content[1].Data)
+	assert.Equal(t, "text", claudeResponse.Content[2].Type)
+}
+
+func TestClaudeProvider_StreamPreservesNativeSignatureAndStopsForClaudeConversion(t *testing.T) {
+	provider := &claudeProvider{}
+	ctx := newMockMultipartHttpContext()
+	ctx.SetContext("needClaudeResponseConversion", true)
+	converter := &ClaudeToOpenAIConverter{}
+	index := 1
+
+	signatureResponse := provider.streamResponseClaude2OpenAI(ctx, &claudeTextGenStreamResponse{
+		Type:  "content_block_delta",
+		Index: &index,
+		Delta: &claudeTextGenDelta{
+			Type:      "signature_delta",
+			Signature: "sig",
+		},
+	})
+	signatureBody, err := json.Marshal(signatureResponse)
+	require.NoError(t, err)
+	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte("data: "+string(signatureBody)+"\n\n"))
+	require.NoError(t, err)
+	events := parseClaudeSSEEvents(t, converted)
+	require.Len(t, events, 2)
+	assert.Equal(t, "content_block_start", events[0].Name)
+	assert.Equal(t, "content_block_delta", events[1].Name)
+	assert.Equal(t, "signature_delta", events[1].Payload.Delta.Type)
+
+	stopResponse := provider.streamResponseClaude2OpenAI(ctx, &claudeTextGenStreamResponse{
+		Type:  "content_block_stop",
+		Index: &index,
+	})
+	stopBody, err := json.Marshal(stopResponse)
+	require.NoError(t, err)
+	converted, err = converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte("data: "+string(stopBody)+"\n\n"))
+	require.NoError(t, err)
+	events = parseClaudeSSEEvents(t, converted)
+	require.Len(t, events, 1)
+	assert.Equal(t, "content_block_stop", events[0].Name)
 }
 
 func TestClaudeProvider_BuildClaudeTextGenRequest_ClaudeCodeMode(t *testing.T) {
@@ -313,5 +571,109 @@ func TestClaudeProvider_GetApiName(t *testing.T) {
 
 	t.Run("unknown_path", func(t *testing.T) {
 		assert.Equal(t, ApiName(""), provider.GetApiName("/unknown"))
+	})
+}
+
+func TestClaudeProvider_BuildClaudeTextGenRequest_ToolRoleConversion(t *testing.T) {
+	provider := &claudeProvider{
+		config: ProviderConfig{
+			claudeCodeMode: false,
+		},
+	}
+
+	t.Run("converts_single_tool_role_to_user_with_tool_result", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 1024,
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "What's the weather?"},
+				{Role: roleAssistant, Content: nil, ToolCalls: []toolCall{
+					{Id: "call_123", Type: "function", Function: functionCall{Name: "get_weather", Arguments: `{"city": "Beijing"}`}},
+				}},
+				{Role: roleTool, ToolCallId: "call_123", Content: "Sunny, 25°C"},
+			},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		// Should have 3 messages: user, assistant with tool_use, user with tool_result
+		require.Len(t, claudeReq.Messages, 3)
+
+		// First message should be user
+		assert.Equal(t, roleUser, claudeReq.Messages[0].Role)
+
+		// Second message should be assistant with tool_use
+		assert.Equal(t, roleAssistant, claudeReq.Messages[1].Role)
+		require.False(t, claudeReq.Messages[1].Content.IsString)
+		require.Len(t, claudeReq.Messages[1].Content.ArrayValue, 1)
+		assert.Equal(t, "tool_use", claudeReq.Messages[1].Content.ArrayValue[0].Type)
+		assert.Equal(t, "call_123", claudeReq.Messages[1].Content.ArrayValue[0].Id)
+		assert.Equal(t, "get_weather", claudeReq.Messages[1].Content.ArrayValue[0].Name)
+
+		// Third message should be user with tool_result
+		assert.Equal(t, roleUser, claudeReq.Messages[2].Role)
+		require.False(t, claudeReq.Messages[2].Content.IsString)
+		require.Len(t, claudeReq.Messages[2].Content.ArrayValue, 1)
+		assert.Equal(t, "tool_result", claudeReq.Messages[2].Content.ArrayValue[0].Type)
+		assert.Equal(t, "call_123", claudeReq.Messages[2].Content.ArrayValue[0].ToolUseId)
+	})
+
+	t.Run("merges_multiple_tool_results_into_single_user_message", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 1024,
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "What's the weather and time?"},
+				{Role: roleAssistant, Content: nil, ToolCalls: []toolCall{
+					{Id: "call_1", Type: "function", Function: functionCall{Name: "get_weather", Arguments: `{"city": "Beijing"}`}},
+					{Id: "call_2", Type: "function", Function: functionCall{Name: "get_time", Arguments: `{"timezone": "Asia/Shanghai"}`}},
+				}},
+				{Role: roleTool, ToolCallId: "call_1", Content: "Sunny, 25°C"},
+				{Role: roleTool, ToolCallId: "call_2", Content: "3:00 PM"},
+			},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		// Should have 3 messages: user, assistant with 2 tool_use, user with 2 tool_results
+		require.Len(t, claudeReq.Messages, 3)
+
+		// Assistant message should have 2 tool_use blocks
+		require.Len(t, claudeReq.Messages[1].Content.ArrayValue, 2)
+		assert.Equal(t, "tool_use", claudeReq.Messages[1].Content.ArrayValue[0].Type)
+		assert.Equal(t, "tool_use", claudeReq.Messages[1].Content.ArrayValue[1].Type)
+
+		// User message should have 2 tool_result blocks merged
+		assert.Equal(t, roleUser, claudeReq.Messages[2].Role)
+		require.Len(t, claudeReq.Messages[2].Content.ArrayValue, 2)
+		assert.Equal(t, "tool_result", claudeReq.Messages[2].Content.ArrayValue[0].Type)
+		assert.Equal(t, "call_1", claudeReq.Messages[2].Content.ArrayValue[0].ToolUseId)
+		assert.Equal(t, "tool_result", claudeReq.Messages[2].Content.ArrayValue[1].Type)
+		assert.Equal(t, "call_2", claudeReq.Messages[2].Content.ArrayValue[1].ToolUseId)
+	})
+
+	t.Run("handles_assistant_tool_calls_with_text_content", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 1024,
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "What's the weather?"},
+				{Role: roleAssistant, Content: "Let me check the weather for you.", ToolCalls: []toolCall{
+					{Id: "call_123", Type: "function", Function: functionCall{Name: "get_weather", Arguments: `{"city": "Beijing"}`}},
+				}},
+			},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.Len(t, claudeReq.Messages, 2)
+
+		// Assistant message should have both text and tool_use
+		assert.Equal(t, roleAssistant, claudeReq.Messages[1].Role)
+		require.False(t, claudeReq.Messages[1].Content.IsString)
+		require.Len(t, claudeReq.Messages[1].Content.ArrayValue, 2)
+		assert.Equal(t, contentTypeText, claudeReq.Messages[1].Content.ArrayValue[0].Type)
+		assert.Equal(t, "Let me check the weather for you.", claudeReq.Messages[1].Content.ArrayValue[0].Text)
+		assert.Equal(t, "tool_use", claudeReq.Messages[1].Content.ArrayValue[1].Type)
 	})
 }

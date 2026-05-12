@@ -10,7 +10,7 @@ env:
   GO_VERSION: 1.24
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -21,7 +21,7 @@ jobs:
     # - run: make lint
 
   coverage-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -57,7 +57,7 @@ jobs:
 
   build:
     # The type of runner that the job will run on
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [lint, coverage-test]
     steps:
       - name: "Checkout ${{ github.ref }}"
@@ -91,16 +91,28 @@ jobs:
           path: out/
 
   gateway-conformance-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [build]
     steps:
       - uses: actions/checkout@v3
 
   higress-conformance-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [build]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Disable containerd image store
+        run: |
+          sudo bash -c 'cat > /etc/docker/daemon.json << EOF
+          {
+            "features": {
+              "containerd-snapshotter": false
+            }
+          }
+          EOF'
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
 
       - name: Free Up GitHub Actions Ubuntu Runner Disk Space 🔧
         uses: jlumbroso/free-disk-space@main
@@ -139,7 +151,7 @@ jobs:
         run: GOPROXY="https://proxy.golang.org,direct" make higress-conformance-test
 
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [higress-conformance-test, gateway-conformance-test]
     steps:
       - uses: actions/checkout@v4

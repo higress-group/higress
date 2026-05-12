@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -30,39 +31,50 @@ const (
 )
 
 type NonOpenAIStyleOptions struct {
-	ReasoningMaxTokens int `json:"reasoning_max_tokens,omitempty"`
+	ReasoningMaxTokens int            `json:"reasoning_max_tokens,omitempty"`
+	Thinking           *thinkingParam `json:"thinking,omitempty"`
+}
+
+type thinkingParam struct {
+	Type        string `json:"type,omitempty"`
+	BudgetToken int    `json:"budget_token,omitempty"`
 }
 
 type chatCompletionRequest struct {
 	NonOpenAIStyleOptions
-	Messages            []chatMessage          `json:"messages"`
-	Model               string                 `json:"model"`
-	Store               bool                   `json:"store,omitempty"`
-	ReasoningEffort     string                 `json:"reasoning_effort,omitempty"`
-	Metadata            map[string]string      `json:"metadata,omitempty"`
-	FrequencyPenalty    float64                `json:"frequency_penalty,omitempty"`
-	LogitBias           map[string]int         `json:"logit_bias,omitempty"`
-	Logprobs            bool                   `json:"logprobs,omitempty"`
-	TopLogprobs         int                    `json:"top_logprobs,omitempty"`
-	MaxTokens           int                    `json:"max_tokens,omitempty"`
-	MaxCompletionTokens int                    `json:"max_completion_tokens,omitempty"`
-	N                   int                    `json:"n,omitempty"`
-	Modalities          []string               `json:"modalities,omitempty"`
-	Prediction          map[string]interface{} `json:"prediction,omitempty"`
-	Audio               map[string]interface{} `json:"audio,omitempty"`
-	PresencePenalty     float64                `json:"presence_penalty,omitempty"`
-	ResponseFormat      map[string]interface{} `json:"response_format,omitempty"`
-	Seed                int                    `json:"seed,omitempty"`
-	ServiceTier         string                 `json:"service_tier,omitempty"`
-	Stop                []string               `json:"stop,omitempty"`
-	Stream              bool                   `json:"stream,omitempty"`
-	StreamOptions       *streamOptions         `json:"stream_options,omitempty"`
-	Temperature         float64                `json:"temperature,omitempty"`
-	TopP                float64                `json:"top_p,omitempty"`
-	Tools               []tool                 `json:"tools,omitempty"`
-	ToolChoice          interface{}            `json:"tool_choice,omitempty"`
-	ParallelToolCalls   bool                   `json:"parallel_tool_calls,omitempty"`
-	User                string                 `json:"user,omitempty"`
+	Messages             []chatMessage          `json:"messages"`
+	Model                string                 `json:"model"`
+	Store                bool                   `json:"store,omitempty"`
+	ReasoningEffort      string                 `json:"reasoning_effort,omitempty"`
+	ClaudeThinking       *claudeThinkingConfig  `json:"claude_thinking,omitempty"`
+	ClaudeOutputConfig   *claudeOutputConfig    `json:"claude_output_config,omitempty"`
+	ClaudeAnthropicBeta  []string               `json:"claude_anthropic_beta,omitempty"`
+	Metadata             map[string]string      `json:"metadata,omitempty"`
+	FrequencyPenalty     float64                `json:"frequency_penalty,omitempty"`
+	LogitBias            map[string]int         `json:"logit_bias,omitempty"`
+	Logprobs             bool                   `json:"logprobs,omitempty"`
+	TopLogprobs          int                    `json:"top_logprobs,omitempty"`
+	MaxTokens            int                    `json:"max_tokens,omitempty"`
+	MaxCompletionTokens  int                    `json:"max_completion_tokens,omitempty"`
+	N                    int                    `json:"n,omitempty"`
+	Modalities           []string               `json:"modalities,omitempty"`
+	Prediction           map[string]interface{} `json:"prediction,omitempty"`
+	Audio                map[string]interface{} `json:"audio,omitempty"`
+	PresencePenalty      float64                `json:"presence_penalty,omitempty"`
+	ResponseFormat       map[string]interface{} `json:"response_format,omitempty"`
+	Seed                 int                    `json:"seed,omitempty"`
+	ServiceTier          string                 `json:"service_tier,omitempty"`
+	Stop                 []string               `json:"stop,omitempty"`
+	Stream               bool                   `json:"stream,omitempty"`
+	StreamOptions        *streamOptions         `json:"stream_options,omitempty"`
+	PromptCacheRetention string                 `json:"prompt_cache_retention,omitempty"`
+	PromptCacheKey       string                 `json:"prompt_cache_key,omitempty"`
+	Temperature          float64                `json:"temperature,omitempty"`
+	TopP                 float64                `json:"top_p,omitempty"`
+	Tools                []tool                 `json:"tools,omitempty"`
+	ToolChoice           interface{}            `json:"tool_choice,omitempty"`
+	ParallelToolCalls    *bool                  `json:"parallel_tool_calls,omitempty"`
+	User                 string                 `json:"user,omitempty"`
 }
 
 func (c *chatCompletionRequest) getMaxTokens() int {
@@ -83,15 +95,33 @@ func (c *chatCompletionRequest) getToolChoiceString() string {
 	return ""
 }
 
-func (c *chatCompletionRequest) getToolChoiceObject() *toolChoice {
-	if c.ToolChoice == nil {
-		return nil
-	}
-
-	if tc, ok := c.ToolChoice.(*toolChoice); ok {
+func (c *chatCompletionRequest) getToolChoiceType() string {
+	if tc := c.getToolChoiceString(); tc != "" {
 		return tc
 	}
-	return nil
+	if tc := c.getToolChoiceObject(); tc != nil {
+		return tc.Type
+	}
+	return ""
+}
+
+func (c *chatCompletionRequest) getToolChoiceObject() *toolChoice {
+	switch tc := c.ToolChoice.(type) {
+	case nil, string:
+		return nil
+	case *toolChoice:
+		return tc
+	}
+
+	body, err := json.Marshal(c.ToolChoice)
+	if err != nil {
+		return nil
+	}
+	var parsed toolChoice
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 type CompletionRequest struct {
@@ -175,17 +205,22 @@ type completionTokensDetails struct {
 }
 
 type chatMessage struct {
-	Id               string                 `json:"id,omitempty"`
-	Audio            map[string]interface{} `json:"audio,omitempty"`
-	Name             string                 `json:"name,omitempty"`
-	Role             string                 `json:"role,omitempty"`
-	Content          any                    `json:"content,omitempty"`
-	ReasoningContent string                 `json:"reasoning_content,omitempty"`
-	Reasoning        string                 `json:"reasoning,omitempty"` // For streaming responses
-	ToolCalls        []toolCall             `json:"tool_calls,omitempty"`
-	FunctionCall     *functionCall          `json:"function_call,omitempty"` // For legacy OpenAI format
-	Refusal          string                 `json:"refusal,omitempty"`
-	ToolCallId       string                 `json:"tool_call_id,omitempty"`
+	Id                       string                     `json:"id,omitempty"`
+	Audio                    map[string]interface{}     `json:"audio,omitempty"`
+	Name                     string                     `json:"name,omitempty"`
+	Role                     string                     `json:"role,omitempty"`
+	Content                  any                        `json:"content,omitempty"`
+	ReasoningContent         string                     `json:"reasoning_content,omitempty"`
+	Reasoning                string                     `json:"reasoning,omitempty"` // For streaming responses
+	ReasoningSignature       string                     `json:"reasoning_signature,omitempty"`
+	ReasoningRedactedContent string                     `json:"reasoning_redacted_content,omitempty"`
+	ClaudeContentBlocks      []claudeChatMessageContent `json:"claude_content_blocks,omitempty"`
+	ClaudeContentBlockIndex  *int                       `json:"claude_content_block_index,omitempty"`
+	ClaudeContentBlockStop   *int                       `json:"claude_content_block_stop,omitempty"`
+	ToolCalls                []toolCall                 `json:"tool_calls,omitempty"`
+	FunctionCall             *functionCall              `json:"function_call,omitempty"` // For legacy OpenAI format
+	Refusal                  string                     `json:"refusal,omitempty"`
+	ToolCallId               string                     `json:"tool_call_id,omitempty"`
 }
 
 func (m *chatMessage) handleNonStreamingReasoningContent(reasoningContentMode string) {
@@ -243,6 +278,70 @@ func (m *chatMessage) handleStreamingReasoningContent(ctx wrapper.HttpContext, r
 	case reasoningBehaviorPassThrough:
 	default:
 		break
+	}
+}
+
+// promoteThinkingOnEmpty promotes reasoning_content to content when content is empty.
+// This handles models that put user-facing replies into thinking blocks instead of text blocks.
+func (r *chatCompletionResponse) promoteThinkingOnEmpty() {
+	for i := range r.Choices {
+		msg := r.Choices[i].Message
+		if msg == nil {
+			continue
+		}
+		if !isContentEmpty(msg.Content) {
+			continue
+		}
+		if msg.ReasoningContent != "" {
+			msg.Content = msg.ReasoningContent
+			msg.ReasoningContent = ""
+		}
+	}
+}
+
+// promoteStreamingThinkingOnEmpty accumulates reasoning content during streaming.
+// It strips reasoning from chunks and buffers it. When content is seen, it marks
+// the stream as having content so no promotion will happen.
+// Call PromoteStreamingThinkingFlush at the end of the stream to emit buffered
+// reasoning as content if no content was ever seen.
+// Returns true if the chunk was modified (reasoning stripped).
+func promoteStreamingThinkingOnEmpty(ctx wrapper.HttpContext, msg *chatMessage) bool {
+	if msg == nil {
+		return false
+	}
+	hasContentDelta, _ := ctx.GetContext(ctxKeyHasContentDelta).(bool)
+	if hasContentDelta {
+		return false
+	}
+
+	if !isContentEmpty(msg.Content) {
+		ctx.SetContext(ctxKeyHasContentDelta, true)
+		return false
+	}
+
+	// Buffer reasoning content and strip it from the chunk
+	reasoning := msg.ReasoningContent
+	if reasoning == "" {
+		reasoning = msg.Reasoning
+	}
+	if reasoning != "" {
+		buffered, _ := ctx.GetContext(ctxKeyBufferedReasoning).(string)
+		ctx.SetContext(ctxKeyBufferedReasoning, buffered+reasoning)
+		msg.ReasoningContent = ""
+		msg.Reasoning = ""
+		return true
+	}
+	return false
+}
+
+func isContentEmpty(content any) bool {
+	switch v := content.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(v) == ""
+	default:
+		return false
 	}
 }
 
@@ -401,7 +500,7 @@ type toolCall struct {
 
 type functionCall struct {
 	Id        string `json:"id,omitempty"`
-	Name      string `json:"name"`
+	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments"`
 }
 
@@ -453,6 +552,122 @@ type imageGenerationRequest struct {
 	Style             string `json:"style,omitempty"`
 	N                 int    `json:"n,omitempty"`
 	Size              string `json:"size,omitempty"`
+}
+
+type imageInputURL struct {
+	URL      string                      `json:"url,omitempty"`
+	ImageURL *chatMessageContentImageUrl `json:"image_url,omitempty"`
+}
+
+func (i *imageInputURL) UnmarshalJSON(data []byte) error {
+	// Support a plain string payload, e.g. "data:image/png;base64,..."
+	var rawURL string
+	if err := json.Unmarshal(data, &rawURL); err == nil {
+		i.URL = rawURL
+		i.ImageURL = nil
+		return nil
+	}
+
+	type alias imageInputURL
+	var value alias
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*i = imageInputURL(value)
+	return nil
+}
+
+func (i *imageInputURL) GetURL() string {
+	if i == nil {
+		return ""
+	}
+	if i.ImageURL != nil && i.ImageURL.Url != "" {
+		return i.ImageURL.Url
+	}
+	return i.URL
+}
+
+type imageEditRequest struct {
+	Model             string          `json:"model"`
+	Prompt            string          `json:"prompt"`
+	Image             *imageInputURL  `json:"image,omitempty"`
+	Images            []imageInputURL `json:"images,omitempty"`
+	ImageURL          *imageInputURL  `json:"image_url,omitempty"`
+	Mask              *imageInputURL  `json:"mask,omitempty"`
+	MaskURL           *imageInputURL  `json:"mask_url,omitempty"`
+	Background        string          `json:"background,omitempty"`
+	Moderation        string          `json:"moderation,omitempty"`
+	OutputCompression int             `json:"output_compression,omitempty"`
+	OutputFormat      string          `json:"output_format,omitempty"`
+	Quality           string          `json:"quality,omitempty"`
+	ResponseFormat    string          `json:"response_format,omitempty"`
+	Style             string          `json:"style,omitempty"`
+	N                 int             `json:"n,omitempty"`
+	Size              string          `json:"size,omitempty"`
+}
+
+func (r *imageEditRequest) GetImageURLs() []string {
+	urls := make([]string, 0, len(r.Images)+2)
+	for _, image := range r.Images {
+		if url := image.GetURL(); url != "" {
+			urls = append(urls, url)
+		}
+	}
+	if r.Image != nil {
+		if url := r.Image.GetURL(); url != "" {
+			urls = append(urls, url)
+		}
+	}
+	if r.ImageURL != nil {
+		if url := r.ImageURL.GetURL(); url != "" {
+			urls = append(urls, url)
+		}
+	}
+	return urls
+}
+
+func (r *imageEditRequest) HasMask() bool {
+	if r.Mask != nil && r.Mask.GetURL() != "" {
+		return true
+	}
+	return r.MaskURL != nil && r.MaskURL.GetURL() != ""
+}
+
+type imageVariationRequest struct {
+	Model             string          `json:"model"`
+	Prompt            string          `json:"prompt,omitempty"`
+	Image             *imageInputURL  `json:"image,omitempty"`
+	Images            []imageInputURL `json:"images,omitempty"`
+	ImageURL          *imageInputURL  `json:"image_url,omitempty"`
+	Background        string          `json:"background,omitempty"`
+	Moderation        string          `json:"moderation,omitempty"`
+	OutputCompression int             `json:"output_compression,omitempty"`
+	OutputFormat      string          `json:"output_format,omitempty"`
+	Quality           string          `json:"quality,omitempty"`
+	ResponseFormat    string          `json:"response_format,omitempty"`
+	Style             string          `json:"style,omitempty"`
+	N                 int             `json:"n,omitempty"`
+	Size              string          `json:"size,omitempty"`
+}
+
+func (r *imageVariationRequest) GetImageURLs() []string {
+	urls := make([]string, 0, len(r.Images)+2)
+	for _, image := range r.Images {
+		if url := image.GetURL(); url != "" {
+			urls = append(urls, url)
+		}
+	}
+	if r.Image != nil {
+		if url := r.Image.GetURL(); url != "" {
+			urls = append(urls, url)
+		}
+	}
+	if r.ImageURL != nil {
+		if url := r.ImageURL.GetURL(); url != "" {
+			urls = append(urls, url)
+		}
+	}
+	return urls
 }
 
 type imageGenerationData struct {
@@ -522,4 +737,88 @@ func (r embeddingsRequest) ParseInput() []string {
 		}
 	}
 	return input
+}
+
+// PromoteThinkingOnEmptyResponse promotes reasoning_content to content in a non-streaming
+// response body when content is empty. Returns the original body if no promotion is needed.
+func PromoteThinkingOnEmptyResponse(body []byte) ([]byte, error) {
+	var resp chatCompletionResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return body, fmt.Errorf("unable to unmarshal response for thinking promotion: %v", err)
+	}
+	promoted := false
+	for i := range resp.Choices {
+		msg := resp.Choices[i].Message
+		if msg == nil {
+			continue
+		}
+		if !isContentEmpty(msg.Content) {
+			continue
+		}
+		if msg.ReasoningContent != "" {
+			msg.Content = msg.ReasoningContent
+			msg.ReasoningContent = ""
+			promoted = true
+		}
+	}
+	if !promoted {
+		return body, nil
+	}
+	return json.Marshal(resp)
+}
+
+// PromoteStreamingThinkingOnEmptyChunk buffers reasoning deltas and strips them from
+// the chunk during streaming. Call PromoteStreamingThinkingFlush on the last chunk
+// to emit buffered reasoning as content if no real content was ever seen.
+func PromoteStreamingThinkingOnEmptyChunk(ctx wrapper.HttpContext, data []byte) ([]byte, error) {
+	var resp chatCompletionResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return data, nil // not a valid chat completion chunk, skip
+	}
+	modified := false
+	for i := range resp.Choices {
+		msg := resp.Choices[i].Delta
+		if msg == nil {
+			continue
+		}
+		if promoteStreamingThinkingOnEmpty(ctx, msg) {
+			modified = true
+		}
+	}
+	if !modified {
+		return data, nil
+	}
+	return json.Marshal(resp)
+}
+
+// PromoteStreamingThinkingFlush checks if the stream had no content and returns
+// an SSE chunk that emits the buffered reasoning as content. Returns nil if
+// content was already seen or no reasoning was buffered.
+func PromoteStreamingThinkingFlush(ctx wrapper.HttpContext) []byte {
+	hasContentDelta, _ := ctx.GetContext(ctxKeyHasContentDelta).(bool)
+	if hasContentDelta {
+		return nil
+	}
+	buffered, _ := ctx.GetContext(ctxKeyBufferedReasoning).(string)
+	if buffered == "" {
+		return nil
+	}
+	// Build a minimal chat.completion.chunk with the buffered reasoning as content
+	resp := chatCompletionResponse{
+		Object: objectChatCompletionChunk,
+		Choices: []chatCompletionChoice{
+			{
+				Index: 0,
+				Delta: &chatMessage{
+					Content: buffered,
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return nil
+	}
+	// Format as SSE
+	return []byte("data: " + string(data) + "\n\n")
 }

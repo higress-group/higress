@@ -2,8 +2,10 @@ package provider
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"net/http"
 	"path"
@@ -39,6 +41,9 @@ const (
 	ApiNameImageEdit                            ApiName = "openai/v1/imageedit"
 	ApiNameImageVariation                       ApiName = "openai/v1/imagevariation"
 	ApiNameAudioSpeech                          ApiName = "openai/v1/audiospeech"
+	ApiNameAudioTranscription                   ApiName = "openai/v1/audiotranscription"
+	ApiNameAudioTranslation                     ApiName = "openai/v1/audiotranslation"
+	ApiNameRealtime                             ApiName = "openai/v1/realtime"
 	ApiNameFiles                                ApiName = "openai/v1/files"
 	ApiNameRetrieveFile                         ApiName = "openai/v1/retrievefile"
 	ApiNameRetrieveFileContent                  ApiName = "openai/v1/retrievefilecontent"
@@ -66,6 +71,7 @@ const (
 	ApiNameQwenAsyncAIGC               ApiName = "qwen/v1/services/aigc"
 	ApiNameQwenAsyncTask               ApiName = "qwen/v1/tasks"
 	ApiNameQwenV1Rerank                ApiName = "qwen/v1/rerank"
+	ApiNameQwenV1Conversations         ApiName = "qwen/v1/conversations"
 	ApiNameGeminiGenerateContent       ApiName = "gemini/v1beta/generatecontent"
 	ApiNameGeminiStreamGenerateContent ApiName = "gemini/v1beta/streamgeneratecontent"
 	ApiNameAnthropicMessages           ApiName = "anthropic/v1/messages"
@@ -88,6 +94,9 @@ const (
 	PathOpenAIImageEdit                            = "/v1/images/edits"
 	PathOpenAIImageVariation                       = "/v1/images/variations"
 	PathOpenAIAudioSpeech                          = "/v1/audio/speech"
+	PathOpenAIAudioTranscriptions                  = "/v1/audio/transcriptions"
+	PathOpenAIAudioTranslations                    = "/v1/audio/translations"
+	PathOpenAIRealtime                             = "/v1/realtime"
 	PathOpenAIResponses                            = "/v1/responses"
 	PathOpenAIFineTuningJobs                       = "/v1/fine_tuning/jobs"
 	PathOpenAIRetrieveFineTuningJob                = "/v1/fine_tuning/jobs/{fine_tuning_job_id}"
@@ -109,6 +118,10 @@ const (
 
 	// Cohere
 	PathCohereV1Rerank = "/v1/rerank"
+
+	// Qwen
+	PathQwenV1Reranks       = "/v1/reranks"
+	PathQwenV1Conversations = "/v1/conversations"
 
 	providerTypeMoonshot   = "moonshot"
 	providerTypeAzure      = "azure"
@@ -151,6 +164,7 @@ const (
 	protocolOriginal = "original"
 
 	roleSystem    = "system"
+	roleDeveloper = "developer"
 	roleAssistant = "assistant"
 	roleUser      = "user"
 	roleTool      = "tool"
@@ -159,6 +173,8 @@ const (
 	finishReasonLength   = "length"
 	finishReasonToolCall = "tool_calls"
 
+	ctxKeyClaudeBudgetTokens     = "claudeBudgetTokens"
+	ctxKeyClaudeThinkingType     = "claudeThinkingType"
 	ctxKeyIncrementalStreaming   = "incrementalStreaming"
 	ctxKeyApiKey                 = "apiKey"
 	CtxKeyApiName                = "apiName"
@@ -169,6 +185,8 @@ const (
 	ctxKeyPushedMessage          = "pushedMessage"
 	ctxKeyContentPushed          = "contentPushed"
 	ctxKeyReasoningContentPushed = "reasoningContentPushed"
+	ctxKeyHasContentDelta        = "hasContentDelta"
+	ctxKeyBufferedReasoning      = "bufferedReasoning"
 
 	objectChatCompletion      = "chat.completion"
 	objectChatCompletionChunk = "chat.completion.chunk"
@@ -192,6 +210,11 @@ type providerInitializer interface {
 
 var (
 	errUnsupportedApiName = errors.New("unsupported API name")
+
+	// Providers that support the "developer" role. Other providers will have "developer" roles converted to "system".
+	developerRoleSupportedProviders = map[string]bool{
+		providerTypeAzure: true,
+	}
 
 	providerInitializers = map[string]providerInitializer{
 		providerTypeMoonshot:   &moonshotProviderInitializer{},
@@ -346,6 +369,12 @@ type ProviderConfig struct {
 	// @Title zh-CN Amazon Bedrock 额外模型请求参数
 	// @Description zh-CN 仅适用于Amazon Bedrock服务，用于设置模型特定的推理参数
 	bedrockAdditionalFields map[string]interface{} `required:"false" yaml:"bedrockAdditionalFields" json:"bedrockAdditionalFields"`
+	// @Title zh-CN Amazon Bedrock Prompt CachePoint 插入位置
+	// @Description zh-CN 仅适用于Amazon Bedrock服务。用于配置 cachePoint 插入位置，支持多选：systemPrompt、lastUserMessage、lastMessage。值为 true 表示启用该位置。
+	bedrockPromptCachePointPositions map[string]bool `required:"false" yaml:"bedrockPromptCachePointPositions" json:"bedrockPromptCachePointPositions"`
+	// @Title zh-CN Amazon Bedrock Prompt Cache 保留策略（默认值）
+	// @Description zh-CN 仅适用于Amazon Bedrock服务。作为请求中 prompt_cache_retention 缺省时的默认值，支持 in_memory 和 24h。
+	promptCacheRetention string `required:"false" yaml:"promptCacheRetention" json:"promptCacheRetention"`
 	// @Title zh-CN minimax API type
 	// @Description zh-CN 仅适用于 minimax 服务。minimax API 类型，v2 和 pro 中选填一项，默认值为 v2
 	minimaxApiType string `required:"false" yaml:"minimaxApiType" json:"minimaxApiType"`
@@ -445,6 +474,27 @@ type ProviderConfig struct {
 	// @Title zh-CN Claude Code 模式
 	// @Description zh-CN 仅适用于Claude服务。启用后将伪装成Claude Code客户端发起请求，支持使用Claude Code的OAuth Token进行认证。
 	claudeCodeMode bool `required:"false" yaml:"claudeCodeMode" json:"claudeCodeMode"`
+	// @Title zh-CN 智谱AI服务域名
+	// @Description zh-CN 仅适用于智谱AI服务。默认为 open.bigmodel.cn（中国），可配置为 api.z.ai（国际）
+	zhipuDomain string `required:"false" yaml:"zhipuDomain" json:"zhipuDomain"`
+	// @Title zh-CN 智谱AI Code Plan 模式
+	// @Description zh-CN 仅适用于智谱AI服务。启用后将使用 /api/coding/paas/v4/chat/completions 接口
+	zhipuCodePlanMode bool `required:"false" yaml:"zhipuCodePlanMode" json:"zhipuCodePlanMode"`
+	// @Title zh-CN 合并连续同角色消息
+	// @Description zh-CN 开启后，若请求的 messages 中存在连续的同角色消息（如连续两条 user 消息），将其内容合并为一条，以满足要求严格轮流交替（user→assistant→user→...）的模型服务商的要求。
+	mergeConsecutiveMessages bool `required:"false" yaml:"mergeConsecutiveMessages" json:"mergeConsecutiveMessages"`
+	// @Title zh-CN 通用 Provider 域名
+	// @Description zh-CN 通用的 Provider 服务域名配置，适用于所有 Provider。当配置此字段时，将优先使用此域名覆盖默认的硬编码域名。常用于代理服务器场景
+	providerDomain string `required:"false" yaml:"providerDomain" json:"providerDomain"`
+	// @Title zh-CN 空内容时提升思考为正文
+	// @Description zh-CN 开启后，若模型响应只包含 reasoning_content/thinking 而没有正文内容，将 reasoning 内容提升为正文内容返回，避免客户端收到空回复。
+	promoteThinkingOnEmpty bool `required:"false" yaml:"promoteThinkingOnEmpty" json:"promoteThinkingOnEmpty"`
+	// @Title zh-CN HiClaw 模式
+	// @Description zh-CN 开启后同时启用 mergeConsecutiveMessages 和 promoteThinkingOnEmpty，适用于 HiClaw 多 Agent 协作场景。
+	hiclawMode bool `required:"false" yaml:"hiclawMode" json:"hiclawMode"`
+	// @Title zh-CN Provider 基础路径
+	// @Description zh-CN 当配置了此值时，各个 Provider 在改写请求路径时会将其添加到路径前面，例如配置"/api/ai"后，请求路径"/v1/chat/completions"会被改写为"/api/ai/v1/chat/completions"
+	providerBasePath string `required:"false" yaml:"providerBasePath" json:"providerBasePath"`
 }
 
 func (c *ProviderConfig) GetId() string {
@@ -537,6 +587,13 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 		c.bedrockAdditionalFields = make(map[string]interface{})
 		for k, v := range json.Get("bedrockAdditionalFields").Map() {
 			c.bedrockAdditionalFields[k] = v.Value()
+		}
+		c.promptCacheRetention = json.Get("promptCacheRetention").String()
+		if rawPositions := json.Get("bedrockPromptCachePointPositions"); rawPositions.Exists() {
+			c.bedrockPromptCachePointPositions = make(map[string]bool)
+			for k, v := range rawPositions.Map() {
+				c.bedrockPromptCachePointPositions[k] = v.Bool()
+			}
 		}
 	}
 	c.minimaxApiType = json.Get("minimaxApiType").String()
@@ -632,6 +689,10 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 			string(ApiNameImageVariation),
 			string(ApiNameImageEdit),
 			string(ApiNameAudioSpeech),
+			string(ApiNameAudioTranscription),
+			string(ApiNameAudioTranslation),
+			string(ApiNameRealtime),
+			string(ApiNameResponses),
 			string(ApiNameCohereV1Rerank),
 			string(ApiNameVideos),
 			string(ApiNameRetrieveVideo),
@@ -650,12 +711,23 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	c.vllmCustomUrl = json.Get("vllmCustomUrl").String()
 	c.doubaoDomain = json.Get("doubaoDomain").String()
 	c.claudeCodeMode = json.Get("claudeCodeMode").Bool()
+	c.zhipuDomain = json.Get("zhipuDomain").String()
+	c.zhipuCodePlanMode = json.Get("zhipuCodePlanMode").Bool()
 	c.contextCleanupCommands = make([]string, 0)
 	for _, cmd := range json.Get("contextCleanupCommands").Array() {
 		if cmd.String() != "" {
 			c.contextCleanupCommands = append(c.contextCleanupCommands, cmd.String())
 		}
 	}
+	c.mergeConsecutiveMessages = json.Get("mergeConsecutiveMessages").Bool()
+	c.providerDomain = json.Get("providerDomain").String()
+	c.promoteThinkingOnEmpty = json.Get("promoteThinkingOnEmpty").Bool()
+	c.hiclawMode = json.Get("hiclawMode").Bool()
+	if c.hiclawMode {
+		c.mergeConsecutiveMessages = true
+		c.promoteThinkingOnEmpty = true
+	}
+	c.providerBasePath = json.Get("providerBasePath").String()
 }
 
 func (c *ProviderConfig) Validate() error {
@@ -690,10 +762,43 @@ func (c *ProviderConfig) Validate() error {
 func (c *ProviderConfig) GetOrSetTokenWithContext(ctx wrapper.HttpContext) string {
 	ctxApiKey := ctx.GetContext(ctxKeyApiKey)
 	if ctxApiKey == nil {
-		ctxApiKey = c.GetRandomToken()
+		token := c.selectApiToken(ctx)
+		ctxApiKey = token
 		ctx.SetContext(ctxKeyApiKey, ctxApiKey)
 	}
 	return ctxApiKey.(string)
+}
+
+// selectApiToken selects an API token based on the request context
+// For stateful APIs, it uses consumer affinity if available
+func (c *ProviderConfig) selectApiToken(ctx wrapper.HttpContext) string {
+	// Get API name from context if available
+	ctxApiName := ctx.GetContext(CtxKeyApiName)
+	var apiName string
+	if ctxApiName != nil {
+		// ctxApiName is of type ApiName, need to convert to string
+		apiName = string(ctxApiName.(ApiName))
+	}
+
+	// For stateful APIs, try to use consumer affinity
+	if isStatefulAPI(apiName) {
+		consumer := c.getConsumerFromContext(ctx)
+		if consumer != "" {
+			return c.GetTokenWithConsumerAffinity(ctx, consumer)
+		}
+	}
+
+	// Fall back to random selection
+	return c.GetRandomToken()
+}
+
+// getConsumerFromContext retrieves the consumer identifier from the request context
+func (c *ProviderConfig) getConsumerFromContext(ctx wrapper.HttpContext) string {
+	consumer, err := proxywasm.GetHttpRequestHeader("x-mse-consumer")
+	if err == nil && consumer != "" {
+		return consumer
+	}
+	return ""
 }
 
 func (c *ProviderConfig) GetRandomToken() string {
@@ -709,8 +814,60 @@ func (c *ProviderConfig) GetRandomToken() string {
 	}
 }
 
+// isStatefulAPI checks if the given API name is a stateful API that requires consumer affinity
+func isStatefulAPI(apiName string) bool {
+	// These APIs maintain session state and should be routed to the same provider consistently
+	statefulAPIs := map[string]bool{
+		string(ApiNameResponses):                true, // Response API - uses previous_response_id
+		string(ApiNameFiles):                    true, // Files API - maintains file state
+		string(ApiNameRetrieveFile):             true, // File retrieval - depends on file upload
+		string(ApiNameRetrieveFileContent):      true, // File content - depends on file upload
+		string(ApiNameBatches):                  true, // Batch API - maintains batch state
+		string(ApiNameRetrieveBatch):            true, // Batch status - depends on batch creation
+		string(ApiNameCancelBatch):              true, // Batch operations - depends on batch state
+		string(ApiNameFineTuningJobs):           true, // Fine-tuning - maintains job state
+		string(ApiNameRetrieveFineTuningJob):    true, // Fine-tuning job status
+		string(ApiNameFineTuningJobEvents):      true, // Fine-tuning events
+		string(ApiNameFineTuningJobCheckpoints): true, // Fine-tuning checkpoints
+		string(ApiNameCancelFineTuningJob):      true, // Cancel fine-tuning job
+		string(ApiNameResumeFineTuningJob):      true, // Resume fine-tuning job
+	}
+	return statefulAPIs[apiName]
+}
+
+// GetTokenWithConsumerAffinity selects an API token based on consumer affinity
+// If x-mse-consumer header is present and API is stateful, it will consistently select the same token
+func (c *ProviderConfig) GetTokenWithConsumerAffinity(ctx wrapper.HttpContext, consumer string) string {
+	apiTokens := c.apiTokens
+	count := len(apiTokens)
+	switch count {
+	case 0:
+		return ""
+	case 1:
+		return apiTokens[0]
+	default:
+		// Use FNV-1a hash for consistent token selection
+		h := fnv.New32a()
+		h.Write([]byte(consumer))
+		hashValue := h.Sum32()
+		index := int(hashValue) % count
+		if index < 0 {
+			index += count
+		}
+		return apiTokens[index]
+	}
+}
+
 func (c *ProviderConfig) IsOriginal() bool {
 	return c.protocol == protocolOriginal
+}
+
+func (c *ProviderConfig) IsGeneric() bool {
+	return c.typ == providerTypeGeneric
+}
+
+func (c *ProviderConfig) GetPromoteThinkingOnEmpty() bool {
+	return c.promoteThinkingOnEmpty
 }
 
 func (c *ProviderConfig) ReplaceByCustomSettings(body []byte) ([]byte, error) {
@@ -723,6 +880,14 @@ func CreateProvider(pc ProviderConfig) (Provider, error) {
 		return nil, errors.New("unknown provider type: " + pc.typ)
 	}
 	return initializer.CreateProvider(pc)
+}
+
+// applyProviderBasePath prepends the ProviderBasePath to the given path if configured.
+func (c *ProviderConfig) applyProviderBasePath(path string) string {
+	if c.providerBasePath != "" && !strings.HasPrefix(path, c.providerBasePath) {
+		return c.providerBasePath + path
+	}
+	return path
 }
 
 func (c *ProviderConfig) parseRequestAndMapModel(ctx wrapper.HttpContext, request interface{}, body []byte) error {
@@ -751,6 +916,16 @@ func (c *ProviderConfig) parseRequestAndMapModel(ctx wrapper.HttpContext, reques
 			return err
 		}
 		return c.setRequestModel(ctx, req)
+	case *imageEditRequest:
+		if err := decodeImageEditRequest(body, req); err != nil {
+			return err
+		}
+		return c.setRequestModel(ctx, req)
+	case *imageVariationRequest:
+		if err := decodeImageVariationRequest(body, req); err != nil {
+			return err
+		}
+		return c.setRequestModel(ctx, req)
 	default:
 		return errors.New("unsupported request type")
 	}
@@ -765,6 +940,10 @@ func (c *ProviderConfig) setRequestModel(ctx wrapper.HttpContext, request interf
 	case *embeddingsRequest:
 		model = &req.Model
 	case *imageGenerationRequest:
+		model = &req.Model
+	case *imageEditRequest:
+		model = &req.Model
+	case *imageVariationRequest:
 		model = &req.Model
 	default:
 		return errors.New("unsupported request type")
@@ -838,6 +1017,34 @@ func doGetMappedModel(model string, modelMapping map[string]string) string {
 	return ""
 }
 
+// isDeveloperRoleSupported checks if the provider supports the "developer" role.
+func isDeveloperRoleSupported(providerType string) bool {
+	return developerRoleSupportedProviders[providerType]
+}
+
+// convertDeveloperRoleToSystem converts "developer" roles to "system" role in the request body.
+// This is used for providers that don't support the "developer" role.
+func convertDeveloperRoleToSystem(body []byte) ([]byte, error) {
+	request := &chatCompletionRequest{}
+	if err := json.Unmarshal(body, request); err != nil {
+		return body, fmt.Errorf("unable to unmarshal request for developer role conversion: %v", err)
+	}
+
+	converted := false
+	for i := range request.Messages {
+		if request.Messages[i].Role == roleDeveloper {
+			request.Messages[i].Role = roleSystem
+			converted = true
+		}
+	}
+
+	if converted {
+		return json.Marshal(request)
+	}
+
+	return body, nil
+}
+
 func ExtractStreamingEvents(ctx wrapper.HttpContext, chunk []byte) []StreamEvent {
 	body := chunk
 	if bufferedStreamingBody, has := ctx.GetContext(ctxKeyStreamingBody).([]byte); has {
@@ -898,7 +1105,7 @@ func ExtractStreamingEvents(ctx wrapper.HttpContext, chunk []byte) []StreamEvent
 		if lineStartIndex != -1 {
 			value := string(body[valueStartIndex:i])
 			currentEvent.SetValue(currentKey, value)
-		} else {
+		} else if eventStartIndex != -1 {
 			currentEvent.RawEvent = string(body[eventStartIndex : i+1])
 			// Extra new line. The current event is complete.
 			events = append(events, *currentEvent)
@@ -957,6 +1164,21 @@ func (c *ProviderConfig) handleRequestBody(
 	// If main.go detected a Claude request that needs conversion, convert the body
 	needClaudeConversion, _ := ctx.GetContext("needClaudeResponseConversion").(bool)
 	if needClaudeConversion {
+		// Extract thinking config from original Claude body before conversion,
+		// so downstream providers (OpenRouter, ZhipuAI) can access it.
+		thinkingType := gjson.GetBytes(body, "thinking.type").String()
+		if thinkingType == "" {
+			// Claude request had no thinking field at all - treat as disabled
+			thinkingType = "disabled"
+		}
+		ctx.SetContext(ctxKeyClaudeThinkingType, thinkingType)
+		// Only extract budget_tokens when thinking is explicitly enabled
+		if thinkingType == "enabled" {
+			if budgetTokens := gjson.GetBytes(body, "thinking.budget_tokens").Int(); budgetTokens > 0 {
+				ctx.SetContext(ctxKeyClaudeBudgetTokens, int(budgetTokens))
+			}
+		}
+
 		// Convert Claude protocol to OpenAI protocol
 		converter := &ClaudeToOpenAIConverter{}
 		body, err = converter.ConvertClaudeRequestToOpenAI(body)
@@ -976,12 +1198,43 @@ func (c *ProviderConfig) handleRequestBody(
 		}
 	}
 
+	// merge consecutive same-role messages for providers that require strict role alternation
+	if apiName == ApiNameChatCompletion && c.mergeConsecutiveMessages {
+		body, err = mergeConsecutiveMessages(body)
+		if err != nil {
+			log.Warnf("[mergeConsecutiveMessages] failed to merge messages: %v", err)
+			err = nil
+		} else {
+			log.Debugf("[mergeConsecutiveMessages] merged consecutive messages for provider: %s", c.typ)
+		}
+	}
+
+	// convert developer role to system role for providers that don't support it
+	if apiName == ApiNameChatCompletion && !isDeveloperRoleSupported(c.typ) {
+		body, err = convertDeveloperRoleToSystem(body)
+		if err != nil {
+			log.Warnf("[developerRole] failed to convert developer role to system: %v", err)
+			// Continue processing even if conversion fails
+			err = nil
+		} else {
+			log.Debugf("[developerRole] converted developer role to system for provider: %s", c.typ)
+		}
+	}
+
+	if needClaudeConversion && provider.GetProviderType() != providerTypeBedrock && provider.GetProviderType() != providerTypeClaude {
+		body = stripClaudeInternalMessageFields(body)
+	}
+
 	// use openai protocol (either original openai or converted from claude)
 	if handler, ok := provider.(TransformRequestBodyHandler); ok {
 		body, err = handler.TransformRequestBody(ctx, apiName, body)
 	} else if handler, ok := provider.(TransformRequestBodyHeadersHandler); ok {
 		headers := util.GetRequestHeaders()
 		body, err = handler.TransformRequestBodyHeaders(ctx, apiName, body, headers)
+		// Apply providerBasePath if configured
+		if c.providerBasePath != "" {
+			headers.Set(":path", c.applyProviderBasePath(headers.Get(":path")))
+		}
 		util.ReplaceRequestHeaders(headers)
 	} else {
 		body, err = c.defaultTransformRequestBody(ctx, apiName, body)
@@ -1003,6 +1256,38 @@ func (c *ProviderConfig) handleRequestBody(
 		return types.ActionContinue, err
 	}
 	return types.ActionContinue, replaceRequestBody(body)
+}
+
+func stripClaudeInternalMessageFields(body []byte) []byte {
+	result := body
+	for _, field := range []string{"claude_thinking", "claude_output_config", "claude_anthropic_beta"} {
+		if updated, err := sjson.DeleteBytes(result, field); err == nil {
+			result = updated
+		}
+	}
+
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return result
+	}
+
+	for _, field := range []string{
+		"reasoning",
+		"reasoning_content",
+		"reasoning_signature",
+		"reasoning_redacted_content",
+		"claude_content_blocks",
+		"claude_content_block_index",
+		"claude_content_block_stop",
+	} {
+		messages.ForEach(func(key, _ gjson.Result) bool {
+			if updated, err := sjson.DeleteBytes(result, fmt.Sprintf("messages.%d.%s", key.Int(), field)); err == nil {
+				result = updated
+			}
+			return true
+		})
+	}
+	return result
 }
 
 func (c *ProviderConfig) handleRequestHeaders(provider Provider, ctx wrapper.HttpContext, apiName ApiName) {
@@ -1038,11 +1323,27 @@ func (c *ProviderConfig) handleRequestHeaders(provider Provider, ctx wrapper.Htt
 	if c.basePath != "" && c.basePathHandling == basePathHandlingPrepend && !strings.HasPrefix(headers.Get(":path"), c.basePath) {
 		headers.Set(":path", path.Join(c.basePath, headers.Get(":path")))
 	}
+
+	// Apply providerBasePath if configured
+	currentPath := headers.Get(":path")
+	if c.providerBasePath != "" {
+		headers.Set(":path", c.applyProviderBasePath(currentPath))
+	}
+
+	// Apply providerDomain if configured (overrides any domain set by the provider)
+	if c.providerDomain != "" {
+		util.OverwriteRequestHostHeader(headers, c.providerDomain)
+	}
+
 	util.ReplaceRequestHeaders(headers)
 }
 
 // defaultTransformRequestBody 默认的请求体转换方法，只做模型映射，用slog替换模型名称，不用序列化和反序列化，提高性能
 func (c *ProviderConfig) defaultTransformRequestBody(ctx wrapper.HttpContext, apiName ApiName, body []byte) ([]byte, error) {
+	if contentType, err := proxywasm.GetHttpRequestHeader(util.HeaderContentType); err == nil && isMultipartFormData(contentType) {
+		return c.defaultTransformMultipartRequestBody(ctx, apiName, body, contentType)
+	}
+
 	switch apiName {
 	case ApiNameChatCompletion,
 		ApiNameVideos,
@@ -1060,6 +1361,28 @@ func (c *ProviderConfig) defaultTransformRequestBody(ctx wrapper.HttpContext, ap
 	mappedModel := getMappedModel(model, c.modelMapping)
 	ctx.SetContext(ctxKeyFinalRequestModel, mappedModel)
 	return sjson.SetBytes(body, "model", mappedModel)
+}
+
+func (c *ProviderConfig) defaultTransformMultipartRequestBody(ctx wrapper.HttpContext, apiName ApiName, body []byte, contentType string) ([]byte, error) {
+	if apiName != ApiNameImageEdit && apiName != ApiNameImageVariation {
+		return body, nil
+	}
+
+	model, err := extractMultipartModel(body, contentType)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx.SetContext(ctxKeyOriginalRequestModel, model)
+
+	mappedModel := getMappedModel(model, c.modelMapping)
+	ctx.SetContext(ctxKeyFinalRequestModel, mappedModel)
+
+	if mappedModel == model || (mappedModel == "" && model == "") {
+		return body, nil
+	}
+
+	return rewriteMultipartFormModel(body, contentType, mappedModel)
 }
 
 func (c *ProviderConfig) DefaultTransformResponseHeaders(ctx wrapper.HttpContext, headers http.Header) {

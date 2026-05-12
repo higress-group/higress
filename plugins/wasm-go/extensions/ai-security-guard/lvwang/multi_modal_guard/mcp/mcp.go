@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -18,9 +19,9 @@ import (
 
 const (
 	MethodToolCall  = "tools/call"
-	DenyResponse    = `{"jsonrpc":"2.0","id":0,"error":{"code":403,"message":"blocked by security guard"}}`
+	DenyResponse    = `{"jsonrpc":"2.0","id":0,"error":{"code":403,"message":"%s"}}`
 	DenySSEResponse = `event: message
-data: {"jsonrpc":"2.0","id":0,"error":{"code":403,"message":"blocked by security guard"}}
+data: {"jsonrpc":"2.0","id":0,"error":{"code":403,"message":"%s"}}
 
 `
 )
@@ -78,7 +79,15 @@ func HandleMcpRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, 
 			ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 		}
 		ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
-		proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, []byte(DenyResponse), -1)
+		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
+		if err != nil {
+			log.Errorf("failed to build deny response body: %v", err)
+			proxywasm.ResumeHttpRequest()
+			return
+		}
+		marshalledDenyMessage := wrapper.MarshalStr(string(denyBody))
+		denyResponse := fmt.Sprintf(DenyResponse, marshalledDenyMessage)
+		proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, []byte(denyResponse), -1)
 	}
 	singleCall = func() {
 		var nextContentIndex int
@@ -124,7 +133,15 @@ func HandleMcpStreamingResponseBody(ctx wrapper.HttpContext, config cfg.AISecuri
 			return
 		}
 		if !cfg.IsRiskLevelAcceptable(config.Action, response.Data, config, consumer) {
-			proxywasm.InjectEncodedDataToFilterChain([]byte(DenySSEResponse), true)
+			denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
+			if err != nil {
+				log.Errorf("failed to build deny response body: %v", err)
+				proxywasm.InjectEncodedDataToFilterChain(frontBuffer, false)
+				return
+			}
+			marshalledDenyMessage := wrapper.MarshalStr(string(denyBody))
+			denySSEResponse := fmt.Sprintf(DenySSEResponse, marshalledDenyMessage)
+			proxywasm.InjectEncodedDataToFilterChain([]byte(denySSEResponse), true)
 		} else {
 			proxywasm.InjectEncodedDataToFilterChain(frontBuffer, false)
 		}
@@ -212,8 +229,16 @@ func HandleMcpResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig,
 			ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 		}
 		ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
+		if err != nil {
+			log.Errorf("failed to build deny response body: %v", err)
+			proxywasm.ResumeHttpResponse()
+			return
+		}
+		marshalledDenyMessage := wrapper.MarshalStr(string(denyBody))
+		denyResponseBody := fmt.Sprintf(DenyResponse, marshalledDenyMessage)
 		proxywasm.RemoveHttpResponseHeader("content-length")
-		proxywasm.ReplaceHttpResponseBody([]byte(DenyResponse))
+		proxywasm.ReplaceHttpResponseBody([]byte(denyResponseBody))
 		proxywasm.ResumeHttpResponse()
 		// proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, []byte(DenyResponse), -1)
 	}

@@ -503,7 +503,7 @@ func (c *controller) ConvertHTTPRoute(convertOptions *common.ConvertOptions, wra
 
 				// Two duplicated rules in the same ingress.
 				if ingressRouteBuilder.Event == common.Normal {
-					pathFormat := wrapperHttpRoute.PathFormat()
+					pathFormat := wrapperHttpRoute.PathFormat() + kingressPathHeadersKey(httpPath.Headers)
 					if definedRules.Contains(pathFormat) {
 						ingressRouteBuilder.PreIngress = cfg
 						ingressRouteBuilder.Event = common.DuplicatedRoute
@@ -725,4 +725,26 @@ func isIngressPublic(ingSpec *ingress.IngressSpec) bool {
 		}
 	}
 	return false
+}
+
+// kingressPathHeadersKey builds a stable string from path-level headers for use
+// in duplicate-route detection. KIngress paths are distinguished by headers
+// (not by URL path), so the dedup key must include header information.
+func kingressPathHeadersKey(headers map[string]ingress.HeaderMatch) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for _, k := range keys {
+		sb.WriteByte('\x00')
+		sb.WriteString(k)
+		sb.WriteByte('=')
+		sb.WriteString(headers[k].Exact)
+	}
+	return sb.String()
 }

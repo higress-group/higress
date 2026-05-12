@@ -38,7 +38,7 @@ spec:
         - name: {{ .Chart.Name }}
           securityContext:
             {{- toYaml .Values.controller.securityContext | nindent 12 }}
-          image: "{{ .Values.controller.hub | default .Values.global.hub }}/{{ .Values.controller.image | default "higress" }}:{{ .Values.controller.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.controller.hub | default .Values.global.hub }}/higress/{{ .Values.controller.image | default "higress" }}:{{ .Values.controller.tag | default .Chart.AppVersion }}"
           args:
           - "serve"
           - --gatewaySelectorKey=higress
@@ -104,8 +104,10 @@ spec:
           - name: log
             mountPath: /var/log
         - name: discovery
-          image: "{{ .Values.pilot.hub | default .Values.global.hub }}/{{ .Values.pilot.image | default "pilot" }}:{{ .Values.pilot.tag | default .Chart.AppVersion }}"
-{{- if .Values.global.imagePullPolicy }}
+          image: "{{ .Values.pilot.hub | default .Values.global.hub }}/higress/{{ .Values.pilot.image | default "pilot" }}:{{ .Values.pilot.tag | default .Chart.AppVersion }}"
+{{- if .Values.controller.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.controller.imagePullPolicy }}
+{{- else if .Values.global.imagePullPolicy }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
 {{- end }}
           args:
@@ -173,6 +175,8 @@ spec:
             value: "{{ .Values.global.xdsMaxRecvMsgSize }}"
           - name: ENBALE_SCOPED_RDS
             value: "{{ .Values.global.enableSRDS }}"
+          - name: ISTIO_DELTA_XDS
+            value: "{{ .Values.global.enableDeltaXDS }}"
           - name: ON_DEMAND_RDS
             value: "{{ .Values.global.onDemandRDS }}"
           - name: HOST_RDS_MERGE_SUBSET

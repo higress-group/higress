@@ -1,7 +1,11 @@
 package test
 
 import (
+	"bytes"
 	"encoding/json"
+	"math/rand"
+	"mime/multipart"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -30,6 +34,17 @@ var vertexExpressModeConfig = func() json.RawMessage {
 		"provider": map[string]interface{}{
 			"type":      "vertex",
 			"apiTokens": []string{"test-api-key-123456789"},
+		},
+	})
+	return data
+}()
+
+// 测试配置：Vertex Express Mode 配置（多 API Token）
+var vertexExpressModeMultiTokensConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "vertex",
+			"apiTokens": []string{"test-api-key-express-a", "test-api-key-express-b"},
 		},
 	})
 	return data
@@ -160,6 +175,18 @@ var vertexRawModeWithBasePathConfig = func() json.RawMessage {
 			"protocol":         "original",
 			"basePath":         "/vertex-proxy",
 			"basePathHandling": "removePrefix",
+		},
+	})
+	return data
+}()
+
+// 测试配置：Vertex Raw 模式配置（Express Mode + 多 API Token）
+var vertexRawModeExpressMultiTokensConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "vertex",
+			"apiTokens": []string{"test-api-key-raw-a", "test-api-key-raw-b"},
+			"protocol":  "original",
 		},
 	})
 	return data
@@ -376,6 +403,416 @@ func RunVertexExpressModeOnHttpRequestBodyTests(t *testing.T) {
 				}
 			}
 			require.True(t, hasVertexLogs, "Should have vertex processing logs")
+		})
+
+		// 测试 Vertex Express Mode 请求体处理（多 token - Google 路径使用请求上下文中的 apiTokenInUse）
+		t.Run("vertex express mode chat completion should reuse api token in context", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeMultiTokensConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			tokens := []string{"test-api-key-express-a", "test-api-key-express-b"}
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			// 从 debug log 中提取请求头阶段固定的 apiTokenInUse
+			var apiTokenInUse string
+			for _, debugLog := range host.GetDebugLogs() {
+				const prefix = "Use apiToken "
+				const suffix = " to send request"
+				start := strings.Index(debugLog, prefix)
+				if start == -1 {
+					continue
+				}
+				start += len(prefix)
+				end := strings.Index(debugLog[start:], suffix)
+				if end == -1 {
+					continue
+				}
+				apiTokenInUse = debugLog[start : start+end]
+				break
+			}
+			require.Contains(t, tokens, apiTokenInUse, "apiTokenInUse should be selected from configured tokens")
+
+			// 强制设置随机种子，让旧实现（OnRequestBody 再次随机）必然选到不同 token
+			targetIndex := 0
+			if apiTokenInUse == tokens[0] {
+				targetIndex = 1
+			}
+			seed := int64(1)
+			for {
+				if rand.New(rand.NewSource(seed)).Intn(len(tokens)) == targetIndex {
+					break
+				}
+				seed++
+			}
+			rand.Seed(seed)
+
+			requestBody := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"token consistency test"}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			pathHeader := ""
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotEmpty(t, pathHeader, "Path header should not be empty")
+			require.Contains(t, pathHeader, "/v1/publishers/google/models/", "Path should use Google publisher endpoint")
+
+			parsedPath, err := url.ParseRequestURI(pathHeader)
+			require.NoError(t, err)
+			query := parsedPath.Query()
+			require.Len(t, query["key"], 1, "Path should contain exactly one key query parameter")
+			require.Equal(t, apiTokenInUse, query.Get("key"),
+				"Path key should use apiTokenInUse selected in request headers phase")
+		})
+
+		// 测试 Vertex Express Mode 请求体处理（多 token - Anthropic 路径使用请求上下文中的 apiTokenInUse）
+		t.Run("vertex express mode anthropic request should reuse api token in context", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeMultiTokensConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			tokens := []string{"test-api-key-express-a", "test-api-key-express-b"}
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			// 从 debug log 中提取请求头阶段固定的 apiTokenInUse
+			var apiTokenInUse string
+			for _, debugLog := range host.GetDebugLogs() {
+				const prefix = "Use apiToken "
+				const suffix = " to send request"
+				start := strings.Index(debugLog, prefix)
+				if start == -1 {
+					continue
+				}
+				start += len(prefix)
+				end := strings.Index(debugLog[start:], suffix)
+				if end == -1 {
+					continue
+				}
+				apiTokenInUse = debugLog[start : start+end]
+				break
+			}
+			require.Contains(t, tokens, apiTokenInUse, "apiTokenInUse should be selected from configured tokens")
+
+			// 强制设置随机种子，让旧实现（OnRequestBody 再次随机）必然选到不同 token
+			targetIndex := 0
+			if apiTokenInUse == tokens[0] {
+				targetIndex = 1
+			}
+			seed := int64(1)
+			for {
+				if rand.New(rand.NewSource(seed)).Intn(len(tokens)) == targetIndex {
+					break
+				}
+				seed++
+			}
+			rand.Seed(seed)
+
+			requestBody := `{"model":"claude-sonnet-4@20250514","messages":[{"role":"user","content":"hello anthropic"}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			pathHeader := ""
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotEmpty(t, pathHeader, "Path header should not be empty")
+			require.Contains(t, pathHeader, "/v1/publishers/anthropic/models/claude-sonnet-4@20250514:rawPredict",
+				"Path should use Anthropic publisher endpoint")
+
+			parsedPath, err := url.ParseRequestURI(pathHeader)
+			require.NoError(t, err)
+			query := parsedPath.Query()
+			require.Len(t, query["key"], 1, "Path should contain exactly one key query parameter")
+			require.Equal(t, apiTokenInUse, query.Get("key"),
+				"Path key should use apiTokenInUse selected in request headers phase")
+		})
+
+		// 测试 Vertex Express Mode structured outputs: json_schema 映射
+		t.Run("vertex express mode structured outputs json_schema request body mapping", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"model":"gemini-2.5-flash",
+				"messages":[{"role":"user","content":"return structured output"}],
+				"response_format":{
+					"type":"json_schema",
+					"json_schema":{
+						"name":"demo_schema",
+						"strict":true,
+						"schema":{
+							"type":"object",
+							"properties":{
+								"answer":{"type":"string"}
+							},
+							"required":["answer"]
+						}
+					}
+				}
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+
+			var transformed map[string]interface{}
+			require.NoError(t, json.Unmarshal(processedBody, &transformed))
+
+			generationConfig, ok := transformed["generationConfig"].(map[string]interface{})
+			require.True(t, ok, "generationConfig should exist")
+			require.Equal(t, "application/json", generationConfig["responseMimeType"], "responseMimeType should be mapped for json_schema")
+
+			responseSchema, ok := generationConfig["responseSchema"].(map[string]interface{})
+			require.True(t, ok, "responseSchema should be mapped from response_format.json_schema.schema")
+			require.Equal(t, "object", responseSchema["type"])
+
+			properties, ok := responseSchema["properties"].(map[string]interface{})
+			require.True(t, ok, "responseSchema.properties should exist")
+			_, hasAnswer := properties["answer"]
+			require.True(t, hasAnswer, "responseSchema.properties.answer should exist")
+		})
+
+		// 测试 Gemini 2.0 structured outputs: 忽略 response_format，按非结构化输出处理
+		t.Run("vertex express mode structured outputs gemini 2.0 ignore response format", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"model":"gemini-2.0-flash",
+				"messages":[{"role":"user","content":"return structured output"}],
+				"response_format":{
+					"type":"json_schema",
+					"json_schema":{
+						"name":"demo_schema",
+						"strict":true,
+						"schema":{
+							"type":"object",
+							"properties":{
+								"beta":{"type":"string"},
+								"alpha":{
+									"type":"object",
+									"properties":{
+										"z":{"type":"string"},
+										"a":{"type":"string"}
+									}
+								}
+							}
+						}
+					}
+				}
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+
+			var transformed map[string]interface{}
+			require.NoError(t, json.Unmarshal(processedBody, &transformed))
+
+			generationConfig, ok := transformed["generationConfig"].(map[string]interface{})
+			require.True(t, ok, "generationConfig should exist")
+			_, hasMimeType := generationConfig["responseMimeType"]
+			_, hasSchema := generationConfig["responseSchema"]
+			require.False(t, hasMimeType, "gemini-2.0 should ignore response_format and not set responseMimeType")
+			require.False(t, hasSchema, "gemini-2.0 should ignore response_format and not set responseSchema")
+		})
+
+		// 测试 Vertex Express Mode structured outputs: json_object 映射
+		t.Run("vertex express mode structured outputs json_object request body mapping", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"model":"gemini-2.5-flash",
+				"messages":[{"role":"user","content":"return json"}],
+				"response_format":{"type":"json_object"}
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+
+			var transformed map[string]interface{}
+			require.NoError(t, json.Unmarshal(processedBody, &transformed))
+
+			generationConfig, ok := transformed["generationConfig"].(map[string]interface{})
+			require.True(t, ok, "generationConfig should exist")
+			require.Equal(t, "application/json", generationConfig["responseMimeType"], "responseMimeType should be mapped for json_object")
+
+			_, hasSchema := generationConfig["responseSchema"]
+			require.False(t, hasSchema, "json_object should not inject responseSchema")
+		})
+
+		// 测试 Vertex Express Mode structured outputs: 兼容 direct schema
+		t.Run("vertex express mode structured outputs direct schema response_format mapping", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"model":"gemini-2.5-flash",
+				"messages":[{"role":"user","content":"return structured output"}],
+				"response_format":{
+					"type":"object",
+					"properties":{"city":{"type":"string"}}
+				}
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+
+			var transformed map[string]interface{}
+			require.NoError(t, json.Unmarshal(processedBody, &transformed))
+
+			generationConfig, ok := transformed["generationConfig"].(map[string]interface{})
+			require.True(t, ok, "generationConfig should exist")
+			require.Equal(t, "application/json", generationConfig["responseMimeType"], "direct schema should be mapped to JSON mime type")
+
+			responseSchema, ok := generationConfig["responseSchema"].(map[string]interface{})
+			require.True(t, ok, "direct schema should be mapped to responseSchema")
+			require.Equal(t, "object", responseSchema["type"])
+		})
+
+		// 测试 Vertex Express Mode structured outputs: 异常 json_schema 应返回错误（不能静默降级）
+		t.Run("vertex express mode structured outputs malformed json_schema mapping", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"model":"gemini-2.5-flash",
+				"messages":[{"role":"user","content":"return structured output"}],
+				"response_format":{
+					"type":"json_schema",
+					"json_schema":"invalid"
+				}
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			errorLogs := host.GetErrorLogs()
+			hasInvalidSchemaError := false
+			for _, log := range errorLogs {
+				if strings.Contains(log, "invalid response_format.json_schema") {
+					hasInvalidSchemaError = true
+					break
+				}
+			}
+			require.True(t, hasInvalidSchemaError, "malformed json_schema should produce explicit validation error")
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+			require.Contains(t, string(processedBody), `"response_format"`, "failed request should keep original body")
+			require.NotContains(t, string(processedBody), `"generationConfig"`, "failed request should not be rewritten into Vertex format")
+
+			requestHeaders := host.GetRequestHeaders()
+			pathHeader := ""
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Equal(t, "/v1/chat/completions", pathHeader, "failed validation should not rewrite upstream path")
+		})
+
+		// 测试 Vertex Express Mode structured outputs: 未知类型不映射
+		t.Run("vertex express mode structured outputs unknown response format type", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"model":"gemini-2.5-flash",
+				"messages":[{"role":"user","content":"return xml"}],
+				"response_format":{"type":"xml"}
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+
+			var transformed map[string]interface{}
+			require.NoError(t, json.Unmarshal(processedBody, &transformed))
+
+			generationConfig, ok := transformed["generationConfig"].(map[string]interface{})
+			require.True(t, ok, "generationConfig should exist")
+			_, hasMime := generationConfig["responseMimeType"]
+			_, hasSchema := generationConfig["responseSchema"]
+			require.False(t, hasMime, "unknown response_format type should not inject responseMimeType")
+			require.False(t, hasSchema, "unknown response_format type should not inject responseSchema")
 		})
 
 		// 测试 Vertex Express Mode 请求体处理（嵌入接口）
@@ -611,8 +1048,8 @@ func RunVertexOpenAICompatibleModeOnHttpRequestBodyTests(t *testing.T) {
 			requestBody := `{"model":"gemini-2.0-flash","messages":[{"role":"user","content":"test"}]}`
 			action := host.CallOnHttpRequestBody([]byte(requestBody))
 
-			// OpenAI 兼容模式需要等待 OAuth token，所以返回 ActionPause
-			require.Equal(t, types.ActionPause, action)
+			// 测试环境使用伪造密钥，OAuth 获取会失败，期望 ActionContinue 并记录错误
+			require.Equal(t, types.ActionContinue, action)
 
 			// 验证请求体保持 OpenAI 格式（不转换为 Vertex 原生格式）
 			processedBody := host.GetRequestBody()
@@ -635,6 +1072,47 @@ func RunVertexOpenAICompatibleModeOnHttpRequestBodyTests(t *testing.T) {
 			require.Contains(t, pathHeader, "/endpoints/openapi/chat/completions", "Path should contain openapi chat completions endpoint")
 		})
 
+		// 测试 Vertex OpenAI 兼容模式 structured outputs 请求体透传
+		t.Run("vertex openai compatible mode structured outputs passthrough", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexOpenAICompatibleModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{
+				"model":"gemini-2.0-flash",
+				"messages":[{"role":"user","content":"test"}],
+				"response_format":{
+					"type":"json_schema",
+					"json_schema":{
+						"name":"demo_schema",
+						"strict":true,
+						"schema":{
+							"type":"object",
+							"properties":{"answer":{"type":"string"}},
+							"required":["answer"]
+						}
+					}
+				}
+			}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+			bodyStr := string(processedBody)
+
+			require.Contains(t, bodyStr, `"response_format"`, "OpenAI compatible mode should preserve response_format")
+			require.Contains(t, bodyStr, `"json_schema"`, "OpenAI compatible mode should preserve json_schema")
+			require.NotContains(t, bodyStr, `"generationConfig"`, "OpenAI compatible mode should not convert to Vertex native generationConfig")
+		})
+
 		// 测试 Vertex OpenAI 兼容模式请求体处理（含模型映射）
 		t.Run("vertex openai compatible mode with model mapping", func(t *testing.T) {
 			host, status := test.NewTestHost(vertexOpenAICompatibleModeWithModelMappingConfig)
@@ -653,7 +1131,7 @@ func RunVertexOpenAICompatibleModeOnHttpRequestBodyTests(t *testing.T) {
 			requestBody := `{"model":"gpt-4","messages":[{"role":"user","content":"test"}]}`
 			action := host.CallOnHttpRequestBody([]byte(requestBody))
 
-			require.Equal(t, types.ActionPause, action)
+			require.Equal(t, types.ActionContinue, action)
 
 			// 验证请求体中的模型名被映射
 			processedBody := host.GetRequestBody()
@@ -689,7 +1167,7 @@ func RunVertexOpenAICompatibleModeOnHttpRequestBodyTests(t *testing.T) {
 
 func RunVertexExpressModeOnStreamingResponseBodyTests(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		// 测试 Vertex Express Mode 流式响应处理
+		// 测试 Vertex Express Mode 流式响应处理：最后一个 chunk 不应丢失
 		t.Run("vertex express mode streaming response body", func(t *testing.T) {
 			host, status := test.NewTestHost(vertexExpressModeConfig)
 			defer host.Reset()
@@ -707,6 +1185,9 @@ func RunVertexExpressModeOnStreamingResponseBodyTests(t *testing.T) {
 			requestBody := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"test"}],"stream":true}`
 			host.CallOnHttpRequestBody([]byte(requestBody))
 
+			// 设置响应属性，确保IsResponseFromUpstream()返回true
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+
 			// 设置流式响应头
 			responseHeaders := [][2]string{
 				{":status", "200"},
@@ -715,8 +1196,8 @@ func RunVertexExpressModeOnStreamingResponseBodyTests(t *testing.T) {
 			host.CallOnHttpResponseHeaders(responseHeaders)
 
 			// 模拟流式响应体
-			chunk1 := `data: {"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"},"finishReason":"","index":0}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":5,"totalTokenCount":14}}`
-			chunk2 := `data: {"candidates":[{"content":{"parts":[{"text":"Hello! How can I help you today?"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":12,"totalTokenCount":21}}`
+			chunk1 := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}],\"role\":\"model\"},\"finishReason\":\"\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":9,\"candidatesTokenCount\":5,\"totalTokenCount\":14}}\n\n"
+			chunk2 := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello! How can I help you today?\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":9,\"candidatesTokenCount\":12,\"totalTokenCount\":21}}\n\n"
 
 			// 处理流式响应体
 			action1 := host.CallOnHttpStreamingResponseBody([]byte(chunk1), false)
@@ -725,16 +1206,194 @@ func RunVertexExpressModeOnStreamingResponseBodyTests(t *testing.T) {
 			action2 := host.CallOnHttpStreamingResponseBody([]byte(chunk2), true)
 			require.Equal(t, types.ActionContinue, action2)
 
-			// 验证流式响应处理
-			debugLogs := host.GetDebugLogs()
-			hasStreamingLogs := false
-			for _, log := range debugLogs {
-				if strings.Contains(log, "streaming") || strings.Contains(log, "chunk") || strings.Contains(log, "vertex") {
-					hasStreamingLogs = true
+			// 验证最后一个 chunk 的内容不会被 [DONE] 覆盖
+			transformedResponseBody := host.GetResponseBody()
+			require.NotNil(t, transformedResponseBody)
+			responseStr := string(transformedResponseBody)
+			require.Contains(t, responseStr, "Hello! How can I help you today?", "last chunk content should be preserved")
+			require.Contains(t, responseStr, "data: [DONE]", "stream should end with [DONE]")
+		})
+
+		// 测试 Vertex Express Mode 流式响应处理：单个 SSE 事件被拆包时可正确重组
+		t.Run("vertex express mode streaming response body with split sse event", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"test"}],"stream":true}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			// 设置响应属性，确保IsResponseFromUpstream()返回true
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+
+			responseHeaders := [][2]string{
+				{":status", "200"},
+				{"Content-Type", "text/event-stream"},
+			}
+			host.CallOnHttpResponseHeaders(responseHeaders)
+
+			fullEvent := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"split chunk\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":2,\"totalTokenCount\":3}}\n\n"
+			splitIdx := strings.Index(fullEvent, "chunk")
+			require.Greater(t, splitIdx, 0, "split marker should exist in test payload")
+			chunkPart1 := fullEvent[:splitIdx]
+			chunkPart2 := fullEvent[splitIdx:]
+
+			action1 := host.CallOnHttpStreamingResponseBody([]byte(chunkPart1), false)
+			require.Equal(t, types.ActionContinue, action1)
+			action2 := host.CallOnHttpStreamingResponseBody([]byte(chunkPart2), true)
+			require.Equal(t, types.ActionContinue, action2)
+
+			transformedResponseBody := host.GetResponseBody()
+			require.NotNil(t, transformedResponseBody)
+			responseStr := string(transformedResponseBody)
+			require.Contains(t, responseStr, "split chunk", "split SSE event should be reassembled and parsed")
+			require.Contains(t, responseStr, "data: [DONE]", "stream should end with [DONE]")
+		})
+
+		// 测试：thoughtSignature 很大时，单个 SSE 事件被拆成多段也能重组并成功解析
+		t.Run("vertex express mode streaming response body with huge thought signature split across chunks", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"test"}],"stream":true}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "text/event-stream"},
+			})
+
+			hugeThoughtSignature := strings.Repeat("CmMBjz1rX4j+TQjtDy2rZxSdYOE1jUqDbRhWetraLlQNrkyaRNQZ/", 180)
+			fullEvent := "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"thought-signature-merge-ok\",\"thoughtSignature\":\"" +
+				hugeThoughtSignature +
+				"\"}]},\"finishReason\":\"STOP\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":28,\"candidatesTokenCount\":3589,\"totalTokenCount\":5240,\"thoughtsTokenCount\":1623}}\n\n"
+
+			signatureStart := strings.Index(fullEvent, "\"thoughtSignature\":\"")
+			require.Greater(t, signatureStart, 0, "thoughtSignature field should exist in test payload")
+			splitAt1 := signatureStart + len("\"thoughtSignature\":\"") + 700
+			splitAt2 := splitAt1 + 1600
+			require.Less(t, splitAt2, len(fullEvent)-1, "split indexes should keep payload in three chunks")
+
+			chunkPart1 := fullEvent[:splitAt1]
+			chunkPart2 := fullEvent[splitAt1:splitAt2]
+			chunkPart3 := fullEvent[splitAt2:]
+
+			action1 := host.CallOnHttpStreamingResponseBody([]byte(chunkPart1), false)
+			require.Equal(t, types.ActionContinue, action1)
+			firstBody := host.GetResponseBody()
+			require.Equal(t, 0, len(firstBody), "partial chunk should not be forwarded to client")
+
+			action2 := host.CallOnHttpStreamingResponseBody([]byte(chunkPart2), false)
+			require.Equal(t, types.ActionContinue, action2)
+			secondBody := host.GetResponseBody()
+			require.Equal(t, 0, len(secondBody), "partial chunk should not be forwarded to client")
+
+			action3 := host.CallOnHttpStreamingResponseBody([]byte(chunkPart3), true)
+			require.Equal(t, types.ActionContinue, action3)
+
+			transformedResponseBody := host.GetResponseBody()
+			require.NotNil(t, transformedResponseBody)
+			responseStr := string(transformedResponseBody)
+			require.Contains(t, responseStr, "thought-signature-merge-ok", "split huge thoughtSignature event should be reassembled and parsed")
+			require.Contains(t, responseStr, "data: [DONE]", "stream should end with [DONE]")
+
+			errorLogs := host.GetErrorLogs()
+			hasUnmarshalError := false
+			for _, log := range errorLogs {
+				if strings.Contains(log, "unable to unmarshal vertex response") {
+					hasUnmarshalError = true
 					break
 				}
 			}
-			require.True(t, hasStreamingLogs, "Should have streaming response processing logs")
+			require.False(t, hasUnmarshalError, "should not have vertex unmarshal errors for split huge thoughtSignature event")
+		})
+
+		// 测试：上游已发送 [DONE]，框架再触发空的最后回调时不应重复输出 [DONE]
+		t.Run("vertex express mode streaming response body with upstream done and empty final callback", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"test"}],"stream":true}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "text/event-stream"},
+			})
+
+			doneChunk := "data: [DONE]\n\n"
+			action1 := host.CallOnHttpStreamingResponseBody([]byte(doneChunk), false)
+			require.Equal(t, types.ActionContinue, action1)
+			firstBody := host.GetResponseBody()
+			require.NotNil(t, firstBody)
+			require.Contains(t, string(firstBody), "data: [DONE]", "first callback should output [DONE]")
+
+			action2 := host.CallOnHttpStreamingResponseBody([]byte{}, true)
+			require.Equal(t, types.ActionContinue, action2)
+
+			debugLogs := host.GetDebugLogs()
+			doneChunkLogCount := 0
+			for _, log := range debugLogs {
+				if strings.Contains(log, "=== modified response chunk: data: [DONE]") {
+					doneChunkLogCount++
+				}
+			}
+			require.Equal(t, 1, doneChunkLogCount, "[DONE] should only be emitted once when upstream already sent it")
+		})
+
+		// 测试：最后一个 chunk 缺少 SSE 结束空行时，isLastChunk=true 也应正确解析并输出
+		t.Run("vertex express mode streaming response body last chunk without terminator", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"test"}],"stream":true}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "text/event-stream"},
+			})
+
+			lastChunkWithoutTerminator := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"no terminator\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":3,\"totalTokenCount\":5}}"
+			action := host.CallOnHttpStreamingResponseBody([]byte(lastChunkWithoutTerminator), true)
+			require.Equal(t, types.ActionContinue, action)
+
+			transformedResponseBody := host.GetResponseBody()
+			require.NotNil(t, transformedResponseBody)
+			responseStr := string(transformedResponseBody)
+			require.Contains(t, responseStr, "no terminator", "last chunk without terminator should still be parsed")
+			require.Contains(t, responseStr, "data: [DONE]", "stream should end with [DONE]")
 		})
 	})
 }
@@ -1273,6 +1932,324 @@ func RunVertexExpressModeImageGenerationResponseBodyTests(t *testing.T) {
 	})
 }
 
+func buildMultipartRequestBody(t *testing.T, fields map[string]string, files map[string][]byte) ([]byte, string) {
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+
+	for key, value := range fields {
+		require.NoError(t, writer.WriteField(key, value))
+	}
+
+	for fieldName, data := range files {
+		part, err := writer.CreateFormFile(fieldName, "upload-image.png")
+		require.NoError(t, err)
+		_, err = part.Write(data)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, writer.Close())
+	return buffer.Bytes(), writer.FormDataContentType()
+}
+
+func RunVertexExpressModeImageEditVariationRequestBodyTests(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		const testDataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+		t.Run("vertex express mode image edit request body with image_url", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/edits"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gemini-2.0-flash-exp","prompt":"Add sunglasses to the cat","image":{"image_url":{"url":"` + testDataURL + `"}},"size":"1024x1024"}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+
+			bodyStr := string(processedBody)
+			require.Contains(t, bodyStr, "inlineData", "Request should contain inlineData converted from image_url")
+			require.Contains(t, bodyStr, "Add sunglasses to the cat", "Prompt text should be preserved")
+			require.NotContains(t, bodyStr, "image_url", "OpenAI image_url field should be converted to Vertex format")
+
+			requestHeaders := host.GetRequestHeaders()
+			pathHeader := ""
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Contains(t, pathHeader, "generateContent", "Image edit should use generateContent action")
+			require.Contains(t, pathHeader, "key=test-api-key-123456789", "Path should contain API key")
+		})
+
+		t.Run("vertex express mode image edit request body with image string", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/edits"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gemini-2.0-flash-exp","prompt":"Add sunglasses to the cat","image":"` + testDataURL + `","size":"1024x1024"}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+
+			bodyStr := string(processedBody)
+			require.Contains(t, bodyStr, "inlineData", "Request should contain inlineData converted from image string")
+			require.Contains(t, bodyStr, "Add sunglasses to the cat", "Prompt text should be preserved")
+		})
+
+		t.Run("vertex express mode image edit multipart request body", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			body, contentType := buildMultipartRequestBody(t, map[string]string{
+				"model":  "gemini-2.0-flash-exp",
+				"prompt": "Add sunglasses to the cat",
+				"size":   "1024x1024",
+			}, map[string][]byte{
+				"image": []byte("fake-image-content"),
+			})
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/edits"},
+				{":method", "POST"},
+				{"Content-Type", contentType},
+			})
+
+			action := host.CallOnHttpRequestBody(body)
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+			bodyStr := string(processedBody)
+			require.Contains(t, bodyStr, "inlineData", "Multipart image should be converted to inlineData")
+			require.Contains(t, bodyStr, "Add sunglasses to the cat", "Prompt text should be preserved")
+
+			requestHeaders := host.GetRequestHeaders()
+			require.True(t, test.HasHeaderWithValue(requestHeaders, "Content-Type", "application/json"), "Content-Type should be rewritten to application/json")
+		})
+
+		t.Run("vertex express mode image variation multipart request body", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			body, contentType := buildMultipartRequestBody(t, map[string]string{
+				"model": "gemini-2.0-flash-exp",
+				"size":  "1024x1024",
+			}, map[string][]byte{
+				"image": []byte("fake-image-content"),
+			})
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/variations"},
+				{":method", "POST"},
+				{"Content-Type", contentType},
+			})
+
+			action := host.CallOnHttpRequestBody(body)
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+			bodyStr := string(processedBody)
+			require.Contains(t, bodyStr, "inlineData", "Multipart image should be converted to inlineData")
+			require.Contains(t, bodyStr, "Create variations of the provided image.", "Variation request should inject a default prompt")
+
+			requestHeaders := host.GetRequestHeaders()
+			require.True(t, test.HasHeaderWithValue(requestHeaders, "Content-Type", "application/json"), "Content-Type should be rewritten to application/json")
+		})
+
+		t.Run("vertex express mode image edit with model mapping", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeWithModelMappingConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/edits"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gpt-4","prompt":"Turn it into watercolor","image_url":{"url":"` + testDataURL + `"}}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			pathHeader := ""
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Contains(t, pathHeader, "gemini-2.5-flash", "Path should contain mapped model name")
+		})
+
+		t.Run("vertex express mode image variation request body with image_url", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/variations"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gemini-2.0-flash-exp","image_url":{"url":"` + testDataURL + `"}}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+
+			bodyStr := string(processedBody)
+			require.Contains(t, bodyStr, "inlineData", "Request should contain inlineData converted from image_url")
+			require.Contains(t, bodyStr, "Create variations of the provided image.", "Variation request should inject a default prompt")
+
+			requestHeaders := host.GetRequestHeaders()
+			pathHeader := ""
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Contains(t, pathHeader, "generateContent", "Image variation should use generateContent action")
+			require.Contains(t, pathHeader, "key=test-api-key-123456789", "Path should contain API key")
+		})
+	})
+}
+
+func RunVertexExpressModeImageEditVariationResponseBodyTests(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		const testDataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+		t.Run("vertex express mode image edit response body", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/edits"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gemini-2.0-flash-exp","prompt":"Add glasses","image_url":{"url":"` + testDataURL + `"}}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "application/json"},
+			})
+
+			responseBody := `{
+				"candidates": [{
+					"content": {
+						"role": "model",
+						"parts": [{
+							"inlineData": {
+								"mimeType": "image/png",
+								"data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+							}
+						}]
+					}
+				}],
+				"usageMetadata": {
+					"promptTokenCount": 12,
+					"candidatesTokenCount": 1024,
+					"totalTokenCount": 1036
+				}
+			}`
+			action := host.CallOnHttpResponseBody([]byte(responseBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedResponseBody := host.GetResponseBody()
+			require.NotNil(t, processedResponseBody)
+
+			responseStr := string(processedResponseBody)
+			require.Contains(t, responseStr, "b64_json", "Response should contain b64_json field")
+			require.Contains(t, responseStr, "usage", "Response should contain usage field")
+		})
+
+		t.Run("vertex express mode image variation response body", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexExpressModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/variations"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gemini-2.0-flash-exp","image_url":{"url":"` + testDataURL + `"}}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "application/json"},
+			})
+
+			responseBody := `{
+				"candidates": [{
+					"content": {
+						"role": "model",
+						"parts": [{
+							"inlineData": {
+								"mimeType": "image/png",
+								"data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+							}
+						}]
+					}
+				}],
+				"usageMetadata": {
+					"promptTokenCount": 8,
+					"candidatesTokenCount": 768,
+					"totalTokenCount": 776
+				}
+			}`
+			action := host.CallOnHttpResponseBody([]byte(responseBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedResponseBody := host.GetResponseBody()
+			require.NotNil(t, processedResponseBody)
+
+			responseStr := string(processedResponseBody)
+			require.Contains(t, responseStr, "b64_json", "Response should contain b64_json field")
+			require.Contains(t, responseStr, "usage", "Response should contain usage field")
+		})
+	})
+}
+
 // ==================== Vertex Raw 模式测试 ====================
 
 func RunVertexRawModeOnHttpRequestHeadersTests(t *testing.T) {
@@ -1393,7 +2370,7 @@ func RunVertexRawModeOnHttpRequestHeadersTests(t *testing.T) {
 
 func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		// 测试 Vertex Raw 模式请求体处理（Express Mode - 透传请求体）
+		// 测试 Vertex Raw 模式请求体处理（Express Mode - 透传请求体 + API Key 认证）
 		t.Run("vertex raw mode express - request body passthrough", func(t *testing.T) {
 			host, status := test.NewTestHost(vertexRawModeExpressConfig)
 			defer host.Reset()
@@ -1405,6 +2382,7 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 				{":path", "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"},
 				{":method", "POST"},
 				{"Content-Type", "application/json"},
+				{"Authorization", "Bearer some-token"},
 			})
 
 			// 设置原生 Vertex 格式的请求体
@@ -1420,6 +2398,22 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 
 			// 请求体应该保持原样
 			require.Equal(t, requestBody, string(processedBody), "Request body should be passed through unchanged")
+
+			// 验证 API Key 被追加到 URL path 中
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Contains(t, pathHeader, "?key=test-api-key-for-raw-mode",
+				"API key should be appended to path as query parameter")
+
+			// 验证 Authorization header 被删除
+			require.False(t, test.HasHeaderWithValue(requestHeaders, "Authorization", "Bearer some-token"),
+				"Authorization header should be removed in Express Mode")
 		})
 
 		// 测试 Vertex Raw 模式请求体处理（标准模式 - 需要 OAuth token）
@@ -1495,13 +2489,13 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 			require.NotContains(t, pathHeader, "/vertex-proxy", "Path should have basePath prefix removed")
 		})
 
-		// 测试 Vertex Raw 模式请求体处理（流式请求）
+		// 测试 Vertex Raw 模式请求体处理（流式请求 - path 已含 ? 时用 & 拼接 API Key）
 		t.Run("vertex raw mode express - streaming request body passthrough", func(t *testing.T) {
 			host, status := test.NewTestHost(vertexRawModeExpressConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
-			// 先设置请求头（流式端点）
+			// 先设置请求头（流式端点，path 已含 ?alt=sse）
 			host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:streamGenerateContent?alt=sse"},
@@ -1519,6 +2513,194 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 			processedBody := host.GetRequestBody()
 			require.NotNil(t, processedBody)
 			require.Equal(t, requestBody, string(processedBody), "Request body should be passed through unchanged")
+
+			// 验证 API Key 使用 & 拼接（因为 path 已含 ?alt=sse）
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Contains(t, pathHeader, "?alt=sse&key=test-api-key-for-raw-mode",
+				"API key should be appended with & when path already contains ?")
+		})
+
+		// 测试 Vertex Raw 模式请求体处理（Express Mode + Anthropic 模型路径）
+		t.Run("vertex raw mode express - anthropic model request body with api key", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeExpressConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 使用 Anthropic 模型的原生 Vertex AI REST API 路径
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:rawPredict"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"anthropic_version":"vertex-2023-10-16","messages":[{"role":"user","content":"Hello"}],"max_tokens":1024}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.Equal(t, types.ActionContinue, action)
+
+			// 验证请求体被透传
+			processedBody := host.GetRequestBody()
+			require.Equal(t, requestBody, string(processedBody), "Request body should be passed through unchanged")
+
+			// 验证 API Key 被追加到 path
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Contains(t, pathHeader, "?key=test-api-key-for-raw-mode",
+				"API key should be appended to anthropic model path")
+		})
+
+		// 测试 Vertex Raw 模式请求体处理（Express Mode + basePath - API Key 正确追加）
+		t.Run("vertex raw mode with basePath express - request body with api key", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeWithBasePathConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 带 basePath 前缀的请求
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/vertex-proxy/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.Equal(t, types.ActionContinue, action)
+
+			// 验证路径：basePath 被移除 + API Key 被追加
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotContains(t, pathHeader, "/vertex-proxy",
+				"Path should have basePath prefix removed")
+			require.Contains(t, pathHeader, "?key=test-api-key-for-raw-mode",
+				"API key should be appended after basePath removal")
+		})
+
+		// 测试 Vertex Raw 模式请求体处理（Express Mode + 多 token，使用请求上下文中的 apiTokenInUse）
+		t.Run("vertex raw mode express - should reuse api token in context for query key", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeExpressMultiTokensConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 选择一个保证前两次 Intn(2) 结果不同的种子：
+			// 第一次用于 SetApiTokenInUse，第二次仅在旧实现中用于 OnRequestBody.GetRandomToken。
+			seed := int64(1)
+			for {
+				r := rand.New(rand.NewSource(seed))
+				if r.Intn(2) != r.Intn(2) {
+					break
+				}
+				seed++
+			}
+			rand.Seed(seed)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotEmpty(t, pathHeader, "Path header should not be empty")
+
+			parsedPath, err := url.ParseRequestURI(pathHeader)
+			require.NoError(t, err)
+			query := parsedPath.Query()
+			require.Len(t, query["key"], 1, "Path should contain exactly one key query parameter")
+			keyInPath := query.Get("key")
+			require.NotEmpty(t, keyInPath, "Path should contain key query parameter")
+
+			// 从 debug log 中提取本次请求固定的 apiTokenInUse
+			var apiTokenInUse string
+			for _, debugLog := range host.GetDebugLogs() {
+				const prefix = "Use apiToken "
+				const suffix = " to send request"
+				start := strings.Index(debugLog, prefix)
+				if start == -1 {
+					continue
+				}
+				start += len(prefix)
+				end := strings.Index(debugLog[start:], suffix)
+				if end == -1 {
+					continue
+				}
+				apiTokenInUse = debugLog[start : start+end]
+				break
+			}
+			require.NotEmpty(t, apiTokenInUse, "apiTokenInUse should be logged")
+			require.Equal(t, apiTokenInUse, keyInPath,
+				"Query key must use apiTokenInUse from request context")
+		})
+
+		// 测试 Vertex Raw 模式请求体处理（Express Mode + 已有 key 参数时应覆盖而不是追加重复）
+		t.Run("vertex raw mode express - should replace existing key query parameter", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeExpressConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=client-key&trace=1"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.NotEmpty(t, pathHeader, "Path header should not be empty")
+
+			parsedPath, err := url.ParseRequestURI(pathHeader)
+			require.NoError(t, err)
+			query := parsedPath.Query()
+
+			require.Len(t, query["key"], 1, "Path should contain exactly one key query parameter")
+			require.Equal(t, "test-api-key-for-raw-mode", query.Get("key"),
+				"Existing key query parameter should be replaced by configured API key")
+			require.Equal(t, "sse", query.Get("alt"), "Existing query parameter alt should be preserved")
+			require.Equal(t, "1", query.Get("trace"), "Existing query parameter trace should be preserved")
 		})
 	})
 }

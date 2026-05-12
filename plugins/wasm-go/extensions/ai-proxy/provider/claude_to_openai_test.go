@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -33,6 +34,66 @@ func init() {
 
 func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
+
+	t.Run("convert_tool_choice_any_to_required", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1000,
+			"messages": [{"role": "user", "content": "Run a search."}],
+			"tools": [{
+				"name": "web_search",
+				"description": "Search the web.",
+				"input_schema": {
+					"type": "object",
+					"properties": {"query": {"type": "string"}},
+					"required": ["query"]
+				}
+			}],
+			"tool_choice": {"type": "any"}
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Equal(t, "required", openaiRequest.ToolChoice)
+		require.NotNil(t, openaiRequest.ParallelToolCalls)
+		require.True(t, *openaiRequest.ParallelToolCalls)
+		require.Contains(t, string(result), `"parallel_tool_calls":true`)
+	})
+
+	t.Run("convert_tool_choice_any_preserves_disable_parallel_tool_use", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1000,
+			"messages": [{"role": "user", "content": "Run a search."}],
+			"tools": [{
+				"name": "web_search",
+				"description": "Search the web.",
+				"input_schema": {
+					"type": "object",
+					"properties": {"query": {"type": "string"}},
+					"required": ["query"]
+				}
+			}],
+			"tool_choice": {"type": "any", "disable_parallel_tool_use": true}
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Equal(t, "required", openaiRequest.ToolChoice)
+		require.NotNil(t, openaiRequest.ParallelToolCalls)
+		require.False(t, *openaiRequest.ParallelToolCalls)
+		require.Contains(t, string(result), `"parallel_tool_calls":false`)
+	})
 
 	t.Run("convert_multiple_text_content_blocks", func(t *testing.T) {
 		// Test case: multiple text content blocks should remain as separate array elements with cache control support
@@ -322,6 +383,42 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 		assert.Equal(t, float64(5), args["max_results"])
 	})
 
+	t.Run("preserve_empty_tool_use_input", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "assistant",
+				"content": [{
+					"type": "thinking",
+					"thinking": "Need to list items.",
+					"signature": "sig"
+				}, {
+					"type": "tool_use",
+					"id": "toolu_empty",
+					"name": "list_items",
+					"input": {}
+				}]
+			}],
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+		require.Contains(t, string(result), `"input":{}`)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Len(t, openaiRequest.Messages, 1)
+		assistantMsg := openaiRequest.Messages[0]
+		require.Len(t, assistantMsg.ToolCalls, 1)
+		assert.Equal(t, "{}", assistantMsg.ToolCalls[0].Function.Arguments)
+		require.Len(t, assistantMsg.ClaudeContentBlocks, 2)
+		require.NotNil(t, assistantMsg.ClaudeContentBlocks[1].Input)
+		assert.Empty(t, *assistantMsg.ClaudeContentBlocks[1].Input)
+	})
+
 	t.Run("convert_tool_result_to_tool_message", func(t *testing.T) {
 		// Test Claude tool_result conversion to OpenAI tool message format
 		claudeRequest := `{
@@ -388,6 +485,7 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 
 	t.Run("convert_tool_result_with_actual_error_data", func(t *testing.T) {
 		// Test using the actual JSON data from the error log to ensure our fix works
+		// This tests the fix for issue #3344 - text content alongside tool_result should be preserved
 		claudeRequest := `{
 			"model": "anthropic/claude-sonnet-4", 
 			"messages": [{
@@ -415,14 +513,20 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 		err = json.Unmarshal(result, &openaiRequest)
 		require.NoError(t, err)
 
-		// Should have one tool message (the text content is included in the same message array)
-		require.Len(t, openaiRequest.Messages, 1)
+		// Should have two messages: tool message + user message with text content
+		// This is the fix for issue #3344 - text content alongside tool_result is preserved
+		require.Len(t, openaiRequest.Messages, 2)
 
-		// Should be tool message
+		// First should be tool message
 		toolMsg := openaiRequest.Messages[0]
 		assert.Equal(t, "tool", toolMsg.Role)
 		assert.Contains(t, toolMsg.Content, "three.js")
 		assert.Equal(t, "toolu_vrtx_01UbCfwoTgoDBqbYEwkVaxd5", toolMsg.ToolCallId)
+
+		// Second should be user message with text content
+		userMsg := openaiRequest.Messages[1]
+		assert.Equal(t, "user", userMsg.Role)
+		assert.Equal(t, "继续", userMsg.Content)
 	})
 
 	t.Run("convert_multiple_tool_calls", func(t *testing.T) {
@@ -617,7 +721,7 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIResponseToClaude(t *testing.T) {
 		// First content should be text
 		textContent := claudeResponse.Content[0]
 		assert.Equal(t, "text", textContent.Type)
-		assert.Equal(t, "I'll analyze the README file to understand this project's purpose.", textContent.Text)
+		assert.Equal(t, "I'll analyze the README file to understand this project's purpose.", *textContent.Text)
 
 		// Second content should be tool_use
 		toolContent := claudeResponse.Content[1]
@@ -627,7 +731,7 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIResponseToClaude(t *testing.T) {
 
 		// Verify tool arguments
 		require.NotNil(t, toolContent.Input)
-		assert.Equal(t, "/Users/zhangty/git/higress/README.md", toolContent.Input["file_path"])
+		assert.Equal(t, "/Users/zhangty/git/higress/README.md", (*toolContent.Input)["file_path"])
 	})
 }
 
@@ -635,11 +739,9 @@ func TestClaudeToOpenAIConverter_ConvertThinkingConfig(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
 
 	tests := []struct {
-		name                 string
-		claudeRequest        string
-		expectedMaxTokens    int
-		expectedEffort       string
-		expectThinkingConfig bool
+		name           string
+		claudeRequest  string
+		expectedEffort string
 	}{
 		{
 			name: "thinking_enabled_low",
@@ -649,9 +751,7 @@ func TestClaudeToOpenAIConverter_ConvertThinkingConfig(t *testing.T) {
 				"messages": [{"role": "user", "content": "Hello"}],
 				"thinking": {"type": "enabled", "budget_tokens": 2048}
 			}`,
-			expectedMaxTokens:    2048,
-			expectedEffort:       "low",
-			expectThinkingConfig: true,
+			expectedEffort: "low",
 		},
 		{
 			name: "thinking_enabled_medium",
@@ -661,9 +761,7 @@ func TestClaudeToOpenAIConverter_ConvertThinkingConfig(t *testing.T) {
 				"messages": [{"role": "user", "content": "Hello"}],
 				"thinking": {"type": "enabled", "budget_tokens": 8192}
 			}`,
-			expectedMaxTokens:    8192,
-			expectedEffort:       "medium",
-			expectThinkingConfig: true,
+			expectedEffort: "medium",
 		},
 		{
 			name: "thinking_enabled_high",
@@ -673,9 +771,7 @@ func TestClaudeToOpenAIConverter_ConvertThinkingConfig(t *testing.T) {
 				"messages": [{"role": "user", "content": "Hello"}],
 				"thinking": {"type": "enabled", "budget_tokens": 20480}
 			}`,
-			expectedMaxTokens:    20480,
-			expectedEffort:       "high",
-			expectThinkingConfig: true,
+			expectedEffort: "high",
 		},
 		{
 			name: "thinking_disabled",
@@ -685,9 +781,7 @@ func TestClaudeToOpenAIConverter_ConvertThinkingConfig(t *testing.T) {
 				"messages": [{"role": "user", "content": "Hello"}],
 				"thinking": {"type": "disabled"}
 			}`,
-			expectedMaxTokens:    0,
-			expectedEffort:       "",
-			expectThinkingConfig: false,
+			expectedEffort: "",
 		},
 		{
 			name: "no_thinking",
@@ -696,9 +790,7 @@ func TestClaudeToOpenAIConverter_ConvertThinkingConfig(t *testing.T) {
 				"max_tokens": 1000,
 				"messages": [{"role": "user", "content": "Hello"}]
 			}`,
-			expectedMaxTokens:    0,
-			expectedEffort:       "",
-			expectThinkingConfig: false,
+			expectedEffort: "",
 		},
 	}
 
@@ -712,13 +804,23 @@ func TestClaudeToOpenAIConverter_ConvertThinkingConfig(t *testing.T) {
 			err = json.Unmarshal(result, &openaiRequest)
 			assert.NoError(t, err)
 
-			if tt.expectThinkingConfig {
-				assert.Equal(t, tt.expectedMaxTokens, openaiRequest.ReasoningMaxTokens)
-				assert.Equal(t, tt.expectedEffort, openaiRequest.ReasoningEffort)
-			} else {
-				assert.Equal(t, 0, openaiRequest.ReasoningMaxTokens)
-				assert.Equal(t, "", openaiRequest.ReasoningEffort)
-			}
+			assert.Equal(t, tt.expectedEffort, openaiRequest.ReasoningEffort)
+
+			// Verify non-standard fields are NEVER set in the converted request.
+			// These fields are not recognized by OpenAI/Azure and would cause 400 errors.
+			assert.Equal(t, 0, openaiRequest.ReasoningMaxTokens,
+				"reasoning_max_tokens must not be set - it is not a standard OpenAI parameter")
+			assert.Nil(t, openaiRequest.Thinking,
+				"thinking must not be set - it is not a standard OpenAI parameter")
+
+			// Also verify at the raw JSON level to catch any serialization issues
+			var rawJSON map[string]interface{}
+			err = json.Unmarshal(result, &rawJSON)
+			require.NoError(t, err)
+			assert.NotContains(t, rawJSON, "thinking",
+				"raw JSON must not contain 'thinking' field")
+			assert.NotContains(t, rawJSON, "reasoning_max_tokens",
+				"raw JSON must not contain 'reasoning_max_tokens' field")
 		})
 	}
 }
@@ -830,21 +932,366 @@ func TestClaudeToOpenAIConverter_ConvertReasoningResponseToClaude(t *testing.T) 
 				// First should be thinking
 				thinkingContent := claudeResponse.Content[0]
 				assert.Equal(t, "thinking", thinkingContent.Type)
-				assert.Equal(t, "", thinkingContent.Signature) // OpenAI doesn't provide signature
-				assert.Contains(t, thinkingContent.Thinking, "Let me think about this step by step")
+				require.NotNil(t, thinkingContent.Signature)
+				assert.Equal(t, "", *thinkingContent.Signature) // OpenAI doesn't provide signature
+				require.NotNil(t, thinkingContent.Thinking)
+				assert.Contains(t, *thinkingContent.Thinking, "Let me think about this step by step")
 
 				// Second should be text
 				textContent := claudeResponse.Content[1]
 				assert.Equal(t, "text", textContent.Type)
-				assert.Equal(t, tt.expectedText, textContent.Text)
+				require.NotNil(t, textContent.Text)
+				assert.Equal(t, tt.expectedText, *textContent.Text)
 			} else {
 				// Should only have text content
 				assert.Len(t, claudeResponse.Content, 1)
 
 				textContent := claudeResponse.Content[0]
 				assert.Equal(t, "text", textContent.Type)
-				assert.Equal(t, tt.expectedText, textContent.Text)
+				require.NotNil(t, textContent.Text)
+				assert.Equal(t, tt.expectedText, *textContent.Text)
 			}
 		})
 	}
+}
+
+func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_WithCachedTokens(t *testing.T) {
+	converter := &ClaudeToOpenAIConverter{}
+
+	streamChunk := "data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\n"
+
+	result, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(streamChunk))
+	require.NoError(t, err)
+
+	resultStr := string(result)
+	assert.Contains(t, resultStr, "\"type\":\"message_delta\"")
+	assert.Contains(t, resultStr, "\"input_tokens\":100")
+	assert.Contains(t, resultStr, "\"output_tokens\":20")
+	assert.Contains(t, resultStr, "\"cache_read_input_tokens\":60")
+}
+
+func TestClaudeToOpenAIConverter_StripCchFromSystemMessage(t *testing.T) {
+	converter := &ClaudeToOpenAIConverter{}
+
+	t.Run("string_system_with_billing_header", func(t *testing.T) {
+		// Test that cch field is stripped from string format system message
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1024,
+			"system": [
+				{
+					"type": "text",
+					"text": "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode; cch=abc123;"
+				}
+			],
+			"messages": [{
+				"role": "user",
+				"content": "Hello"
+			}]
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Len(t, openaiRequest.Messages, 2)
+
+		// First message should be system with cch stripped
+		systemMsg := openaiRequest.Messages[0]
+		assert.Equal(t, "system", systemMsg.Role)
+
+		// The system content should have cch removed
+		contentArray, ok := systemMsg.Content.([]interface{})
+		require.True(t, ok, "System content should be an array")
+		require.Len(t, contentArray, 1)
+
+		contentMap, ok := contentArray[0].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "text", contentMap["type"])
+		assert.Equal(t, "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode;", contentMap["text"])
+		assert.NotContains(t, contentMap["text"], "cch=")
+	})
+
+	t.Run("plain_string_system_unchanged", func(t *testing.T) {
+		// Test that normal system messages are not modified
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1024,
+			"system": "You are a helpful assistant.",
+			"messages": [{
+				"role": "user",
+				"content": "Hello"
+			}]
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		// First message should be system with original content
+		systemMsg := openaiRequest.Messages[0]
+		assert.Equal(t, "system", systemMsg.Role)
+		assert.Equal(t, "You are a helpful assistant.", systemMsg.Content)
+	})
+}
+func TestStripCchFromBillingHeader(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "billing header with cch at end",
+			input:    "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode; cch=abc123;",
+			expected: "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode;",
+		},
+		{
+			name:     "billing header with cch at end without trailing semicolon",
+			input:    "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode; cch=abc123",
+			expected: "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode",
+		},
+		{
+			name:     "billing header with cch in middle",
+			input:    "x-anthropic-billing-header: cc_version=2.1.37.3a3; cch=abc123; cc_entrypoint=claude-vscode;",
+			expected: "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode;",
+		},
+		{
+			name:     "billing header without cch",
+			input:    "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode;",
+			expected: "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode;",
+		},
+		{
+			name:     "non-billing header text unchanged",
+			input:    "This is a normal system prompt",
+			expected: "This is a normal system prompt",
+		},
+		{
+			name:     "empty string unchanged",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "billing header with multiple cch fields",
+			input:    "x-anthropic-billing-header: cc_version=2.1.37.3a3; cch=first; cc_entrypoint=claude-vscode; cch=second;",
+			expected: "x-anthropic-billing-header: cc_version=2.1.37.3a3; cc_entrypoint=claude-vscode;",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripCchFromBillingHeader(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestNormalizeFinishReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      *string
+		wantReason string
+		wantValid  bool
+	}{
+		{
+			name:      "nil finish reason",
+			input:     nil,
+			wantValid: false,
+		},
+		{
+			name:      "empty finish reason",
+			input:     stringPtr(""),
+			wantValid: false,
+		},
+		{
+			name:      "whitespace finish reason",
+			input:     stringPtr("   "),
+			wantValid: false,
+		},
+		{
+			name:      "string null finish reason",
+			input:     stringPtr("null"),
+			wantValid: false,
+		},
+		{
+			name:      "uppercase string null finish reason",
+			input:     stringPtr("NULL"),
+			wantValid: false,
+		},
+		{
+			name:       "valid finish reason",
+			input:      stringPtr("length"),
+			wantReason: "length",
+			wantValid:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotReason, gotValid := normalizeFinishReason(tt.input)
+			assert.Equal(t, tt.wantReason, gotReason)
+			assert.Equal(t, tt.wantValid, gotValid)
+		})
+	}
+}
+
+func TestClaudeToOpenAIConverter_streaming_tool_call_smoke(t *testing.T) {
+	converter := &ClaudeToOpenAIConverter{}
+
+	start := `data: {"id":"tc1","choices":[{"index":0,"delta":{"role":"assistant","content":""}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+	_, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(start))
+	require.NoError(t, err)
+
+	toolChunk := `data: {"id":"tc1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"my_fn","arguments":""}}]}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+	out, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(toolChunk))
+	require.NoError(t, err)
+	require.Contains(t, string(out), "content_block_start")
+	require.Contains(t, string(out), "tool_use")
+
+	argChunk := `data: {"id":"tc1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"x\":1}"}}]}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+	out2, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(argChunk))
+	require.NoError(t, err)
+	require.Contains(t, string(out2), "input_json_delta")
+}
+
+func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_Compatibility(t *testing.T) {
+	t.Run("finish_reason empty string should not stop stream", func(t *testing.T) {
+		converter := &ClaudeToOpenAIConverter{}
+
+		chunk1 := `data: {"id":"stream-1","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":""}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+		out1, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunk1))
+		require.NoError(t, err)
+		events1 := parseClaudeSSEEvents(t, out1)
+		require.Len(t, events1, 1)
+		assert.Equal(t, "message_start", events1[0].Name)
+
+		chunk2 := `data: {"id":"stream-1","choices":[{"index":0,"delta":{"reasoning_content":"Let"},"finish_reason":""}],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}` + "\n\n"
+		out2, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunk2))
+		require.NoError(t, err)
+		events2 := parseClaudeSSEEvents(t, out2)
+		require.Len(t, events2, 3)
+		assert.Equal(t, "content_block_start", events2[0].Name)
+		assert.Equal(t, "content_block_delta", events2[1].Name)
+		assert.Equal(t, "message_delta", events2[2].Name)
+		assert.Nil(t, events2[2].Payload.Delta.StopReason, "usage chunk without real finish_reason must not carry stop_reason")
+
+		eventNames := []string{events2[0].Name, events2[1].Name, events2[2].Name}
+		assert.NotContains(t, eventNames, "content_block_stop")
+		assert.NotContains(t, eventNames, "message_stop")
+	})
+
+	t.Run("usage in every chunk should not trigger early message_stop", func(t *testing.T) {
+		converter := &ClaudeToOpenAIConverter{}
+
+		chunkStart := `data: {"id":"stream-2","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+		_, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkStart))
+		require.NoError(t, err)
+
+		chunkThinking1 := `data: {"id":"stream-2","choices":[{"index":0,"delta":{"reasoning_content":"Let"},"finish_reason":null}],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}` + "\n\n"
+		outThinking1, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkThinking1))
+		require.NoError(t, err)
+		eventsThinking1 := parseClaudeSSEEvents(t, outThinking1)
+		require.Len(t, eventsThinking1, 3)
+		assert.Equal(t, "message_delta", eventsThinking1[2].Name)
+		assert.Nil(t, eventsThinking1[2].Payload.Delta.StopReason)
+
+		chunkThinking2 := `data: {"id":"stream-2","choices":[{"index":0,"delta":{"reasoning_content":" me"},"finish_reason":null}],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}` + "\n\n"
+		outThinking2, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkThinking2))
+		require.NoError(t, err)
+		eventsThinking2 := parseClaudeSSEEvents(t, outThinking2)
+		require.Len(t, eventsThinking2, 2)
+		assert.Equal(t, "content_block_delta", eventsThinking2[0].Name)
+		assert.Equal(t, "message_delta", eventsThinking2[1].Name)
+		assert.Nil(t, eventsThinking2[1].Payload.Delta.StopReason)
+
+		chunkFinishNoUsage := `data: {"id":"stream-2","choices":[{"index":0,"delta":{"content":"","reasoning_content":""},"finish_reason":"length"}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+		outFinishNoUsage, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkFinishNoUsage))
+		require.NoError(t, err)
+		eventsFinishNoUsage := parseClaudeSSEEvents(t, outFinishNoUsage)
+		require.Len(t, eventsFinishNoUsage, 1)
+		assert.Equal(t, "content_block_stop", eventsFinishNoUsage[0].Name)
+
+		chunkFinalUsage := `data: {"id":"stream-2","choices":[],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":100,"total_tokens":110}}` + "\n\n"
+		outFinalUsage, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkFinalUsage))
+		require.NoError(t, err)
+		eventsFinalUsage := parseClaudeSSEEvents(t, outFinalUsage)
+		require.Len(t, eventsFinalUsage, 2)
+		assert.Equal(t, "message_delta", eventsFinalUsage[0].Name)
+		require.NotNil(t, eventsFinalUsage[0].Payload.Delta.StopReason)
+		assert.Equal(t, "max_tokens", *eventsFinalUsage[0].Payload.Delta.StopReason)
+		assert.Equal(t, "message_stop", eventsFinalUsage[1].Name)
+
+		chunkDuplicateUsage := `data: {"id":"stream-2","choices":[],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":100,"total_tokens":110}}` + "\n\n"
+		outDuplicateUsage, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkDuplicateUsage))
+		require.NoError(t, err)
+		assert.Empty(t, strings.TrimSpace(string(outDuplicateUsage)), "duplicate trailing chunks after message_stop should be ignored")
+
+		doneChunk := "data: [DONE]\n\n"
+		outDone, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(doneChunk))
+		require.NoError(t, err)
+		assert.Empty(t, strings.TrimSpace(string(outDone)))
+
+		nextRequestChunk := `data: {"id":"stream-3","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+		outNextRequest, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(nextRequestChunk))
+		require.NoError(t, err)
+		eventsNextRequest := parseClaudeSSEEvents(t, outNextRequest)
+		require.Len(t, eventsNextRequest, 1)
+		assert.Equal(t, "message_start", eventsNextRequest[0].Name)
+	})
+}
+
+type parsedClaudeSSEEvent struct {
+	Name    string
+	Payload claudeTextGenStreamResponse
+}
+
+func parseClaudeSSEEvents(t *testing.T, raw []byte) []parsedClaudeSSEEvent {
+	t.Helper()
+
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return nil
+	}
+
+	blocks := strings.Split(text, "\n\n")
+	events := make([]parsedClaudeSSEEvent, 0, len(blocks))
+	for _, block := range blocks {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+
+		var eventName string
+		var dataPayload string
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, "event: ") {
+				eventName = strings.TrimPrefix(line, "event: ")
+			}
+			if strings.HasPrefix(line, "data: ") {
+				dataPayload = strings.TrimPrefix(line, "data: ")
+			}
+		}
+
+		require.NotEmpty(t, eventName)
+		require.NotEmpty(t, dataPayload)
+
+		var payload claudeTextGenStreamResponse
+		require.NoError(t, json.Unmarshal([]byte(dataPayload), &payload))
+		events = append(events, parsedClaudeSSEEvent{
+			Name:    eventName,
+			Payload: payload,
+		})
+	}
+
+	return events
+}
+
+func stringPtr(value string) *string {
+	return &value
 }

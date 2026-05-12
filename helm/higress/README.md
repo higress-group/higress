@@ -46,6 +46,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | controller.env | object | `{}` |  |
 | controller.hub | string | `""` |  |
 | controller.image | string | `"higress"` |  |
+| controller.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | controller.imagePullSecrets | list | `[]` |  |
 | controller.labels | object | `{}` |  |
 | controller.name | string | `"higress-controller"` |  |
@@ -98,6 +99,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | gateway.httpsPort | int | `443` |  |
 | gateway.hub | string | `""` |  |
 | gateway.image | string | `"gateway"` |  |
+| gateway.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | gateway.kind | string | `"Deployment"` | Use a `DaemonSet` or `Deployment` |
 | gateway.labels | object | `{}` | Labels to apply to all resources |
 | gateway.metrics.enabled | bool | `false` | If true, create PodMonitor or VMPodScrape for gateway |
@@ -163,6 +165,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.defaultResources | object | `{"requests":{"cpu":"10m"}}` | A minimal set of requested resources to applied to all deployments so that Horizontal Pod Autoscaler will be able to function (if set). Each component can overwrite these default values by adding its own resources block in the relevant section below and setting the desired resources values. |
 | global.defaultUpstreamConcurrencyThreshold | int | `10000` |  |
 | global.disableAlpnH2 | bool | `false` | Whether to disable HTTP/2 in ALPN |
+| global.enableDeltaXDS | bool | `true` | Whether to enable Istio delta xDS, default is false. |
 | global.enableGatewayAPI | bool | `true` | If true, Higress Controller will monitor Gateway API resources as well |
 | global.enableH3 | bool | `false` |  |
 | global.enableIPv6 | bool | `false` |  |
@@ -177,7 +180,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.enableStatus | bool | `true` | If true, Higress Controller will update the status field of Ingress resources. When migrating from Nginx Ingress, in order to avoid status field of Ingress objects being overwritten, this parameter needs to be set to false, so Higress won't write the entry IP to the status field of the corresponding Ingress object. |
 | global.externalIstiod | bool | `false` | Configure a remote cluster data plane controlled by an external istiod. When set to true, istiod is not deployed locally and only a subset of the other discovery charts are enabled. |
 | global.hostRDSMergeSubset | bool | `false` |  |
-| global.hub | string | `"higress-registry.cn-hangzhou.cr.aliyuncs.com/higress"` | Default hub for Istio images. Releases are published to docker hub under 'istio' project. Dev builds from prow are on gcr.io |
+| global.hub | string | `"higress-registry.cn-hangzhou.cr.aliyuncs.com"` | Default hub (registry) for Higress images. For Higress deployments, images are pulled from: {hub}/higress/{image} For built-in plugins, images are pulled from: {hub}/{pluginNamespace}/{plugin-name} Change this to use a mirror registry closer to your deployment region for faster image pulls. |
 | global.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | global.imagePullSecrets | list | `[]` | ImagePullSecrets for all ServiceAccount, list of secrets in the same namespace to use for pulling any images in pods that reference this ServiceAccount. For components that don't use ServiceAccounts (i.e. grafana, servicegraph, tracing) ImagePullSecrets will be added to the corresponding Deployment(StatefulSet) objects. Must be set for any cluster configured with private docker registry. |
 | global.ingressClass | string | `"higress"` | IngressClass filters which ingress resources the higress controller watches. The default ingress class is higress. There are some special cases for special ingress class. 1. When the ingress class is set as nginx, the higress controller will watch ingress resources with the nginx ingress class or without any ingress class. 2. When the ingress class is set empty, the higress controller will watch all ingress resources in the k8s cluster. |
@@ -202,6 +205,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.onlyPushRouteCluster | bool | `true` |  |
 | global.operatorManageWebhooks | bool | `false` | Configure whether Operator manages webhook configurations. The current behavior of Istiod is to manage its own webhook configurations. When this option is set as true, Istio Operator, instead of webhooks, manages the webhook configurations. When this option is set as false, webhooks manage their own webhook configurations. |
 | global.pilotCertProvider | string | `"istiod"` | Configure the certificate provider for control plane communication. Currently, two providers are supported: "kubernetes" and "istiod". As some platforms may not have kubernetes signing APIs, Istiod is the default |
+| global.pluginNamespace | string | `"plugins"` | Namespace for built-in plugin images. Default is "plugins". Used by higress-console to configure plugin image path. |
 | global.priorityClassName | string | `""` | Kubernetes >=v1.11.0 will create two PriorityClass, including system-cluster-critical and system-node-critical, it is better to configure this in order to make sure your Istio pods will not be killed because of low priority class. Refer to https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/#priorityclass for more detail. |
 | global.proxy.autoInject | string | `"enabled"` | This controls the 'policy' in the sidecar injector. |
 | global.proxy.clusterDomain | string | `"cluster.local"` | CAUTION: It is important to ensure that all Istio helm charts specify the same clusterDomain value cluster domain. Default value is "cluster.local". |
@@ -251,13 +255,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | meshConfig | object | `{"enablePrometheusMerge":true,"rootNamespace":null,"trustDomain":"cluster.local"}` | meshConfig defines runtime configuration of components, including Istiod and istio-agent behavior See https://istio.io/docs/reference/config/istio.mesh.v1alpha1/ for all available options |
 | meshConfig.rootNamespace | string | `nil` | The namespace to treat as the administrative root namespace for Istio configuration. When processing a leaf namespace Istio will search for declarations in that namespace first and if none are found it will search in the root namespace. Any matching declaration found in the root namespace is processed as if it were declared in the leaf namespace. |
 | meshConfig.trustDomain | string | `"cluster.local"` | The trust domain corresponds to the trust root of a system Refer to https://github.com/spiffe/spiffe/blob/master/standards/SPIFFE-ID.md#21-trust-domain |
-| pilot.autoscaleEnabled | bool | `false` |  |
-| pilot.autoscaleMax | int | `5` |  |
-| pilot.autoscaleMin | int | `1` |  |
-| pilot.configMap | bool | `true` | Install the mesh config map, generated from values.yaml. If false, pilot wil use default values (by default) or user-supplied values. |
-| pilot.configSource | object | `{"subscribedResources":[]}` | This is used to set the source of configuration for the associated address in configSource, if nothing is specified the default MCP is assumed. |
 | pilot.cpu.targetAverageUtilization | int | `80` |  |
-| pilot.deploymentLabels | object | `{}` | Additional labels to apply to the deployment. |
 | pilot.enableProtocolSniffingForInbound | bool | `true` | if protocol sniffing is enabled for inbound |
 | pilot.enableProtocolSniffingForOutbound | bool | `true` | if protocol sniffing is enabled for outbound |
 | pilot.env.PILOT_ENABLE_CROSS_CLUSTER_WORKLOAD_ENTRY | string | `"false"` |  |
@@ -268,19 +266,13 @@ The command removes all the Kubernetes components associated with the chart and 
 | pilot.image | string | `"pilot"` | Can be a full hub/image:tag |
 | pilot.jwksResolverExtraRootCA | string | `""` | You can use jwksResolverExtraRootCA to provide a root certificate in PEM format. This will then be trusted by pilot when resolving JWKS URIs. |
 | pilot.keepaliveMaxServerConnectionAge | string | `"30m"` | The following is used to limit how long a sidecar can be connected to a pilot. It balances out load across pilot instances at the cost of increasing system churn. |
-| pilot.nodeSelector | object | `{}` |  |
 | pilot.plugins | list | `[]` |  |
-| pilot.podAnnotations | object | `{}` |  |
-| pilot.podLabels | object | `{}` | Additional labels to apply on the pod level for monitoring and logging configuration. |
-| pilot.replicaCount | int | `1` |  |
 | pilot.resources | object | `{"requests":{"cpu":"500m","memory":"2048Mi"}}` | Resources for a small pilot install |
-| pilot.rollingMaxSurge | string | `"100%"` |  |
-| pilot.rollingMaxUnavailable | string | `"25%"` |  |
-| pilot.serviceAnnotations | object | `{}` |  |
 | pilot.tag | string | `""` |  |
 | pilot.traceSampling | float | `1` |  |
 | pluginServer.hub | string | `""` |  |
 | pluginServer.image | string | `"plugin-server"` |  |
+| pluginServer.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | pluginServer.imagePullSecrets | list | `[]` |  |
 | pluginServer.labels | object | `{}` |  |
 | pluginServer.name | string | `"higress-plugin-server"` |  |

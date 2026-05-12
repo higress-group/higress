@@ -112,7 +112,7 @@ func (s *statusSyncer) updateStatus(status []coreV1.LoadBalancerIngress) error {
 		}
 		ingress.Status.MarkNetworkConfigured()
 		KIngressStatus := transportLoadBalancerIngress(status)
-		if ingress.Status.PublicLoadBalancer == nil || len(ingress.Status.PublicLoadBalancer.Ingress) != len(KIngressStatus) || reflect.DeepEqual(ingress.Status.PublicLoadBalancer.Ingress, KIngressStatus) {
+		if ingress.Status.PublicLoadBalancer == nil || len(ingress.Status.PublicLoadBalancer.Ingress) != len(KIngressStatus) || !reflect.DeepEqual(ingress.Status.PublicLoadBalancer.Ingress, KIngressStatus) {
 			ingress.Status.ObservedGeneration = ingress.Generation
 			ingress.Status.MarkLoadBalancerReady(KIngressStatus, KIngressStatus)
 			IngressLog.Infof("Update Ingress %v/%v within cluster %s status", ingress.Namespace, ingress.Name, s.controller.options.ClusterId)

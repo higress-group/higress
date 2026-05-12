@@ -17,7 +17,7 @@ package main
 import (
 	"amap-tools/tools"
 
-	"github.com/higress-group/wasm-go/pkg/mcp"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
 )
 
 func main() {}

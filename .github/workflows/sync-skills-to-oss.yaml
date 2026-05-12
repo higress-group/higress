@@ -1,0 +1,50 @@
+name: Sync Skills to OSS
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.claude/skills/**'
+  workflow_dispatch: ~
+
+jobs:
+  sync-skills-to-oss:
+    runs-on: ubuntu-latest
+    environment:
+      name: oss
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download AI Gateway Install Script
+        run: |
+          wget -O install.sh https://raw.githubusercontent.com/higress-group/higress-standalone/main/all-in-one/get-ai-gateway.sh
+          chmod +x install.sh
+
+      - name: Package Skills
+        run: |
+          mkdir -p packaged-skills
+          for skill_dir in .claude/skills/*/; do
+            if [ -d "$skill_dir" ]; then
+              skill_name=$(basename "$skill_dir")
+              echo "Packaging $skill_name..."
+              (cd "$skill_dir" && zip -r "$GITHUB_WORKSPACE/packaged-skills/${skill_name}.zip" .)
+            fi
+          done
+
+      - name: Sync Skills to OSS
+        uses: go-choppy/ossutil-github-action@master
+        with:
+          ossArgs: 'cp -r -u packaged-skills/ oss://higress-ai/skills/'
+          accessKey: ${{ secrets.ACCESS_KEYID }}
+          accessSecret: ${{ secrets.ACCESS_KEYSECRET }}
+          endpoint: oss-cn-hongkong.aliyuncs.com
+
+      - name: Sync Install Script to OSS
+        uses: go-choppy/ossutil-github-action@master
+        with:
+          ossArgs: 'cp -u install.sh oss://higress-ai/ai-gateway/install.sh'
+          accessKey: ${{ secrets.ACCESS_KEYID }}
+          accessSecret: ${{ secrets.ACCESS_KEYSECRET }}
+          endpoint: oss-cn-hongkong.aliyuncs.com
