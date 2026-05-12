@@ -4,9 +4,9 @@ ARG BASE_DISTRIBUTION=debug
 # Version is the base image version from the TLD Makefile
 ARG BASE_VERSION=latest
 
-ARG HUB
+ARG HUB=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress
 
-ARG TARGETARCH
+ARG TARGETARCH=amd64
 
 # The following section is used as base image if BASE_DISTRIBUTION=debug
 # This base image is provided by istio, see: https://github.com/istio/istio/blob/master/docker/Dockerfile.base

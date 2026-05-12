@@ -3,7 +3,8 @@
 # Declare variables to be passed into your templates.
 global:
   # -- Specify the image registry and pull policy
-  hub: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress
+  # Will inherit from parent chart's global.hub if not set
+  hub: ""
   # -- Specify image pull policy if default behavior isn't desired.
   # Default behavior: latest images will be Always else IfNotPresent.
   imagePullPolicy: ""

@@ -243,14 +243,13 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 			}
 			return
 		}
-		denyMessage := cfg.DefaultDenyMessage
-		if config.DenyMessage != "" {
-			denyMessage = config.DenyMessage
-		} else if response.Data.Advice != nil && response.Data.Advice[0].Answer != "" {
-			denyMessage = response.Data.Advice[0].Answer
+		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
+		if err != nil {
+			log.Errorf("failed to build deny response body: %v", err)
+			proxywasm.ResumeHttpRequest()
+			return
 		}
-		marshalledDenyMessage := wrapper.MarshalStr(denyMessage)
-		proxywasm.SendHttpResponse(403, [][2]string{{"content-type", "application/json"}}, []byte(marshalledDenyMessage), -1)
+		proxywasm.SendHttpResponse(403, [][2]string{{"content-type", "application/json"}}, denyBody, -1)
 		ctx.DontReadResponseBody()
 		config.IncrementCounter("ai_sec_request_deny", 1)
 		endTime := time.Now().UnixMilli()
@@ -315,14 +314,13 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 			return
 		}
 
-		denyMessage := cfg.DefaultDenyMessage
-		if config.DenyMessage != "" {
-			denyMessage = config.DenyMessage
-		} else if response.Data.Advice != nil && response.Data.Advice[0].Answer != "" {
-			denyMessage = response.Data.Advice[0].Answer
+		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
+		if err != nil {
+			log.Errorf("failed to build deny response body: %v", err)
+			proxywasm.ResumeHttpRequest()
+			return
 		}
-		marshalledDenyMessage := wrapper.MarshalStr(denyMessage)
-		proxywasm.SendHttpResponse(403, [][2]string{{"content-type", "application/json"}}, []byte(marshalledDenyMessage), -1)
+		proxywasm.SendHttpResponse(403, [][2]string{{"content-type", "application/json"}}, denyBody, -1)
 		ctx.DontReadResponseBody()
 		config.IncrementCounter("ai_sec_request_deny", 1)
 		ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
@@ -402,14 +400,13 @@ func HandleQwenImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.A
 			}
 			return
 		}
-		denyMessage := cfg.DefaultDenyMessage
-		if config.DenyMessage != "" {
-			denyMessage = config.DenyMessage
-		} else if response.Data.Advice != nil && response.Data.Advice[0].Answer != "" {
-			denyMessage = response.Data.Advice[0].Answer
+		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
+		if err != nil {
+			log.Errorf("failed to build deny response body: %v", err)
+			proxywasm.ResumeHttpResponse()
+			return
 		}
-		marshalledDenyMessage := wrapper.MarshalStr(denyMessage)
-		proxywasm.SendHttpResponse(403, [][2]string{{"content-type", "application/json"}}, []byte(marshalledDenyMessage), -1)
+		proxywasm.SendHttpResponse(403, [][2]string{{"content-type", "application/json"}}, denyBody, -1)
 		config.IncrementCounter("ai_sec_request_deny", 1)
 		ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 		ctx.SetUserAttribute("safecheck_status", "reqeust deny")

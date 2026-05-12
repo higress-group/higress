@@ -115,6 +115,66 @@ func TestTemplateProcessor_ProcessConfig(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name: "config with default and non-default namespaces (default first)",
+			wasmPlugin: &extensions.WasmPlugin{
+				PluginName: "test-plugin",
+				PluginConfig: makeStructValue(t, map[string]interface{}{
+					"a1": map[string]interface{}{
+						"type":        "${secret.auth-secret.auth_config.type}",
+						"credentials": "${secret.auth-secret.auth_config.credentials}",
+					},
+					"a2": map[string]interface{}{
+						"timeout":     "${secret.default/test-secret.plugin_conf.timeout}",
+						"max_retries": "${secret.default/test-secret.plugin_conf.max_retries}",
+					},
+				}),
+			},
+			expected: &extensions.WasmPlugin{
+				PluginName: "test-plugin",
+				PluginConfig: makeStructValue(t, map[string]interface{}{
+					"a1": map[string]interface{}{
+						"type":        "basic",
+						"credentials": "base64-encoded",
+					},
+					"a2": map[string]interface{}{
+						"timeout":     "5000",
+						"max_retries": "3",
+					},
+				}),
+			},
+			expectError: false,
+		},
+		{
+			name: "config with default and non-default namespaces (non-default first)",
+			wasmPlugin: &extensions.WasmPlugin{
+				PluginName: "test-plugin",
+				PluginConfig: makeStructValue(t, map[string]interface{}{
+					"a1": map[string]interface{}{
+						"timeout":     "${secret.default/test-secret.plugin_conf.timeout}",
+						"max_retries": "${secret.default/test-secret.plugin_conf.max_retries}",
+					},
+					"a2": map[string]interface{}{
+						"type":        "${secret.auth-secret.auth_config.type}",
+						"credentials": "${secret.auth-secret.auth_config.credentials}",
+					},
+				}),
+			},
+			expected: &extensions.WasmPlugin{
+				PluginName: "test-plugin",
+				PluginConfig: makeStructValue(t, map[string]interface{}{
+					"a1": map[string]interface{}{
+						"timeout":     "5000",
+						"max_retries": "3",
+					},
+					"a2": map[string]interface{}{
+						"type":        "basic",
+						"credentials": "base64-encoded",
+					},
+				}),
+			},
+			expectError: false,
+		},
+		{
 			name: "non-existent secret",
 			wasmPlugin: &extensions.WasmPlugin{
 				PluginName: "test-plugin",

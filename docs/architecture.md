@@ -14,7 +14,7 @@ Higress Console 是 Higress 网关的管理控制台，主要功能是管理 Hig
 ### 1.1 Higress Admin SDK
 
 Higress Admin SDK 脱胎于 Higress Console。起初，它作为 Higress Console 的一部分，为前端界面提供实际的功能支持。后来考虑到对接外部系统等需求，将配置管理的部分剥离出来，形成一个独立的逻辑组件，便于和各个系统进行对接。目前支持服务来源管理、服务管理、路由管理、域名管理、证书管理、插件管理等功能。
-Higress Admin SDK 现在只提供 Java 版本，且要求 JDK 版本不低于 17。具体如何集成请参考 Higress 官方 BLOG [如何使用 Higress Admin SDK 进行配置管理](https://higress.io/zh-cn/blog/admin-sdk-intro)。
+Higress Admin SDK 现在只提供 Java 版本，且要求 JDK 版本不低于 17。具体如何集成请参考 Higress 官方 BLOG [如何使用 Higress Admin SDK 进行配置管理](https://higress.ai/blog/admin-sdk-intro)。
 
 ## 2 Higress Controller
 

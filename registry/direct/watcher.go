@@ -22,7 +22,7 @@ import (
 	"sync"
 
 	"istio.io/api/networking/v1alpha3"
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 
 	apiv1 "github.com/alibaba/higress/v2/api/networking/v1"
 	"github.com/alibaba/higress/v2/pkg/common"
@@ -145,22 +145,43 @@ func (w *watcher) generateServiceEntry(host string) *v1alpha3.ServiceEntry {
 	for _, ep := range strings.Split(w.Domain, common.CommaSeparator) {
 		var endpoint *v1alpha3.WorkloadEntry
 		if w.Type == string(registry.Static) {
-			pair := strings.Split(ep, common.ColonSeparator)
-			if len(pair) != 2 {
-				log.Errorf("invalid endpoint:%s with static type", ep)
-				return nil
+			var ip string
+			var portStr string
+			// Support IPv6 format: [2001:db8::1]:8080
+			if strings.HasPrefix(ep, "[") {
+				// IPv6 format: [IPv6]:port
+				lastBracket := strings.LastIndex(ep, "]")
+				if lastBracket == -1 {
+					log.Errorf("invalid IPv6 endpoint format:%s with static type", ep)
+					return nil
+				}
+				ip = ep[1:lastBracket] // Extract IPv6 address without brackets
+				if lastBracket+1 >= len(ep) || ep[lastBracket+1] != ':' {
+					log.Errorf("invalid IPv6 endpoint format:%s with static type, missing colon after bracket", ep)
+					return nil
+				}
+				portStr = ep[lastBracket+2:] // Extract port after "]:"
+			} else {
+				// IPv4 format: 192.168.1.1:8080
+				pair := strings.Split(ep, common.ColonSeparator)
+				if len(pair) != 2 {
+					log.Errorf("invalid endpoint:%s with static type", ep)
+					return nil
+				}
+				ip = pair[0]
+				portStr = pair[1]
 			}
-			port, err := strconv.ParseUint(pair[1], 10, 32)
+			port, err := strconv.ParseUint(portStr, 10, 32)
 			if err != nil {
-				log.Errorf("invalid port:%s of endpoint:%s", pair[1], ep)
+				log.Errorf("invalid port:%s of endpoint:%s", portStr, ep)
 				return nil
 			}
-			if net.ParseIP(pair[0]) == nil {
-				log.Errorf("invalid ip:%s of endpoint:%s", pair[0], ep)
+			if net.ParseIP(ip) == nil {
+				log.Errorf("invalid ip:%s of endpoint:%s", ip, ep)
 				return nil
 			}
 			endpoint = &v1alpha3.WorkloadEntry{
-				Address: pair[0],
+				Address: ip,
 				Ports:   map[string]uint32{protocol: uint32(port)},
 			}
 		} else if w.Type == string(registry.DNS) {

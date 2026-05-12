@@ -27,9 +27,12 @@ const (
 	qwenChatCompletionPath                = "/api/v1/services/aigc/text-generation/generation"
 	qwenTextEmbeddingPath                 = "/api/v1/services/embeddings/text-embedding/text-embedding"
 	qwenTextRerankPath                    = "/api/v1/services/rerank/text-rerank/text-rerank"
+	qwenCompatibleTextRerankPath          = "/compatible-api/v1/reranks"
 	qwenCompatibleChatCompletionPath      = "/compatible-mode/v1/chat/completions"
 	qwenCompatibleCompletionsPath         = "/compatible-mode/v1/completions"
 	qwenCompatibleTextEmbeddingPath       = "/compatible-mode/v1/embeddings"
+	qwenCompatibleConversationsPath       = "/compatible-mode/v1/conversations"
+	qwenCompatibleResponsesPath           = "/compatible-mode/v1/responses"
 	qwenCompatibleFilesPath               = "/compatible-mode/v1/files"
 	qwenCompatibleRetrieveFilePath        = "/compatible-mode/v1/files/{file_id}"
 	qwenCompatibleRetrieveFileContentPath = "/compatible-mode/v1/files/{file_id}/content"
@@ -37,7 +40,7 @@ const (
 	qwenCompatibleRetrieveBatchPath       = "/compatible-mode/v1/batches/{batch_id}"
 	qwenBailianPath                       = "/api/v1/apps"
 	qwenMultimodalGenerationPath          = "/api/v1/services/aigc/multimodal-generation/generation"
-	qwenAnthropicMessagesPath             = "/api/v2/apps/claude-code-proxy/v1/messages"
+	qwenAnthropicMessagesPath             = "/apps/anthropic/v1/messages"
 
 	qwenAsyncAIGCPath = "/api/v1/services/aigc/"
 	qwenAsyncTaskPath = "/api/v1/tasks/"
@@ -69,6 +72,7 @@ func (m *qwenProviderInitializer) DefaultCapabilities(qwenEnableCompatible bool)
 			string(ApiNameChatCompletion):      qwenCompatibleChatCompletionPath,
 			string(ApiNameEmbeddings):          qwenCompatibleTextEmbeddingPath,
 			string(ApiNameCompletion):          qwenCompatibleCompletionsPath,
+			string(ApiNameResponses):           qwenCompatibleResponsesPath,
 			string(ApiNameFiles):               qwenCompatibleFilesPath,
 			string(ApiNameRetrieveFile):        qwenCompatibleRetrieveFilePath,
 			string(ApiNameRetrieveFileContent): qwenCompatibleRetrieveFileContentPath,
@@ -76,7 +80,8 @@ func (m *qwenProviderInitializer) DefaultCapabilities(qwenEnableCompatible bool)
 			string(ApiNameRetrieveBatch):       qwenCompatibleRetrieveBatchPath,
 			string(ApiNameQwenAsyncAIGC):       qwenAsyncAIGCPath,
 			string(ApiNameQwenAsyncTask):       qwenAsyncTaskPath,
-			string(ApiNameQwenV1Rerank):        qwenTextRerankPath,
+			string(ApiNameQwenV1Rerank):        qwenCompatibleTextRerankPath,
+			string(ApiNameQwenV1Conversations): qwenCompatibleConversationsPath,
 			string(ApiNameAnthropicMessages):   qwenAnthropicMessagesPath,
 		}
 	} else {
@@ -334,6 +339,11 @@ func (m *qwenProvider) buildChatCompletionResponse(ctx wrapper.HttpContext, qwen
 }
 
 func (m *qwenProvider) buildChatCompletionStreamingResponse(ctx wrapper.HttpContext, qwenResponse *qwenTextGenResponse, incrementalStreaming bool) []*chatCompletionResponse {
+	if len(qwenResponse.Output.Choices) == 0 {
+		log.Warnf("qwen response has no choices, request_id: %s", qwenResponse.RequestId)
+		return nil
+	}
+
 	baseMessage := chatCompletionResponse{
 		Id:                qwenResponse.RequestId,
 		Created:           time.Now().UnixMilli() / 1000,
@@ -702,12 +712,17 @@ func (m *qwenProvider) GetApiName(path string) ApiName {
 	case strings.Contains(path, qwenTextEmbeddingPath),
 		strings.Contains(path, qwenCompatibleTextEmbeddingPath):
 		return ApiNameEmbeddings
+	case strings.Contains(path, qwenCompatibleResponsesPath):
+		return ApiNameResponses
 	case strings.Contains(path, qwenAsyncAIGCPath):
 		return ApiNameQwenAsyncAIGC
 	case strings.Contains(path, qwenAsyncTaskPath):
 		return ApiNameQwenAsyncTask
-	case strings.Contains(path, qwenTextRerankPath):
+	case strings.Contains(path, qwenTextRerankPath),
+		strings.Contains(path, qwenCompatibleTextRerankPath):
 		return ApiNameQwenV1Rerank
+	case strings.Contains(path, qwenCompatibleConversationsPath):
+		return ApiNameQwenV1Conversations
 	default:
 		return ""
 	}

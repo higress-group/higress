@@ -15,8 +15,8 @@
 package tools
 
 import (
-	"github.com/higress-group/wasm-go/pkg/mcp"
-	"github.com/higress-group/wasm-go/pkg/mcp/server"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/server"
 )
 
 func LoadTools(server *mcp.MCPServer) server.Server {

@@ -268,7 +268,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "1. Default header with expried ES256",
+					TestCaseName:    "1. Default header with expired ES256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -289,7 +289,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "2. Default header with expried RS256",
+					TestCaseName:    "2. Default header with expired RS256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -310,7 +310,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "3. Default params with expried ES256",
+					TestCaseName:    "3. Default params with expired ES256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -330,7 +330,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "4. Default params with expried RS256",
+					TestCaseName:    "4. Default params with expired RS256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -350,7 +350,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "5. Custom header with expried ES256",
+					TestCaseName:    "5. Custom header with expired ES256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -371,7 +371,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "6. Custom header with expried RS256",
+					TestCaseName:    "6. Custom header with expired RS256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -392,7 +392,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "7. Custom params with expried ES256",
+					TestCaseName:    "7. Custom params with expired ES256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -412,7 +412,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "8. Custom params with expried RS256",
+					TestCaseName:    "8. Custom params with expired RS256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -432,7 +432,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "9. Custom cookies with expried ES256",
+					TestCaseName:    "9. Custom cookies with expired ES256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -453,7 +453,7 @@ var WasmPluginsJWTAuthExpried = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "10. Custom cookies with expried RS256",
+					TestCaseName:    "10. Custom cookies with expired RS256",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -774,7 +774,7 @@ var WasmPluginsJWTAuthSingleConsumer = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "2. Default hedaer with expried ES256 by single consumer_EC",
+					TestCaseName:    "2. Default hedaer with expired ES256 by single consumer_EC",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
@@ -877,7 +877,7 @@ var WasmPluginsJWTAuthSingleConsumer = suite.ConformanceTest{
 				Meta: http.AssertionMeta{
 					TargetBackend:   "infra-backend-v1",
 					TargetNamespace: "higress-conformance-infra",
-					TestCaseName:    "7. Default params with expried ES256 by single consumer_EC",
+					TestCaseName:    "7. Default params with expired ES256 by single consumer_EC",
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{

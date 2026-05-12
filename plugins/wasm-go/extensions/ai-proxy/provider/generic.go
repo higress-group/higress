@@ -52,6 +52,8 @@ func (m *genericProvider) OnRequestHeaders(ctx wrapper.HttpContext, apiName ApiN
 }
 
 func (m *genericProvider) OnRequestBody(ctx wrapper.HttpContext, apiName ApiName, body []byte) (types.Action, error) {
+	// buffer original request body
+	_ = proxywasm.ReplaceHttpRequestBody(body)
 	return types.ActionContinue, nil
 }
 

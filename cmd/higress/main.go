@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 
 	"github.com/alibaba/higress/v2/pkg/cmd"
 )

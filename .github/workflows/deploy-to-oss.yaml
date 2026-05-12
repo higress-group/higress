@@ -19,7 +19,7 @@ jobs:
       - name: Download Helm Charts Index
         uses: go-choppy/ossutil-github-action@master
         with:
-          ossArgs: 'cp oss://higress-website-cn-hongkong/helm-charts/index.yaml ./artifact/'
+          ossArgs: 'cp oss://higress-ai/helm-charts/index.yaml ./artifact/'
           accessKey: ${{ secrets.ACCESS_KEYID }}
           accessSecret: ${{ secrets.ACCESS_KEYSECRET }}
           endpoint: oss-cn-hongkong.aliyuncs.com
@@ -48,7 +48,8 @@ jobs:
       - name: Upload to OSS
         uses: go-choppy/ossutil-github-action@master
         with:
-          ossArgs: 'cp -r -u ./artifact/ oss://higress-website-cn-hongkong/helm-charts/'
+          ossArgs: 'cp -r -u ./artifact/ oss://higress-ai/helm-charts/'
           accessKey: ${{ secrets.ACCESS_KEYID }}
           accessSecret: ${{ secrets.ACCESS_KEYSECRET }}
           endpoint: oss-cn-hongkong.aliyuncs.com
+

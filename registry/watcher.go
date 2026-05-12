@@ -21,7 +21,7 @@ import (
 
 	apiv1 "github.com/alibaba/higress/v2/api/networking/v1"
 	"istio.io/api/networking/v1alpha3"
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 )
 
 const (

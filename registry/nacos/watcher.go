@@ -15,6 +15,7 @@
 package nacos
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +27,7 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/model"
 	"github.com/nacos-group/nacos-sdk-go/vo"
 	"istio.io/api/networking/v1alpha3"
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 
 	apiv1 "github.com/alibaba/higress/v2/api/networking/v1"
 	"github.com/alibaba/higress/v2/pkg/common"
@@ -352,10 +353,19 @@ func (w *watcher) generateServiceEntry(host string, services []model.SubscribeSe
 				portList = append(portList, port)
 			}
 		}
+		// Calculate weight from Nacos instance
+		// Nacos weight is float64, need to convert to uint32 for Istio
+		// Use math.Round to preserve fractional weights (e.g., 0.5, 1.5)
+		// If weight is 0 or negative, use default weight 1
+		weight := uint32(1)
+		if service.Weight > 0 {
+			weight = uint32(math.Round(service.Weight))
+		}
 		endpoint := v1alpha3.WorkloadEntry{
 			Address: service.Ip,
 			Ports:   map[string]uint32{port.Protocol: port.Number},
 			Labels:  service.Metadata,
+			Weight:  weight,
 		}
 		endpoints = append(endpoints, &endpoint)
 	}
