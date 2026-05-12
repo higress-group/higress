@@ -5,6 +5,7 @@ import (
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/provider"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/test"
+	"github.com/tidwall/gjson"
 )
 
 func Test_getApiName(t *testing.T) {
@@ -115,6 +116,58 @@ func Test_isSupportedRequestContentType(t *testing.T) {
 			got := isSupportedRequestContentType(tt.apiName, tt.contentType)
 			if got != tt.want {
 				t.Errorf("isSupportedRequestContentType(%v, %q) = %v, want %v", tt.apiName, tt.contentType, got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_normalizeOpenAiRequestBody(t *testing.T) {
+	tests := []struct {
+		name                    string
+		body                    string
+		disableStreamUsageStats bool
+		wantIncludeUsage        bool
+		wantExists              bool
+	}{
+		{
+			name:                    "stream enabled, stats enabled",
+			body:                    `{"stream":true,"messages":[]}`,
+			disableStreamUsageStats: false,
+			wantExists:              true,
+			wantIncludeUsage:        true,
+		},
+		{
+			name:                    "stream enabled, stats disabled",
+			body:                    `{"stream":true,"messages":[]}`,
+			disableStreamUsageStats: true,
+			wantExists:              false,
+			wantIncludeUsage:        false,
+		},
+		{
+			name:                    "stream disabled, stats enabled",
+			body:                    `{"stream":false,"messages":[]}`,
+			disableStreamUsageStats: false,
+			wantExists:              false,
+			wantIncludeUsage:        false,
+		},
+		{
+			name:                    "stream_options already set, stats enabled",
+			body:                    `{"stream":true,"stream_options":{"include_usage":false}}`,
+			disableStreamUsageStats: false,
+			wantExists:              true,
+			wantIncludeUsage:        false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeOpenAiRequestBody([]byte(tt.body), tt.disableStreamUsageStats)
+			parsed := gjson.ParseBytes(got)
+			exists := parsed.Get("stream_options.include_usage").Exists()
+			if exists != tt.wantExists {
+				t.Errorf("stream_options.include_usage exists=%v, want %v", exists, tt.wantExists)
+			}
+			if exists && parsed.Get("stream_options.include_usage").Bool() != tt.wantIncludeUsage {
+				t.Errorf("stream_options.include_usage=%v, want %v", parsed.Get("stream_options.include_usage").Bool(), tt.wantIncludeUsage)
 			}
 		})
 	}

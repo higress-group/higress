@@ -495,6 +495,9 @@ type ProviderConfig struct {
 	// @Title zh-CN Provider 基础路径
 	// @Description zh-CN 当配置了此值时，各个 Provider 在改写请求路径时会将其添加到路径前面，例如配置"/api/ai"后，请求路径"/v1/chat/completions"会被改写为"/api/ai/v1/chat/completions"
 	providerBasePath string `required:"false" yaml:"providerBasePath" json:"providerBasePath"`
+	// @Title zh-CN 禁用Stream Usage统计
+	// @Description zh-CN 开启后，stream请求不会自动添加stream_options.include_usage参数，用于兼容不支持该参数的旧版推理引擎。
+	disableStreamUsageStats bool `required:"false" yaml:"disableStreamUsageStats" json:"disableStreamUsageStats"`
 }
 
 func (c *ProviderConfig) GetId() string {
@@ -523,6 +526,10 @@ func (c *ProviderConfig) GetContextCleanupCommands() []string {
 
 func (c *ProviderConfig) IsOpenAIProtocol() bool {
 	return c.protocol == protocolOpenAI
+}
+
+func (c *ProviderConfig) IsStreamUsageStatsDisabled() bool {
+	return c.disableStreamUsageStats
 }
 
 func (c *ProviderConfig) FromJson(json gjson.Result) {
@@ -728,6 +735,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 		c.promoteThinkingOnEmpty = true
 	}
 	c.providerBasePath = json.Get("providerBasePath").String()
+	c.disableStreamUsageStats = json.Get("disableStreamUsageStats").Bool()
 }
 
 func (c *ProviderConfig) Validate() error {

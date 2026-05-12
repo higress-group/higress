@@ -305,7 +305,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig
 		// 仅 /v1/chat/completions 和 /v1/completions 接口支持 stream_options 参数
 		// generic provider 不做能力映射，不添加 stream_options
 		if providerConfig.IsOpenAIProtocol() && !providerConfig.IsGeneric() && (apiName == provider.ApiNameChatCompletion || apiName == provider.ApiNameCompletion) {
-			newBody = normalizeOpenAiRequestBody(newBody)
+			newBody = normalizeOpenAiRequestBody(newBody, providerConfig.IsStreamUsageStatsDisabled())
 		}
 		log.Debugf("[onHttpRequestBody] newBody=%s", newBody)
 		body = newBody
@@ -629,7 +629,10 @@ func convertResponseBodyToClaude(ctx wrapper.HttpContext, body []byte) ([]byte, 
 	return convertedBody, nil
 }
 
-func normalizeOpenAiRequestBody(body []byte) []byte {
+func normalizeOpenAiRequestBody(body []byte, disableStreamUsageStats bool) []byte {
+	if disableStreamUsageStats {
+		return body
+	}
 	var err error
 	// Default setting include_usage.
 	if gjson.GetBytes(body, "stream").Bool() && (!gjson.GetBytes(body, "stream_options").Exists() || !gjson.GetBytes(body, "stream_options.include_usage").Exists()) {
