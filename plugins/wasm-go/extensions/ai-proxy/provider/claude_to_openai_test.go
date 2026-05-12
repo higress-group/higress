@@ -1141,6 +1141,25 @@ func TestNormalizeFinishReason(t *testing.T) {
 	}
 }
 
+func TestClaudeToOpenAIConverter_streaming_tool_call_smoke(t *testing.T) {
+	converter := &ClaudeToOpenAIConverter{}
+
+	start := `data: {"id":"tc1","choices":[{"index":0,"delta":{"role":"assistant","content":""}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+	_, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(start))
+	require.NoError(t, err)
+
+	toolChunk := `data: {"id":"tc1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"my_fn","arguments":""}}]}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+	out, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(toolChunk))
+	require.NoError(t, err)
+	require.Contains(t, string(out), "content_block_start")
+	require.Contains(t, string(out), "tool_use")
+
+	argChunk := `data: {"id":"tc1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"x\":1}"}}]}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+	out2, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(argChunk))
+	require.NoError(t, err)
+	require.Contains(t, string(out2), "input_json_delta")
+}
+
 func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_Compatibility(t *testing.T) {
 	t.Run("finish_reason empty string should not stop stream", func(t *testing.T) {
 		converter := &ClaudeToOpenAIConverter{}
