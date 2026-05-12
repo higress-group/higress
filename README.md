@@ -7,7 +7,7 @@
 <h4 align="center"> AI Native API Gateway </h4>
 
 <div align="center">
-    
+
 [![Build Status](https://github.com/alibaba/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/alibaba/higress/actions)
 [![license](https://img.shields.io/github/license/alibaba/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
 [![discord](https://img.shields.io/discord/1364956090566971515?color=5865F2&label=discord&labelColor=black&logo=discord&logoColor=white&style=flat-square)](https://discord.gg/tSbww9VDaM)
@@ -34,7 +34,7 @@ Higress is a cloud-native API gateway based on Istio and Envoy, which can be ext
 
 ### Core Use Cases
 
-Higress's AI gateway capabilities support all [mainstream model providers](https://github.com/alibaba/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider) both domestic and international. It also supports hosting MCP (Model Context Protocol) Servers through its plugin mechanism, enabling AI Agents to easily call various tools and services. With the [openapi-to-mcp tool](https://github.com/higress-group/openapi-to-mcpserver), you can quickly convert OpenAPI specifications into remote MCP servers for hosting. Higress provides unified management for both LLM API and MCP API. 
+Higress's AI gateway capabilities support all [mainstream model providers](https://github.com/alibaba/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider) both domestic and international. It also supports hosting MCP (Model Context Protocol) Servers through its plugin mechanism, enabling AI Agents to easily call various tools and services. With the [openapi-to-mcp tool](https://github.com/higress-group/openapi-to-mcpserver), you can quickly convert OpenAPI specifications into remote MCP servers for hosting. Higress provides unified management for both LLM API and MCP API.
 
 **🌟 Try it now at [https://mcp.higress.ai/](https://mcp.higress.ai/)** to experience Higress-hosted Remote MCP Servers firsthand:
 
@@ -51,7 +51,7 @@ You can click the button below to install the enterprise version of Higress:
 
 ## Summary
 
-- [**Quick Start**](#quick-start)    
+- [**Quick Start**](#quick-start)
 - [**Feature Showcase**](#feature-showcase)
 - [**Use Cases**](#use-cases)
 - [**Core Advantages**](#core-advantages)
@@ -78,20 +78,20 @@ Port descriptions:
 
 > All Higress Docker images use Higress's own image repository and are not affected by Docker Hub rate limits.
 > In addition, the submission and updates of the images are protected by a security scanning mechanism (powered by Alibaba Cloud ACR), making them very secure for use in production environments.
-> 
+>
 > If you experience a timeout when pulling image from `higress-registry.cn-hangzhou.cr.aliyuncs.com`, you can try replacing it with the following docker registry mirror source:
-> 
+>
 > **North America**: `higress-registry.us-west-1.cr.aliyuncs.com`
-> 
+>
 > **Southeast Asia**: `higress-registry.ap-southeast-7.cr.aliyuncs.com`
 
 > **For Kubernetes deployments**, you can configure the `global.hub` parameter in Helm values to use a mirror registry closer to your region. This applies to both Higress component images and built-in Wasm plugin images:
-> 
+>
 > ```bash
 > # Example: Using North America mirror
 > helm install higress -n higress-system higress.io/higress --set global.hub=higress-registry.us-west-1.cr.aliyuncs.com --create-namespace
 > ```
-> 
+>
 > Available mirror registries:
 > - **China (Hangzhou)**: `higress-registry.cn-hangzhou.cr.aliyuncs.com` (default)
 > - **North America**: `higress-registry.us-west-1.cr.aliyuncs.com`
@@ -129,7 +129,7 @@ If you are deploying on the cloud, it is recommended to use the [Enterprise Edit
 - **Kubernetes ingress controller**:
 
   Higress can function as a feature-rich ingress controller, which is compatible with many annotations of K8s' nginx ingress controller.
-  
+
   [Gateway API](https://gateway-api.sigs.k8s.io/) is already supported, and it supports a smooth migration from Ingress API to Gateway API.
 
   Compared to ingress-nginx, the resource overhead has significantly decreased, and the speed at which route changes take effect has improved by ten times.
@@ -140,13 +140,13 @@ If you are deploying on the cloud, it is recommended to use the [Enterprise Edit
 
    ![](https://img.alicdn.com/imgextra/i1/O1CN01bhEtb229eeMNBWmdP_!!6000000008093-2-tps-750-547.png)
 
-  
+
 - **Microservice gateway**:
 
   Higress can function as a microservice gateway, which can discovery microservices from various service registries, such as Nacos, ZooKeeper, Consul, Eureka, etc.
-  
+
   It deeply integrates with [Dubbo](https://github.com/apache/dubbo), [Nacos](https://github.com/alibaba/nacos), [Sentinel](https://github.com/alibaba/Sentinel) and other microservice technology stacks.
-  
+
 - **Security gateway**:
 
   Higress can be used as a security gateway, supporting WAF and various authentication strategies, such as key-auth, hmac-auth, jwt-auth, basic-auth, oidc, etc.
@@ -165,15 +165,15 @@ If you are deploying on the cloud, it is recommended to use the [Enterprise Edit
   Supports true complete streaming processing of request/response bodies, Wasm plugins can easily customize the handling of streaming protocols such as SSE (Server-Sent Events).
 
   In high-bandwidth scenarios such as AI businesses, it can significantly reduce memory overhead.
-    
+
 - **Easy to Extend**
-  
+
   Provides a rich official plugin library covering AI, traffic management, security protection and other common functions, meeting more than 90% of business scenario requirements.
 
   Focuses on Wasm plugin extensions, ensuring memory safety through sandbox isolation, supporting multiple programming languages, allowing plugin versions to be upgraded independently, and achieving traffic-lossless hot updates of gateway logic.
 
 - **Secure and Easy to Use**
-  
+
   Based on Ingress API and Gateway API standards, provides out-of-the-box UI console, WAF protection plugin, IP/Cookie CC protection plugin ready to use.
 
   Supports connecting to Let's Encrypt for automatic issuance and renewal of free certificates, and can be deployed outside of K8s, started with a single Docker command, convenient for individual developers to use.
