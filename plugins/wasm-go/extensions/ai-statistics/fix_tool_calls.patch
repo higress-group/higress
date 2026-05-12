@@ -1,0 +1,15 @@
+--- a/main.go
++++ b/main.go
+@@ -790,6 +790,14 @@
+ 			buffer = extractStreamingToolCalls(body, buffer)
+ 			ctx.SetContext(CtxStreamingToolCallsBuffer, buffer)
+ 			
++			// Also set tool_calls to user attributes so they appear in ai_log
++			toolCalls := getToolCallsFromBuffer(buffer)
++			if len(toolCalls) > 0 {
++				ctx.SetUserAttribute(BuiltinToolCallsKey, toolCalls)
++				return toolCalls
++			}
+ 		}
+ 	} else if source == ResponseBody {
+ 		if value := gjson.GetBytes(body, ToolCallsPathNonStreaming).Value(); value != nil {

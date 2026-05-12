@@ -619,3 +619,182 @@ func TestCreateRuleKey(t *testing.T) {
 func buildHigressAnnotationKey(key string) string {
 	return annotations.HigressAnnotationsPrefix + "/" + key
 }
+
+// TestKingressPathHeadersKey verifies that kingressPathHeadersKey produces
+// stable, unique keys for different header combinations.
+func TestKingressPathHeadersKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]ingress.HeaderMatch
+		want    string
+	}{
+		{
+			name:    "nil headers",
+			headers: nil,
+			want:    "",
+		},
+		{
+			name:    "empty headers",
+			headers: map[string]ingress.HeaderMatch{},
+			want:    "",
+		},
+		{
+			name: "single header",
+			headers: map[string]ingress.HeaderMatch{
+				"x-version": {Exact: "v1"},
+			},
+			want: "\x00x-version=v1",
+		},
+		{
+			name: "multiple headers are sorted deterministically",
+			headers: map[string]ingress.HeaderMatch{
+				"x-version": {Exact: "v2"},
+				"x-env":     {Exact: "prod"},
+			},
+			// sorted: x-env, x-version
+			want: "\x00x-env=prod\x00x-version=v2",
+		},
+		{
+			name: "same headers different values produce different keys",
+			headers: map[string]ingress.HeaderMatch{
+				"x-version": {Exact: "v2"},
+			},
+			want: "\x00x-version=v2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := kingressPathHeadersKey(tt.headers)
+			if got != tt.want {
+				t.Errorf("kingressPathHeadersKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// Verify that v1 and v2 keys are distinct.
+	keyV1 := kingressPathHeadersKey(map[string]ingress.HeaderMatch{"x-version": {Exact: "v1"}})
+	keyV2 := kingressPathHeadersKey(map[string]ingress.HeaderMatch{"x-version": {Exact: "v2"}})
+	if keyV1 == keyV2 {
+		t.Errorf("expected distinct keys for different header values, got %q == %q", keyV1, keyV2)
+	}
+}
+
+// TestConvertHTTPRoute_HeaderDistinctPaths verifies that two KIngress paths
+// sharing the same URL path but differing only in header-match rules are NOT
+// treated as duplicates and both produce VirtualService routes.
+//
+// KIngress example that triggers the bug (before fix):
+//
+//	apiVersion: networking.internal.knative.dev/v1alpha1
+//	kind: Ingress
+//	metadata:
+//	  name: hello-header-routing
+//	  namespace: default
+//	spec:
+//	  rules:
+//	    - hosts: ["hello.default.example.com"]
+//	      http:
+//	        paths:
+//	          - path: "/"
+//	            headers:
+//	              x-version:
+//	                exact: "v1"
+//	            splits:
+//	              - serviceName: hello-v1
+//	                servicePort: 80
+//	                percent: 100
+//	          - path: "/"
+//	            headers:
+//	              x-version:
+//	                exact: "v2"
+//	            splits:
+//	              - serviceName: hello-v2
+//	                servicePort: 80
+//	                percent: 100
+//
+// Before the fix, the second path (x-version: v2) was incorrectly marked as
+// DuplicatedRoute and dropped, leaving only the v1 route in the VirtualService.
+// After the fix, both routes are preserved.
+func TestConvertHTTPRoute_HeaderDistinctPaths(t *testing.T) {
+	fakeClient := kube.NewFakeClient()
+	options := common.Options{IngressClass: "mse", ClusterId: "", EnableStatus: true}
+	secretController := secret.NewController(fakeClient, options)
+	c := NewController(fakeClient, fakeClient, options, secretController)
+
+	convertOptions := &common.ConvertOptions{
+		IngressDomainCache: &common.IngressDomainCache{
+			Valid:   make(map[string]*common.IngressDomainBuilder),
+			Invalid: make([]model.IngressDomain, 0),
+		},
+		Route2Ingress:     map[string]*common.WrapperConfigWithRuleKey{},
+		VirtualServices:   make(map[string]*common.WrapperVirtualService),
+		Gateways:          make(map[string]*common.WrapperGateway),
+		IngressRouteCache: common.NewIngressRouteCache(),
+		HTTPRoutes:        make(map[string][]*common.WrapperHTTPRoute),
+	}
+
+	wrapperConfig := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Name:      "hello-header-routing",
+				Namespace: "default",
+			},
+			// Two paths share the same URL "/" but differ by x-version header.
+			// Before fix: second path was dropped as DuplicatedRoute.
+			// After fix:  both paths are kept.
+			Spec: ingress.IngressSpec{
+				Rules: []ingress.IngressRule{
+					{
+						Hosts: []string{"hello.default.example.com"},
+						HTTP: &ingress.HTTPIngressRuleValue{
+							Paths: []ingress.HTTPIngressPath{
+								{
+									Path: "/",
+									Headers: map[string]ingress.HeaderMatch{
+										"x-version": {Exact: "v1"},
+									},
+									Splits: []ingress.IngressBackendSplit{{
+										IngressBackend: ingress.IngressBackend{
+											ServiceNamespace: "default",
+											ServiceName:      "hello-v1",
+											ServicePort:      intstr.FromInt(80),
+										},
+										Percent: 100,
+									}},
+								},
+								{
+									Path: "/",
+									Headers: map[string]ingress.HeaderMatch{
+										"x-version": {Exact: "v2"},
+									},
+									Splits: []ingress.IngressBackendSplit{{
+										IngressBackend: ingress.IngressBackend{
+											ServiceNamespace: "default",
+											ServiceName:      "hello-v2",
+											ServicePort:      intstr.FromInt(80),
+										},
+										Percent: 100,
+									}},
+								},
+							},
+						},
+						Visibility: ingress.IngressVisibilityExternalIP,
+					},
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{},
+	}
+
+	err := c.ConvertHTTPRoute(convertOptions, wrapperConfig)
+	require.NoError(t, err)
+
+	routes, ok := convertOptions.HTTPRoutes["hello.default.example.com"]
+	require.True(t, ok, "expected HTTPRoutes entry for hello.default.example.com")
+
+	// Both header-differentiated paths must survive dedup and appear as
+	// separate WrapperHTTPRoute entries destined for distinct backends.
+	require.Equal(t, 2, len(routes),
+		"expected 2 routes (one per header value), got %d; "+
+			"the second path was likely dropped as a false duplicate", len(routes))
+}

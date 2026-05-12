@@ -23,8 +23,10 @@ spec:
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
-          image: {{ .Values.pluginServer.hub | default .Values.global.hub }}/{{ .Values.pluginServer.image | default "plugin-server" }}:{{ .Values.pluginServer.tag | default "1.0.0" }}
-          {{- if .Values.global.imagePullPolicy }}
+          image: {{ .Values.pluginServer.hub | default .Values.global.hub }}/higress/{{ .Values.pluginServer.image | default "plugin-server" }}:{{ .Values.pluginServer.tag | default "1.0.0" }}
+          {{- if .Values.pluginServer.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.pluginServer.imagePullPolicy }}
+          {{- else if .Values.global.imagePullPolicy }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           {{- end }}
           ports:

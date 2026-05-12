@@ -53,7 +53,7 @@ func (p *TemplateProcessor) ProcessConfig(cfg *config.Config) error {
 	configStr := string(jsonBytes)
 	// Find all value references in format:
 	// ${type.name.key} or ${type.namespace/name.key}
-	valueRegex := regexp.MustCompile(`\$\{([^.}]+)\.(?:([^/]+)/)?([^.}]+)\.([^}]+)\}`)
+	valueRegex := regexp.MustCompile(`\$\{([^.}/]+)\.(?:([^/}]+)/)?([^.}/]+)\.([^}]+)\}`)
 	matches := valueRegex.FindAllStringSubmatch(configStr, -1)
 	// If there are no value references, return immediately
 	if len(matches) == 0 {

@@ -140,10 +140,16 @@ func (s *SSEServer) HandleSSE(cb api.FilterCallbackHandler, stopChan chan struct
 
 	// Send the initial endpoint event
 	initialEvent := fmt.Sprintf("event: endpoint\ndata: %s\n\n", messageEndpoint)
-	err = s.redisClient.Publish(channel, initialEvent)
-	if err != nil {
-		api.LogErrorf("Failed to send initial event: %v", err)
-	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				api.LogErrorf("Failed to send initial event: %v", r)
+			}
+		}()
+		defer cb.EncoderFilterCallbacks().RecoverPanic()
+		api.LogDebugf("SSE Send message: %s", initialEvent)
+		cb.EncoderFilterCallbacks().InjectData([]byte(initialEvent))
+	}()
 
 	// Start health check handler
 	go func() {

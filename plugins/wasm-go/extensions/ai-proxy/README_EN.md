@@ -52,6 +52,7 @@ Plugin execution priority: `100`
 | `context`        | object                 | Optional    | -       | Configuration for AI conversation context information                                                                                                                                                                                                                                                                                                                                     |
 | `customSettings` | array of customSetting | Optional    | -       | Specifies overrides or fills parameters for AI requests                                                                                                                                                                                                                                                                                                                                   |
 | `subPath`        | string                 | Optional    | -       | If subPath is configured, the prefix will be removed from the request path before further processing.                                                                                                                                                                                                                                                                                     |
+| `contextCleanupCommands` | array of string | Optional    | -       | List of context cleanup commands. When a user message in the request exactly matches any of the configured commands, that message and all non-system messages before it will be removed, keeping only system messages and messages after the command. This enables users to actively clear conversation history.                                                                           |
 
 **Details for the `context` configuration fields:**
 
@@ -184,11 +185,22 @@ For MiniMax, the corresponding `type` is `minimax`. Its unique configuration fie
 
 #### Anthropic Claude
 
-For Anthropic Claude, the corresponding `type` is `claude`. Its unique configuration field is:
+For Anthropic Claude, the corresponding `type` is `claude`. Its unique configuration fields are:
 
 | Name        | Data Type   | Filling Requirements | Default Value | Description                                                                                                    |
 |------------|-------------|----------------------|---------------|---------------------------------------------------------------------------------------------------------------|
 | `claudeVersion` | string | Optional             | -             | The version of the Claude service's API, default is 2023-06-01.                                               |
+| `claudeCodeMode` | boolean | Optional             | false         | Enable Claude Code mode for OAuth token authentication. When enabled, requests will be formatted as Claude Code client requests. |
+
+**Claude Code Mode**
+
+When `claudeCodeMode: true` is enabled, the plugin will:
+- Use Bearer Token authentication instead of x-api-key (compatible with Claude Code OAuth tokens)
+- Set Claude Code-specific request headers (user-agent, x-app, anthropic-beta)
+- Add `?beta=true` query parameter to request URLs
+- Automatically inject Claude Code system prompt if not provided
+
+This enables direct use of Claude Code OAuth tokens for authentication in Higress.
 
 #### Ollama
 
@@ -1146,6 +1158,44 @@ Both protocol formats will return responses in their respective formats:
   }
 }
 ```
+
+### Using Claude Code Mode
+
+Claude Code is Anthropic's official CLI tool. By enabling `claudeCodeMode`, you can authenticate using Claude Code OAuth tokens:
+
+**Configuration Information**
+
+```yaml
+provider:
+  type: claude
+  apiTokens:
+    - "sk-ant-oat01-xxxxx"  # Claude Code OAuth Token
+  claudeCodeMode: true  # Enable Claude Code mode
+```
+
+Once this mode is enabled, the plugin will automatically:
+- Use Bearer Token authentication (instead of x-api-key)
+- Set Claude Code-specific request headers and query parameters
+- Inject Claude Code system prompt if not provided
+
+**Request Example**
+
+```json
+{
+  "model": "claude-sonnet-4-5-20250929",
+  "max_tokens": 8192,
+  "messages": [
+    {
+      "role": "user",
+      "content": "List files in current directory"
+    }
+  ]
+}
+```
+
+The plugin will automatically transform the request into Claude Code format, including:
+- Adding system prompt: `"You are Claude Code, Anthropic's official CLI for Claude."`
+- Setting appropriate authentication and request headers
 
 ### Using Intelligent Protocol Conversion
 
@@ -2146,6 +2196,93 @@ providers:
     "model": "gpt2",
 }
 ```
+
+### Using Context Cleanup Commands
+
+After configuring context cleanup commands, users can actively clear conversation history by sending specific messages, achieving a "start over" effect.
+
+**Configuration**
+
+```yaml
+provider:
+  type: qwen
+  apiTokens:
+    - "YOUR_QWEN_API_TOKEN"
+  modelMapping:
+    "*": "qwen-turbo"
+  contextCleanupCommands:
+    - "clear context"
+    - "/clear"
+    - "start over"
+    - "new conversation"
+```
+
+**Request Example**
+
+When a user sends a request containing a cleanup command:
+
+```json
+{
+  "model": "gpt-3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an assistant"
+    },
+    {
+      "role": "user",
+      "content": "Hello"
+    },
+    {
+      "role": "assistant",
+      "content": "Hello! How can I help you?"
+    },
+    {
+      "role": "user",
+      "content": "What's the weather like today"
+    },
+    {
+      "role": "assistant",
+      "content": "Sorry, I cannot get real-time weather information."
+    },
+    {
+      "role": "user",
+      "content": "clear context"
+    },
+    {
+      "role": "user",
+      "content": "Let's start a new topic, introduce yourself"
+    }
+  ]
+}
+```
+
+**Actual Request Sent to AI Service**
+
+The plugin automatically removes the cleanup command and all non-system messages before it:
+
+```json
+{
+  "model": "qwen-turbo",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an assistant"
+    },
+    {
+      "role": "user",
+      "content": "Let's start a new topic, introduce yourself"
+    }
+  ]
+}
+```
+
+**Notes**
+
+- The cleanup command must exactly match the configured string; partial matches will not trigger cleanup
+- When multiple cleanup commands exist in messages, only the last matching command is processed
+- Cleanup preserves all system messages and removes user, assistant, and tool messages before the command
+- All messages after the cleanup command are preserved
 
 ## Full Configuration Example
 

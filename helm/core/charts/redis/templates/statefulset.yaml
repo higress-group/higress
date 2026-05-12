@@ -23,7 +23,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
-          image: "{{ .Values.global.hub }}/{{ .Values.redis.image | default "redis-stack-server" }}:{{ .Values.redis.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.global.hub }}/higress/{{ .Values.redis.image | default "redis-stack-server" }}:{{ .Values.redis.tag | default .Chart.AppVersion }}"
           {{- if .Values.global.imagePullPolicy }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           {{- end }}

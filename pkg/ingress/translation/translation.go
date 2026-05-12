@@ -17,7 +17,6 @@ package translation
 import (
 	"sync"
 
-	"istio.io/istio/pilot/pkg/model"
 	istiomodel "istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/schema/collection"
@@ -40,8 +39,8 @@ type IngressTranslation struct {
 	ingressConfig      *ingressconfig.IngressConfig
 	kingressConfig     *ingressconfig.KIngressConfig
 	mutex              sync.RWMutex
-	higressRouteCache  model.IngressRouteCollection
-	higressDomainCache model.IngressDomainCollection
+	higressRouteCache  istiomodel.IngressRouteCollection
+	higressDomainCache istiomodel.IngressDomainCollection
 }
 
 func NewIngressTranslation(localKubeClient kube.Client, xdsUpdater istiomodel.XDSUpdater, namespace string, options common.Options) *IngressTranslation {
@@ -109,11 +108,11 @@ func (m *IngressTranslation) SetWatchErrorHandler(f func(r *cache.Reflector, err
 	return nil
 }
 
-func (m *IngressTranslation) GetIngressRoutes() model.IngressRouteCollection {
+func (m *IngressTranslation) GetIngressRoutes() istiomodel.IngressRouteCollection {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	ingressRouteCache := m.ingressConfig.GetIngressRoutes()
-	m.higressRouteCache = model.IngressRouteCollection{}
+	m.higressRouteCache = istiomodel.IngressRouteCollection{}
 	m.higressRouteCache.Invalid = append(m.higressRouteCache.Invalid, ingressRouteCache.Invalid...)
 	m.higressRouteCache.Valid = append(m.higressRouteCache.Valid, ingressRouteCache.Valid...)
 	if m.kingressConfig != nil {
@@ -125,12 +124,12 @@ func (m *IngressTranslation) GetIngressRoutes() model.IngressRouteCollection {
 	return m.higressRouteCache
 }
 
-func (m *IngressTranslation) GetIngressDomains() model.IngressDomainCollection {
+func (m *IngressTranslation) GetIngressDomains() istiomodel.IngressDomainCollection {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	ingressDomainCache := m.ingressConfig.GetIngressDomains()
 
-	m.higressDomainCache = model.IngressDomainCollection{}
+	m.higressDomainCache = istiomodel.IngressDomainCollection{}
 	m.higressDomainCache.Invalid = append(m.higressDomainCache.Invalid, ingressDomainCache.Invalid...)
 	m.higressDomainCache.Valid = append(m.higressDomainCache.Valid, ingressDomainCache.Valid...)
 	if m.kingressConfig != nil {

@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"regexp"
 	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -19,6 +21,7 @@ import (
 
 const (
 	DefaultMaxBodyBytes = 100 * 1024 * 1024 // 100MB
+	AutoModelPrefix     = "higress/auto"
 )
 
 func main() {}
@@ -34,11 +37,21 @@ func init() {
 	)
 }
 
+// AutoRoutingRule defines a regex-based routing rule for auto model selection
+type AutoRoutingRule struct {
+	Pattern *regexp.Regexp
+	Model   string
+}
+
 type ModelRouterConfig struct {
 	modelKey           string
 	addProviderHeader  string
 	modelToHeader      string
 	enableOnPathSuffix []string
+	// Auto routing configuration
+	enableAutoRouting bool
+	autoRoutingRules  []AutoRoutingRule
+	defaultModel      string
 }
 
 func parseConfig(json gjson.Result, config *ModelRouterConfig) error {
@@ -67,8 +80,39 @@ func parseConfig(json gjson.Result, config *ModelRouterConfig) error {
 			"/video-synthesis",
 			"/rerank",
 			"/messages",
+			"/responses",
 		}
 	}
+
+	// Parse auto routing configuration
+	autoRouting := json.Get("autoRouting")
+	if autoRouting.Exists() {
+		config.enableAutoRouting = autoRouting.Get("enable").Bool()
+		config.defaultModel = autoRouting.Get("defaultModel").String()
+
+		rules := autoRouting.Get("rules")
+		if rules.Exists() && rules.IsArray() {
+			for _, rule := range rules.Array() {
+				patternStr := rule.Get("pattern").String()
+				model := rule.Get("model").String()
+				if patternStr == "" || model == "" {
+					log.Warnf("skipping invalid auto routing rule: pattern=%s, model=%s", patternStr, model)
+					continue
+				}
+				compiled, err := regexp.Compile(patternStr)
+				if err != nil {
+					log.Warnf("failed to compile regex pattern '%s': %v", patternStr, err)
+					continue
+				}
+				config.autoRoutingRules = append(config.autoRoutingRules, AutoRoutingRule{
+					Pattern: compiled,
+					Model:   model,
+				})
+				log.Debugf("loaded auto routing rule: pattern=%s, model=%s", patternStr, model)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -91,12 +135,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config ModelRouterConfig) typ
 		}
 	}
 
-	if !enable {
+	if !enable || !ctx.HasRequestBody() {
 		ctx.DontReadRequestBody()
-		return types.ActionContinue
-	}
-
-	if !ctx.HasRequestBody() {
 		return types.ActionContinue
 	}
 
@@ -123,10 +163,83 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config ModelRouterConfig, body [
 	return types.ActionContinue
 }
 
-func handleJsonBody(ctx wrapper.HttpContext, config ModelRouterConfig, body []byte) types.Action {
+// extractLastUserMessage extracts the content of the last message with role "user" from the messages array
+func extractLastUserMessage(body []byte) string {
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.Exists() || !messages.IsArray() {
+		return ""
+	}
 
+	var lastUserContent string
+	for _, msg := range messages.Array() {
+		if msg.Get("role").String() == "user" {
+			content := msg.Get("content")
+			if content.IsArray() {
+				// Handle array content (e.g., multimodal messages with text and images)
+				for _, item := range content.Array() {
+					if item.Get("type").String() == "text" {
+						lastUserContent = item.Get("text").String()
+					}
+				}
+			} else {
+				lastUserContent = content.String()
+			}
+		}
+	}
+	return lastUserContent
+}
+
+// matchAutoRoutingRule matches the user message against auto routing rules and returns the matched model
+func matchAutoRoutingRule(config ModelRouterConfig, userMessage string) (string, bool) {
+	for _, rule := range config.autoRoutingRules {
+		if rule.Pattern.MatchString(userMessage) {
+			log.Debugf("auto routing rule matched: pattern=%s, model=%s", rule.Pattern.String(), rule.Model)
+			return rule.Model, true
+		}
+	}
+	return "", false
+}
+
+func handleJsonBody(ctx wrapper.HttpContext, config ModelRouterConfig, body []byte) types.Action {
+	if !json.Valid(body) {
+		log.Error("invalid json body")
+		return types.ActionContinue
+	}
 	modelValue := gjson.GetBytes(body, config.modelKey).String()
 	if modelValue == "" {
+		return types.ActionContinue
+	}
+
+	// Check if auto routing should be triggered
+	if config.enableAutoRouting && modelValue == AutoModelPrefix {
+		userMessage := extractLastUserMessage(body)
+		var targetModel string
+		if userMessage != "" {
+			if matchedModel, found := matchAutoRoutingRule(config, userMessage); found {
+				targetModel = matchedModel
+				log.Infof("auto routing: user message matched, routing to model: %s", matchedModel)
+			}
+		}
+		// No rule matched, use default model if configured
+		if targetModel == "" && config.defaultModel != "" {
+			targetModel = config.defaultModel
+			log.Infof("auto routing: no rule matched, using default model: %s", config.defaultModel)
+		}
+
+		if targetModel != "" {
+			// Set the matched model to the header for routing
+			_ = proxywasm.ReplaceHttpRequestHeader("x-higress-llm-model", targetModel)
+			// Update the model field in the request body
+			newBody, err := sjson.SetBytes(body, config.modelKey, targetModel)
+			if err != nil {
+				log.Errorf("failed to update model in auto routing json body: %v", err)
+				return types.ActionContinue
+			}
+			_ = proxywasm.ReplaceHttpRequestBody(newBody)
+			log.Debugf("auto routing: updated body model field to: %s", targetModel)
+		} else {
+			log.Warnf("auto routing: no rule matched and no default model configured")
+		}
 		return types.ActionContinue
 	}
 

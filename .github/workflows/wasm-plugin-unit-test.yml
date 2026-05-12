@@ -199,15 +199,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Set up Go 1.24
+    - name: Set up Go 1.25
       uses: actions/setup-go@v4
       with:
-        go-version: 1.24
+        go-version: 1.25
         cache: true
-        
+
     - name: Install required tools
       run: |
-        go install github.com/wadey/gocovmerge@latest
         sudo apt-get update && sudo apt-get install -y bc
         
     - name: Download all test results

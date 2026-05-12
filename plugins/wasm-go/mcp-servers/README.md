@@ -80,8 +80,8 @@ import (
     "net/http"
     
     "my-mcp-server/config"
-    "github.com/higress-group/wasm-go/pkg/mcp/server"
-    "github.com/higress-group/wasm-go/pkg/mcp/utils"
+    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/server"
+    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 )
 
 // Define your tool structure with input parameters
@@ -145,8 +145,8 @@ For better organization, you can create a separate file to load all your tools:
 package tools
 
 import (
-    "github.com/higress-group/wasm-go/pkg/mcp"
-    "github.com/higress-group/wasm-go/pkg/mcp/server"
+    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
+    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/server"
 )
 
 func LoadTools(server *mcp.MCPServer) server.Server {
@@ -170,7 +170,7 @@ import (
     amap "amap-tools/tools"
     quark "quark-search/tools"
     
-    "github.com/higress-group/wasm-go/pkg/mcp"
+    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
 )
 
 func main() {}
@@ -375,7 +375,7 @@ package main
 import (
     "my-mcp-server/tools"
     
-    "github.com/higress-group/wasm-go/pkg/mcp"
+    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
 )
 
 func main() {}

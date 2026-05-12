@@ -24,8 +24,8 @@ import (
 
 	"quark-search/config"
 
-	"github.com/higress-group/wasm-go/pkg/mcp/server"
-	"github.com/higress-group/wasm-go/pkg/mcp/utils"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/server"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/tidwall/gjson"
 )
 

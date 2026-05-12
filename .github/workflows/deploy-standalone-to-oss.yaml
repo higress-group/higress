@@ -31,7 +31,8 @@ jobs:
       - name: Upload to OSS
         uses: go-choppy/ossutil-github-action@master
         with:
-          ossArgs: 'cp -r -u ./artifact/ oss://higress-website-cn-hongkong/standalone/'
+          ossArgs: 'cp -r -u ./artifact/ oss://higress-ai/standalone/'
           accessKey: ${{ secrets.ACCESS_KEYID }}
           accessSecret: ${{ secrets.ACCESS_KEYSECRET }}
           endpoint: oss-cn-hongkong.aliyuncs.com
+

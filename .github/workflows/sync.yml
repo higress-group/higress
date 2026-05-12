@@ -1,0 +1,41 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # 每天 UTC 时间 00:00 运行 (北京时间 08:00)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # 获取所有历史记录，防止报错
+
+      - name: Setup Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Add Upstream Remote
+        # 将 <原始仓库URL> 替换为你要同步的原始项目地址
+        run: git remote add upstream https://github.com/alibaba/higress.git
+
+      - name: Fetch Upstream
+        run: git fetch upstream
+
+      - name: Merge Upstream Changes
+        # 将 upstream/main 替换为 upstream/master 或其他分支名
+        run: |
+          git checkout main
+          git merge upstream/main --no-edit
+          # 如果合并冲突，可以使用 git merge --abort 中止，或者手动处理
+
+      - name: Push to Origin
+        # 使用 secrets.GITHUB_TOKEN 自动推送，无需配置 PAT
+        run: git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

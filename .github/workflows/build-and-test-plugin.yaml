@@ -19,7 +19,7 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -30,13 +30,25 @@ jobs:
     # - run: make lint
 
   higress-wasmplugin-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         # TODO(Xunzhuo): Enable C WASM Filters in CI
         wasmPluginType: [GO, RUST]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Disable containerd image store
+        run: |
+          sudo bash -c 'cat > /etc/docker/daemon.json << EOF
+          {
+            "features": {
+              "containerd-snapshotter": false
+            }
+          }
+          EOF'
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
 
       - name: Free Up GitHub Actions Ubuntu Runner Disk Space 🔧
         uses: jlumbroso/free-disk-space@main
@@ -79,7 +91,7 @@ jobs:
           command: GOPROXY="https://proxy.golang.org,direct" PLUGIN_TYPE=${{ matrix.wasmPluginType }} make higress-wasmplugin-test
 
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [higress-wasmplugin-test]
     steps:
       - uses: actions/checkout@v4
