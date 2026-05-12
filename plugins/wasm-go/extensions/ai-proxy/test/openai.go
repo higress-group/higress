@@ -984,6 +984,10 @@ func RunOpenAIOnStreamingResponseBodyTests(t *testing.T) {
 			action4 := host.CallOnHttpStreamingResponseBody([]byte(chunk4), true)
 			require.Equal(t, types.ActionContinue, action4)
 
+			// Empty chunk should not panic
+			actionEmpty := host.CallOnHttpStreamingResponseBody([]byte{}, false)
+			require.Equal(t, types.ActionContinue, actionEmpty)
+
 			// 验证流式响应处理
 			// 注意：流式响应可能不会在GetResponseBody中累积，需要检查日志或其他方式验证
 			debugLogs := host.GetDebugLogs()

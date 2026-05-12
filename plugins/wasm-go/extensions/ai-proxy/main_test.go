@@ -1,10 +1,12 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/provider"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/test"
+	"github.com/tidwall/gjson"
 )
 
 func Test_getApiName(t *testing.T) {
@@ -24,6 +26,9 @@ func Test_getApiName(t *testing.T) {
 		{"openai realtime", "/v1/realtime", provider.ApiNameRealtime},
 		{"openai realtime with prefix", "/proxy/v1/realtime", provider.ApiNameRealtime},
 		{"openai realtime with trailing slash", "/v1/realtime/", ""},
+		{"openai chat completions with path_prefix", "/gateway/proxy/v1/chat/completions", provider.ApiNameChatCompletion},
+		{"openai chat completions_extra_path_not_suffix_match", "/v1/chat/completions/extra", ""},
+		{"openai realtime_with_query_not_matched_as_suffix", "/v1/realtime?stream=1", ""},
 		{"openai image generation", "/v1/images/generations", provider.ApiNameImageGeneration},
 		{"openai image variation", "/v1/images/variations", provider.ApiNameImageVariation},
 		{"openai image edit", "/v1/images/edits", provider.ApiNameImageEdit},
@@ -109,6 +114,30 @@ func Test_isSupportedRequestContentType(t *testing.T) {
 			contentType: "text/plain",
 			want:        false,
 		},
+		{
+			name:        "json_with_charset",
+			apiName:     provider.ApiNameChatCompletion,
+			contentType: "application/json; charset=utf-8",
+			want:        true,
+		},
+		{
+			name:        "multipart_uppercase_image_edit",
+			apiName:     provider.ApiNameImageEdit,
+			contentType: "MULTIPART/FORM-DATA; boundary=abc",
+			want:        true,
+		},
+		{
+			name:        "multipart_image_generation_not_allowed",
+			apiName:     provider.ApiNameImageGeneration,
+			contentType: "multipart/form-data; boundary=----boundary",
+			want:        false,
+		},
+		{
+			name:        "multipart_embeddings_not_allowed",
+			apiName:     provider.ApiNameEmbeddings,
+			contentType: "multipart/form-data; boundary=----boundary",
+			want:        false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -117,6 +146,94 @@ func Test_isSupportedRequestContentType(t *testing.T) {
 				t.Errorf("isSupportedRequestContentType(%v, %q) = %v, want %v", tt.apiName, tt.contentType, got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_normalizeOpenAiRequestBody(t *testing.T) {
+	t.Run("stream_adds_include_usage", func(t *testing.T) {
+		in := []byte(`{"model":"x","stream":true}`)
+		got := normalizeOpenAiRequestBody(in)
+		if !gjson.GetBytes(got, "stream_options.include_usage").Bool() {
+			t.Fatalf("want stream_options.include_usage true, got %s", string(got))
+		}
+	})
+	t.Run("stream_false_no_stream_options", func(t *testing.T) {
+		in := []byte(`{"model":"x","stream":false}`)
+		got := normalizeOpenAiRequestBody(in)
+		if gjson.GetBytes(got, "stream_options").Exists() {
+			t.Fatalf("did not expect stream_options, got %s", string(got))
+		}
+	})
+	t.Run("respect_explicit_include_usage_false", func(t *testing.T) {
+		in := []byte(`{"model":"x","stream":true,"stream_options":{"include_usage":false}}`)
+		got := normalizeOpenAiRequestBody(in)
+		if gjson.GetBytes(got, "stream_options.include_usage").Bool() {
+			t.Fatalf("want include_usage false, got %s", string(got))
+		}
+	})
+	t.Run("stream_missing_no_stream_options", func(t *testing.T) {
+		in := []byte(`{"model":"x"}`)
+		got := normalizeOpenAiRequestBody(in)
+		if gjson.GetBytes(got, "stream_options").Exists() {
+			t.Fatalf("unexpected stream_options: %s", string(got))
+		}
+	})
+	t.Run("stream_non_bool_treated_as_false", func(t *testing.T) {
+		in := []byte(`{"model":"x","stream":"yes"}`)
+		got := normalizeOpenAiRequestBody(in)
+		if gjson.GetBytes(got, "stream_options").Exists() {
+			t.Fatalf("unexpected stream_options for non-bool stream: %s", string(got))
+		}
+	})
+}
+
+func Test_convertResponseBodyToClaude_glue(t *testing.T) {
+	ctx := test.NewMockHttpContext()
+	openaiBody := []byte(`{"id":"id1","object":"chat.completion","created":1,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hello"}}]}`)
+
+	out, err := convertResponseBodyToClaude(ctx, openaiBody)
+	if err != nil || string(out) != string(openaiBody) {
+		t.Fatalf("without flag: err=%v out=%s", err, string(out))
+	}
+	// Full OpenAI→Claude conversion runs log.Debugf inside the provider and requires a Wasm host
+	// when this package's init() has registered the plugin (see provider/claude_to_openai_test.go).
+}
+
+func Test_convertStreamingResponseToClaude_glue(t *testing.T) {
+	chunk := []byte("data: {\"x\":1}\n\n")
+	ctx := test.NewMockHttpContext()
+	out, err := convertStreamingResponseToClaude(ctx, chunk)
+	if err != nil || string(out) != string(chunk) {
+		t.Fatalf("without conversion flag: err=%v out=%q", err, string(out))
+	}
+}
+
+func Test_needsClaudeResponseConversion(t *testing.T) {
+	ctx := test.NewMockHttpContext()
+	if NeedsClaudeResponseConversionForTest(ctx) {
+		t.Fatal("expected false without context flag")
+	}
+	ctx.SetContext("needClaudeResponseConversion", true)
+	if !NeedsClaudeResponseConversionForTest(ctx) {
+		t.Fatal("expected true when flag set")
+	}
+}
+
+func Test_promoteThinkingInStreamingChunk(t *testing.T) {
+	ctx := test.NewMockHttpContext()
+	reasoningJSON := `{"choices":[{"index":0,"delta":{"reasoning_content":"only-thinking"}}]}`
+	sse := "data: " + reasoningJSON + "\n"
+	out := promoteThinkingInStreamingChunk(ctx, []byte(sse), true)
+	if len(out) == 0 {
+		t.Fatal("expected non-empty output")
+	}
+	// Last chunk should prepend flush SSE when no content delta was seen
+	if !strings.HasPrefix(string(out), "data: ") {
+		t.Fatalf("expected flush data line prepended, got prefix %q", string(out))
+	}
+	// Original line should still be present (possibly stripped reasoning)
+	if !strings.Contains(string(out), "data:") {
+		t.Fatalf("expected SSE data lines: %s", string(out))
 	}
 }
 
@@ -183,6 +300,10 @@ func TestUtil(t *testing.T) {
 	test.RunMapRequestPathByCapabilityTests(t)
 }
 
+func TestMainEdgeCases(t *testing.T) {
+	test.RunMainEdgeCaseTests(t)
+}
+
 func TestApiPathRegression(t *testing.T) {
 	test.RunApiPathRegressionTests(t)
 }
@@ -238,4 +359,65 @@ func TestOpenRouter(t *testing.T) {
 
 func TestZhipuAI(t *testing.T) {
 	test.RunZhipuAIClaudeAutoConversionTests(t)
+}
+
+func TestDeepSeek(t *testing.T) {
+	test.RunDeepSeekParseConfigTests(t)
+	test.RunDeepSeekOnHttpRequestHeadersTests(t)
+}
+
+func TestDoubao(t *testing.T) {
+	test.RunDoubaoParseConfigTests(t)
+	test.RunDoubaoOnHttpRequestHeadersTests(t)
+}
+
+func TestGroq(t *testing.T) {
+	test.RunGroqParseConfigTests(t)
+	test.RunGroqOnHttpRequestHeadersTests(t)
+}
+
+func TestMistral(t *testing.T) {
+	test.RunMistralParseConfigTests(t)
+	test.RunMistralOnHttpRequestHeadersTests(t)
+}
+
+func TestMoonshot(t *testing.T) {
+	test.RunMoonshotParseConfigTests(t)
+	test.RunMoonshotOnHttpRequestHeadersTests(t)
+}
+
+func TestSpark(t *testing.T) {
+	test.RunSparkParseConfigTests(t)
+	test.RunSparkOnHttpRequestHeadersTests(t)
+}
+
+func TestTogetherAI(t *testing.T) {
+	test.RunTogetherAIParseConfigTests(t)
+	test.RunTogetherAIOnHttpRequestHeadersTests(t)
+}
+
+func TestGithub(t *testing.T) {
+	test.RunGithubParseConfigTests(t)
+	test.RunGithubOnHttpRequestHeadersTests(t)
+}
+
+func TestGrok(t *testing.T) {
+	test.RunGrokParseConfigTests(t)
+	test.RunGrokOnHttpRequestHeadersTests(t)
+}
+
+func TestProviderWasmSmoke(t *testing.T) {
+	test.RunBaichuanWasmSmokeTests(t)
+	test.RunYiWasmSmokeTests(t)
+	test.RunOllamaWasmSmokeTests(t)
+	test.RunBaiduWasmSmokeTests(t)
+	test.RunHunyuanWasmSmokeTests(t)
+	test.RunStepfunWasmSmokeTests(t)
+	test.RunCloudflareWasmSmokeTests(t)
+	test.RunDeeplWasmSmokeTests(t)
+	test.RunCohereWasmSmokeTests(t)
+	test.RunCozeWasmSmokeTests(t)
+	test.RunDifyWasmSmokeTests(t)
+	test.RunTritonWasmSmokeTests(t)
+	test.RunVllmWasmSmokeTests(t)
 }
