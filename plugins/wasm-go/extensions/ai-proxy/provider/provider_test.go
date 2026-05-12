@@ -544,6 +544,19 @@ func TestFailover_FromJson_FailoverOnStatus(t *testing.T) {
 	})
 }
 
+func TestFailover_Validate(t *testing.T) {
+	t.Run("missing_healthCheckModel", func(t *testing.T) {
+		f := &failover{}
+		f.FromJson(gjson.Parse(`{"enabled":true}`))
+		assert.Error(t, f.Validate())
+	})
+	t.Run("ok_with_healthCheckModel", func(t *testing.T) {
+		f := &failover{}
+		f.FromJson(gjson.Parse(`{"enabled":true,"healthCheckModel":"gpt-4o-mini"}`))
+		assert.NoError(t, f.Validate())
+	})
+}
+
 func TestHealthCheckEndpoint_Struct(t *testing.T) {
 	t.Run("health_check_endpoint_fields", func(t *testing.T) {
 		endpoint := HealthCheckEndpoint{
@@ -676,6 +689,32 @@ func TestProviderConfig_SetDefaultCapabilities(t *testing.T) {
 
 		assert.Equal(t, "/v1/embeddings", config.capabilities[string(ApiNameEmbeddings)])
 		assert.Equal(t, "/v1/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
+	})
+}
+
+func TestCreateProvider(t *testing.T) {
+	t.Run("generic_success", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}`))
+		p, err := CreateProvider(pc)
+		assert.NoError(t, err)
+		assert.Equal(t, providerTypeGeneric, p.GetProviderType())
+	})
+
+	t.Run("openai_minimal_success", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"openai","apiTokens":["sk-test"]}`))
+		p, err := CreateProvider(pc)
+		assert.NoError(t, err)
+		assert.Equal(t, providerTypeOpenAI, p.GetProviderType())
+	})
+
+	t.Run("unknown_type", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"no-such-provider-xyz","apiTokens":["t"]}`))
+		_, err := CreateProvider(pc)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown provider type")
 	})
 }
 
