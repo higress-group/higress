@@ -22,6 +22,7 @@ description: AI 配额管理插件配置参考
 | `redis_key_prefix` | string          |  选填                                     |   chat_quota:   | qutoa redis key 前缀                         |
 | `admin_consumer`   | string          | 必填                                   |      | 管理 quota 管理身份的 consumer 名称                 |
 | `admin_path`       | string          | 选填                                   |   /quota   | 管理 quota 请求 path 前缀                        |
+| `enable_path_suffixes` | []string     | 选填                                   |  ["/v1/chat/completions", "/v1/messages"] | 启用配额校验的请求路径后缀（仅用于 completion 请求，不影响管理接口路径） |
 | `redis`            | object          | 是                                    |      | redis相关配置                                  |
 
 `redis`中每一项的配置字段说明
