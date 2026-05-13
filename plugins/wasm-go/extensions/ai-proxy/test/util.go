@@ -110,6 +110,15 @@ func RunMapRequestPathByCapabilityTests(t *testing.T) {
 			},
 			expected: "/v1/videos",
 		},
+		{
+			name:    "video placeholder maps to custom nested path",
+			apiName: "openai/v1/retrievevideo",
+			origin:  "/v1/videos/my-video-id",
+			mapping: map[string]string{
+				"openai/v1/retrievevideo": "/api/v3/contents/generations/tasks/{video_id}",
+			},
+			expected: "/api/v3/contents/generations/tasks/my-video-id",
+		},
 	}
 
 	for _, tc := range testCases {
