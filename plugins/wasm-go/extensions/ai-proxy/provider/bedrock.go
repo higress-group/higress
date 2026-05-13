@@ -23,26 +23,32 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const (
-	httpPostMethod = "POST"
-	awsService     = "bedrock"
+	httpPostMethod          = "POST"
+	awsServiceBedrock       = "bedrock"
+	awsServiceBedrockMantle = "bedrock-mantle"
 	// bedrock-runtime.{awsRegion}.amazonaws.com
 	bedrockDefaultDomain = "bedrock-runtime.%s.amazonaws.com"
+	// bedrock-mantle.{awsRegion}.api.aws
+	bedrockMantleDomain = "bedrock-mantle.%s.api.aws"
 	// converse路径 /model/{modelId}/converse
 	bedrockChatCompletionPath = "/model/%s/converse"
 	// converseStream路径 /model/{modelId}/converse-stream
 	bedrockStreamChatCompletionPath = "/model/%s/converse-stream"
 	// invoke_model 路径 /model/{modelId}/invoke
-	bedrockInvokeModelPath   = "/model/%s/invoke"
-	bedrockSignedHeaders     = "host;x-amz-date"
-	requestIdHeader          = "X-Amzn-Requestid"
-	bedrockCacheTypeDefault  = "default"
-	bedrockCacheTTL5m        = "5m"
-	bedrockCacheTTL1h        = "1h"
-	bedrockPromptCacheNova   = "amazon.nova"
-	bedrockPromptCacheClaude = "anthropic.claude"
+	bedrockInvokeModelPath    = "/model/%s/invoke"
+	bedrockMantleMessagesPath = "/anthropic/v1/messages"
+	bedrockSignedHeaders      = "host;x-amz-date"
+	requestIdHeader           = "X-Amzn-Requestid"
+	bedrockCacheTypeDefault   = "default"
+	bedrockCacheTTL5m         = "5m"
+	bedrockCacheTTL1h         = "1h"
+	bedrockPromptCacheNova    = "amazon.nova"
+	bedrockPromptCacheClaude  = "anthropic.claude"
 
 	bedrockCachePointPositionSystemPrompt    = "systemPrompt"
 	bedrockCachePointPositionLastUserMessage = "lastUserMessage"
@@ -73,8 +79,9 @@ func (b *bedrockProviderInitializer) ValidateConfig(config *ProviderConfig) erro
 
 func (b *bedrockProviderInitializer) DefaultCapabilities() map[string]string {
 	return map[string]string{
-		string(ApiNameChatCompletion):  bedrockChatCompletionPath,
-		string(ApiNameImageGeneration): bedrockInvokeModelPath,
+		string(ApiNameChatCompletion):    bedrockChatCompletionPath,
+		string(ApiNameAnthropicMessages): bedrockMantleMessagesPath,
+		string(ApiNameImageGeneration):   bedrockInvokeModelPath,
 	}
 }
 
@@ -92,6 +99,10 @@ type bedrockProvider struct {
 }
 
 func (b *bedrockProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name ApiName, chunk []byte, isLastChunk bool) ([]byte, error) {
+	if name == ApiNameAnthropicMessages {
+		return chunk, nil
+	}
+
 	events := extractAmazonEventStreamEvents(ctx, chunk)
 	if len(events) == 0 {
 		if isLastChunk {
@@ -718,6 +729,18 @@ func (b *bedrockProvider) OnRequestHeaders(ctx wrapper.HttpContext, apiName ApiN
 }
 
 func (b *bedrockProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiName ApiName, headers http.Header) {
+	if apiName == ApiNameAnthropicMessages {
+		util.OverwriteRequestHostHeader(headers, fmt.Sprintf(bedrockMantleDomain, strings.TrimSpace(b.config.awsRegion)))
+		util.OverwriteRequestPathHeaderByCapability(headers, string(apiName), b.config.capabilities)
+		headers.Set("anthropic-version", b.anthropicVersion())
+
+		if len(b.config.apiTokens) > 0 {
+			headers.Set("x-api-key", b.config.GetApiTokenInUse(ctx))
+			headers.Del(util.HeaderAuthorization)
+		}
+		return
+	}
+
 	util.OverwriteRequestHostHeader(headers, fmt.Sprintf(bedrockDefaultDomain, strings.TrimSpace(b.config.awsRegion)))
 
 	// If apiTokens is configured, set Bearer token authentication here
@@ -733,7 +756,7 @@ func (b *bedrockProvider) OnRequestBody(ctx wrapper.HttpContext, apiName ApiName
 	// and only apply auth headers.
 	if b.config.IsOriginal() {
 		headers := util.GetRequestHeaders()
-		b.setAuthHeaders(body, headers)
+		b.setAuthHeaders(apiName, body, headers)
 		util.ReplaceRequestHeaders(headers)
 		return types.ActionContinue, replaceRequestBody(body)
 	}
@@ -750,6 +773,8 @@ func (b *bedrockProvider) TransformRequestBodyHeaders(ctx wrapper.HttpContext, a
 	switch apiName {
 	case ApiNameChatCompletion:
 		transformedBody, err = b.onChatCompletionRequestBody(ctx, body, headers)
+	case ApiNameAnthropicMessages:
+		transformedBody, err = b.onAnthropicMessagesRequestBody(ctx, body, headers)
 	case ApiNameImageGeneration:
 		transformedBody, err = b.onImageGenerationRequestBody(ctx, body, headers)
 	default:
@@ -762,7 +787,7 @@ func (b *bedrockProvider) TransformRequestBodyHeaders(ctx wrapper.HttpContext, a
 
 	// Always apply auth after request body/path are finalized.
 	// For Bearer token mode this is a no-op; for AK/SK mode this generates SigV4 headers.
-	b.setAuthHeaders(transformedBody, headers)
+	b.setAuthHeaders(apiName, transformedBody, headers)
 	return transformedBody, nil
 }
 
@@ -770,6 +795,8 @@ func (b *bedrockProvider) TransformResponseBody(ctx wrapper.HttpContext, apiName
 	switch apiName {
 	case ApiNameChatCompletion:
 		return b.onChatCompletionResponseBody(ctx, body)
+	case ApiNameAnthropicMessages:
+		return body, nil
 	case ApiNameImageGeneration:
 		return b.onImageGenerationResponseBody(body)
 	}
@@ -795,6 +822,28 @@ func (b *bedrockProvider) onImageGenerationRequestBody(ctx wrapper.HttpContext, 
 	headers.Set("Accept", "*/*")
 	b.overwriteRequestPathHeader(headers, bedrockInvokeModelPath, request.Model)
 	return b.buildBedrockImageGenerationRequest(request, headers)
+}
+
+func (b *bedrockProvider) onAnthropicMessagesRequestBody(ctx wrapper.HttpContext, body []byte, headers http.Header) ([]byte, error) {
+	if gjson.GetBytes(body, "stream").Bool() {
+		headers.Set("Accept", "text/event-stream")
+		ctx.SetContext(ctxKeyIsStreaming, true)
+	} else {
+		ctx.SetContext(ctxKeyIsStreaming, false)
+	}
+
+	model := gjson.GetBytes(body, "model").String()
+	if err := b.config.mapModel(ctx, &model); err != nil {
+		return nil, err
+	}
+	return sjson.SetBytes(body, "model", model)
+}
+
+func (b *bedrockProvider) anthropicVersion() string {
+	if b.config.apiVersion != "" {
+		return b.config.apiVersion
+	}
+	return claudeDefaultVersion
 }
 
 func (b *bedrockProvider) buildBedrockImageGenerationRequest(origRequest *imageGenerationRequest, headers http.Header) ([]byte, error) {
@@ -1587,7 +1636,7 @@ func claudeToolResultBlockToBedrock(block claudeChatMessageContent) *toolResultB
 	return result
 }
 
-func (b *bedrockProvider) setAuthHeaders(body []byte, headers http.Header) {
+func (b *bedrockProvider) setAuthHeaders(apiName ApiName, body []byte, headers http.Header) {
 	// Bearer token authentication is already set in TransformRequestHeaders
 	// This function only handles AWS SigV4 authentication which requires the request body
 	if len(b.config.apiTokens) > 0 {
@@ -1601,30 +1650,49 @@ func (b *bedrockProvider) setAuthHeaders(body []byte, headers http.Header) {
 	amzDate := t.Format("20060102T150405Z")
 	dateStamp := t.Format("20060102")
 	path := headers.Get(":path")
-	signature := b.generateSignature(path, amzDate, dateStamp, body)
+	service := bedrockAWSService(apiName)
+	signature := b.generateSignatureWithService(path, amzDate, dateStamp, body, service)
 	headers.Set("X-Amz-Date", amzDate)
-	util.OverwriteRequestAuthorizationHeader(headers, fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s/%s/%s/aws4_request, SignedHeaders=%s, Signature=%s", accessKey, dateStamp, region, awsService, bedrockSignedHeaders, signature))
+	util.OverwriteRequestAuthorizationHeader(headers, fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s/%s/%s/aws4_request, SignedHeaders=%s, Signature=%s", accessKey, dateStamp, region, service, bedrockSignedHeaders, signature))
 }
 
 func (b *bedrockProvider) generateSignature(path, amzDate, dateStamp string, body []byte) string {
+	return b.generateSignatureWithService(path, amzDate, dateStamp, body, awsServiceBedrock)
+}
+
+func (b *bedrockProvider) generateSignatureWithService(path, amzDate, dateStamp string, body []byte, service string) string {
 	canonicalURI := encodeSigV4Path(path)
 	hashedPayload := sha256Hex(body)
 	region := strings.TrimSpace(b.config.awsRegion)
 	secretKey := strings.TrimSpace(b.config.awsSecretKey)
 
-	endpoint := fmt.Sprintf(bedrockDefaultDomain, region)
+	endpoint := bedrockAWSEndpoint(service, region)
 	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-date:%s\n", endpoint, amzDate)
 	canonicalRequest := fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s",
 		httpPostMethod, canonicalURI, canonicalHeaders, bedrockSignedHeaders, hashedPayload)
 
-	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStamp, region, awsService)
+	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStamp, region, service)
 	hashedCanonReq := sha256Hex([]byte(canonicalRequest))
 	stringToSign := fmt.Sprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s",
 		amzDate, credentialScope, hashedCanonReq)
 
-	signingKey := getSignatureKey(secretKey, dateStamp, region, awsService)
+	signingKey := getSignatureKey(secretKey, dateStamp, region, service)
 	signature := hmacHex(signingKey, stringToSign)
 	return signature
+}
+
+func bedrockAWSService(apiName ApiName) string {
+	if apiName == ApiNameAnthropicMessages {
+		return awsServiceBedrockMantle
+	}
+	return awsServiceBedrock
+}
+
+func bedrockAWSEndpoint(service, region string) string {
+	if service == awsServiceBedrockMantle {
+		return fmt.Sprintf(bedrockMantleDomain, region)
+	}
+	return fmt.Sprintf(bedrockDefaultDomain, region)
 }
 
 func encodeSigV4Path(path string) string {
