@@ -170,6 +170,9 @@ func processMTLS(config *Ingress) *networking.ClientTLSSettings {
 func processSimple(config *Ingress) *networking.ClientTLSSettings {
 	tls := &networking.ClientTLSSettings{
 		Mode: networking.ClientTLSSettings_SIMPLE,
+		InsecureSkipVerify: &wrappers.BoolValue{
+			Value: true,
+		},
 	}
 
 	if config.UpstreamTLS.EnableSNI && config.UpstreamTLS.SNI != "" {

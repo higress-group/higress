@@ -35,6 +35,66 @@ func init() {
 func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
 
+	t.Run("convert_tool_choice_any_to_required", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1000,
+			"messages": [{"role": "user", "content": "Run a search."}],
+			"tools": [{
+				"name": "web_search",
+				"description": "Search the web.",
+				"input_schema": {
+					"type": "object",
+					"properties": {"query": {"type": "string"}},
+					"required": ["query"]
+				}
+			}],
+			"tool_choice": {"type": "any"}
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Equal(t, "required", openaiRequest.ToolChoice)
+		require.NotNil(t, openaiRequest.ParallelToolCalls)
+		require.True(t, *openaiRequest.ParallelToolCalls)
+		require.Contains(t, string(result), `"parallel_tool_calls":true`)
+	})
+
+	t.Run("convert_tool_choice_any_preserves_disable_parallel_tool_use", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1000,
+			"messages": [{"role": "user", "content": "Run a search."}],
+			"tools": [{
+				"name": "web_search",
+				"description": "Search the web.",
+				"input_schema": {
+					"type": "object",
+					"properties": {"query": {"type": "string"}},
+					"required": ["query"]
+				}
+			}],
+			"tool_choice": {"type": "any", "disable_parallel_tool_use": true}
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Equal(t, "required", openaiRequest.ToolChoice)
+		require.NotNil(t, openaiRequest.ParallelToolCalls)
+		require.False(t, *openaiRequest.ParallelToolCalls)
+		require.Contains(t, string(result), `"parallel_tool_calls":false`)
+	})
+
 	t.Run("convert_multiple_text_content_blocks", func(t *testing.T) {
 		// Test case: multiple text content blocks should remain as separate array elements with cache control support
 		// Both system and user messages should handle array content format
@@ -328,9 +388,9 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 			"model": "anthropic/claude-sonnet-4",
 			"messages": [{
 				"role": "assistant",
-				"content": [{
-					"type": "thinking",
-					"thinking": "The user needs current weather, so I should call the search tool.",
+					"content": [{
+						"type": "thinking",
+						"thinking": "The user needs current weather, so I should call the search tool.",
 					"signature": "signature-value"
 				}, {
 					"type": "tool_use",
@@ -645,6 +705,42 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 		assert.NotContains(t, rawAssistant, "thinking")
 		assert.NotContains(t, rawAssistant, "signature")
 		require.Len(t, rawAssistant["tool_calls"].([]interface{}), 1)
+	})
+
+	t.Run("preserve_empty_tool_use_input", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "assistant",
+				"content": [{
+					"type": "thinking",
+					"thinking": "Need to list items.",
+					"signature": "sig"
+				}, {
+					"type": "tool_use",
+					"id": "toolu_empty",
+					"name": "list_items",
+					"input": {}
+				}]
+			}],
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+		require.Contains(t, string(result), `"input":{}`)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Len(t, openaiRequest.Messages, 1)
+		assistantMsg := openaiRequest.Messages[0]
+		require.Len(t, assistantMsg.ToolCalls, 1)
+		assert.Equal(t, "{}", assistantMsg.ToolCalls[0].Function.Arguments)
+		require.Len(t, assistantMsg.ClaudeContentBlocks, 2)
+		require.NotNil(t, assistantMsg.ClaudeContentBlocks[1].Input)
+		assert.Empty(t, *assistantMsg.ClaudeContentBlocks[1].Input)
 	})
 
 	t.Run("convert_tool_result_to_tool_message", func(t *testing.T) {
@@ -1247,6 +1343,22 @@ func TestClaudeToOpenAIConverter_ConvertReasoningResponseToClaude(t *testing.T) 
 	}
 }
 
+func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_WithCachedTokens(t *testing.T) {
+	converter := &ClaudeToOpenAIConverter{}
+
+	streamChunk := "data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\n"
+
+	result, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(streamChunk))
+	require.NoError(t, err)
+
+	resultStr := string(result)
+	assert.Contains(t, resultStr, "\"type\":\"message_delta\"")
+	assert.Contains(t, resultStr, "\"input_tokens\":100")
+	assert.Contains(t, resultStr, "\"output_tokens\":20")
+	assert.Contains(t, resultStr, "\"cache_read_input_tokens\":60")
+}
+
 func TestClaudeToOpenAIConverter_StripCchFromSystemMessage(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
 
@@ -1415,6 +1527,25 @@ func TestNormalizeFinishReason(t *testing.T) {
 			assert.Equal(t, tt.wantValid, gotValid)
 		})
 	}
+}
+
+func TestClaudeToOpenAIConverter_streaming_tool_call_smoke(t *testing.T) {
+	converter := &ClaudeToOpenAIConverter{}
+
+	start := `data: {"id":"tc1","choices":[{"index":0,"delta":{"role":"assistant","content":""}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+	_, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(start))
+	require.NoError(t, err)
+
+	toolChunk := `data: {"id":"tc1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"my_fn","arguments":""}}]}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+	out, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(toolChunk))
+	require.NoError(t, err)
+	require.Contains(t, string(out), "content_block_start")
+	require.Contains(t, string(out), "tool_use")
+
+	argChunk := `data: {"id":"tc1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"x\":1}"}}]}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
+	out2, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(argChunk))
+	require.NoError(t, err)
+	require.Contains(t, string(out2), "input_json_delta")
 }
 
 func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_Compatibility(t *testing.T) {

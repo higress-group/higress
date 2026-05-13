@@ -54,12 +54,13 @@ func init() {
 }
 
 type QuotaConfig struct {
-	redisInfo       RedisInfo         `yaml:"redis"`
-	RedisKeyPrefix  string            `yaml:"redis_key_prefix"`
-	AdminConsumer   string            `yaml:"admin_consumer"`
-	AdminPath       string            `yaml:"admin_path"`
-	credential2Name map[string]string `yaml:"-"`
-	redisClient     wrapper.RedisClient
+	redisInfo          RedisInfo         `yaml:"redis"`
+	RedisKeyPrefix     string            `yaml:"redis_key_prefix"`
+	AdminConsumer      string            `yaml:"admin_consumer"`
+	AdminPath          string            `yaml:"admin_path"`
+	EnablePathSuffixes []string          `yaml:"enable_path_suffixes"`
+	credential2Name    map[string]string `yaml:"-"`
+	redisClient        wrapper.RedisClient
 }
 
 type Consumer struct {
@@ -83,6 +84,25 @@ func parseConfig(json gjson.Result, config *QuotaConfig) error {
 	config.AdminConsumer = json.Get("admin_consumer").String()
 	if config.AdminPath == "" {
 		config.AdminPath = "/quota"
+	}
+	suffixResult := json.Get("enable_path_suffixes")
+	if !suffixResult.Exists() {
+		config.EnablePathSuffixes = []string{"/v1/chat/completions", "/v1/messages"}
+	} else if !suffixResult.IsArray() {
+		return errors.New("enable_path_suffixes must be an array")
+	} else {
+		pathSuffixes := suffixResult.Array()
+		config.EnablePathSuffixes = make([]string, 0, len(pathSuffixes))
+		for _, suffix := range pathSuffixes {
+			suffixStr := strings.TrimSpace(suffix.String())
+			if suffixStr == "" {
+				continue
+			}
+			config.EnablePathSuffixes = append(config.EnablePathSuffixes, suffixStr)
+		}
+	}
+	if len(config.EnablePathSuffixes) == 0 {
+		return errors.New("enable_path_suffixes must not be empty")
 	}
 	if config.AdminConsumer == "" {
 		return errors.New("missing admin_consumer in config")
@@ -144,7 +164,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 
 	rawPath := context.Path()
 	path, _ := url.Parse(rawPath)
-	chatMode, adminMode := getOperationMode(path.Path, config.AdminPath)
+	chatMode, adminMode := getOperationMode(path.Path, config.AdminPath, config.EnablePathSuffixes)
 	context.SetContext("chatMode", chatMode)
 	context.SetContext("adminMode", adminMode)
 	context.SetContext("consumer", consumer)
@@ -257,7 +277,7 @@ func deniedUnauthorizedConsumer() types.Action {
 	return types.ActionContinue
 }
 
-func getOperationMode(path string, adminPath string) (ChatMode, AdminMode) {
+func getOperationMode(path string, adminPath string, pathSuffixes []string) (ChatMode, AdminMode) {
 	fullAdminPath := "/v1/chat/completions" + adminPath
 	if strings.HasSuffix(path, fullAdminPath+"/refresh") {
 		return ChatModeAdmin, AdminModeRefresh
@@ -268,8 +288,10 @@ func getOperationMode(path string, adminPath string) (ChatMode, AdminMode) {
 	if strings.HasSuffix(path, fullAdminPath) {
 		return ChatModeAdmin, AdminModeQuery
 	}
-	if strings.HasSuffix(path, "/v1/chat/completions") {
-		return ChatModeCompletion, AdminModeNone
+	for _, suffix := range pathSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return ChatModeCompletion, AdminModeNone
+		}
 	}
 	return ChatModeNone, AdminModeNone
 }

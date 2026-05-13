@@ -24,7 +24,7 @@ import (
 
 	"github.com/avast/retry-go/v4"
 	"github.com/hudl/fargo"
-	"istio.io/pkg/log"
+	"istio.io/istio/pkg/log"
 )
 
 var httpClient = http.DefaultClient

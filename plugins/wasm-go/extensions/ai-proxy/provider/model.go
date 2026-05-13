@@ -46,6 +46,9 @@ type chatCompletionRequest struct {
 	Model                string                 `json:"model"`
 	Store                bool                   `json:"store,omitempty"`
 	ReasoningEffort      string                 `json:"reasoning_effort,omitempty"`
+	ClaudeThinking       *claudeThinkingConfig  `json:"claude_thinking,omitempty"`
+	ClaudeOutputConfig   *claudeOutputConfig    `json:"claude_output_config,omitempty"`
+	ClaudeAnthropicBeta  []string               `json:"claude_anthropic_beta,omitempty"`
 	Metadata             map[string]string      `json:"metadata,omitempty"`
 	FrequencyPenalty     float64                `json:"frequency_penalty,omitempty"`
 	LogitBias            map[string]int         `json:"logit_bias,omitempty"`
@@ -70,7 +73,7 @@ type chatCompletionRequest struct {
 	TopP                 float64                `json:"top_p,omitempty"`
 	Tools                []tool                 `json:"tools,omitempty"`
 	ToolChoice           interface{}            `json:"tool_choice,omitempty"`
-	ParallelToolCalls    bool                   `json:"parallel_tool_calls,omitempty"`
+	ParallelToolCalls    *bool                  `json:"parallel_tool_calls,omitempty"`
 	User                 string                 `json:"user,omitempty"`
 }
 
@@ -92,15 +95,33 @@ func (c *chatCompletionRequest) getToolChoiceString() string {
 	return ""
 }
 
-func (c *chatCompletionRequest) getToolChoiceObject() *toolChoice {
-	if c.ToolChoice == nil {
-		return nil
-	}
-
-	if tc, ok := c.ToolChoice.(*toolChoice); ok {
+func (c *chatCompletionRequest) getToolChoiceType() string {
+	if tc := c.getToolChoiceString(); tc != "" {
 		return tc
 	}
-	return nil
+	if tc := c.getToolChoiceObject(); tc != nil {
+		return tc.Type
+	}
+	return ""
+}
+
+func (c *chatCompletionRequest) getToolChoiceObject() *toolChoice {
+	switch tc := c.ToolChoice.(type) {
+	case nil, string:
+		return nil
+	case *toolChoice:
+		return tc
+	}
+
+	body, err := json.Marshal(c.ToolChoice)
+	if err != nil {
+		return nil
+	}
+	var parsed toolChoice
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 type CompletionRequest struct {
@@ -184,17 +205,22 @@ type completionTokensDetails struct {
 }
 
 type chatMessage struct {
-	Id               string                 `json:"id,omitempty"`
-	Audio            map[string]interface{} `json:"audio,omitempty"`
-	Name             string                 `json:"name,omitempty"`
-	Role             string                 `json:"role,omitempty"`
-	Content          any                    `json:"content,omitempty"`
-	ReasoningContent string                 `json:"reasoning_content,omitempty"`
-	Reasoning        string                 `json:"reasoning,omitempty"` // For streaming responses
-	ToolCalls        []toolCall             `json:"tool_calls,omitempty"`
-	FunctionCall     *functionCall          `json:"function_call,omitempty"` // For legacy OpenAI format
-	Refusal          string                 `json:"refusal,omitempty"`
-	ToolCallId       string                 `json:"tool_call_id,omitempty"`
+	Id                       string                     `json:"id,omitempty"`
+	Audio                    map[string]interface{}     `json:"audio,omitempty"`
+	Name                     string                     `json:"name,omitempty"`
+	Role                     string                     `json:"role,omitempty"`
+	Content                  any                        `json:"content,omitempty"`
+	ReasoningContent         string                     `json:"reasoning_content,omitempty"`
+	Reasoning                string                     `json:"reasoning,omitempty"` // For streaming responses
+	ReasoningSignature       string                     `json:"reasoning_signature,omitempty"`
+	ReasoningRedactedContent string                     `json:"reasoning_redacted_content,omitempty"`
+	ClaudeContentBlocks      []claudeChatMessageContent `json:"claude_content_blocks,omitempty"`
+	ClaudeContentBlockIndex  *int                       `json:"claude_content_block_index,omitempty"`
+	ClaudeContentBlockStop   *int                       `json:"claude_content_block_stop,omitempty"`
+	ToolCalls                []toolCall                 `json:"tool_calls,omitempty"`
+	FunctionCall             *functionCall              `json:"function_call,omitempty"` // For legacy OpenAI format
+	Refusal                  string                     `json:"refusal,omitempty"`
+	ToolCallId               string                     `json:"tool_call_id,omitempty"`
 }
 
 func (m *chatMessage) handleNonStreamingReasoningContent(reasoningContentMode string) {
@@ -474,7 +500,7 @@ type toolCall struct {
 
 type functionCall struct {
 	Id        string `json:"id,omitempty"`
-	Name      string `json:"name"`
+	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments"`
 }
 

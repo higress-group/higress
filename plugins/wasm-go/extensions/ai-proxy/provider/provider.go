@@ -1235,6 +1235,10 @@ func (c *ProviderConfig) handleRequestBody(
 		}
 	}
 
+	if needClaudeConversion && provider.GetProviderType() != providerTypeBedrock && provider.GetProviderType() != providerTypeClaude {
+		body = stripClaudeInternalMessageFields(body, c.supportsMessageReasoningContent())
+	}
+
 	// use openai protocol (either original openai or converted from claude)
 	if handler, ok := provider.(TransformRequestBodyHandler); ok {
 		body, err = handler.TransformRequestBody(ctx, apiName, body)
@@ -1266,6 +1270,42 @@ func (c *ProviderConfig) handleRequestBody(
 		return types.ActionContinue, err
 	}
 	return types.ActionContinue, replaceRequestBody(body)
+}
+
+func stripClaudeInternalMessageFields(body []byte, preserveMessageReasoningContent ...bool) []byte {
+	result := body
+	for _, field := range []string{"claude_thinking", "claude_output_config", "claude_anthropic_beta"} {
+		if updated, err := sjson.DeleteBytes(result, field); err == nil {
+			result = updated
+		}
+	}
+
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return result
+	}
+
+	fields := []string{
+		"reasoning",
+		"reasoning_signature",
+		"reasoning_redacted_content",
+		"claude_content_blocks",
+		"claude_content_block_index",
+		"claude_content_block_stop",
+	}
+	if len(preserveMessageReasoningContent) == 0 || !preserveMessageReasoningContent[0] {
+		fields = append(fields, "reasoning_content")
+	}
+
+	for _, field := range fields {
+		messages.ForEach(func(key, _ gjson.Result) bool {
+			if updated, err := sjson.DeleteBytes(result, fmt.Sprintf("messages.%d.%s", key.Int(), field)); err == nil {
+				result = updated
+			}
+			return true
+		})
+	}
+	return result
 }
 
 func (c *ProviderConfig) handleRequestHeaders(provider Provider, ctx wrapper.HttpContext, apiName ApiName) {
