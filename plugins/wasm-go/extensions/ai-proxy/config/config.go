@@ -98,3 +98,8 @@ func (c *PluginConfig) GetProvider() provider.Provider {
 func (c *PluginConfig) GetProviderConfig() *provider.ProviderConfig {
 	return c.activeProviderConfig
 }
+
+// SetActiveProviderForTest replaces the runtime Provider after Complete(); intended for unit tests in package main only.
+func (c *PluginConfig) SetActiveProviderForTest(p provider.Provider) {
+	c.activeProvider = p
+}

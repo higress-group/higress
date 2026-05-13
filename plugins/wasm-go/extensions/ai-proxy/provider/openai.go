@@ -34,6 +34,9 @@ func (m *openaiProviderInitializer) DefaultCapabilities() map[string]string {
 		string(ApiNameImageEdit):                            PathOpenAIImageEdit,
 		string(ApiNameImageVariation):                       PathOpenAIImageVariation,
 		string(ApiNameAudioSpeech):                          PathOpenAIAudioSpeech,
+		string(ApiNameAudioTranscription):                   PathOpenAIAudioTranscriptions,
+		string(ApiNameAudioTranslation):                     PathOpenAIAudioTranslations,
+		string(ApiNameRealtime):                             PathOpenAIRealtime,
 		string(ApiNameModels):                               PathOpenAIModels,
 		string(ApiNameFiles):                                PathOpenAIFiles,
 		string(ApiNameRetrieveFile):                         PathOpenAIRetrieveFile,
@@ -63,6 +66,8 @@ func isDirectPath(path string) bool {
 	return strings.HasSuffix(path, "/completions") ||
 		strings.HasSuffix(path, "/embeddings") ||
 		strings.HasSuffix(path, "/audio/speech") ||
+		strings.HasSuffix(path, "/audio/transcriptions") ||
+		strings.HasSuffix(path, "/audio/translations") ||
 		strings.HasSuffix(path, "/images/generations") ||
 		strings.HasSuffix(path, "/images/variations") ||
 		strings.HasSuffix(path, "/images/edits") ||
@@ -70,6 +75,7 @@ func isDirectPath(path string) bool {
 		strings.HasSuffix(path, "/responses") ||
 		strings.HasSuffix(path, "/fine_tuning/jobs") ||
 		strings.HasSuffix(path, "/fine_tuning/checkpoints") ||
+		strings.HasSuffix(path, "/realtime") ||
 		strings.HasSuffix(path, "/videos")
 }
 

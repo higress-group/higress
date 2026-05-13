@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/provider"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
@@ -243,6 +244,84 @@ func RunOpenAIOnHttpRequestHeadersTests(t *testing.T) {
 			require.Contains(t, authValue, "sk-openai-test123456789", "Authorization should contain OpenAI API token")
 		})
 
+		// 测试OpenAI请求头处理（语音转写接口）
+		t.Run("openai audio transcriptions request headers", func(t *testing.T) {
+			host, status := test.NewTestHost(basicOpenAIConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/audio/transcriptions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost)
+			require.Equal(t, "api.openai.com", hostValue)
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath)
+			require.Contains(t, pathValue, "/v1/audio/transcriptions", "Path should contain audio transcriptions endpoint")
+		})
+
+		// 测试OpenAI请求头处理（语音翻译接口）
+		t.Run("openai audio translations request headers", func(t *testing.T) {
+			host, status := test.NewTestHost(basicOpenAIConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/audio/translations"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath)
+			require.Contains(t, pathValue, "/v1/audio/translations", "Path should contain audio translations endpoint")
+		})
+
+		// 测试OpenAI请求头处理（实时接口，WebSocket握手）
+		t.Run("openai realtime websocket handshake request headers", func(t *testing.T) {
+			host, status := test.NewTestHost(basicOpenAIConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/realtime?model=gpt-4o-realtime-preview"},
+				{":method", "GET"},
+				{"Connection", "Upgrade"},
+				{"Upgrade", "websocket"},
+				{"Sec-WebSocket-Version", "13"},
+				{"Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="},
+			})
+
+			// WebSocket 握手本身不应依赖请求体。受测试框架限制，某些场景可能仍返回 HeaderStopIteration。
+			require.True(t, action == types.ActionContinue || action == types.HeaderStopIteration)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath)
+			require.Contains(t, pathValue, "/v1/realtime", "Path should contain realtime endpoint")
+			require.Contains(t, pathValue, "model=gpt-4o-realtime-preview", "Query parameters should be preserved")
+		})
+
 		// 测试OpenAI请求头处理（图像生成接口）
 		t.Run("openai image generation request headers", func(t *testing.T) {
 			host, status := test.NewTestHost(basicOpenAIConfig)
@@ -304,6 +383,61 @@ func RunOpenAIOnHttpRequestHeadersTests(t *testing.T) {
 			require.True(t, hasPath)
 			// 对于直接路径，应该保持原有路径
 			require.Contains(t, pathValue, "/v1/chat/completions", "Path should be preserved for direct custom path")
+		})
+
+		// 测试OpenAI自定义域名请求头处理（间接路径语音转写）
+		t.Run("openai custom domain indirect path audio transcriptions request headers", func(t *testing.T) {
+			host, status := test.NewTestHost(openAICustomDomainIndirectPathConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/audio/transcriptions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost)
+			require.Equal(t, "custom.openai.com", hostValue, "Host should be changed to custom domain")
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath)
+			require.Contains(t, pathValue, "/api/audio/transcriptions", "Path should be rewritten with indirect custom prefix")
+		})
+
+		// 测试OpenAI自定义域名请求头处理（间接路径 realtime，WebSocket握手）
+		t.Run("openai custom domain indirect path realtime websocket handshake request headers", func(t *testing.T) {
+			host, status := test.NewTestHost(openAICustomDomainIndirectPathConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/realtime?model=gpt-4o-realtime-preview"},
+				{":method", "GET"},
+				{"Connection", "Upgrade"},
+				{"Upgrade", "websocket"},
+				{"Sec-WebSocket-Version", "13"},
+				{"Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="},
+			})
+
+			// WebSocket 握手本身不应依赖请求体。受测试框架限制，某些场景可能仍返回 HeaderStopIteration。
+			require.True(t, action == types.ActionContinue || action == types.HeaderStopIteration)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath)
+			require.Contains(t, pathValue, "/api/realtime", "Path should be rewritten with indirect custom prefix")
+			require.Contains(t, pathValue, "model=gpt-4o-realtime-preview", "Query parameters should be preserved")
 		})
 	})
 }
@@ -850,6 +984,10 @@ func RunOpenAIOnStreamingResponseBodyTests(t *testing.T) {
 			action4 := host.CallOnHttpStreamingResponseBody([]byte(chunk4), true)
 			require.Equal(t, types.ActionContinue, action4)
 
+			// Empty chunk should not panic
+			actionEmpty := host.CallOnHttpStreamingResponseBody([]byte{}, false)
+			require.Equal(t, types.ActionContinue, actionEmpty)
+
 			// 验证流式响应处理
 			// 注意：流式响应可能不会在GetResponseBody中累积，需要检查日志或其他方式验证
 			debugLogs := host.GetDebugLogs()
@@ -862,5 +1000,160 @@ func RunOpenAIOnStreamingResponseBodyTests(t *testing.T) {
 			}
 			require.True(t, hasStreamingLogs, "Should have streaming response processing logs")
 		})
+	})
+}
+
+// 测试配置：OpenAI配置 + promoteThinkingOnEmpty
+var openAIPromoteThinkingConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":                   "openai",
+			"apiTokens":              []string{"sk-openai-test123456789"},
+			"promoteThinkingOnEmpty": true,
+		},
+	})
+	return data
+}()
+
+// 测试配置：OpenAI配置 + hiclawMode
+var openAIHiclawModeConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":       "openai",
+			"apiTokens":  []string{"sk-openai-test123456789"},
+			"hiclawMode": true,
+		},
+	})
+	return data
+}()
+
+func RunOpenAIPromoteThinkingOnEmptyTests(t *testing.T) {
+	// Config parsing tests via host framework
+	test.RunGoTest(t, func(t *testing.T) {
+		t.Run("promoteThinkingOnEmpty config parses", func(t *testing.T) {
+			host, status := test.NewTestHost(openAIPromoteThinkingConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+		})
+
+		t.Run("hiclawMode config parses", func(t *testing.T) {
+			host, status := test.NewTestHost(openAIHiclawModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+		})
+	})
+
+	// Non-streaming promote logic tests via provider functions directly
+	t.Run("promotes reasoning_content when content is empty string", func(t *testing.T) {
+		body := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning_content":"这是思考内容"},"finish_reason":"stop"}]}`)
+		result, err := provider.PromoteThinkingOnEmptyResponse(body)
+		require.NoError(t, err)
+		require.Contains(t, string(result), `"content":"这是思考内容"`)
+		require.NotContains(t, string(result), `"reasoning_content":"这是思考内容"`)
+	})
+
+	t.Run("promotes reasoning_content when content is nil", func(t *testing.T) {
+		body := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","reasoning_content":"思考结果"},"finish_reason":"stop"}]}`)
+		result, err := provider.PromoteThinkingOnEmptyResponse(body)
+		require.NoError(t, err)
+		require.Contains(t, string(result), `"content":"思考结果"`)
+	})
+
+	t.Run("no promotion when content is present", func(t *testing.T) {
+		body := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":"正常回复","reasoning_content":"思考过程"},"finish_reason":"stop"}]}`)
+		result, err := provider.PromoteThinkingOnEmptyResponse(body)
+		require.NoError(t, err)
+		require.Equal(t, string(body), string(result))
+	})
+
+	t.Run("no promotion when no reasoning", func(t *testing.T) {
+		body := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":"正常回复"},"finish_reason":"stop"}]}`)
+		result, err := provider.PromoteThinkingOnEmptyResponse(body)
+		require.NoError(t, err)
+		require.Equal(t, string(body), string(result))
+	})
+
+	t.Run("no promotion when both empty", func(t *testing.T) {
+		body := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}`)
+		result, err := provider.PromoteThinkingOnEmptyResponse(body)
+		require.NoError(t, err)
+		require.Equal(t, string(body), string(result))
+	})
+
+	t.Run("invalid json returns error", func(t *testing.T) {
+		body := []byte(`not json`)
+		result, err := provider.PromoteThinkingOnEmptyResponse(body)
+		require.Error(t, err)
+		require.Equal(t, string(body), string(result))
+	})
+}
+
+func RunOpenAIPromoteThinkingOnEmptyStreamingTests(t *testing.T) {
+	// Streaming tests use provider functions directly since the test framework
+	// does not expose GetStreamingResponseBody.
+	t.Run("streaming: buffers reasoning and flushes on end when no content", func(t *testing.T) {
+		ctx := NewMockHttpContext()
+		// Chunk with only reasoning_content
+		data := []byte(`{"choices":[{"index":0,"delta":{"reasoning_content":"流式思考"}}]}`)
+		result, err := provider.PromoteStreamingThinkingOnEmptyChunk(ctx, data)
+		require.NoError(t, err)
+		// Reasoning should be stripped (not promoted inline)
+		require.NotContains(t, string(result), `"content":"流式思考"`)
+
+		// Flush should emit buffered reasoning as content
+		flush := provider.PromoteStreamingThinkingFlush(ctx)
+		require.NotNil(t, flush)
+		require.Contains(t, string(flush), `"content":"流式思考"`)
+	})
+
+	t.Run("streaming: no flush when content was seen", func(t *testing.T) {
+		ctx := NewMockHttpContext()
+		// First chunk: content delta
+		data1 := []byte(`{"choices":[{"index":0,"delta":{"content":"正文"}}]}`)
+		_, _ = provider.PromoteStreamingThinkingOnEmptyChunk(ctx, data1)
+
+		// Second chunk: reasoning only
+		data2 := []byte(`{"choices":[{"index":0,"delta":{"reasoning_content":"后续思考"}}]}`)
+		result, err := provider.PromoteStreamingThinkingOnEmptyChunk(ctx, data2)
+		require.NoError(t, err)
+		// Should be unchanged since content was already seen
+		require.Equal(t, string(data2), string(result))
+
+		// Flush should return nil since content was seen
+		flush := provider.PromoteStreamingThinkingFlush(ctx)
+		require.Nil(t, flush)
+	})
+
+	t.Run("streaming: accumulates multiple reasoning chunks", func(t *testing.T) {
+		ctx := NewMockHttpContext()
+		data1 := []byte(`{"choices":[{"index":0,"delta":{"reasoning_content":"第一段"}}]}`)
+		_, _ = provider.PromoteStreamingThinkingOnEmptyChunk(ctx, data1)
+
+		data2 := []byte(`{"choices":[{"index":0,"delta":{"reasoning_content":"第二段"}}]}`)
+		_, _ = provider.PromoteStreamingThinkingOnEmptyChunk(ctx, data2)
+
+		flush := provider.PromoteStreamingThinkingFlush(ctx)
+		require.NotNil(t, flush)
+		require.Contains(t, string(flush), `"content":"第一段第二段"`)
+	})
+
+	t.Run("streaming: no flush when no reasoning buffered", func(t *testing.T) {
+		ctx := NewMockHttpContext()
+		flush := provider.PromoteStreamingThinkingFlush(ctx)
+		require.Nil(t, flush)
+	})
+
+	t.Run("streaming: invalid json returns original", func(t *testing.T) {
+		ctx := NewMockHttpContext()
+		data := []byte(`not json`)
+		result, err := provider.PromoteStreamingThinkingOnEmptyChunk(ctx, data)
+		require.NoError(t, err)
+		require.Equal(t, string(data), string(result))
 	})
 }

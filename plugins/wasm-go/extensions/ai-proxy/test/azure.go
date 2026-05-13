@@ -1,7 +1,11 @@
 package test
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"mime"
+	"mime/multipart"
 	"strings"
 	"testing"
 
@@ -80,6 +84,22 @@ var azureDomainOnlyConfig = func() json.RawMessage {
 	return data
 }()
 
+var azureDomainOnlyImageMultipartConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type": "azure",
+			"apiTokens": []string{
+				"sk-azure-image-multipart",
+			},
+			"azureServiceUrl": "https://domain-resource.openai.azure.com?api-version=2024-02-15-preview",
+			"modelMapping": map[string]string{
+				"gpt-image-1.5": "gpt-image-1",
+			},
+		},
+	})
+	return data
+}()
+
 // 测试配置：Azure OpenAI多模型配置
 var azureMultiModelConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -98,6 +118,74 @@ var azureMultiModelConfig = func() json.RawMessage {
 	})
 	return data
 }()
+
+func getMultipartTextField(body []byte, contentType string, fieldName string) (string, bool, error) {
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", false, err
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return "", false, nil
+	}
+
+	reader := multipart.NewReader(bytes.NewReader(body), boundary)
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
+
+		data, err := io.ReadAll(part)
+		_ = part.Close()
+		if err != nil {
+			return "", false, err
+		}
+		if part.FormName() == fieldName {
+			return string(data), true, nil
+		}
+	}
+}
+
+func RunAzureMultipartHelperTests(t *testing.T) {
+	t.Run("multipart text field returns error for invalid content type", func(t *testing.T) {
+		_, _, err := getMultipartTextField([]byte("bad-body"), "multipart/form-data; boundary=\"", "model")
+		require.Error(t, err)
+	})
+
+	t.Run("multipart text field returns not found for missing boundary", func(t *testing.T) {
+		value, found, err := getMultipartTextField([]byte("bad-body"), "multipart/form-data", "model")
+		require.NoError(t, err)
+		require.False(t, found)
+		require.Equal(t, "", value)
+	})
+
+	t.Run("multipart text field returns not found on eof", func(t *testing.T) {
+		body, contentType := buildMultipartRequestBody(t, map[string]string{
+			"model": "gpt-image-1.5",
+		}, nil)
+
+		value, found, err := getMultipartTextField(body, contentType, "prompt")
+		require.NoError(t, err)
+		require.False(t, found)
+		require.Equal(t, "", value)
+	})
+
+	t.Run("multipart text field returns next part error on malformed body", func(t *testing.T) {
+		body := []byte("--abc\r\nnot-a-header\r\n\r\nvalue\r\n--abc--\r\n")
+		_, _, err := getMultipartTextField(body, "multipart/form-data; boundary=abc", "model")
+		require.Error(t, err)
+	})
+
+	t.Run("multipart text field returns read error on truncated part", func(t *testing.T) {
+		body := []byte("--abc\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nvalue\r\n--ab")
+		_, _, err := getMultipartTextField(body, "multipart/form-data; boundary=abc", "model")
+		require.Error(t, err)
+	})
+}
 
 // 测试配置：Azure OpenAI无效配置（缺少azureServiceUrl）
 var azureInvalidConfigMissingUrl = func() json.RawMessage {
@@ -613,6 +701,121 @@ func RunAzureOnHttpRequestBodyTests(t *testing.T) {
 			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
 			require.True(t, hasPath, "Path header should exist")
 			require.Equal(t, pathValue, "/openai/deployments/gpt-3.5-turbo/chat/completions?api-version=2024-02-15-preview", "Path should use model from request body")
+		})
+
+		t.Run("azure domain only multipart image edit request body", func(t *testing.T) {
+			host, status := test.NewTestHost(azureDomainOnlyImageMultipartConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			body, contentType := buildMultipartRequestBody(t, map[string]string{
+				"model":  "gpt-image-1.5",
+				"prompt": "把小狗换成白色",
+				"size":   "1024x1024",
+				"n":      "1",
+			}, map[string][]byte{
+				"image[]": []byte("fake-image-content"),
+			})
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/edits"},
+				{":method", "POST"},
+				{"Content-Type", contentType},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			action = host.CallOnHttpRequestBody(body)
+			require.Equal(t, types.ActionContinue, action)
+
+			transformedBody := host.GetRequestBody()
+			require.NotNil(t, transformedBody)
+
+			modelValue, found, err := getMultipartTextField(transformedBody, contentType, "model")
+			require.NoError(t, err)
+			require.True(t, found, "Model field should exist in multipart body")
+			require.Equal(t, "gpt-image-1", modelValue, "Model field should be mapped in multipart body")
+			require.Contains(t, string(transformedBody), "fake-image-content", "Image file content should remain in multipart body")
+
+			requestHeaders := host.GetRequestHeaders()
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/openai/deployments/gpt-image-1/images/edits?api-version=2024-02-15-preview", pathValue, "Path should use mapped multipart model")
+
+			contentTypeValue, hasContentType := test.GetHeaderValue(requestHeaders, "Content-Type")
+			require.True(t, hasContentType, "Content-Type header should exist")
+			require.Equal(t, contentType, contentTypeValue, "Multipart Content-Type should remain unchanged")
+		})
+
+		t.Run("azure domain only multipart image variation request body", func(t *testing.T) {
+			host, status := test.NewTestHost(azureDomainOnlyImageMultipartConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			body, contentType := buildMultipartRequestBody(t, map[string]string{
+				"model":  "gpt-image-1.5",
+				"prompt": "生成类似风格",
+				"size":   "1024x1024",
+				"n":      "1",
+			}, map[string][]byte{
+				"image": []byte("fake-image-content"),
+			})
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/variations"},
+				{":method", "POST"},
+				{"Content-Type", contentType},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			action = host.CallOnHttpRequestBody(body)
+			require.Equal(t, types.ActionContinue, action)
+
+			transformedBody := host.GetRequestBody()
+			require.NotNil(t, transformedBody)
+
+			modelValue, found, err := getMultipartTextField(transformedBody, contentType, "model")
+			require.NoError(t, err)
+			require.True(t, found, "Model field should exist in multipart body")
+			require.Equal(t, "gpt-image-1", modelValue, "Model field should be mapped in multipart body")
+			require.Contains(t, string(transformedBody), "fake-image-content", "Image file content should remain in multipart body")
+
+			requestHeaders := host.GetRequestHeaders()
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/openai/deployments/gpt-image-1/images/variations?api-version=2024-02-15-preview", pathValue, "Path should use mapped multipart model")
+
+			contentTypeValue, hasContentType := test.GetHeaderValue(requestHeaders, "Content-Type")
+			require.True(t, hasContentType, "Content-Type header should exist")
+			require.Equal(t, contentType, contentTypeValue, "Multipart Content-Type should remain unchanged")
+		})
+
+		t.Run("azure domain only multipart malformed body logs transform failure", func(t *testing.T) {
+			host, status := test.NewTestHost(azureDomainOnlyImageMultipartConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/images/edits"},
+				{":method", "POST"},
+				{"Content-Type", "multipart/form-data"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			action = host.CallOnHttpRequestBody([]byte("bad-multipart-body"))
+			require.Equal(t, types.ActionContinue, action)
+
+			debugLogs := host.GetDebugLogs()
+			hasMultipartTransformFailureLog := false
+			for _, debugLog := range debugLogs {
+				if strings.Contains(debugLog, "[azure multipart] body transform failed") {
+					hasMultipartTransformFailureLog = true
+					break
+				}
+			}
+			require.True(t, hasMultipartTransformFailureLog, "Should log azure multipart transform failure")
 		})
 
 		// 测试Azure OpenAI模型无关请求处理（仅域名配置）

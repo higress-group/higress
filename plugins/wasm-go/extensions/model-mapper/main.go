@@ -112,6 +112,7 @@ func parseConfig(json gjson.Result, config *Config) error {
 			"/video-synthesis",
 			"/rerank",
 			"/messages",
+			"/responses",
 		}
 	}
 

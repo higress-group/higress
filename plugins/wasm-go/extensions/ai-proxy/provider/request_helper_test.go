@@ -8,6 +8,131 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMergeConsecutiveMessages(t *testing.T) {
+	t.Run("no_consecutive_messages", func(t *testing.T) {
+		input := chatCompletionRequest{
+			Messages: []chatMessage{
+				{Role: "user", Content: "你好"},
+				{Role: "assistant", Content: "你好！"},
+				{Role: "user", Content: "再见"},
+			},
+		}
+		body, err := json.Marshal(input)
+		require.NoError(t, err)
+
+		result, err := mergeConsecutiveMessages(body)
+		assert.NoError(t, err)
+		// No merging needed, returned body should be identical
+		assert.Equal(t, body, result)
+	})
+
+	t.Run("merges_consecutive_user_messages", func(t *testing.T) {
+		input := chatCompletionRequest{
+			Messages: []chatMessage{
+				{Role: "user", Content: "第一条"},
+				{Role: "user", Content: "第二条"},
+				{Role: "assistant", Content: "回复"},
+			},
+		}
+		body, err := json.Marshal(input)
+		require.NoError(t, err)
+
+		result, err := mergeConsecutiveMessages(body)
+		assert.NoError(t, err)
+
+		var output chatCompletionRequest
+		require.NoError(t, json.Unmarshal(result, &output))
+
+		assert.Len(t, output.Messages, 2)
+		assert.Equal(t, "user", output.Messages[0].Role)
+		assert.Equal(t, "第一条\n\n第二条", output.Messages[0].Content)
+		assert.Equal(t, "assistant", output.Messages[1].Role)
+	})
+
+	t.Run("merges_consecutive_assistant_messages", func(t *testing.T) {
+		input := chatCompletionRequest{
+			Messages: []chatMessage{
+				{Role: "user", Content: "问题"},
+				{Role: "assistant", Content: "第一段"},
+				{Role: "assistant", Content: "第二段"},
+			},
+		}
+		body, err := json.Marshal(input)
+		require.NoError(t, err)
+
+		result, err := mergeConsecutiveMessages(body)
+		assert.NoError(t, err)
+
+		var output chatCompletionRequest
+		require.NoError(t, json.Unmarshal(result, &output))
+
+		assert.Len(t, output.Messages, 2)
+		assert.Equal(t, "user", output.Messages[0].Role)
+		assert.Equal(t, "assistant", output.Messages[1].Role)
+		assert.Equal(t, "第一段\n\n第二段", output.Messages[1].Content)
+	})
+
+	t.Run("merges_multiple_consecutive_same_role", func(t *testing.T) {
+		input := chatCompletionRequest{
+			Messages: []chatMessage{
+				{Role: "user", Content: "A"},
+				{Role: "user", Content: "B"},
+				{Role: "user", Content: "C"},
+				{Role: "assistant", Content: "回复"},
+			},
+		}
+		body, err := json.Marshal(input)
+		require.NoError(t, err)
+
+		result, err := mergeConsecutiveMessages(body)
+		assert.NoError(t, err)
+
+		var output chatCompletionRequest
+		require.NoError(t, json.Unmarshal(result, &output))
+
+		assert.Len(t, output.Messages, 2)
+		assert.Equal(t, "A\n\nB\n\nC", output.Messages[0].Content)
+	})
+
+	t.Run("system_messages_not_merged", func(t *testing.T) {
+		input := chatCompletionRequest{
+			Messages: []chatMessage{
+				{Role: "system", Content: "系统提示1"},
+				{Role: "system", Content: "系统提示2"},
+				{Role: "user", Content: "问题"},
+			},
+		}
+		body, err := json.Marshal(input)
+		require.NoError(t, err)
+
+		result, err := mergeConsecutiveMessages(body)
+		assert.NoError(t, err)
+		// system messages are not merged, body unchanged
+		assert.Equal(t, body, result)
+	})
+
+	t.Run("single_message_unchanged", func(t *testing.T) {
+		input := chatCompletionRequest{
+			Messages: []chatMessage{
+				{Role: "user", Content: "只有一条"},
+			},
+		}
+		body, err := json.Marshal(input)
+		require.NoError(t, err)
+
+		result, err := mergeConsecutiveMessages(body)
+		assert.NoError(t, err)
+		assert.Equal(t, body, result)
+	})
+
+	t.Run("invalid_json_body", func(t *testing.T) {
+		body := []byte(`invalid json`)
+		result, err := mergeConsecutiveMessages(body)
+		assert.Error(t, err)
+		assert.Equal(t, body, result)
+	})
+}
+
 func TestCleanupContextMessages(t *testing.T) {
 	t.Run("empty_cleanup_commands", func(t *testing.T) {
 		body := []byte(`{"messages":[{"role":"user","content":"hello"}]}`)

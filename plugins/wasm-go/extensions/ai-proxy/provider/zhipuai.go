@@ -95,6 +95,10 @@ func (m *zhipuAiProvider) TransformRequestBody(ctx wrapper.HttpContext, apiName 
 		body, _ = sjson.SetBytes(body, "thinking", map[string]string{"type": "enabled"})
 		// Remove reasoning_effort field as ZhipuAI doesn't recognize it
 		body, _ = sjson.DeleteBytes(body, "reasoning_effort")
+	} else if thinkingType, ok := ctx.GetContext(ctxKeyClaudeThinkingType).(string); ok && thinkingType != "enabled" {
+		// Request came from Claude auto-conversion with thinking explicitly disabled or absent.
+		// Explicitly set thinking=disabled to prevent ZhipuAI from enabling it by default.
+		body, _ = sjson.SetBytes(body, "thinking", map[string]string{"type": "disabled"})
 	}
 
 	return m.config.defaultTransformRequestBody(ctx, apiName, body)

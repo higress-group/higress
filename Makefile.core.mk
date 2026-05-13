@@ -23,6 +23,11 @@ export GOPROXY ?= https://proxy.golang.org,direct
 
 TARGET_ARCH ?= amd64
 
+VALID_ARCHS := amd64 arm64
+ifeq ($(filter $(TARGET_ARCH),$(VALID_ARCHS)),)
+  $(error "TARGET_ARCH must be one of: $(VALID_ARCHS)")
+endif
+
 GOARCH_LOCAL := $(TARGET_ARCH)
 GOOS_LOCAL := $(TARGET_OS)
 RELEASE_LDFLAGS='$(GO_LDFLAGS) -extldflags -static -s -w'
@@ -166,7 +171,7 @@ build-gateway: prebuild buildx-prepare build-golang-filter
 	USE_REAL_USER=1 TARGET_ARCH=arm64 DOCKER_TARGETS="docker.proxyv2" ./tools/hack/build-istio-image.sh init
 	DOCKER_TARGETS="docker.proxyv2" IMG_URL="${IMG_URL}" ./tools/hack/build-istio-image.sh docker.buildx
 
-build-gateway-local: prebuild build-golang-filter-amd64
+build-gateway-local: prebuild $(if $(filter amd64,$(TARGET_ARCH)),build-golang-filter-amd64,build-golang-filter-arm64)
 	TARGET_ARCH=${TARGET_ARCH} DOCKER_TARGETS="docker.proxyv2" ./tools/hack/build-istio-image.sh docker
 
 build-golang-filter-amd64:
@@ -200,8 +205,8 @@ install: pre-install
 	helm install higress helm/higress -n higress-system --create-namespace --set 'global.local=true'
 
 HIGRESS_LATEST_IMAGE_TAG ?= latest
-ENVOY_LATEST_IMAGE_TAG ?= ca6ff3a92e3fa592bff706894b22e0509a69757b
-ISTIO_LATEST_IMAGE_TAG ?= c482b42b9a14885bd6692c6abd01345d50a372f7
+ENVOY_LATEST_IMAGE_TAG ?= 36c1d07376bf11295edc40357d74a5ecb50122b1
+ISTIO_LATEST_IMAGE_TAG ?= 36c1d07376bf11295edc40357d74a5ecb50122b1
 
 install-dev: pre-install
 	helm install higress helm/core -n higress-system --create-namespace --set 'controller.tag=$(TAG)' --set 'gateway.replicas=1' --set 'pilot.tag=$(ISTIO_LATEST_IMAGE_TAG)' --set 'gateway.tag=$(ENVOY_LATEST_IMAGE_TAG)' --set 'global.local=true'

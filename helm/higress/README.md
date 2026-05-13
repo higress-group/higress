@@ -46,6 +46,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | controller.env | object | `{}` |  |
 | controller.hub | string | `""` |  |
 | controller.image | string | `"higress"` |  |
+| controller.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | controller.imagePullSecrets | list | `[]` |  |
 | controller.labels | object | `{}` |  |
 | controller.name | string | `"higress-controller"` |  |
@@ -98,6 +99,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | gateway.httpsPort | int | `443` |  |
 | gateway.hub | string | `""` |  |
 | gateway.image | string | `"gateway"` |  |
+| gateway.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | gateway.kind | string | `"Deployment"` | Use a `DaemonSet` or `Deployment` |
 | gateway.labels | object | `{}` | Labels to apply to all resources |
 | gateway.metrics.enabled | bool | `false` | If true, create PodMonitor or VMPodScrape for gateway |
@@ -253,13 +255,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | meshConfig | object | `{"enablePrometheusMerge":true,"rootNamespace":null,"trustDomain":"cluster.local"}` | meshConfig defines runtime configuration of components, including Istiod and istio-agent behavior See https://istio.io/docs/reference/config/istio.mesh.v1alpha1/ for all available options |
 | meshConfig.rootNamespace | string | `nil` | The namespace to treat as the administrative root namespace for Istio configuration. When processing a leaf namespace Istio will search for declarations in that namespace first and if none are found it will search in the root namespace. Any matching declaration found in the root namespace is processed as if it were declared in the leaf namespace. |
 | meshConfig.trustDomain | string | `"cluster.local"` | The trust domain corresponds to the trust root of a system Refer to https://github.com/spiffe/spiffe/blob/master/standards/SPIFFE-ID.md#21-trust-domain |
-| pilot.autoscaleEnabled | bool | `false` |  |
-| pilot.autoscaleMax | int | `5` |  |
-| pilot.autoscaleMin | int | `1` |  |
-| pilot.configMap | bool | `true` | Install the mesh config map, generated from values.yaml. If false, pilot wil use default values (by default) or user-supplied values. |
-| pilot.configSource | object | `{"subscribedResources":[]}` | This is used to set the source of configuration for the associated address in configSource, if nothing is specified the default MCP is assumed. |
 | pilot.cpu.targetAverageUtilization | int | `80` |  |
-| pilot.deploymentLabels | object | `{}` | Additional labels to apply to the deployment. |
 | pilot.enableProtocolSniffingForInbound | bool | `true` | if protocol sniffing is enabled for inbound |
 | pilot.enableProtocolSniffingForOutbound | bool | `true` | if protocol sniffing is enabled for outbound |
 | pilot.env.PILOT_ENABLE_CROSS_CLUSTER_WORKLOAD_ENTRY | string | `"false"` |  |
@@ -270,19 +266,13 @@ The command removes all the Kubernetes components associated with the chart and 
 | pilot.image | string | `"pilot"` | Can be a full hub/image:tag |
 | pilot.jwksResolverExtraRootCA | string | `""` | You can use jwksResolverExtraRootCA to provide a root certificate in PEM format. This will then be trusted by pilot when resolving JWKS URIs. |
 | pilot.keepaliveMaxServerConnectionAge | string | `"30m"` | The following is used to limit how long a sidecar can be connected to a pilot. It balances out load across pilot instances at the cost of increasing system churn. |
-| pilot.nodeSelector | object | `{}` |  |
 | pilot.plugins | list | `[]` |  |
-| pilot.podAnnotations | object | `{}` |  |
-| pilot.podLabels | object | `{}` | Additional labels to apply on the pod level for monitoring and logging configuration. |
-| pilot.replicaCount | int | `1` |  |
 | pilot.resources | object | `{"requests":{"cpu":"500m","memory":"2048Mi"}}` | Resources for a small pilot install |
-| pilot.rollingMaxSurge | string | `"100%"` |  |
-| pilot.rollingMaxUnavailable | string | `"25%"` |  |
-| pilot.serviceAnnotations | object | `{}` |  |
 | pilot.tag | string | `""` |  |
 | pilot.traceSampling | float | `1` |  |
 | pluginServer.hub | string | `""` |  |
 | pluginServer.image | string | `"plugin-server"` |  |
+| pluginServer.imagePullPolicy | string | `""` | Specify image pull policy if default behavior isn't desired. Default behavior: latest images will be Always else IfNotPresent. |
 | pluginServer.imagePullSecrets | list | `[]` |  |
 | pluginServer.labels | object | `{}` |  |
 | pluginServer.name | string | `"higress-plugin-server"` |  |

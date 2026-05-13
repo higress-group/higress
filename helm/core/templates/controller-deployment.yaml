@@ -105,7 +105,9 @@ spec:
             mountPath: /var/log
         - name: discovery
           image: "{{ .Values.pilot.hub | default .Values.global.hub }}/higress/{{ .Values.pilot.image | default "pilot" }}:{{ .Values.pilot.tag | default .Chart.AppVersion }}"
-{{- if .Values.global.imagePullPolicy }}
+{{- if .Values.controller.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.controller.imagePullPolicy }}
+{{- else if .Values.global.imagePullPolicy }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
 {{- end }}
           args:

@@ -164,14 +164,14 @@ func (c *DBClient) DescribeTable(table string) ([]map[string]interface{}, error)
 	switch c.dbType {
 	case MYSQL:
 		sql = `
-			select 
+			select
 			    column_name,
 				column_type,
 				is_nullable,
 				column_key,
 				column_default,
 				extra,
-				column_comment 
+				column_comment
 			from information_schema.columns
 			where table_schema = database() and table_name = ?
 		`
@@ -179,17 +179,17 @@ func (c *DBClient) DescribeTable(table string) ([]map[string]interface{}, error)
 
 	case POSTGRES:
 		sql = `
-			select 
+			select
 			    column_name,
 				data_type as column_type,
 				is_nullable,
-				case 
+				case
 				    when column_default like 'nextval%' then 'auto_increment'
 				    when column_default is not null then 'default'
 				    else ''
 				end as column_key,
 				column_default,
-				case 
+				case
 				    when column_default like 'nextval%' then 'auto_increment'
 				    else ''
 				end as extra,
@@ -202,7 +202,7 @@ func (c *DBClient) DescribeTable(table string) ([]map[string]interface{}, error)
 
 	case CLICKHOUSE:
 		sql = `
-			select 
+			select
 			    name as column_name,
 				type as column_type,
 				if(is_nullable, 'YES', 'NO') as is_nullable,
@@ -217,7 +217,7 @@ func (c *DBClient) DescribeTable(table string) ([]map[string]interface{}, error)
 
 	case SQLITE:
 		sql = `
-			select 
+			select
 			    name as column_name,
 				type as column_type,
 				not (notnull = 1) as is_nullable,
@@ -236,6 +236,10 @@ func (c *DBClient) DescribeTable(table string) ([]map[string]interface{}, error)
 
 // ListTables List all tables in the connected database.
 func (c *DBClient) ListTables() ([]string, error) {
+	if err := c.reconnectIfDbEmpty(); err != nil {
+		return nil, err
+	}
+
 	var sql string
 	switch c.dbType {
 	case MYSQL:
@@ -263,6 +267,10 @@ func (c *DBClient) ListTables() ([]string, error) {
 			return nil, fmt.Errorf("failed to scan table name: %w", err)
 		}
 		tables = append(tables, table)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating table rows: %w", err)
 	}
 
 	return tables, nil
@@ -333,6 +341,10 @@ func (c *DBClient) Query(sql string, args ...interface{}) ([]map[string]interfac
 
 		// Append the map to the results slice
 		results = append(results, rowMap)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate table rows in Query: %w", err)
 	}
 
 	return results, nil

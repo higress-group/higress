@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -151,17 +152,44 @@ func (m *azureProvider) OnRequestBody(ctx wrapper.HttpContext, apiName ApiName, 
 	return m.config.handleRequestBody(m, m.contextCache, ctx, apiName, body)
 }
 
+func isAzureMultipartImageRequest(apiName ApiName, contentType string) bool {
+	if apiName != ApiNameImageEdit && apiName != ApiNameImageVariation {
+		return false
+	}
+	return isMultipartFormData(contentType)
+}
+
 func (m *azureProvider) TransformRequestBody(ctx wrapper.HttpContext, apiName ApiName, body []byte) (transformedBody []byte, err error) {
 	transformedBody = body
 	err = nil
 
+	contentType, _ := proxywasm.GetHttpRequestHeader(util.HeaderContentType)
+	isMultipartImageRequest := isAzureMultipartImageRequest(apiName, contentType)
+
 	transformedBody, err = m.config.defaultTransformRequestBody(ctx, apiName, body)
+	if isMultipartImageRequest {
+		if err != nil {
+			log.Debugf("[azure multipart] body transform failed: api=%s, err=%v", apiName, err)
+		} else {
+			log.Debugf("[azure multipart] body transformed: api=%s, originalModel=%s, mappedModel=%s, bodyBytes=%d->%d",
+				apiName,
+				ctx.GetStringContext(ctxKeyOriginalRequestModel, ""),
+				ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
+				len(body),
+				len(transformedBody),
+			)
+		}
+	}
 	if err != nil {
 		return
 	}
 
 	// This must be called after the body is transformed, because it uses the model from the context filled by that call.
 	if path := m.transformRequestPath(ctx, apiName); path != "" {
+		if isMultipartImageRequest {
+			log.Debugf("[azure multipart] body path overwrite: api=%s, path=%s, modelInContext=%s",
+				apiName, path, ctx.GetStringContext(ctxKeyFinalRequestModel, ""))
+		}
 		err = util.OverwriteRequestPath(path)
 		if err == nil {
 			log.Debugf("azureProvider: overwrite request path to %s succeeded", path)
@@ -222,16 +250,30 @@ func (m *azureProvider) transformRequestPath(ctx wrapper.HttpContext, apiName Ap
 }
 
 func (m *azureProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiName ApiName, headers http.Header) {
+	contentType := headers.Get(util.HeaderContentType)
+	isMultipartImageRequest := isAzureMultipartImageRequest(apiName, contentType)
+
 	// We need to overwrite the request path in the request headers stage,
 	// because for some APIs, we don't read the request body and the path is model irrelevant.
 	if overwrittenPath := m.transformRequestPath(ctx, apiName); overwrittenPath != "" {
 		util.OverwriteRequestPathHeader(headers, overwrittenPath)
+		if isMultipartImageRequest {
+			log.Debugf("[azure multipart] header path overwrite: api=%s, path=%s, modelInContext=%s",
+				apiName, overwrittenPath, ctx.GetStringContext(ctxKeyFinalRequestModel, ""))
+		}
 	}
 	util.OverwriteRequestHostHeader(headers, m.serviceUrl.Host)
 	headers.Set("api-key", m.config.GetApiTokenInUse(ctx))
 	headers.Del("Content-Length")
 
-	if !m.config.isSupportedAPI(apiName) || !m.config.needToProcessRequestBody(apiName) {
+	supportedAPI := m.config.isSupportedAPI(apiName)
+	needProcessBody := m.config.needToProcessRequestBody(apiName)
+	if isMultipartImageRequest {
+		log.Debugf("[azure multipart] body processing decision: api=%s, supported=%t, needProcessBody=%t",
+			apiName, supportedAPI, needProcessBody)
+	}
+
+	if !supportedAPI || !needProcessBody {
 		// If the API is not supported or there is no need to process the body,
 		// we should not read the request body and keep it as it is.
 		ctx.DontReadRequestBody()

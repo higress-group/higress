@@ -79,6 +79,22 @@ func (o *openrouterProvider) TransformRequestBody(ctx wrapper.HttpContext, apiNa
 	// Check if ReasoningMaxTokens exists in the request body
 	reasoningMaxTokens := gjson.GetBytes(body, "reasoning_max_tokens")
 	if !reasoningMaxTokens.Exists() || reasoningMaxTokens.Int() == 0 {
+		// Check if budget_tokens was stored in context (from Claude auto-conversion path)
+		// Only use it when thinking was explicitly enabled, to avoid dirty input
+		if thinkingType, _ := ctx.GetContext(ctxKeyClaudeThinkingType).(string); thinkingType == "enabled" {
+			if budgetTokens, ok := ctx.GetContext(ctxKeyClaudeBudgetTokens).(int); ok && budgetTokens > 0 {
+				// Use budget_tokens from Claude thinking config
+				modifiedBody, err := sjson.DeleteBytes(body, "reasoning_effort")
+				if err != nil {
+					modifiedBody = body
+				}
+				modifiedBody, err = sjson.SetBytes(modifiedBody, "reasoning.max_tokens", budgetTokens)
+				if err != nil {
+					return nil, err
+				}
+				return o.config.defaultTransformRequestBody(ctx, apiName, modifiedBody)
+			}
+		}
 		// No reasoning_max_tokens, use default transformation
 		return o.config.defaultTransformRequestBody(ctx, apiName, body)
 	}

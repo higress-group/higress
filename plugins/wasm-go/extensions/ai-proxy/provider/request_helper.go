@@ -154,6 +154,54 @@ func cleanupContextMessages(body []byte, cleanupCommands []string) ([]byte, erro
 	return json.Marshal(request)
 }
 
+// mergeConsecutiveMessages merges consecutive messages of the same role (user or assistant).
+// Many LLM providers require strict user↔assistant alternation and reject requests where
+// two messages of the same role appear consecutively. When enabled, consecutive same-role
+// messages have their content concatenated into a single message.
+func mergeConsecutiveMessages(body []byte) ([]byte, error) {
+	request := &chatCompletionRequest{}
+	if err := json.Unmarshal(body, request); err != nil {
+		return body, fmt.Errorf("unable to unmarshal request for message merging: %v", err)
+	}
+	if len(request.Messages) <= 1 {
+		return body, nil
+	}
+
+	merged := false
+	result := make([]chatMessage, 0, len(request.Messages))
+	for _, msg := range request.Messages {
+		if len(result) > 0 &&
+			result[len(result)-1].Role == msg.Role &&
+			(msg.Role == roleUser || msg.Role == roleAssistant) {
+			last := &result[len(result)-1]
+			last.Content = mergeMessageContent(last.Content, msg.Content)
+			merged = true
+			continue
+		}
+		result = append(result, msg)
+	}
+
+	if !merged {
+		return body, nil
+	}
+	request.Messages = result
+	return json.Marshal(request)
+}
+
+// mergeMessageContent concatenates two message content values.
+// If both are plain strings they are joined with a blank line.
+// Otherwise both are converted to content-block arrays and concatenated.
+func mergeMessageContent(prev, curr any) any {
+	prevStr, prevIsStr := prev.(string)
+	currStr, currIsStr := curr.(string)
+	if prevIsStr && currIsStr {
+		return prevStr + "\n\n" + currStr
+	}
+	prevParts := (&chatMessage{Content: prev}).ParseContent()
+	currParts := (&chatMessage{Content: curr}).ParseContent()
+	return append(prevParts, currParts...)
+}
+
 func ReplaceResponseBody(body []byte) error {
 	log.Debugf("response body: %s", string(body))
 	err := proxywasm.ReplaceHttpResponseBody(body)
