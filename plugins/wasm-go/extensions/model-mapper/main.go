@@ -28,6 +28,14 @@ const (
 	contextResponsePendingData    = "model_mapper.response_pending_data"
 )
 
+var defaultResponseModelPaths = []string{
+	"model",
+	"body.model",
+	"response.model",
+	"message.model",
+	"modelVersion",
+}
+
 func main() {}
 
 func init() {
@@ -56,6 +64,7 @@ type Config struct {
 	defaultModel          string
 	enableOnPathSuffix    []string
 	enableResponseMapping bool
+	responseModelPaths    []string
 }
 
 func parseConfig(json gjson.Result, config *Config) error {
@@ -63,12 +72,31 @@ func parseConfig(json gjson.Result, config *Config) error {
 	if config.modelKey == "" {
 		config.modelKey = "model"
 	}
-	config.enableResponseMapping = true
+	config.enableResponseMapping = false
 	if enableResponseMapping := json.Get("enableResponseMapping"); enableResponseMapping.Exists() {
 		if !enableResponseMapping.IsBool() {
 			return errors.New("enableResponseMapping must be a boolean")
 		}
 		config.enableResponseMapping = enableResponseMapping.Bool()
+	}
+
+	config.responseModelPaths = make([]string, len(defaultResponseModelPaths))
+	copy(config.responseModelPaths, defaultResponseModelPaths)
+	if userPaths := json.Get("responseModelPaths"); userPaths.Exists() {
+		if !userPaths.IsArray() {
+			return errors.New("responseModelPaths must be an array of strings")
+		}
+		seen := make(map[string]bool)
+		for _, p := range config.responseModelPaths {
+			seen[p] = true
+		}
+		for _, p := range userPaths.Array() {
+			path := p.String()
+			if !seen[path] {
+				config.responseModelPaths = append(config.responseModelPaths, path)
+				seen[path] = true
+			}
+		}
 	}
 
 	modelMapping := json.Get("modelMapping")
@@ -213,7 +241,6 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 	if newModel != "" && newModel != oldModel {
 		if config.enableResponseMapping && oldModel != "" {
 			ctx.SetContext(contextResponseRewriteEnabled, true)
-			ctx.SetContext(contextResponseModelKey, config.modelKey)
 			ctx.SetContext(contextResponseClientModel, oldModel)
 			ctx.SetContext(contextResponseUpstreamModel, newModel)
 		}
@@ -265,10 +292,9 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config Config, chunk [
 		return chunk
 	}
 
-	modelKey := ctx.GetStringContext(contextResponseModelKey, "")
 	clientModel := ctx.GetStringContext(contextResponseClientModel, "")
 	upstreamModel := ctx.GetStringContext(contextResponseUpstreamModel, "")
-	if modelKey == "" || clientModel == "" || upstreamModel == "" {
+	if clientModel == "" || upstreamModel == "" {
 		return chunk
 	}
 
@@ -282,13 +308,13 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config Config, chunk [
 			break
 		}
 		rawEvent := pendingData[:eventPos]
-		output.WriteString(rewriteSseEvent(rawEvent, modelKey, upstreamModel, clientModel))
+		output.WriteString(rewriteSseEvent(rawEvent, config.responseModelPaths, upstreamModel, clientModel))
 		output.WriteString(pendingData[eventPos : eventPos+sepSize])
 		pendingData = pendingData[eventPos+sepSize:]
 	}
 
 	if isLastChunk && pendingData != "" {
-		output.WriteString(rewriteSseEvent(pendingData, modelKey, upstreamModel, clientModel))
+		output.WriteString(rewriteSseEvent(pendingData, config.responseModelPaths, upstreamModel, clientModel))
 		pendingData = ""
 	}
 	ctx.SetContext(contextResponsePendingData, pendingData)
@@ -304,14 +330,13 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config Config, body []byte) typ
 		return types.ActionContinue
 	}
 
-	modelKey := ctx.GetStringContext(contextResponseModelKey, "")
 	clientModel := ctx.GetStringContext(contextResponseClientModel, "")
 	upstreamModel := ctx.GetStringContext(contextResponseUpstreamModel, "")
-	if modelKey == "" || clientModel == "" || upstreamModel == "" || len(body) == 0 {
+	if clientModel == "" || upstreamModel == "" || len(body) == 0 {
 		return types.ActionContinue
 	}
 
-	newBody, rewritten, err := rewriteModelFieldInJSONBytes(body, modelKey, upstreamModel, clientModel)
+	newBody, rewritten, err := rewriteModelFieldInJSONBytes(body, config.responseModelPaths, upstreamModel, clientModel)
 	if err != nil {
 		log.Errorf("failed to rewrite response model: %v", err)
 		return types.ActionContinue
@@ -331,34 +356,21 @@ func resetResponseRewriteContext(ctx wrapper.HttpContext) {
 	ctx.SetContext(contextResponsePendingData, "")
 }
 
-func rewriteModelFieldInJSONBytes(payload []byte, key, upstreamModel, clientModel string) ([]byte, bool, error) {
+func rewriteModelFieldInJSONBytes(payload []byte, paths []string, upstreamModel, clientModel string) ([]byte, bool, error) {
 	if !json.Valid(payload) {
 		return payload, false, nil
 	}
 
-	rewritten := false
-	newPayload := payload
-
-	if gjson.GetBytes(newPayload, key).String() == upstreamModel {
-		updatedPayload, err := sjson.SetBytes(newPayload, key, clientModel)
-		if err != nil {
-			return payload, false, err
+	for _, path := range paths {
+		if gjson.GetBytes(payload, path).String() == upstreamModel {
+			newPayload, err := sjson.SetBytes(payload, path, clientModel)
+			if err != nil {
+				return payload, false, err
+			}
+			return newPayload, true, nil
 		}
-		newPayload = updatedPayload
-		rewritten = true
 	}
-
-	nestedKey := "message." + key
-	if gjson.GetBytes(newPayload, nestedKey).String() == upstreamModel {
-		updatedPayload, err := sjson.SetBytes(newPayload, nestedKey, clientModel)
-		if err != nil {
-			return payload, false, err
-		}
-		newPayload = updatedPayload
-		rewritten = true
-	}
-
-	return newPayload, rewritten, nil
+	return payload, false, nil
 }
 
 func findSseEventSeparator(data string) (eventPos int, separatorSize int) {
@@ -376,7 +388,7 @@ func findSseEventSeparator(data string) (eventPos int, separatorSize int) {
 	return crlfPos, 4
 }
 
-func rewriteSseEvent(rawEvent, key, upstreamModel, clientModel string) string {
+func rewriteSseEvent(rawEvent string, paths []string, upstreamModel, clientModel string) string {
 	var result strings.Builder
 	lineStart := 0
 
@@ -411,7 +423,7 @@ func rewriteSseEvent(rawEvent, key, upstreamModel, clientModel string) string {
 			continue
 		}
 
-		rewrittenPayload, rewritten, err := rewriteModelFieldInJSONBytes([]byte(payload), key, upstreamModel, clientModel)
+		rewrittenPayload, rewritten, err := rewriteModelFieldInJSONBytes([]byte(payload), paths, upstreamModel, clientModel)
 		if err != nil || !rewritten {
 			result.WriteString(line)
 			if hasNewline {

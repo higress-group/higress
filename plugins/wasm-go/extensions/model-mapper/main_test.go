@@ -95,7 +95,7 @@ func TestParseConfig(t *testing.T) {
 			require.Contains(t, cfg.enableOnPathSuffix, "/v1/embeddings")
 		})
 
-		t.Run("enableResponseMapping defaults to true", func(t *testing.T) {
+		t.Run("enableResponseMapping defaults to false", func(t *testing.T) {
 			var cfg Config
 			jsonData := []byte(`{
 				"modelMapping": {
@@ -104,7 +104,7 @@ func TestParseConfig(t *testing.T) {
 			}`)
 			err := parseConfig(gjson.ParseBytes(jsonData), &cfg)
 			require.NoError(t, err)
-			require.True(t, cfg.enableResponseMapping)
+			require.False(t, cfg.enableResponseMapping)
 		})
 
 		t.Run("enableResponseMapping can be disabled", func(t *testing.T) {
@@ -146,13 +146,54 @@ func TestParseConfig(t *testing.T) {
 			err := parseConfig(gjson.ParseBytes(jsonData), &cfg)
 			require.Error(t, err)
 		})
+
+		t.Run("responseModelPaths defaults", func(t *testing.T) {
+			var cfg Config
+			jsonData := []byte(`{
+				"modelMapping": {
+					"gpt-3.5-turbo": "gpt-4"
+				}
+			}`)
+			err := parseConfig(gjson.ParseBytes(jsonData), &cfg)
+			require.NoError(t, err)
+			require.Equal(t, 5, len(cfg.responseModelPaths))
+			require.Equal(t, "model", cfg.responseModelPaths[0])
+			require.Equal(t, "body.model", cfg.responseModelPaths[1])
+			require.Equal(t, "message.model", cfg.responseModelPaths[3])
+			require.Equal(t, "modelVersion", cfg.responseModelPaths[4])
+		})
+
+		t.Run("responseModelPaths append merges with defaults", func(t *testing.T) {
+			var cfg Config
+			jsonData := []byte(`{
+				"modelMapping": {
+					"gpt-3.5-turbo": "gpt-4"
+				},
+				"responseModelPaths": ["data.model", "model", "result.model"]
+			}`)
+			err := parseConfig(gjson.ParseBytes(jsonData), &cfg)
+			require.NoError(t, err)
+			require.Equal(t, 7, len(cfg.responseModelPaths))
+			require.Equal(t, "model", cfg.responseModelPaths[0])
+			require.Equal(t, "data.model", cfg.responseModelPaths[5])
+			require.Equal(t, "result.model", cfg.responseModelPaths[6])
+		})
+
+		t.Run("responseModelPaths must be array", func(t *testing.T) {
+			var cfg Config
+			jsonData := []byte(`{
+				"responseModelPaths": "invalid"
+			}`)
+			err := parseConfig(gjson.ParseBytes(jsonData), &cfg)
+			require.Error(t, err)
+		})
 	})
 }
 
 func TestRewriteModelFieldInJSONBytes(t *testing.T) {
 	t.Run("rewrite top-level model", func(t *testing.T) {
 		payload := []byte(`{"model":"gpt-4","id":"x"}`)
-		newPayload, rewritten, err := rewriteModelFieldInJSONBytes(payload, "model", "gpt-4", "gpt-3.5-turbo")
+		newPayload, rewritten, err := rewriteModelFieldInJSONBytes(payload, []string{"model"}, "gpt-4", "gpt-3.5-turbo")
 		require.NoError(t, err)
 		require.True(t, rewritten)
 		require.Equal(t, "gpt-3.5-turbo", gjson.GetBytes(newPayload, "model").String())
@@ -160,7 +201,7 @@ func TestRewriteModelFieldInJSONBytes(t *testing.T) {
 
 	t.Run("rewrite nested message.model", func(t *testing.T) {
 		payload := []byte(`{"message":{"model":"gpt-4","id":"m1"}}`)
-		newPayload, rewritten, err := rewriteModelFieldInJSONBytes(payload, "model", "gpt-4", "gpt-3.5-turbo")
+		newPayload, rewritten, err := rewriteModelFieldInJSONBytes(payload, []string{"message.model"}, "gpt-4", "gpt-3.5-turbo")
 		require.NoError(t, err)
 		require.True(t, rewritten)
 		require.Equal(t, "gpt-3.5-turbo", gjson.GetBytes(newPayload, "message.model").String())
@@ -168,7 +209,26 @@ func TestRewriteModelFieldInJSONBytes(t *testing.T) {
 
 	t.Run("invalid json does not fail", func(t *testing.T) {
 		payload := []byte(`{"model":`)
-		newPayload, rewritten, err := rewriteModelFieldInJSONBytes(payload, "model", "gpt-4", "gpt-3.5-turbo")
+		newPayload, rewritten, err := rewriteModelFieldInJSONBytes(payload, []string{"model"}, "gpt-4", "gpt-3.5-turbo")
+		require.NoError(t, err)
+		require.False(t, rewritten)
+		require.Equal(t, payload, newPayload)
+	})
+
+	t.Run("first-match-wins across multiple paths", func(t *testing.T) {
+		payload := []byte(`{"message":{"model":"gpt-4"},"model":"other"}`)
+		// "model" matches first but value is "other", then "message.model" matches with correct value
+		paths := []string{"model", "message.model"}
+		newPayload, rewritten, err := rewriteModelFieldInJSONBytes(payload, paths, "gpt-4", "gpt-3.5-turbo")
+		require.NoError(t, err)
+		require.True(t, rewritten)
+		require.Equal(t, "gpt-3.5-turbo", gjson.GetBytes(newPayload, "message.model").String())
+		require.Equal(t, "other", gjson.GetBytes(newPayload, "model").String())
+	})
+
+	t.Run("no path matches returns unchanged", func(t *testing.T) {
+		payload := []byte(`{"model":"unknown"}`)
+		newPayload, rewritten, err := rewriteModelFieldInJSONBytes(payload, []string{"model", "message.model"}, "gpt-4", "gpt-3.5-turbo")
 		require.NoError(t, err)
 		require.False(t, rewritten)
 		require.Equal(t, payload, newPayload)
@@ -180,14 +240,14 @@ func TestRewriteSseEvent(t *testing.T) {
 		raw := "event: message\n" +
 			"data: {\"model\":\"gpt-4\",\"id\":\"1\"}\n" +
 			"data: [DONE]\n"
-		rewritten := rewriteSseEvent(raw, "model", "gpt-4", "gpt-3.5-turbo")
+		rewritten := rewriteSseEvent(raw, []string{"model"}, "gpt-4", "gpt-3.5-turbo")
 		require.Contains(t, rewritten, `data: {"model":"gpt-3.5-turbo","id":"1"}`)
 		require.Contains(t, rewritten, "data: [DONE]")
 	})
 
 	t.Run("invalid data line stays unchanged", func(t *testing.T) {
 		raw := "data: not-json\n"
-		rewritten := rewriteSseEvent(raw, "model", "gpt-4", "gpt-3.5-turbo")
+		rewritten := rewriteSseEvent(raw, []string{"model"}, "gpt-4", "gpt-3.5-turbo")
 		require.Equal(t, raw, rewritten)
 	})
 }
