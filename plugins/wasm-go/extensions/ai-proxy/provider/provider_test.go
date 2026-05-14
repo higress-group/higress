@@ -690,6 +690,21 @@ func TestProviderConfig_SetDefaultCapabilities(t *testing.T) {
 		assert.Equal(t, "/v1/embeddings", config.capabilities[string(ApiNameEmbeddings)])
 		assert.Equal(t, "/v1/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
 	})
+
+	t.Run("preserve_existing_capability", func(t *testing.T) {
+		config := &ProviderConfig{
+			capabilities: map[string]string{
+				string(ApiNameChatCompletion): "/custom/chat/completions",
+			},
+		}
+
+		defaultCaps := map[string]string{
+			string(ApiNameChatCompletion): "/v1/chat/completions",
+		}
+		config.setDefaultCapabilities(defaultCaps)
+
+		assert.Equal(t, "/custom/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
+	})
 }
 
 func TestCreateProvider(t *testing.T) {

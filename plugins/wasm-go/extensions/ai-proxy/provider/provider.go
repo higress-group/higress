@@ -65,6 +65,8 @@ const (
 	ApiNameRetrieveVideo                        ApiName = "openai/v1/retrievevideo"
 	ApiNameVideoRemix                           ApiName = "openai/v1/videoremix"
 	ApiNameRetrieveVideoContent                 ApiName = "openai/v1/retrievevideocontent"
+	ApiNameKlingImageToVideo                    ApiName = "kling/v1/image2video"
+	ApiNameKlingRetrieveImageVideo              ApiName = "kling/v1/retrieveimagevideo"
 
 	// TODO: 以下是一些非标准的API名称，需要进一步确认是否支持
 	ApiNameCohereV1Rerank              ApiName = "cohere/v1/rerank"
@@ -159,6 +161,7 @@ const (
 	providerTypeFireworks  = "fireworks"
 	providerTypeVllm       = "vllm"
 	providerTypeGeneric    = "generic"
+	providerTypeKling      = "kling"
 
 	protocolOpenAI   = "openai"
 	protocolOriginal = "original"
@@ -253,6 +256,7 @@ var (
 		providerTypeFireworks:  &fireworksProviderInitializer{},
 		providerTypeVllm:       &vllmProviderInitializer{},
 		providerTypeGeneric:    &genericProviderInitializer{},
+		providerTypeKling:      &klingProviderInitializer{},
 	}
 )
 
@@ -417,6 +421,15 @@ type ProviderConfig struct {
 	// @Title zh-CN Vertex token刷新提前时间
 	// @Description zh-CN 用于Google服务账号认证，access token过期时间判定提前刷新，单位为秒，默认值为60秒
 	vertexTokenRefreshAhead int64 `required:"false" yaml:"vertexTokenRefreshAhead" json:"vertexTokenRefreshAhead"`
+	// @Title zh-CN Kling Access Key
+	// @Description zh-CN 仅适用于KlingAI官方服务鉴权，用于生成JWT Token
+	klingAccessKey string `required:"false" yaml:"klingAccessKey" json:"klingAccessKey"`
+	// @Title zh-CN Kling Secret Key
+	// @Description zh-CN 仅适用于KlingAI官方服务鉴权，用于签名JWT Token
+	klingSecretKey string `required:"false" yaml:"klingSecretKey" json:"klingSecretKey"`
+	// @Title zh-CN Kling token刷新提前时间
+	// @Description zh-CN Kling JWT过期前提前刷新的时间，单位为秒，默认值为60秒
+	klingTokenRefreshAhead int64 `required:"false" yaml:"klingTokenRefreshAhead" json:"klingTokenRefreshAhead"`
 	// @Title zh-CN Vertex AI OpenAI兼容模式
 	// @Description zh-CN 启用后将使用Vertex AI的OpenAI兼容API，请求和响应均使用OpenAI格式，无需协议转换。与Express Mode(apiTokens)互斥。
 	vertexOpenAICompatible bool `required:"false" yaml:"vertexOpenAICompatible" json:"vertexOpenAICompatible"`
@@ -614,6 +627,12 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	if c.vertexTokenRefreshAhead == 0 {
 		c.vertexTokenRefreshAhead = 60
 	}
+	c.klingAccessKey = json.Get("klingAccessKey").String()
+	c.klingSecretKey = json.Get("klingSecretKey").String()
+	c.klingTokenRefreshAhead = json.Get("klingTokenRefreshAhead").Int()
+	if c.klingTokenRefreshAhead == 0 {
+		c.klingTokenRefreshAhead = 60
+	}
 	c.vertexOpenAICompatible = json.Get("vertexOpenAICompatible").Bool()
 	c.targetLang = json.Get("targetLang").String()
 
@@ -696,6 +715,8 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 			string(ApiNameCohereV1Rerank),
 			string(ApiNameVideos),
 			string(ApiNameRetrieveVideo),
+			string(ApiNameKlingImageToVideo),
+			string(ApiNameKlingRetrieveImageVideo),
 			string(ApiNameRetrieveVideoContent),
 			string(ApiNameVideoRemix):
 			c.capabilities[capability] = pathJson.String()
@@ -1137,7 +1158,9 @@ func (c *ProviderConfig) setDefaultCapabilities(capabilities map[string]string) 
 		c.capabilities = make(map[string]string)
 	}
 	for capability, path := range capabilities {
-		c.capabilities[capability] = path
+		if _, exists := c.capabilities[capability]; !exists {
+			c.capabilities[capability] = path
+		}
 	}
 }
 
