@@ -12,6 +12,9 @@ import (
 const (
 	propertyNamespace = "nginx_rewrite_compatible"
 	headerPrefix      = "x-higress-rewrite-var-"
+	argVarPrefix      = "arg_"
+	httpVarPrefix     = "http_"
+	cookieVarPrefix   = "cookie_"
 )
 
 func (c PluginConfig) Apply(ctx wrapper.HttpContext, logger log.Log) (bool, error) {
@@ -26,6 +29,8 @@ func (c PluginConfig) Apply(ctx wrapper.HttpContext, logger log.Log) (bool, erro
 	currentPath, currentQuery := splitPathAndQuery(originalPath)
 	vars := map[string]string{}
 	passHeaders := map[string]bool{}
+	requestHeaders := map[string]string{}
+	requestCookies := map[string]string{}
 	changed := false
 
 	for i, rule := range c.Rules {
@@ -70,11 +75,19 @@ func (c PluginConfig) Apply(ctx wrapper.HttpContext, logger log.Log) (bool, erro
 	}
 
 	for name, value := range vars {
-		if value != "" {
+		switch {
+		case strings.HasPrefix(name, argVarPrefix):
+			currentQuery = setQueryParam(currentQuery, strings.TrimPrefix(name, argVarPrefix), value)
+		case strings.HasPrefix(name, httpVarPrefix):
+			requestHeaders[buildRequestHeaderName(strings.TrimPrefix(name, httpVarPrefix))] = value
+		case strings.HasPrefix(name, cookieVarPrefix):
+			requestCookies[strings.TrimPrefix(name, cookieVarPrefix)] = value
+		case value != "":
 			if err := proxywasm.SetProperty([]string{propertyNamespace, "vars", name}, []byte(value)); err != nil {
 				return false, fmt.Errorf("failed to set property for var %q: %w", name, err)
 			}
 		}
+
 		headerName := buildUpstreamHeaderName(name)
 		if passHeaders[name] {
 			if err := proxywasm.ReplaceHttpRequestHeader(headerName, value); err != nil {
@@ -84,6 +97,26 @@ func (c PluginConfig) Apply(ctx wrapper.HttpContext, logger log.Log) (bool, erro
 		}
 		if err := proxywasm.RemoveHttpRequestHeader(headerName); err != nil {
 			logger.Warnf("failed to remove upstream header %q: %v", headerName, err)
+		}
+	}
+
+	for name, value := range requestHeaders {
+		if err := proxywasm.ReplaceHttpRequestHeader(name, value); err != nil {
+			return false, fmt.Errorf("failed to set request header %q: %w", name, err)
+		}
+	}
+
+	if len(requestCookies) > 0 {
+		currentCookie, err := proxywasm.GetHttpRequestHeader("cookie")
+		if err != nil {
+			currentCookie = ""
+		}
+		updatedCookie := currentCookie
+		for name, value := range requestCookies {
+			updatedCookie = setCookie(updatedCookie, name, value)
+		}
+		if err := proxywasm.ReplaceHttpRequestHeader("cookie", updatedCookie); err != nil {
+			return false, fmt.Errorf("failed to set cookie header: %w", err)
 		}
 	}
 
@@ -122,6 +155,35 @@ func appendQuery(existing string, suffix string) string {
 	return existing + "&" + suffix
 }
 
+func setQueryParam(existing string, key string, value string) string {
+	if key == "" {
+		return existing
+	}
+
+	parts := []string{}
+	replaced := false
+	if existing != "" {
+		for _, part := range strings.Split(existing, "&") {
+			if part == "" {
+				continue
+			}
+			name, _, _ := strings.Cut(part, "=")
+			if name != key {
+				parts = append(parts, part)
+				continue
+			}
+			if !replaced {
+				parts = append(parts, key+"="+value)
+				replaced = true
+			}
+		}
+	}
+	if !replaced {
+		parts = append(parts, key+"="+value)
+	}
+	return strings.Join(parts, "&")
+}
+
 func expandTemplate(rule Rule, currentPath string, matches []int, template string) string {
 	return string(rule.compiled.ExpandString(nil, template, currentPath, matches))
 }
@@ -143,4 +205,41 @@ func buildUpstreamHeaderName(name string) string {
 	sanitized = strings.ReplaceAll(sanitized, "_", "-")
 	sanitized = strings.ReplaceAll(sanitized, " ", "-")
 	return headerPrefix + sanitized
+}
+
+func buildRequestHeaderName(name string) string {
+	sanitized := strings.ToLower(strings.TrimSpace(name))
+	sanitized = strings.ReplaceAll(sanitized, "_", "-")
+	sanitized = strings.ReplaceAll(sanitized, " ", "-")
+	return sanitized
+}
+
+func setCookie(existing string, key string, value string) string {
+	if key == "" {
+		return existing
+	}
+
+	parts := []string{}
+	replaced := false
+	if existing != "" {
+		for _, part := range strings.Split(existing, ";") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			name, _, _ := strings.Cut(part, "=")
+			if name != key {
+				parts = append(parts, part)
+				continue
+			}
+			if !replaced {
+				parts = append(parts, key+"="+value)
+				replaced = true
+			}
+		}
+	}
+	if !replaced {
+		parts = append(parts, key+"="+value)
+	}
+	return strings.Join(parts, "; ")
 }

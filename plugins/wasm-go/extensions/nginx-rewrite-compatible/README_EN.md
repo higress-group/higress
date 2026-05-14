@@ -43,7 +43,7 @@ Plugin execution priority: `100`
 | `replacement` | string | Yes | - | New path template. Supports capture references such as `$1` and `$2` |
 | `query_append` | string | No | - | Query fragment appended to the existing query string. Supports `$1`, `$2` |
 | `query_template` | string | No | - | Query template that replaces the existing query string. Supports `$1`, `$2` |
-| `set_vars` | array of object | No | - | Stores capture groups as request-scoped variables |
+| `set_vars` | array of object | No | - | Stores capture groups as request-scoped variables, or rewrites query/header/cookie based on variable prefixes |
 | `pass_to_upstream` | bool | No | `false` | Whether variables from the current rule should also be written into upstream request headers |
 | `mode` | string | No | `last` | Rule flow mode. Supported values: `break`, `last` |
 
@@ -52,14 +52,15 @@ Notes:
 1. `query_append` and `query_template` are mutually exclusive.
 2. `mode: break` stops evaluation after the current matching rule.
 3. `mode: last` continues evaluating the following rules with the rewritten path.
-4. Variables are stored with `proxywasm.SetProperty([]string{"nginx_rewrite_compatible","vars",name})`.
-5. When `pass_to_upstream: true`, variables are also written to `x-higress-rewrite-var-<name>`.
+4. In `set_vars`, the `arg_` prefix rewrites a request query parameter, `http_` rewrites a request header, `cookie_` rewrites a request cookie, and any other name is stored with `proxywasm.SetProperty([]string{"nginx_rewrite_compatible","vars",name})`.
+5. For `http_`, the header name is derived by removing the prefix and converting underscores to hyphens.
+6. When `pass_to_upstream: true`, variables are also written to `x-higress-rewrite-var-<name>`.
 
 ### `set_vars`
 
 | Field Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `name` | string | Yes | Variable name |
+| `name` | string | Yes | Variable name. `arg_`/`http_`/`cookie_` mean query parameter, header, and cookie updates respectively; other names become custom properties |
 | `capture_group` | int | Yes | Capture-group index. `0` means the whole match and `1` means the first group |
 
 ## Nginx Mapping Table
@@ -124,7 +125,31 @@ rules:
     query_template: a=$1&b=$2
 ```
 
-### 4. Variable Preservation and Propagation
+### 4. Special Variable Prefixes
+
+```yaml
+rules:
+  - regex: "^/api/(.*)/(.*)$"
+    replacement: "/internal"
+    set_vars:
+      - name: original_path
+        capture_group: 1
+      - name: http_x_original
+        capture_group: 1
+      - name: arg_source
+        capture_group: 2
+      - name: cookie_track_id
+        capture_group: 1
+```
+
+Semantics:
+
+1. `original_path` is stored as a request property and can be read later with `GetProperty(["nginx_rewrite_compatible","vars","original_path"])`.
+2. `http_x_original` sets the request header `x-original`.
+3. `arg_source` sets the query parameter `source`.
+4. `cookie_track_id` sets the cookie `track_id`.
+
+### 5. Variable Preservation and Propagation
 
 Nginx:
 
@@ -146,7 +171,7 @@ rules:
     pass_to_upstream: true
 ```
 
-### 5. Multiple Rules
+### 6. Multiple Rules
 
 Nginx:
 
@@ -166,7 +191,7 @@ rules:
     replacement: /final/$1
 ```
 
-### 6. `break` / `last`
+### 7. `break` / `last`
 
 Nginx `break`:
 
@@ -206,6 +231,12 @@ rules:
     query_append: migrated=true
     set_vars:
       - name: original_endpoint
+        capture_group: 1
+      - name: http_x_original_endpoint
+        capture_group: 1
+      - name: arg_source
+        capture_group: 1
+      - name: cookie_track_id
         capture_group: 1
     pass_to_upstream: true
     mode: break

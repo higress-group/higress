@@ -69,6 +69,42 @@ func TestNginxRewriteCompatible(t *testing.T) {
 			require.Equal(t, "alice", string(value))
 		})
 
+		t.Run("special set var prefixes", func(t *testing.T) {
+			host, status := test.NewTestHost(mustConfig(t, map[string]any{
+				"rules": []map[string]any{
+					{
+						"regex":       "^/api/(.*)/(.*)$",
+						"replacement": "/internal",
+						"set_vars": []map[string]any{
+							{"name": "original_path", "capture_group": 1},
+							{"name": "http_x_original", "capture_group": 1},
+							{"name": "arg_source", "capture_group": 2},
+							{"name": "cookie_track_id", "capture_group": 1},
+						},
+					},
+				},
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders(baseHeadersWithCookie("/api/orders/mobile?legacy=yes", "session=abc"))
+			require.Equal(t, types.ActionContinue, action)
+			requirePath(t, host.GetRequestHeaders(), "/internal?legacy=yes&source=mobile")
+			requireHeader(t, host.GetRequestHeaders(), "x-original", "orders")
+			requireHeader(t, host.GetRequestHeaders(), "cookie", "session=abc; track_id=orders")
+
+			value, err := host.GetProperty([]string{"nginx_rewrite_compatible", "vars", "original_path"})
+			require.NoError(t, err)
+			require.Equal(t, "orders", string(value))
+
+			_, err = host.GetProperty([]string{"nginx_rewrite_compatible", "vars", "http_x_original"})
+			require.Error(t, err)
+			_, err = host.GetProperty([]string{"nginx_rewrite_compatible", "vars", "arg_source"})
+			require.Error(t, err)
+			_, err = host.GetProperty([]string{"nginx_rewrite_compatible", "vars", "cookie_track_id"})
+			require.Error(t, err)
+		})
+
 		t.Run("multiple capture groups", func(t *testing.T) {
 			host, status := test.NewTestHost(mustConfig(t, map[string]any{
 				"rules": []map[string]any{
@@ -272,6 +308,11 @@ func baseHeaders(path string) [][2]string {
 		{":path", path},
 		{":method", "GET"},
 	}
+}
+
+func baseHeadersWithCookie(path string, cookie string) [][2]string {
+	headers := baseHeaders(path)
+	return append(headers, [2]string{"cookie", cookie})
 }
 
 func requirePath(t *testing.T, headers [][2]string, expected string) {

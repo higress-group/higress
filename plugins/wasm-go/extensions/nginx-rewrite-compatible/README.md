@@ -43,7 +43,7 @@ Higress 的 WASM 插件没有这个问题，原因是：
 | `replacement` | string | 是 | - | 新的路径模板，支持 `$1`、`$2` 等捕获组引用 |
 | `query_append` | string | 否 | - | 追加到原 query string 的片段，支持 `$1`、`$2` |
 | `query_template` | string | 否 | - | 完全替换原 query string 的模板，支持 `$1`、`$2` |
-| `set_vars` | array of object | 否 | - | 将捕获组保存为请求级变量 |
+| `set_vars` | array of object | 否 | - | 将捕获组写入请求级变量，或按变量名前缀改写 query/header/cookie |
 | `pass_to_upstream` | bool | 否 | `false` | 是否把当前规则的变量同时写入请求头传给上游 |
 | `mode` | string | 否 | `last` | 规则流转模式，支持 `break` 和 `last` |
 
@@ -52,14 +52,15 @@ Higress 的 WASM 插件没有这个问题，原因是：
 1. `query_append` 和 `query_template` 不能同时配置。
 2. `mode: break` 表示命中当前规则后停止继续匹配后续规则。
 3. `mode: last` 表示命中当前规则后，使用重写后的 path 继续匹配后续规则。
-4. `set_vars` 会通过 `proxywasm.SetProperty([]string{"nginx_rewrite_compatible","vars",name})` 保存。
-5. 当 `pass_to_upstream: true` 时，变量还会写入请求头 `x-higress-rewrite-var-<name>`。
+4. `set_vars` 中，`arg_` 前缀会修改请求 query parameter，`http_` 前缀会修改请求 header，`cookie_` 前缀会修改请求 cookie，其他变量名会通过 `proxywasm.SetProperty([]string{"nginx_rewrite_compatible","vars",name})` 保存。
+5. `http_` 前缀对应的 header 名称会去掉前缀，并把下划线转换成横杠。
+6. 当 `pass_to_upstream: true` 时，变量还会额外写入请求头 `x-higress-rewrite-var-<name>`。
 
 ### `set_vars` 配置说明
 
 | 字段名 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `name` | string | 是 | 变量名 |
+| `name` | string | 是 | 变量名。`arg_`/`http_`/`cookie_` 前缀分别表示写 query parameter、header、cookie；其他名称表示自定义属性 |
 | `capture_group` | int | 是 | 捕获组编号，`0` 表示整个匹配，`1` 表示第一个分组 |
 
 ## Nginx 配置对照表
@@ -124,7 +125,31 @@ rules:
     query_template: a=$1&b=$2
 ```
 
-### 4. 变量保存与传递
+### 4. 特殊变量前缀
+
+```yaml
+rules:
+  - regex: "^/api/(.*)/(.*)$"
+    replacement: "/internal"
+    set_vars:
+      - name: original_path
+        capture_group: 1
+      - name: http_x_original
+        capture_group: 1
+      - name: arg_source
+        capture_group: 2
+      - name: cookie_track_id
+        capture_group: 1
+```
+
+语义：
+
+1. `original_path` 保存为请求属性，可供后续插件通过 `GetProperty(["nginx_rewrite_compatible","vars","original_path"])` 读取。
+2. `http_x_original` 设置请求头 `x-original`。
+3. `arg_source` 设置 query parameter `source`。
+4. `cookie_track_id` 设置 cookie `track_id`。
+
+### 5. 变量保存与传递
 
 Nginx:
 
@@ -146,7 +171,7 @@ rules:
     pass_to_upstream: true
 ```
 
-### 5. 多规则组合
+### 6. 多规则组合
 
 Nginx:
 
@@ -166,7 +191,7 @@ rules:
     replacement: /final/$1
 ```
 
-### 6. break / last 控制
+### 7. break / last 控制
 
 Nginx `break`:
 
@@ -206,6 +231,12 @@ rules:
     query_append: migrated=true
     set_vars:
       - name: original_endpoint
+        capture_group: 1
+      - name: http_x_original_endpoint
+        capture_group: 1
+      - name: arg_source
+        capture_group: 1
+      - name: cookie_track_id
         capture_group: 1
     pass_to_upstream: true
     mode: break
