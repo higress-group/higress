@@ -36,7 +36,7 @@ The configuration fields for each item in `conditions` are described as follows:
 |-------------------|-------------------|---------------|----------|------------------------------------------------------------------------------------------------------------------|
 | `conditionType`   | string            | -             | Yes      | Condition type, supports `header`, `parameter`, `cookie`.                                                        |
 | `key`             | string            | -             | Yes      | The key of the condition.                                                                                        |
-| `operator`        | string            | -             | Yes      | Operator, supports `equal`, `not_equal`, `prefix`, `in`, `not_in`, `regex`, `percentage`, `exists`, not_exists`. |
+| `operator`        | string            | -             | Yes      | Operator, supports `equal`, `not_equal`, `prefix`, `in`, `not_in`, `regex`, `percentage`, `exists`, `not_exists`. |
 | `value`           | array of string    | -             | Yes      | The value of the condition. **Only when** the operator is `in` and `not_in` multiple values are supported.       |
 
 > **Note: When the `operator` is `regex`, the regular expression engine used is [RE2](https://github.com/google/re2). For details, please refer to the [RE2 Official Documentation](https://github.com/google/re2/wiki/Syntax).**
