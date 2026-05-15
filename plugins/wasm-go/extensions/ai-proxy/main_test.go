@@ -314,6 +314,13 @@ func TestGeneric(t *testing.T) {
 	test.RunGenericOnHttpRequestBodyTests(t)
 }
 
+func TestKling(t *testing.T) {
+	test.RunKlingParseConfigTests(t)
+	test.RunKlingOnHttpRequestHeadersTests(t)
+	test.RunKlingOnHttpRequestBodyTests(t)
+	test.RunKlingOnHttpResponseBodyTests(t)
+}
+
 func TestVertex(t *testing.T) {
 	test.RunVertexParseConfigTests(t)
 	test.RunVertexExpressModeOnHttpRequestHeadersTests(t)

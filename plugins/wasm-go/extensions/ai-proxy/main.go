@@ -264,8 +264,9 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 			return types.ActionContinue
 		}
 
+		_, hasRequestBodyHandler := activeProvider.(provider.RequestBodyHandler)
 		hasRequestBody := ctx.HasRequestBody()
-		if hasRequestBody {
+		if hasRequestBody && hasRequestBodyHandler {
 			_ = proxywasm.RemoveHttpRequestHeader("Content-Length")
 			ctx.SetRequestBodyBufferLimit(defaultMaxBodyBytes)
 			// Delay the header processing to allow changing in OnRequestBody

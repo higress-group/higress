@@ -51,9 +51,18 @@ Configuration fields for each item in `authorization_request`
 | Name | Data Type | Required | Default Value | Description |
 | --- | --- | --- | --- | --- |
 | `allowed_headers` | array of StringMatcher | No | - | After setting, the client request headers that match the items will be added to the request headers in the authorization service request. In addition to the user-defined header matching rules, the `Authorization` HTTP header will be automatically included in the authorization service request (when `endpoint_mode` is `forward_auth`, the `X-Forwarded-*` request headers will be added) |
+| `allowed_properties` | array of AllowedProperty | No | - | When set, Envoy filter state properties will be mapped to HTTP headers and sent to the authorization service.<br>Check out following documents for the property list supported by Envoy:<br><ul><li>Envoy 1.27 (Higress < 2.2.0): https://www.envoyproxy.io/docs/envoy/v1.27.0/intro/arch_overview/advanced/attributes</li><li>Envoy 1.36 (Higress >= 2.2.0): https://www.envoyproxy.io/docs/envoy/v1.36.0/intro/arch_overview/advanced/attributes</li></ul> |
+
 | `headers_to_add` | map[string]string | No | - | Sets the list of request headers to be included in the authorization service request. Please note that the client request headers with the same name will be overwritten |
 | `with_request_body` | bool | No | false | Buffer the client request body and send it to the authentication request (not effective for HTTP Method GET, OPTIONS, HEAD requests) |
 | `max_request_body_bytes` | int | No | 10MB | Sets the maximum size of the client request body to be saved in memory. When the client request body reaches the value set in this field, an HTTP 413 status code will be returned and the authorization process will not be started. Note that this setting takes precedence over the `failure_mode_allow` configuration |
+
+Configuration fields for each item of `AllowedProperty` type
+
+| Name | Data Type | Required | Default Value | Description |
+| --- | --- | --- | --- | --- |
+| `path` | array of string | Yes | - | Property path, e.g., `["route_name"]` or `["metadata", "user_id"]` |
+| `header` | string | Yes | - | The request header name to map the property to |
 
 Configuration fields for each item in `authorization_response`
 
@@ -236,6 +245,53 @@ Content-Length: 0
 
 If the response headers returned by the `ext-auth` service contain `x-user-id` and `x-auth-version`, these two headers will be included in the request when the gateway calls the upstream.
 
+#### Example 3: Passing Route Name to Authorization Service
+
+Configuration of the `ext-auth` plugin:
+
+```yaml
+http_service:
+  authorization_request:
+    allowed_headers:
+      - exact: x-auth-version
+    allowed_properties:
+      - path: [route_name]
+        header: x-route-name
+    headers_to_add:
+      x-envoy-header: true
+  authorization_response:
+    allowed_upstream_headers:
+      - exact: x-user-id
+      - exact: x-auth-version
+  endpoint_mode: envoy
+  endpoint:
+    service_name: ext-auth.backend.svc.cluster.local
+    service_host: my-domain.local
+    service_port: 8090
+    path_prefix: /auth
+  timeout: 1000
+```
+
+When using the following request to the gateway after enabling the `ext-auth` plugin:
+
+```shell
+curl -X POST http://localhost:8082/users?apikey=9a342114-ba8a-11ec-b1bf-00163e1250b5 -X GET -H "foo: bar" -H "Authorization: xxx"
+```
+
+The `ext-auth` service will receive the following authorization request:
+
+```
+POST /auth/users?apikey=9a342114-ba8a-11ec-b1bf-00163e1250b5 HTTP/1.1
+Host: my-domain.local
+Authorization: xxx
+X-Auth-Version: 1.0
+x-envoy-header: true
+Content-Length: 0
+X-Route-Name: your-route-name
+```
+
+By configuring `allowed_properties`, you can map Envoy filter state properties like `route_name` to HTTP headers and send them to the authorization service, enabling the authorization service to make decisions based on routing information.
+
 ### When endpoint_mode is forward_auth
 
 #### Example 1
@@ -340,3 +396,52 @@ Content-Length: 0
 ```
 
 If the response headers returned by the `ext-auth` service contain `x-user-id` and `x-auth-version`, these two headers will be included in the request when the gateway calls the upstream.
+
+#### Example 3: Passing Route Name to Authorization Service
+
+Configuration of the `ext-auth` plugin:
+
+```yaml
+http_service:
+  authorization_request:
+    allowed_headers:
+      - exact: x-auth-version
+    allowed_properties:
+      - path: [route_name]
+        header: x-route-name
+  authorization_response:
+    allowed_upstream_headers:
+      - exact: x-mse-consumer
+      - exact: x-ext-auth-user
+  endpoint_mode: forward_auth
+  endpoint:
+    service_name: ext-auth.backend.svc.cluster.local
+    service_port: 8090
+    path: /auth
+    request_method: POST
+  timeout: 1000
+```
+
+When using the following request to the gateway after enabling the `ext-auth` plugin:
+
+```shell
+curl -i http://localhost:8082/users?apikey=9a342114-ba8a-11ec-b1bf-00163e1250b5 -X GET -H "foo: bar" -H "Authorization: xxx" -H "X-Auth-Version: 1.0" -H "Host: foo.bar.com"
+```
+
+The `ext-auth` service will receive the following authorization request:
+
+```
+POST /auth HTTP/1.1
+Host: my-domain.local
+Authorization: xxx
+X-Forwarded-Proto: HTTP
+X-Forwarded-Host: foo.bar.com
+X-Forwarded-Uri: /users?apikey=9a342114-ba8a-11ec-b1bf-00163e1250b5
+X-Forwarded-Method: GET
+X-Auth-Version: 1.0
+x-envoy-header: true
+X-Route-Name: your-route-name
+Content-Length: 0
+```
+
+By configuring `allowed_properties`, you can map Envoy filter state properties like `route_name` to HTTP headers and send them to the authorization service, enabling the authorization service to make decisions based on routing information.
