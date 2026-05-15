@@ -2083,6 +2083,8 @@ Vertex AI supported resolutions (imageSize): `1k`, `2k`, `4k`
 
 ### Utilizing OpenAI Protocol Proxy for AWS Bedrock Services
 
+For Bedrock, `/v1/chat/completions` continues to be converted to the Bedrock Runtime Converse API. `/v1/messages` is forwarded directly to the Bedrock Mantle Anthropic Messages API: `https://bedrock-mantle.{awsRegion}.api.aws/anthropic/v1/messages`. The request body, response body, and streaming SSE keep the native Anthropic format; the plugin only applies model mapping and authentication handling. When `apiTokens` are used with Mantle, the plugin sends the token in the `x-api-key` request header.
+
 AWS Bedrock supports two authentication methods:
 
 #### Method 1: Using AWS Access Key/Secret Key Authentication (AWS Signature V4)

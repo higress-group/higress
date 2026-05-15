@@ -2320,6 +2320,8 @@ Vertex AI 支持的分辨率（imageSize）：`1k`、`2k`、`4k`
 
 ### 使用 OpenAI 协议代理 AWS Bedrock 服务
 
+对于 Bedrock，`/v1/chat/completions` 会继续转换为 Bedrock Runtime Converse API；`/v1/messages` 会直接转发到 Bedrock Mantle 的 Anthropic Messages API：`https://bedrock-mantle.{awsRegion}.api.aws/anthropic/v1/messages`，请求体、响应体和流式 SSE 都保持 Anthropic 原生格式，仅执行模型映射和认证处理。使用 `apiTokens` 访问 Mantle 时，插件会写入 `x-api-key` 请求头。
+
 AWS Bedrock 支持两种认证方式：
 
 #### 方式一：使用 AWS Access Key/Secret Key 认证（AWS Signature V4）
