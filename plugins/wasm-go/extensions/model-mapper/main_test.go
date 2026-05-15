@@ -278,6 +278,9 @@ func TestOnHttpRequestBody_ModelMapping(t *testing.T) {
 			processed := host.GetRequestBody()
 			require.NotNil(t, processed)
 			require.Equal(t, "gpt-4", gjson.GetBytes(processed, "model").String())
+			v, ok := getHeader(host.GetRequestHeaders(), "x-higress-llm-model-final")
+			require.True(t, ok)
+			require.Equal(t, "gpt-4", v)
 		})
 
 		t.Run("default model when key missing", func(t *testing.T) {
@@ -305,6 +308,9 @@ func TestOnHttpRequestBody_ModelMapping(t *testing.T) {
 			require.NotNil(t, processed)
 			// default model should be set at request.model
 			require.Equal(t, "gpt-4o", gjson.GetBytes(processed, "request.model").String())
+			v, ok := getHeader(host.GetRequestHeaders(), "x-higress-llm-model-final")
+			require.True(t, ok)
+			require.Equal(t, "gpt-4o", v)
 		})
 
 		t.Run("prefix mapping takes effect", func(t *testing.T) {
@@ -331,6 +337,9 @@ func TestOnHttpRequestBody_ModelMapping(t *testing.T) {
 			processed := host.GetRequestBody()
 			require.NotNil(t, processed)
 			require.Equal(t, "gpt-4-mini", gjson.GetBytes(processed, "request.model").String())
+			v, ok := getHeader(host.GetRequestHeaders(), "x-higress-llm-model-final")
+			require.True(t, ok)
+			require.Equal(t, "gpt-4-mini", v)
 		})
 
 		t.Run("exact mapping beats prefix for same family", func(t *testing.T) {
@@ -357,6 +366,9 @@ func TestOnHttpRequestBody_ModelMapping(t *testing.T) {
 			processed := host.GetRequestBody()
 			require.NotNil(t, processed)
 			require.Equal(t, "gpt-4-turbo-1", gjson.GetBytes(processed, "request.model").String())
+			v, ok := getHeader(host.GetRequestHeaders(), "x-higress-llm-model-final")
+			require.True(t, ok)
+			require.Equal(t, "gpt-4-turbo-1", v)
 		})
 
 		t.Run("empty request body is a no-op", func(t *testing.T) {
@@ -389,6 +401,7 @@ func TestOnHttpRequestBody_ModelMapping(t *testing.T) {
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-higress-llm-model-final", "should-not-change"},
 			})
 
 			bad := []byte(`not json`)
@@ -398,9 +411,12 @@ func TestOnHttpRequestBody_ModelMapping(t *testing.T) {
 			if out != nil {
 				require.Equal(t, string(bad), string(out))
 			}
+			v, ok := getHeader(host.GetRequestHeaders(), "x-higress-llm-model-final")
+			require.True(t, ok)
+			require.Equal(t, "should-not-change", v, "invalid JSON must not refresh model header")
 		})
 
-		t.Run("no model rewrite when already mapped target", func(t *testing.T) {
+		t.Run("no body rewrite when already mapped target but header still refreshed", func(t *testing.T) {
 			host, status := test.NewTestHost(basicConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -419,9 +435,12 @@ func TestOnHttpRequestBody_ModelMapping(t *testing.T) {
 			if out != nil {
 				require.Equal(t, string(origBody), string(out))
 			}
+			v, ok := getHeader(host.GetRequestHeaders(), "x-higress-llm-model-final")
+			require.True(t, ok)
+			require.Equal(t, "gpt-4", v)
 		})
 
-		t.Run("modelToHeader updated when it disagrees with mapped model", func(t *testing.T) {
+		t.Run("modelToHeader always set to resolved model", func(t *testing.T) {
 			host, status := test.NewTestHost(headerSyncConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -442,6 +461,30 @@ func TestOnHttpRequestBody_ModelMapping(t *testing.T) {
 			require.Equal(t, "gpt-4", gjson.GetBytes(processed, "model").String())
 
 			v, ok := getHeader(host.GetRequestHeaders(), "x-final-model")
+			require.True(t, ok)
+			require.Equal(t, "gpt-4", v)
+		})
+
+		t.Run("modelToHeader refreshed even when it already matches resolved model", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+				{"x-higress-llm-model-final", "gpt-4"},
+			})
+
+			origBody := []byte(`{"model":"gpt-3.5-turbo","messages":[]}`)
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(origBody))
+
+			processed := host.GetRequestBody()
+			require.NotNil(t, processed)
+			require.Equal(t, "gpt-4", gjson.GetBytes(processed, "model").String())
+			v, ok := getHeader(host.GetRequestHeaders(), "x-higress-llm-model-final")
 			require.True(t, ok)
 			require.Equal(t, "gpt-4", v)
 		})

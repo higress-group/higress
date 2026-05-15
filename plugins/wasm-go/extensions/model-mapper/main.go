@@ -190,13 +190,10 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 		}
 	}
 
+	// update x-higress-llm-model-final header
+	proxywasm.ReplaceHttpRequestHeader(config.modelToHeader, newModel)
+	log.Debugf("set header %s: %s", config.modelToHeader, newModel)
 	if newModel != "" && newModel != oldModel {
-		// if x-higress-llm-model-final header is set, and it is not the same as the new model, update it
-		// this is to support fallback and token rate limit
-		model, _ := proxywasm.GetHttpRequestHeader(config.modelToHeader)
-		if model != "" && model != newModel {
-			proxywasm.ReplaceHttpRequestHeader(config.modelToHeader, newModel)
-		}
 		newBody, err := sjson.SetBytes(body, config.modelKey, newModel)
 		if err != nil {
 			log.Errorf("failed to update model: %v", err)
