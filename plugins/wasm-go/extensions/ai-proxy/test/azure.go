@@ -50,6 +50,40 @@ var azureFullPathConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：Azure OpenAI v1 完整路径配置（无需 api-version）
+var azureV1FullPathConfigWithoutApiVersion = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type": "azure",
+			"apiTokens": []string{
+				"sk-azure-v1",
+			},
+			"azureServiceUrl": "https://v1-resource.openai.azure.com/openai/v1/chat/completions",
+			"modelMapping": map[string]string{
+				"*": "gpt-4.1",
+			},
+		},
+	})
+	return data
+}()
+
+// 测试配置：Azure OpenAI v1 base_url 配置（无需 api-version）
+var azureV1BaseURLConfigWithoutApiVersion = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type": "azure",
+			"apiTokens": []string{
+				"sk-azure-v1-base",
+			},
+			"azureServiceUrl": "https://v1-base-resource.openai.azure.com/openai/v1",
+			"modelMapping": map[string]string{
+				"*": "gpt-4.1",
+			},
+		},
+	})
+	return data
+}()
+
 // 测试配置：Azure OpenAI仅部署配置
 var azureDeploymentOnlyConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -203,7 +237,7 @@ var azureInvalidConfigMissingUrl = func() json.RawMessage {
 	return data
 }()
 
-// 测试配置：Azure OpenAI无效配置（缺少api-version）
+// 测试配置：Azure OpenAI legacy deployment 无效配置（缺少api-version）
 var azureInvalidConfigMissingApiVersion = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
 		"provider": map[string]interface{}{
@@ -212,6 +246,23 @@ var azureInvalidConfigMissingApiVersion = func() json.RawMessage {
 				"sk-azure-invalid",
 			},
 			"azureServiceUrl": "https://invalid-resource.openai.azure.com/openai/deployments/invalid-deployment/chat/completions",
+			"modelMapping": map[string]string{
+				"*": "gpt-3.5-turbo",
+			},
+		},
+	})
+	return data
+}()
+
+// 测试配置：Azure OpenAI legacy domain-only 无效配置（缺少api-version）
+var azureInvalidDomainOnlyConfigMissingApiVersion = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type": "azure",
+			"apiTokens": []string{
+				"sk-azure-invalid-domain",
+			},
+			"azureServiceUrl": "https://invalid-domain-resource.openai.azure.com",
 			"modelMapping": map[string]string{
 				"*": "gpt-3.5-turbo",
 			},
@@ -325,6 +376,28 @@ func RunAzureParseConfigTests(t *testing.T) {
 			require.NotNil(t, config)
 		})
 
+		// 测试Azure OpenAI v1完整路径配置解析（缺少api-version也应通过）
+		t.Run("azure v1 full path config without api version", func(t *testing.T) {
+			host, status := test.NewTestHost(azureV1FullPathConfigWithoutApiVersion)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+		})
+
+		// 测试Azure OpenAI v1 base_url配置解析（缺少api-version也应通过）
+		t.Run("azure v1 base url config without api version", func(t *testing.T) {
+			host, status := test.NewTestHost(azureV1BaseURLConfigWithoutApiVersion)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+		})
+
 		// 测试Azure OpenAI仅部署配置解析
 		t.Run("azure deployment only config", func(t *testing.T) {
 			host, status := test.NewTestHost(azureDeploymentOnlyConfig)
@@ -382,6 +455,14 @@ func RunAzureParseConfigTests(t *testing.T) {
 			host, status := test.NewTestHost(azureInvalidConfigMissingApiVersion)
 			defer host.Reset()
 			// 应该失败，因为缺少api-version
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		// 测试Azure OpenAI legacy domain-only无效配置（缺少api-version）
+		t.Run("azure invalid domain-only config missing api version", func(t *testing.T) {
+			host, status := test.NewTestHost(azureInvalidDomainOnlyConfigMissingApiVersion)
+			defer host.Reset()
+			// legacy domain-only 模式仍应失败，因为缺少api-version
 			require.Equal(t, types.OnPluginStartStatusFailed, status)
 		})
 
@@ -479,6 +560,60 @@ func RunAzureOnHttpRequestHeadersTests(t *testing.T) {
 			require.True(t, hasApiKey, "api-key header should exist")
 			require.Equal(t, "sk-azure-fullpath", apiKeyValue, "api-key should contain Azure API token")
 		})
+
+		// 测试Azure OpenAI v1完整路径配置不拼接空query
+		t.Run("azure v1 full path request headers without trailing query", func(t *testing.T) {
+			host, status := test.NewTestHost(azureV1FullPathConfigWithoutApiVersion)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost, "Host header should exist")
+			require.Equal(t, "v1-resource.openai.azure.com", hostValue, "Host should be changed to Azure service domain")
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/openai/v1/chat/completions", pathValue, "Path should not contain trailing empty query")
+		})
+
+		// 测试Azure OpenAI v1 base_url会继续拼接OpenAI capability path
+		t.Run("azure v1 base url request headers maps chat completions path", func(t *testing.T) {
+			host, status := test.NewTestHost(azureV1BaseURLConfigWithoutApiVersion)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost, "Host header should exist")
+			require.Equal(t, "v1-base-resource.openai.azure.com", hostValue, "Host should be changed to Azure service domain")
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/openai/v1/chat/completions", pathValue, "Path should map OpenAI request path onto Azure v1 base URL")
+		})
 	})
 }
 
@@ -532,6 +667,39 @@ func RunAzureOnHttpRequestBodyTests(t *testing.T) {
 			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
 			require.True(t, hasPath, "Path header should exist")
 			require.Equal(t, pathValue, "/openai/deployments/test-deployment/chat/completions?api-version=2024-02-15-preview", "Path should contain Azure deployment path")
+		})
+
+		// 测试Azure OpenAI v1 base_url在Body阶段仍保持正确的capability path
+		t.Run("azure v1 base url request body maps chat completions path", func(t *testing.T) {
+			host, status := test.NewTestHost(azureV1BaseURLConfigWithoutApiVersion)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+				"model": "gpt-4.1",
+				"messages": [
+					{
+						"role": "user",
+						"content": "Hello from Azure v1"
+					}
+				]
+			}`
+
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/openai/v1/chat/completions", pathValue, "Path should keep Azure v1 capability path after body processing")
 		})
 
 		// 测试Azure OpenAI请求体处理（不同模型）

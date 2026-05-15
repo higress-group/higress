@@ -128,18 +128,20 @@ OpenAI 所对应的 `type` 为 `openai`。它特有的配置字段如下:
 
 Azure OpenAI 所对应的 `type` 为 `azure`。它特有的配置字段如下：
 
-| 名称              | 数据类型 | 填写要求 | 默认值 | 描述                                                     |
-| ----------------- | -------- | -------- | ------ | -------------------------------------------------------- |
-| `azureServiceUrl` | string   | 必填     | -      | Azure OpenAI 服务的 URL，须包含 `api-version` 查询参数。 |
+| 名称              | 数据类型 | 填写要求 | 默认值 | 描述                                                                                                   |
+| ----------------- | -------- | -------- | ------ | ------------------------------------------------------------------------------------------------------ |
+| `azureServiceUrl` | string   | 必填     | -      | Azure OpenAI 服务的 URL。`/openai/v1` 新版路径无需日期型 `api-version`；legacy 路径或仅资源名称模式仍须包含。 |
 
 **注意：**
 1. Azure OpenAI 只支持配置一个 API Token。
-2. `azureServiceUrl` 支持以下三种配置格式：
-   1. 完整路径格式，例如：`https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME/chat/completions?api-version=2024-02-15-preview`
+2. `azureServiceUrl` 支持新版 `/openai/v1` 和 legacy 配置格式：
+   1. 新版 v1 格式，例如：`https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1`
+      - 插件会直接使用该 v1 base URL，且不会自动追加日期型 `api-version`。
+   2. Legacy 完整路径格式，例如：`https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME/chat/completions?api-version=2024-02-15-preview`
       - 插件会直接将请求转发至该 URL，不会参考实际的请求路径。
-   2. 部署名称格式，例如：`https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME?api-version=2024-02-15-preview`
+   3. Legacy 部署名称格式，例如：`https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME?api-version=2024-02-15-preview`
       - 插件会根据实际的请求路径拼接后续路径。路径中的部署名称会保留不变，不会按照模型映射规则进行修改。同时支持 URL 中不包含部署名称的接口。
-   3. 资源名称格式，例如：`https://YOUR_RESOURCE_NAME.openai.azure.com?api-version=2024-02-15-preview` 
+   4. Legacy 资源名称格式，例如：`https://YOUR_RESOURCE_NAME.openai.azure.com?api-version=2024-02-15-preview`
       - 插件会根据实际的请求路径拼接后续路径。路径中的部署名称会根据请求中的模型名称结合模型映射规则进行填入。同时支持 URL 中不包含部署名称的接口。
 
 #### 月之暗面（Moonshot）
@@ -400,7 +402,7 @@ provider:
   type: azure
   apiTokens:
     - "YOUR_AZURE_OPENAI_API_TOKEN"
-  azureServiceUrl: "https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME/chat/completions?api-version=2024-02-15-preview",
+  azureServiceUrl: "https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1",
 ```
 
 **请求示例**
