@@ -84,6 +84,15 @@ func RunMapRequestPathByCapabilityTests(t *testing.T) {
 			expected: "/v1/videos/video-xyz",
 		},
 		{
+			name:    "video placeholder is replaced in nested provider path",
+			apiName: "openai/v1/retrievevideo",
+			origin:  "/openai/v1/videos/video-xyz",
+			mapping: map[string]string{
+				"openai/v1/retrievevideo": "/v1/videos/text2video/{video_id}",
+			},
+			expected: "/v1/videos/text2video/video-xyz",
+		},
+		{
 			name:    "video content placeholder with query",
 			apiName: "openai/v1/retrievevideocontent",
 			origin:  "/openai/v1/videos/video-xyz/content?variant=thumbnail",
