@@ -704,9 +704,9 @@ tracing:
   enable: false
   sampling: 100
   timeout: 500
-  # skywalking:
+  skywalking:
   #   access_token: ""
-  #   service: ""
+    service: ""
   #   port: 11800
   # zipkin:
   #   service: ""
