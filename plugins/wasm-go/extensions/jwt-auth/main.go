@@ -33,7 +33,24 @@ import (
 // @Contact.email ink33@smlk.org
 //
 // @Example
-// {}
+//
+//	{
+//	  "consumers": [
+//	    {
+//	      "name": "example-consumer",
+//	      "issuer": "https://issuer.example.com",
+//	      "jwks_uri": "https://issuer.example.com/.well-known/jwks.json",
+//	      "jwks_cache_duration": 600,
+//	      "jwks_fetch_timeout": 1500
+//	    },
+//	    {
+//	      "name": "inline-consumer",
+//	      "issuer": "https://issuer.example.com",
+//	      "jwks": "{\"keys\":[...]}"
+//	    }
+//	  ]
+//	}
+//
 // @End
 func main() {}
 

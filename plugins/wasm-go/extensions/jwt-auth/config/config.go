@@ -24,6 +24,12 @@ var (
 	// DefaultKeepToken 是 KeepToken 的默认值
 	DefaultKeepToken = true
 
+	// DefaultJWKsCacheDuration is the default remote JWKS cache duration in seconds.
+	DefaultJWKsCacheDuration = int64(600)
+
+	// DefaultJWKsFetchTimeout is the default remote JWKS fetch timeout in milliseconds.
+	DefaultJWKsFetchTimeout = int64(1500)
+
 	// DefaultFromHeader 是 from_header 的默认值
 	DefaultFromHeader = []FromHeader{{
 		Name:        "Authorization",
@@ -67,6 +73,17 @@ type Consumer struct {
 	//
 	// https://www.rfc-editor.org/rfc/rfc7517
 	JWKs string `json:"jwks"`
+
+	// JWKsURI specifies the HTTPS remote JWKS URL used to refresh signing keys.
+	// The gateway must be able to reach the host through an FQDN outbound cluster.
+	JWKsURI string `json:"jwks_uri"`
+
+	// JWKsCacheDuration is the remote JWKS cache duration in seconds.
+	// Requests are denied while the first fetch is in flight or after recent fetch failures.
+	JWKsCacheDuration *int64 `json:"jwks_cache_duration,omitempty"`
+
+	// JWKsFetchTimeout is the remote JWKS fetch timeout in milliseconds.
+	JWKsFetchTimeout *int64 `json:"jwks_fetch_timeout,omitempty"`
 
 	// Issuer JWT的签发者，需要和payload中的iss字段保持一致
 	Issuer string `json:"issuer"`

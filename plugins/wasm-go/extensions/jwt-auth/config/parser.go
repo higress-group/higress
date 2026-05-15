@@ -17,6 +17,9 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/go-jose/go-jose/v3"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -25,6 +28,9 @@ import (
 
 // RuleSet 插件是否至少在一个 domain 或 route 上生效
 var RuleSet bool
+
+const maxJWKsFetchTimeout = int64(10 * 1000)      // milliseconds
+const maxJWKsCacheDuration = int64(7 * 24 * 3600) // seconds
 
 // ParseGlobalConfig 从wrapper提供的配置中解析并转换到插件运行时需要使用的配置。
 // 此处解析的是全局配置，域名和路由级配置由 ParseRuleConfig 负责。
@@ -88,11 +94,43 @@ func ParseConsumer(consumer gjson.Result, names map[string]struct{}) (c *Consume
 		return nil, fmt.Errorf("consumer already exists: %s", c.Name)
 	}
 
-	// 检查JWKs是否合法
-	jwks := &jose.JSONWebKeySet{}
-	err = json.Unmarshal([]byte(c.JWKs), jwks)
-	if err != nil {
-		return nil, fmt.Errorf("jwks is invalid, consumer:%s, status:%s, jwks:%s", c.Name, err.Error(), c.JWKs)
+	c.JWKs = strings.TrimSpace(c.JWKs)
+	c.JWKsURI = strings.TrimSpace(c.JWKsURI)
+	if c.JWKs == "" && c.JWKsURI == "" {
+		return nil, fmt.Errorf("one of jwks and jwks_uri is required, consumer:%s", c.Name)
+	}
+	if c.JWKs != "" && c.JWKsURI != "" {
+		return nil, fmt.Errorf("only one of jwks and jwks_uri can be configured, consumer:%s", c.Name)
+	}
+	if c.JWKs != "" {
+		// Validate inline JWKS before accepting the consumer.
+		jwks := &jose.JSONWebKeySet{}
+		err = json.Unmarshal([]byte(c.JWKs), jwks)
+		if err != nil {
+			return nil, fmt.Errorf("jwks is invalid, consumer:%s, status:%s, jwks:%s", c.Name, err.Error(), c.JWKs)
+		}
+		if len(jwks.Keys) == 0 {
+			return nil, fmt.Errorf("jwks is empty, consumer:%s", c.Name)
+		}
+		c.JWKsCacheDuration = nil
+		c.JWKsFetchTimeout = nil
+	}
+	if c.JWKsURI != "" {
+		if strings.TrimSpace(c.Issuer) == "" {
+			return nil, fmt.Errorf("issuer is required when jwks_uri is set, consumer:%s", c.Name)
+		}
+		parsed, err := url.Parse(c.JWKsURI)
+		if err != nil || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || parsed.Scheme != "https" || strings.HasSuffix(parsed.Host, ":") {
+			return nil, fmt.Errorf("jwks_uri is invalid, consumer:%s, jwks_uri:%s", c.Name, c.JWKsURI)
+		}
+		if parsed.Port() != "" {
+			port, err := strconv.ParseInt(parsed.Port(), 10, 64)
+			if err != nil || port <= 0 || port > 65535 {
+				return nil, fmt.Errorf("jwks_uri is invalid, consumer:%s, jwks_uri:%s", c.Name, c.JWKsURI)
+			}
+		}
+		parsed.Host = strings.ToLower(parsed.Host)
+		c.JWKsURI = parsed.String()
 	}
 
 	// 检查是否需要使用默认jwt抽取来源
@@ -130,6 +168,32 @@ func ParseConsumer(consumer gjson.Result, names map[string]struct{}) (c *Consume
 	// 为KeepToken填充默认值
 	if c.KeepToken == nil {
 		c.KeepToken = &DefaultKeepToken
+	}
+
+	if c.JWKsURI != "" {
+		// Fill the default remote JWKS cache duration.
+		if c.JWKsCacheDuration == nil {
+			v := DefaultJWKsCacheDuration
+			c.JWKsCacheDuration = &v
+		}
+		if *c.JWKsCacheDuration <= 0 {
+			return nil, fmt.Errorf("jwks_cache_duration must be positive, consumer:%s", c.Name)
+		}
+		if *c.JWKsCacheDuration > maxJWKsCacheDuration {
+			return nil, fmt.Errorf("jwks_cache_duration must be less than or equal to %d, consumer:%s", maxJWKsCacheDuration, c.Name)
+		}
+
+		// Fill the default remote JWKS fetch timeout.
+		if c.JWKsFetchTimeout == nil {
+			v := DefaultJWKsFetchTimeout
+			c.JWKsFetchTimeout = &v
+		}
+		if *c.JWKsFetchTimeout <= 0 {
+			return nil, fmt.Errorf("jwks_fetch_timeout must be positive, consumer:%s", c.Name)
+		}
+		if *c.JWKsFetchTimeout > maxJWKsFetchTimeout {
+			return nil, fmt.Errorf("jwks_fetch_timeout must be less than or equal to %d, consumer:%s", maxJWKsFetchTimeout, c.Name)
+		}
 	}
 
 	// consumer合法，记录consumer名称
