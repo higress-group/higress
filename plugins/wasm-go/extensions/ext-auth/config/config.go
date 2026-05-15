@@ -51,6 +51,12 @@ type AuthorizationRequest struct {
 	HeadersToAdd        map[string]string
 	WithRequestBody     bool
 	MaxRequestBodyBytes uint32
+	AllowedProperties   []AllowedProperty
+}
+
+type AllowedProperty struct {
+	Path   []string
+	Header string
 }
 
 type AuthorizationResponse struct {
@@ -210,6 +216,13 @@ func parseAuthorizationRequestConfig(json gjson.Result, httpService *HttpService
 		}
 		authorizationRequest.MaxRequestBodyBytes = maxRequestBodyBytes
 
+		allowedProperties := authorizationRequestConfig.Get("allowed_properties").Array()
+		var err error
+		authorizationRequest.AllowedProperties, err = parseAllowedProperties(allowedProperties)
+		if err != nil {
+			return err
+		}
+
 		httpService.AuthorizationRequest = authorizationRequest
 	}
 	return nil
@@ -315,4 +328,34 @@ func convertToStringList(results []gjson.Result) []string {
 		interfaces[i] = result.String()
 	}
 	return interfaces
+}
+
+func parseAllowedProperties(results []gjson.Result) ([]AllowedProperty, error) {
+	props := make([]AllowedProperty, 0, len(results))
+	for i, result := range results {
+		pathVal := result.Get("path")
+		headerVal := result.Get("header")
+		if !pathVal.Exists() {
+			return nil, fmt.Errorf("allowed_properties[%d]: missing required field 'path'", i)
+		}
+		if !headerVal.Exists() {
+			return nil, fmt.Errorf("allowed_properties[%d]: missing required field 'header'", i)
+		}
+		// path can be array format: [route_name] or [metadata, test]
+		// or single value format: route_name
+		var path []string
+		if pathVal.IsArray() {
+			pathVal.ForEach(func(key, value gjson.Result) bool {
+				path = append(path, value.String())
+				return true
+			})
+		} else {
+			path = []string{pathVal.String()}
+		}
+		props = append(props, AllowedProperty{
+			Path:   path,
+			Header: headerVal.String(),
+		})
+	}
+	return props, nil
 }
