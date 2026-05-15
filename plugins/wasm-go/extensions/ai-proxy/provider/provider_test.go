@@ -763,4 +763,9 @@ func TestStripClaudeInternalMessageFields(t *testing.T) {
 	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_block_index").Exists())
 	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_block_stop").Exists())
 	assert.Equal(t, "answer", gjson.GetBytes(result, "messages.0.content").String())
+
+	preserved := stripClaudeInternalMessageFields(body, true)
+	assert.Equal(t, "reasoning", gjson.GetBytes(preserved, "messages.0.reasoning_content").String())
+	assert.False(t, gjson.GetBytes(preserved, "messages.0.reasoning_signature").Exists())
+	assert.False(t, gjson.GetBytes(preserved, "messages.0.claude_content_blocks").Exists())
 }

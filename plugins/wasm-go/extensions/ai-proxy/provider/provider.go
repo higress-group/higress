@@ -538,6 +538,18 @@ func (c *ProviderConfig) IsOpenAIProtocol() bool {
 	return c.protocol == protocolOpenAI
 }
 
+func (c *ProviderConfig) supportsMessageReasoningContent() bool {
+	switch c.typ {
+	case providerTypeQwen, providerTypeOpenRouter, providerTypeZhipuAi:
+		return true
+	default:
+		// DeepSeek supports Anthropic Messages natively, so Claude requests usually bypass
+		// this Claude->OpenAI conversion path. Its OpenAI request-side reasoning history
+		// semantics should be validated separately before adding it here.
+		return false
+	}
+}
+
 func (c *ProviderConfig) FromJson(json gjson.Result) {
 	c.id = json.Get("id").String()
 	c.typ = json.Get("type").String()
@@ -1204,7 +1216,9 @@ func (c *ProviderConfig) handleRequestBody(
 
 		// Convert Claude protocol to OpenAI protocol
 		converter := &ClaudeToOpenAIConverter{}
-		body, err = converter.ConvertClaudeRequestToOpenAI(body)
+		body, err = converter.ConvertClaudeRequestToOpenAIWithOptions(body, ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: c.supportsMessageReasoningContent(),
+		})
 		if err != nil {
 			return types.ActionContinue, fmt.Errorf("failed to convert claude request to openai: %v", err)
 		}
@@ -1245,7 +1259,7 @@ func (c *ProviderConfig) handleRequestBody(
 	}
 
 	if needClaudeConversion && provider.GetProviderType() != providerTypeBedrock && provider.GetProviderType() != providerTypeClaude {
-		body = stripClaudeInternalMessageFields(body)
+		body = stripClaudeInternalMessageFields(body, c.supportsMessageReasoningContent())
 	}
 
 	// use openai protocol (either original openai or converted from claude)
@@ -1281,7 +1295,7 @@ func (c *ProviderConfig) handleRequestBody(
 	return types.ActionContinue, replaceRequestBody(body)
 }
 
-func stripClaudeInternalMessageFields(body []byte) []byte {
+func stripClaudeInternalMessageFields(body []byte, preserveMessageReasoningContent ...bool) []byte {
 	result := body
 	for _, field := range []string{"claude_thinking", "claude_output_config", "claude_anthropic_beta"} {
 		if updated, err := sjson.DeleteBytes(result, field); err == nil {
@@ -1294,15 +1308,19 @@ func stripClaudeInternalMessageFields(body []byte) []byte {
 		return result
 	}
 
-	for _, field := range []string{
+	fields := []string{
 		"reasoning",
-		"reasoning_content",
 		"reasoning_signature",
 		"reasoning_redacted_content",
 		"claude_content_blocks",
 		"claude_content_block_index",
 		"claude_content_block_stop",
-	} {
+	}
+	if len(preserveMessageReasoningContent) == 0 || !preserveMessageReasoningContent[0] {
+		fields = append(fields, "reasoning_content")
+	}
+
+	for _, field := range fields {
 		messages.ForEach(func(key, _ gjson.Result) bool {
 			if updated, err := sjson.DeleteBytes(result, fmt.Sprintf("messages.%d.%s", key.Int(), field)); err == nil {
 				result = updated

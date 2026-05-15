@@ -124,17 +124,27 @@ func (m *qwenProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiName 
 
 func (m *qwenProvider) TransformRequestBodyHeaders(ctx wrapper.HttpContext, apiName ApiName, body []byte, headers http.Header) ([]byte, error) {
 	if m.config.qwenEnableCompatible {
-		if gjson.GetBytes(body, "model").Exists() {
-			rawModel := gjson.GetBytes(body, "model").String()
+		modifiedBody := body
+		if requestBodyHasMessageReasoningContent(modifiedBody) {
+			// Qwen OpenAI-compatible mode requires top-level preserve_thinking=true
+			// before historical reasoning_content can be reused by the model.
+			var err error
+			modifiedBody, err = sjson.SetBytes(modifiedBody, "preserve_thinking", true)
+			if err != nil {
+				return modifiedBody, err
+			}
+		}
+		if gjson.GetBytes(modifiedBody, "model").Exists() {
+			rawModel := gjson.GetBytes(modifiedBody, "model").String()
 			mappedModel := getMappedModel(rawModel, m.config.modelMapping)
-			newBody, err := sjson.SetBytes(body, "model", mappedModel)
+			newBody, err := sjson.SetBytes(modifiedBody, "model", mappedModel)
 			if err != nil {
 				log.Errorf("Replace model error: %v", err)
 				return newBody, err
 			}
-			return newBody, nil
+			return newBody, err
 		}
-		return body, nil
+		return modifiedBody, nil
 	}
 	switch apiName {
 	case ApiNameChatCompletion:
@@ -286,6 +296,7 @@ func (m *qwenProvider) buildQwenTextGenerationRequest(ctx wrapper.HttpContext, o
 			TopP:              math.Max(qwenTopPMin, math.Min(origRequest.TopP, qwenTopPMax)),
 			IncrementalOutput: streaming && (origRequest.Tools == nil || len(origRequest.Tools) == 0),
 			EnableSearch:      m.config.qwenEnableSearch,
+			PreserveThinking:  chatMessagesHaveReasoningContent(origRequest.Messages),
 			Tools:             origRequest.Tools,
 		},
 	}
@@ -566,6 +577,7 @@ type qwenTextGenParameters struct {
 	TopP              float64 `json:"top_p,omitempty"`
 	IncrementalOutput bool    `json:"incremental_output,omitempty"`
 	EnableSearch      bool    `json:"enable_search,omitempty"`
+	PreserveThinking  bool    `json:"preserve_thinking,omitempty"`
 	Tools             []tool  `json:"tools,omitempty"`
 }
 
@@ -673,13 +685,32 @@ func (m *qwenMessage) StringContent() string {
 	return ""
 }
 
+func chatMessagesHaveReasoningContent(messages []chatMessage) bool {
+	for _, message := range messages {
+		if message.ReasoningContent != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func requestBodyHasMessageReasoningContent(body []byte) bool {
+	for _, message := range gjson.GetBytes(body, "messages").Array() {
+		if message.Get("reasoning_content").String() != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func chatMessage2QwenMessage(chatMessage chatMessage) qwenMessage {
 	if chatMessage.IsStringContent() {
 		return qwenMessage{
-			Name:      chatMessage.Name,
-			Role:      chatMessage.Role,
-			Content:   chatMessage.StringContent(),
-			ToolCalls: chatMessage.ToolCalls,
+			Name:             chatMessage.Name,
+			Role:             chatMessage.Role,
+			Content:          chatMessage.StringContent(),
+			ReasoningContent: chatMessage.ReasoningContent,
+			ToolCalls:        chatMessage.ToolCalls,
 		}
 	} else {
 		var contents []qwenVlMessageContent
@@ -694,10 +725,11 @@ func chatMessage2QwenMessage(chatMessage chatMessage) qwenMessage {
 			contents = append(contents, content)
 		}
 		return qwenMessage{
-			Name:      chatMessage.Name,
-			Role:      chatMessage.Role,
-			Content:   contents,
-			ToolCalls: chatMessage.ToolCalls,
+			Name:             chatMessage.Name,
+			Role:             chatMessage.Role,
+			Content:          contents,
+			ReasoningContent: chatMessage.ReasoningContent,
+			ToolCalls:        chatMessage.ToolCalls,
 		}
 	}
 }
