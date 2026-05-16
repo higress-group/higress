@@ -252,6 +252,19 @@ ai-security-guard 插件提供了以下监控指标：
 - `ai_sec_risklabel`: 表示请求命中的风险类型
 - `ai_sec_deny_phase`: 表示请求被检测到风险的阶段（取值为request或者response）
 
+### AI Log
+ai-security-guard 插件会将每次提交给内容安全服务的检测结果写入 AI 访问日志，用于将网关日志和阿里云内容安全请求关联起来：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `safecheck_requests` | array | 检测提交事件数组，每个元素为 `{"requestId"?: string, "phase": string, "modality": string, "result": string}` |
+| `safecheck_request_ids` | array | 当前网关请求内所有有效内容安全 `RequestId`，按提交完成顺序保留，不去重、不截断 |
+| `safecheck_request_id` | string | 最新一个有效内容安全 `RequestId`，用于兼容只读取单值的日志消费方 |
+
+`safecheck_requests[].phase` 取值为 `request` 或 `response`；`modality` 取值为 `text`、`image` 或 `mcp`；`result` 表示最终网关动作，取值为 `pass`、`deny`、`mask` 或 `error`。只有安全服务响应中的 `RequestId` 是 JSON 字符串且 `strings.TrimSpace(RequestId) != ""` 时，才会写入 `requestId`、`safecheck_request_ids` 和 `safecheck_request_id`；缺失、空字符串、空白字符串或非字符串值不会写入空占位。
+
+每一次提交尝试都会生成一个 `safecheck_requests` 事件，包括 HTTP 非 200、业务失败码以及调用内容安全服务失败等错误场景，错误结果会记录为 `result=error`。历史字段 `safecheck_status` 仍会保留以兼容现有日志消费方；需要精确审计多次提交、流式分段或图片多次检测时，应优先使用 `safecheck_requests`。
+
 ## 请求示例
 ```bash
 curl http://localhost/v1/chat/completions \

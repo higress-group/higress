@@ -212,18 +212,24 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 	contentIndex := 0
 	imageIndex := 0
 	sessionID, _ := utils.GenerateHexID(20)
+	currentSubmissionIndex := 0
+	currentImageSubmissionIndex := 0
 	var singleCall func()
 	var singleCallForImage func()
 	callback := func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		log.Info(string(responseBody))
 		if statusCode != 200 || gjson.GetBytes(responseBody, "Code").Int() != 200 {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
 		var response cfg.Response
 		err := json.Unmarshal(responseBody, &response)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
 			log.Errorf("%+v", err)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
@@ -232,10 +238,13 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 				endTime := time.Now().UnixMilli()
 				ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 				ctx.SetUserAttribute("safecheck_status", "request pass")
-				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+			}
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultPass)
+			if contentIndex >= len(content) {
 				if len(images) > 0 && config.CheckRequestImage {
 					singleCallForImage()
 				} else {
+					cfg.WriteGuardrailLog(ctx)
 					proxywasm.ResumeHttpRequest()
 				}
 			} else {
@@ -245,7 +254,9 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 		}
 		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
 			log.Errorf("failed to build deny response body: %v", err)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
@@ -259,9 +270,11 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 			ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 			ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 		}
-		ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+		cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+		cfg.WriteGuardrailLog(ctx)
 	}
 	singleCall = func() {
+		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseRequest, cfg.GuardrailModalityText)
 		var nextContentIndex int
 		if contentIndex+cfg.LengthLimit >= len(content) {
 			nextContentIndex = len(content)
@@ -275,6 +288,8 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
+			cfg.CompleteGuardrailSubmissionEventWithRequestID(ctx, currentSubmissionIndex, "", cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpRequest()
 		}
 	}
@@ -283,6 +298,8 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 		imageIndex += 1
 		log.Info(string(responseBody))
 		if statusCode != 200 || gjson.GetBytes(responseBody, "Code").Int() != 200 {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			if imageIndex < len(images) {
 				singleCallForImage()
 			} else {
@@ -293,6 +310,8 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 		var response cfg.Response
 		err := json.Unmarshal(responseBody, &response)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			log.Errorf("%+v", err)
 			if imageIndex < len(images) {
 				singleCallForImage()
@@ -306,7 +325,10 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 			if imageIndex >= len(images) {
 				ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 				ctx.SetUserAttribute("safecheck_status", "request pass")
-				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+			}
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultPass)
+			if imageIndex >= len(images) {
+				cfg.WriteGuardrailLog(ctx)
 				proxywasm.ResumeHttpRequest()
 			} else {
 				singleCallForImage()
@@ -316,7 +338,9 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 
 		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultError)
 			log.Errorf("failed to build deny response body: %v", err)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
@@ -329,9 +353,11 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 			ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 			ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 		}
-		ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+		cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+		cfg.WriteGuardrailLog(ctx)
 	}
 	singleCallForImage = func() {
+		currentImageSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseRequest, cfg.GuardrailModalityImage)
 		img := images[imageIndex]
 		imgUrl := ""
 		imgBase64 := ""
@@ -344,6 +370,8 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 		err := config.Client.Post(path, headers, body, callbackForImage, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
+			cfg.CompleteGuardrailSubmissionEventWithRequestID(ctx, currentImageSubmissionIndex, "", cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpRequest()
 		}
 	}
@@ -365,11 +393,14 @@ func HandleQwenImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.A
 		return types.ActionContinue
 	}
 	imageIndex := 0
+	currentSubmissionIndex := 0
 	var singleCall func()
 	callback := func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		imageIndex += 1
 		log.Info(string(responseBody))
 		if statusCode != 200 || gjson.GetBytes(responseBody, "Code").Int() != 200 {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			if imageIndex < len(imgUrls) {
 				singleCall()
 			} else {
@@ -380,6 +411,8 @@ func HandleQwenImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.A
 		var response cfg.Response
 		err := json.Unmarshal(responseBody, &response)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			log.Errorf("%+v", err)
 			if imageIndex < len(imgUrls) {
 				singleCall()
@@ -391,9 +424,12 @@ func HandleQwenImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.A
 		endTime := time.Now().UnixMilli()
 		if cfg.IsRiskLevelAcceptable(config.Action, response.Data, config, consumer) {
 			if imageIndex >= len(imgUrls) {
-				ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
-				ctx.SetUserAttribute("safecheck_status", "request pass")
-				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+				ctx.SetUserAttribute("safecheck_response_rt", endTime-startTime)
+				ctx.SetUserAttribute("safecheck_status", "response pass")
+			}
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultPass)
+			if imageIndex >= len(imgUrls) {
+				cfg.WriteGuardrailLog(ctx)
 				proxywasm.ResumeHttpResponse()
 			} else {
 				singleCall()
@@ -402,22 +438,28 @@ func HandleQwenImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.A
 		}
 		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
 			log.Errorf("failed to build deny response body: %v", err)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpResponse()
 			return
 		}
 		proxywasm.SendHttpResponse(403, [][2]string{{"content-type", "application/json"}}, denyBody, -1)
-		config.IncrementCounter("ai_sec_request_deny", 1)
-		ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
-		ctx.SetUserAttribute("safecheck_status", "reqeust deny")
-		ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+		config.IncrementCounter("ai_sec_response_deny", 1)
+		ctx.SetUserAttribute("safecheck_response_rt", endTime-startTime)
+		ctx.SetUserAttribute("safecheck_status", "response deny")
+		cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+		cfg.WriteGuardrailLog(ctx)
 	}
 	singleCall = func() {
+		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityImage)
 		imgUrl := imgUrls[imageIndex]
 		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, checkImageService, imgUrl, "")
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
+			cfg.CompleteGuardrailSubmissionEventWithRequestID(ctx, currentSubmissionIndex, "", cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpResponse()
 		}
 	}

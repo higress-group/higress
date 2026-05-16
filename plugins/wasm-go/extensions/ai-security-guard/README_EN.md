@@ -169,3 +169,16 @@ ai-security-guard plugin provides following metrics:
 ai-security-guard plugin provides following span attributes:
 - `ai_sec_risklabel`: risk type of this request
 - `ai_sec_deny_phase`: denied phase of this request, value can be request/response
+
+### AI Log
+ai-security-guard writes each submission to the content security service into the AI access log, so gateway logs can be correlated with Alibaba Cloud content security requests:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `safecheck_requests` | array | Submission event array. Each item is `{"requestId"?: string, "phase": string, "modality": string, "result": string}` |
+| `safecheck_request_ids` | array | All valid content security `RequestId` values for the current gateway request, preserved in submission completion order without deduplication or truncation |
+| `safecheck_request_id` | string | The latest valid content security `RequestId`, kept for consumers that only read a single value |
+
+`safecheck_requests[].phase` is `request` or `response`; `modality` is `text`, `image`, or `mcp`; `result` is the final gateway action and can be `pass`, `deny`, `mask`, or `error`. The plugin writes `requestId`, `safecheck_request_ids`, and `safecheck_request_id` only when the security service response contains a JSON string `RequestId` and `strings.TrimSpace(RequestId) != ""`; missing, empty, whitespace-only, or non-string values do not produce empty placeholders.
+
+Every submission attempt emits one `safecheck_requests` event, including HTTP non-200 responses, business failures, and failures to dispatch the security service call. These error paths are recorded as `result=error`. The legacy `safecheck_status` field remains for compatibility with existing log consumers; use `safecheck_requests` for precise auditing across multiple submissions, streaming chunks, or multiple image checks.
