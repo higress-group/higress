@@ -195,15 +195,15 @@ pub struct AiDataMaskingConfig {
 }
 
 impl AiDataMaskingConfig {
-    fn check_message(&self, message: &str, log: &Log) -> bool {
-        if let Some(word) = self.deny_words.check(message) {
+    fn check_message(&self, message: &str, log: &Log, allow_end_boundary: bool) -> bool {
+        if let Some(word) = self.deny_words.check(message, allow_end_boundary) {
             log.warn(&format!(
                 "custom deny word {} matched from {}",
                 word, message
             ));
             return true;
         } else if self.system_deny {
-            if let Some(word) = SYSTEM.deny_word.check(message) {
+            if let Some(word) = SYSTEM.deny_word.check(message, allow_end_boundary) {
                 log.warn(&format!(
                     "system deny word {} matched from {}",
                     word, message
@@ -367,9 +367,9 @@ impl RootContextWrapper<AiDataMaskingConfig> for AiDataMaskingRoot {
 }
 
 impl AiDataMasking {
-    fn check_message(&self, message: &str) -> bool {
+    fn check_message(&self, message: &str, allow_end_boundary: bool) -> bool {
         if let Some(config) = &self.config {
-            config.check_message(message, self.log())
+            config.check_message(message, self.log(), allow_end_boundary)
         } else {
             false
         }
@@ -526,7 +526,7 @@ impl HttpContext for AiDataMasking {
                 for message in self.msg_window.messages_iter_mut() {
                     if let Ok(mut msg) = String::from_utf8(message.clone()) {
                         if let Some(config) = &self.config {
-                            if config.check_message(&msg, &log) {
+                            if config.check_message(&msg, &log, false) {
                                 deny = true;
                                 break;
                             }
@@ -572,6 +572,13 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
         &self.log
     }
     fn on_config(&mut self, config: Rc<AiDataMaskingConfig>) {
+        let (phrase_char_len, phrase_byte_len) = config.deny_words.max_phrase_len();
+        if phrase_char_len > self.char_window_size {
+            self.char_window_size = phrase_char_len;
+        }
+        if phrase_byte_len > self.byte_window_size {
+            self.byte_window_size = phrase_byte_len;
+        }
         self.config = Some(config.clone());
     }
     fn cache_request_body(&self) -> bool {
@@ -600,8 +607,8 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
                 self.is_openai = true;
                 self.stream = req.stream;
                 for msg in req.messages {
-                    if self.check_message(&msg.content)
-                        || self.check_message(&msg.reasoning_content)
+                    if self.check_message(&msg.content, true)
+                        || self.check_message(&msg.reasoning_content, true)
                     {
                         return self.deny(false);
                     }
@@ -630,7 +637,7 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
                     for v in jsonpath.find_slice(&json) {
                         if let JsonPathValue::Slice(d, _) = v {
                             if let Some(s) = d.as_str() {
-                                if self.check_message(s) {
+                                if self.check_message(s, true) {
                                     return self.deny(false);
                                 }
                                 let content = s.to_string();
@@ -650,7 +657,7 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
             }
         }
         if config.deny_raw {
-            if self.check_message(&req_body) {
+            if self.check_message(&req_body, true) {
                 return self.deny(false);
             }
             let new_body = self.replace_request_msg(&req_body);
@@ -680,8 +687,8 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
             if let Ok(res) = serde_json::from_str::<Res>(res_body.as_str()) {
                 for msg in res.choices {
                     if let Some(message) = msg.message {
-                        if self.check_message(&message.content)
-                            || self.check_message(&message.reasoning_content)
+                        if self.check_message(&message.content, true)
+                            || self.check_message(&message.reasoning_content, true)
                         {
                             return self.deny(true);
                         }
@@ -718,7 +725,7 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
             }
         }
         if config.deny_raw {
-            if self.check_message(&res_body) {
+            if self.check_message(&res_body, true) {
                 return self.deny(true);
             }
             if !self.mask_map.is_empty() {
