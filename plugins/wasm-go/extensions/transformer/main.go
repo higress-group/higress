@@ -15,9 +15,9 @@
 package main
 
 import (
-	"strings"
-
 	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -202,6 +202,67 @@ type DedupeParam struct {
 	strategy string `yaml:"strategy"`
 }
 
+type RequirementOperator string
+
+const (
+	RequirementOperatorIn           RequirementOperator = "In"
+	RequirementOperatorNotIn        RequirementOperator = "NotIn"
+	RequirementOperatorExists       RequirementOperator = "Exists"
+	RequirementOperatorDoesNotExist RequirementOperator = "DoesNotExist"
+)
+
+type Requirement struct {
+	Key      string              `json:"key"`
+	Operator RequirementOperator `json:"operator"`
+	Values   []string            `json:"values,omitempty"`
+}
+
+func (r *Requirement) match(mapSourceData MapSourceData) bool {
+	if len(mapSourceData.kvs) == 0 {
+		return false
+	}
+	// 获取该 Key 对应的所有实际值
+	actualValues, exists := mapSourceData.kvs[r.Key]
+
+	switch r.Operator {
+	case RequirementOperatorExists:
+		// 只要 Key 在 map 里出现过（哪怕值是空切片），也算 Exists
+		return exists
+	case RequirementOperatorDoesNotExist:
+		// Key 必须完全不存在
+		return !exists
+	case RequirementOperatorIn:
+		// 逻辑：必须存在，且 [实际值集合] 与 [期望值集合] 有交集
+		if !exists || len(actualValues) == 0 {
+			return false
+		}
+
+		// 遍历实际拥有的值，只要有一个在白名单里，就通过
+		for _, v := range actualValues {
+			if slices.Contains(r.Values, v) {
+				return true
+			}
+		}
+		return false
+	case RequirementOperatorNotIn:
+		// 逻辑：如果 Key 不存在，或者 [实际值集合] 与 [黑名单集合] 无交集
+		if !exists || len(actualValues) == 0 {
+			return true
+		}
+
+		// 遍历实际拥有的值，只要有一个在黑名单里，就失败
+		for _, v := range actualValues {
+			if slices.Contains(r.Values, v) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+
+}
+
 type Param struct {
 	removeParam  RemoveParam
 	renameParam  RenameParam
@@ -221,6 +282,10 @@ type Param struct {
 	// @Title 请求路径匹配规则
 	// @Description 指定路径匹配规则，当转换操作类型为 replace, add, append 时有效
 	pathPattern string `yaml:"path_pattern"`
+
+	// @Title 转换规则的触发条件
+	// @Description
+	requirement *Requirement `yaml:"requirement"`
 }
 
 func parseConfig(json gjson.Result, config *TransformerConfig, log log.Log) (err error) {
@@ -268,6 +333,20 @@ func parseConfig(json gjson.Result, config *TransformerConfig, log log.Log) (err
 func constructParam(item gjson.Result, op, valueType string) Param {
 	p := Param{
 		valueType: valueType,
+	}
+
+	// requirement满足时, op操作才会生效
+	reqResult := item.Get("requirement")
+	if reqResult.Exists() {
+		p.requirement = &Requirement{
+			Key:      reqResult.Get("key").String(),
+			Operator: RequirementOperator(reqResult.Get("operator").String()),
+		}
+		valuesResult := reqResult.Get("values").Array()
+		p.requirement.Values = make([]string, 0, len(valuesResult))
+		for _, v := range valuesResult {
+			p.requirement.Values = append(p.requirement.Values, v.String())
+		}
 	}
 
 	switch op {
@@ -943,6 +1022,15 @@ func (h kvHandler) handle(host, path string, kvs map[string][]string, mapSourceD
 		case AddK:
 			// add: 若指定 key 存在则无操作；否则添加 key:value
 			for _, add := range kvtOp.addKvtGroup {
+				// 判断是否满足requirement
+				if add.requirement != nil {
+					sourceData, ok := mapSourceData[kvtOp.typ]
+					if !ok || !add.requirement.match(sourceData) {
+						proxywasm.LogWarnf("skip because don't match requirements, requirement: %+v, sourceData:%+v", *add.requirement, sourceData)
+						continue
+					}
+				}
+
 				key, value := add.key, add.value
 				if _, ok := kvs[key]; ok {
 					continue
@@ -1263,6 +1351,7 @@ type addKvt struct {
 	value string
 	typ   string
 	*reg
+	requirement *Requirement
 }
 type appendKvt struct {
 	key         string
@@ -1292,6 +1381,7 @@ const (
 )
 
 type kvtOperation struct {
+	typ             string
 	kvtOpType       KvtOpType
 	removeKvtGroup  []removeKvt
 	renameKvtGroup  []renameKvt
@@ -1317,6 +1407,7 @@ func newKvtGroup(rules []TransformRule, typ string) (g []kvtOperation, isChange 
 		}
 
 		var kvtOp kvtOperation
+		kvtOp.typ = typ
 		switch r.operate {
 		case "remove":
 			kvtOp.kvtOpType = RemoveK
@@ -1391,7 +1482,7 @@ func newKvtGroup(rules []TransformRule, typ string) (g []kvtOperation, isChange 
 						return nil, false, false, errors.Wrap(err, "failed to new reg")
 					}
 				}
-				kvtOp.addKvtGroup = append(kvtOp.addKvtGroup, addKvt{p.addParam.key, p.addParam.value, p.valueType, rg})
+				kvtOp.addKvtGroup = append(kvtOp.addKvtGroup, addKvt{p.addParam.key, p.addParam.value, p.valueType, rg, p.requirement})
 			case "append":
 				if typ == "headers" {
 					p.appendParam.key = strings.ToLower(p.appendParam.key)
