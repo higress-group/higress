@@ -15,11 +15,65 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// 将 multipart 字节按 part name 排序后重新序列化（使用 \r\n）
+func sortMultipartBody(data []byte, boundary string) []byte {
+	reader := multipart.NewReader(bytes.NewReader(data), boundary)
+	type Part struct {
+		Name        string
+		Filename    string
+		ContentType string
+		Content     []byte
+	}
+	var parts []Part
+
+	for {
+		p, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		content, _ := io.ReadAll(p)
+		parts = append(parts, Part{
+			Name:        p.FormName(),
+			Filename:    p.FileName(),
+			ContentType: p.Header.Get("Content-Type"),
+			Content:     content,
+		})
+	}
+
+	// 按 Name 排序
+	sort.Slice(parts, func(i, j int) bool {
+		return parts[i].Name < parts[j].Name
+	})
+
+	// 重新组装（严格用 \r\n）
+	var buf bytes.Buffer
+	for _, p := range parts {
+		buf.WriteString("--" + boundary + "\r\n")
+		if p.Filename != "" {
+			buf.WriteString(fmt.Sprintf("Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n", p.Name, p.Filename))
+			if p.ContentType != "" {
+				buf.WriteString("Content-Type: " + p.ContentType + "\r\n")
+			}
+		} else {
+			buf.WriteString(fmt.Sprintf("Content-Disposition: form-data; name=\"%s\"\r\n", p.Name))
+		}
+		buf.WriteString("\r\n")
+		buf.Write(p.Content)
+		buf.WriteString("\r\n")
+	}
+	buf.WriteString("--" + boundary + "--\r\n")
+	return buf.Bytes()
+}
 
 func TestParseQueryByPath(t *testing.T) {
 	cases := []struct {
@@ -180,6 +234,21 @@ func TestParseBody(t *testing.T) {
 			body:      []byte(``),
 			errMsg:    errEmptyBody.Error(),
 		},
+		{
+			name:      "multipart/form-data with file",
+			mediaType: "multipart/form-data; boundary=--------------------------180978275079165582161528",
+			body:      []byte("----------------------------180978275079165582161528\r\nContent-Disposition: form-data; name=\"file1\"; filename=\"test.txt\"\r\nContent-Type: text/plain\r\n\r\n这是一个txt文件\r\n----------------------------180978275079165582161528\r\nContent-Disposition: form-data; name=\"file2\"; filename=\"test.txt\"\r\nContent-Type: text/plain\r\n\r\n这是一个txt文件\r\n----------------------------180978275079165582161528--\r\n"),
+			expected: map[string][]string{
+				"file1":              {""},
+				"file1.content":      {"6L+Z5piv5LiA5LiqdHh05paH5Lu2"},
+				"file1.content-type": {"text/plain"},
+				"file1.filename":     {"test.txt"},
+				"file2":              {""},
+				"file2.content":      {"6L+Z5piv5LiA5LiqdHh05paH5Lu2"},
+				"file2.content-type": {"text/plain"},
+				"file2.filename":     {"test.txt"},
+			},
+		},
 	}
 
 	for _, c := range cases {
@@ -247,6 +316,38 @@ func TestConstructBody(t *testing.T) {
 			body:      map[string]interface{}{"body": []byte{}},
 			expected:  []byte{},
 		},
+		{
+			name:      "multipart/form-data with file",
+			mediaType: "multipart/form-data; boundary=--------------------------180978275079165582161528",
+			body: map[string][]string{
+				"X-process":          {"wasm"},
+				"file1":              {},
+				"file1.content":      {"6L+Z5piv5LiA5LiqdHh05paH5Lu2"},
+				"file1.content-type": {"text/plain"},
+				"file1.filename":     {"test.txt"},
+				"file2":              {},
+				"file2.content":      {"6L+Z5piv5LiA5LiqdHh05paH5Lu2"},
+				"file2.content-type": {"text/plain"},
+				"file2.filename":     {"test.txt"},
+			},
+			expected: []byte(
+				"----------------------------180978275079165582161528\r\n" +
+					"Content-Disposition: form-data; name=\"X-process\"\r\n" +
+					"\r\n" +
+					"wasm\r\n" +
+					"----------------------------180978275079165582161528\r\n" +
+					"Content-Disposition: form-data; name=\"file1\"; filename=\"test.txt\"\r\n" +
+					"Content-Type: text/plain\r\n" +
+					"\r\n" +
+					"这是一个txt文件\r\n" +
+					"----------------------------180978275079165582161528\r\n" +
+					"Content-Disposition: form-data; name=\"file2\"; filename=\"test.txt\"\r\n" +
+					"Content-Type: text/plain\r\n" +
+					"\r\n" +
+					"这是一个txt文件\r\n" +
+					"----------------------------180978275079165582161528--\r\n",
+			),
+		},
 	}
 
 	for _, c := range cases {
@@ -256,6 +357,13 @@ func TestConstructBody(t *testing.T) {
 				require.EqualError(t, err, c.errMsg)
 				return
 			}
+
+			if "multipart/form-data with file" == c.name {
+				boundary := "--------------------------180978275079165582161528"
+				// 进行排序，解决map顺序不确定导致比较失败的问题
+				actual = sortMultipartBody(actual, boundary)
+			}
+
 			require.NoError(t, err)
 			require.Equal(t, c.expected, actual)
 		})

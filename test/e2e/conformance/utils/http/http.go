@@ -398,7 +398,7 @@ func CompareRequest(req *roundtripper.Request, cReq *roundtripper.CapturedReques
 				cReq.Headers["Content-Type"] = []string{expected.Request.ExpectedRequest.ContentType}
 			}
 
-			eTyp, eParams, err := mime.ParseMediaType(expected.Request.ExpectedRequest.ContentType)
+			eTyp, _, err := mime.ParseMediaType(expected.Request.ExpectedRequest.ContentType)
 			if err != nil {
 				return fmt.Errorf("ExpectedRequest Content-Type: %s failed to parse: %s", expected.Request.ExpectedRequest.ContentType, err.Error())
 			}
@@ -452,21 +452,20 @@ func CompareRequest(req *roundtripper.Request, cReq *roundtripper.CapturedReques
 					return fmt.Errorf("expected %s body to be %s, got result: %s", eTyp, string(eRBJson), string(cRBJson))
 				}
 			case ContentTypeMultipartForm:
-				var eReqBody map[string][]string
-				var cReqBody map[string][]string
+				eReqBodyBytes := expected.Request.ExpectedRequest.Body
 
-				eReqBody, err = ParseMultipartFormBody(expected.Request.ExpectedRequest.Body, eParams["boundary"])
-				if err != nil {
-					return fmt.Errorf("failed to parse ExpectedRequest body %s, %s", string(expected.Request.ExpectedRequest.Body), err.Error())
-				}
-				if cReqBody, ok = cReq.Body.(map[string][]string); !ok {
-					return fmt.Errorf("failed to parse CapturedRequest body")
+				var cReqBodyBytes []byte
+				switch cReq.Body.(type) {
+				case string:
+					cReqBodyBytes = []byte(cReq.Body.(string))
+				case []byte:
+					cReqBodyBytes = cReq.Body.([]byte)
+				default:
+					return fmt.Errorf("expected body to be of type string or byte slice, got %T", cReq.Body)
 				}
 
-				if !reflect.DeepEqual(eReqBody, cReqBody) {
-					eRBJson, _ := json.Marshal(eReqBody)
-					cRBJson, _ := json.Marshal(cReqBody)
-					return fmt.Errorf("expected %s body to be %s, got result: %s", eTyp, string(eRBJson), string(cRBJson))
+				if !reflect.DeepEqual(expected.Request.ExpectedRequest.Body, cReqBodyBytes) {
+					return fmt.Errorf("expected %s body to be %s, got result: %s", eTyp, string(eReqBodyBytes), string(cReqBodyBytes))
 				}
 			default:
 				return fmt.Errorf("Content-Type: %s invalid or not support.", eTyp)
