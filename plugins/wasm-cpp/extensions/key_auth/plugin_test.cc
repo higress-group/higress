@@ -83,6 +83,10 @@ class KeyAuthTest : public ::testing::Test {
           if (header == "x-api-key") {
             *result = key_header_;
           }
+          auto it = headers_.find(std::string(header));
+          if (it != headers_.end()) {
+            *result = it->second;
+          }
           return WasmResult::Ok;
         });
     ON_CALL(*mock_context_, addHeaderMapValue(WasmHeaderMapType::RequestHeaders,
@@ -113,6 +117,7 @@ class KeyAuthTest : public ::testing::Test {
   std::string authority_;
   std::string route_name_;
   std::string key_header_;
+  std::unordered_map<std::string, std::string> headers_;
 };
 
 TEST_F(KeyAuthTest, InQuery) {
@@ -417,6 +422,70 @@ TEST_F(KeyAuthTest, ConsumerDefaultKey) {
   path_ = "/test?defaultkey=def";
   EXPECT_EQ(context_->onRequestHeaders(0, false),
             FilterHeadersStatus::Continue);
+}
+
+TEST_F(KeyAuthTest, SharedKeyNameDifferentExtractionSource) {
+  std::string configuration = R"(
+{
+  "global_auth": false,
+  "consumers": [
+    {
+      "name": "c1",
+      "credentials": ["query-cred"],
+      "keys": ["apikey"],
+      "in_query": true,
+      "in_header": false
+    },
+    {
+      "name": "c2",
+      "credentials": ["header-cred"],
+      "keys": ["apikey"],
+      "in_query": false,
+      "in_header": true
+    }
+  ],
+  "_rules_": [
+    {
+      "_match_route_": ["test"],
+      "allow": ["c1"]
+    },
+    {
+      "_match_route_": ["test2"],
+      "allow": ["c2"]
+    }
+  ]
+})";
+  BufferBase buffer;
+  buffer.set(configuration);
+  EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
+      .WillOnce([&buffer](WasmBufferType) { return &buffer; });
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  // c1 extracts from query
+  route_name_ = "test";
+  path_ = "/test?apikey=query-cred";
+  headers_.clear();
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::Continue);
+
+  // c1 should not match header credential
+  path_ = "/test";
+  headers_["apikey"] = "query-cred";
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::StopIteration);
+
+  // c2 extracts from header
+  route_name_ = "test2";
+  path_ = "/test";
+  headers_["apikey"] = "header-cred";
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::Continue);
+
+  // c2 should not match query credential
+  headers_.clear();
+  path_ = "/test?apikey=header-cred";
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::StopIteration);
 }
 
 TEST_F(KeyAuthTest, NoGlobalKeySetting) {
