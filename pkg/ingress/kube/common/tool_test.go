@@ -970,6 +970,40 @@ func TestSortIngressByCreationTime(t *testing.T) {
 	}
 
 	assert.Equal(t, expectedNamespace, actualNamespace, "When the names are the same, the configuration should be sorted by namespace")
+
+	// Test canary ingress sorting - base ingress should come before canary variants
+	// Using Namespace.Name format ensures "default.xx-hg" < "default.xx-hg-canary-*"
+	canaryConfigs := []config.Config{
+		{
+			Meta: config.Meta{
+				Name:      "xx-hg-canary-by-header",
+				Namespace: "default",
+			},
+		},
+		{
+			Meta: config.Meta{
+				Name:      "xx-hg",
+				Namespace: "default",
+			},
+		},
+		{
+			Meta: config.Meta{
+				Name:      "xx-hg-canary-by-weight",
+				Namespace: "default",
+			},
+		},
+	}
+
+	expectedCanary := []string{"xx-hg", "xx-hg-canary-by-header", "xx-hg-canary-by-weight"}
+
+	SortIngressByCreationTime(canaryConfigs)
+
+	var actualCanary []string
+	for _, cfg := range canaryConfigs {
+		actualCanary = append(actualCanary, cfg.Name)
+	}
+
+	assert.Equal(t, expectedCanary, actualCanary, "Base ingress should be sorted before canary variants (using Namespace.Name format)")
 }
 
 func TestPartMd5(t *testing.T) {
