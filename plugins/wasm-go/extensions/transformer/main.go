@@ -913,7 +913,7 @@ type jsonHandler struct {
 }
 
 func (h kvHandler) handle(host, path string, kvs map[string][]string, mapSourceData map[string]MapSourceData) error {
-	// arbitary order. for example: remove → rename → replace → add → append → map → dedupe
+	// arbitrary order. for example: remove → rename → replace → add → append → map → dedupe
 
 	for _, kvtOp := range h.kvtOps {
 		switch kvtOp.kvtOpType {
@@ -1038,7 +1038,7 @@ func (h kvHandler) handle(host, path string, kvs map[string][]string, mapSourceD
 
 // only for body
 func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map[string]MapSourceData) (data []byte, err error) {
-	// arbitary order. for example: remove → rename → replace → add → append → map → dedupe
+	// arbitrary order. for example: remove → rename → replace → add → append → map → dedupe
 	if !gjson.ValidBytes(oriData) {
 		return nil, errors.New("invalid json body")
 	}

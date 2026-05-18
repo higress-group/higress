@@ -562,7 +562,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	if compatible := json.Get("qwenEnableCompatible"); compatible.Exists() {
 		c.qwenEnableCompatible = compatible.Bool()
 	} else {
-		// Default use official compatiable mode
+		// Default use official compatible mode
 		c.qwenEnableCompatible = true
 	}
 	c.qwenDomain = json.Get("qwenDomain").String()
@@ -1003,7 +1003,7 @@ func doGetMappedModel(model string, modelMapping map[string]string) string {
 	}
 
 	if v, ok := modelMapping[model]; ok {
-		log.Debugf("model [%s] is mapped to [%s] explictly", model, v)
+		log.Debugf("model [%s] is mapped to [%s] explicitly", model, v)
 		return v
 	}
 

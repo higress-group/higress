@@ -135,11 +135,11 @@ func parseOverrideRuleConfig(json gjson.Result, global config.PluginConfig, plug
 
 	pluginConfig.FromJson(json)
 	if err := pluginConfig.Validate(); err != nil {
-		log.Errorf("overriden rule config is invalid: %v", err)
+		log.Errorf("overridden rule config is invalid: %v", err)
 		return err
 	}
 	if err := pluginConfig.Complete(); err != nil {
-		log.Errorf("failed to apply overriden rule config: %v", err)
+		log.Errorf("failed to apply overridden rule config: %v", err)
 		return err
 	}
 
