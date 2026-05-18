@@ -15,7 +15,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -31,6 +30,10 @@ var protectionSpace = "MSE Gateway" // 认证失败时，返回响应头 WWW-Aut
 type ErrDenied struct {
 	msg    string
 	denied func() types.Action
+}
+
+type verifiedConsumer struct {
+	claims map[string]any
 }
 
 type Logger interface {
@@ -61,10 +64,10 @@ func (e *ErrDenied) Error() string {
 	return e.msg
 }
 
-func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderProvider, log Logger) error {
-	tokenStr := extractToken(*consumer.KeepToken, consumer, header, log)
+func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderProvider, log Logger) (*verifiedConsumer, error) {
+	tokenStr := extractToken(true, consumer, header, log)
 	if tokenStr == "" {
-		return &ErrDenied{
+		return nil, &ErrDenied{
 			msg:    fmt.Sprintf("jwt is missing, consumer: %s", consumer.Name),
 			denied: deniedJWTMissing,
 		}
@@ -73,7 +76,7 @@ func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderP
 	// 当前版本的higress暂不支持jwe，此处用ParseSigned
 	token, err := jwt.ParseSigned(tokenStr)
 	if err != nil {
-		return &ErrDenied{
+		return nil, &ErrDenied{
 			msg: fmt.Sprintf("jwt parse failed, consumer: %s, token: %s, reason: %s",
 				consumer.Name,
 				tokenStr,
@@ -83,11 +86,37 @@ func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderP
 		}
 	}
 
-	// 此处可以直接使用 JSON 反序列 jwks
-	jwks := jose.JSONWebKeySet{}
-	err = json.Unmarshal([]byte(consumer.JWKs), &jwks)
+	if consumer.JWKsURI != "" {
+		// Avoid remote JWKS fetches for tokens that cannot belong to this issuer.
+		// Signature and time claims are still verified after keys are loaded.
+		unsafeClaims := jwt.Claims{}
+		if err := token.UnsafeClaimsWithoutVerification(&unsafeClaims); err != nil ||
+			unsafeClaims.Issuer != consumer.Issuer {
+			return nil, &ErrDenied{
+				msg: fmt.Sprintf("jwt verify failed, consumer: %s, token: %s, reason: issuer does not equal",
+					consumer.Name,
+					tokenStr,
+				),
+				denied: deniedJWTVerificationFails,
+			}
+		}
+	}
+
+	jwks, err := consumerJWKs(consumer, verifyTime)
 	if err != nil {
-		return &ErrDenied{
+		if isRemoteJWKsCacheMiss(err) {
+			return nil, err
+		}
+		if isRemoteJWKsRefreshThrottled(err) {
+			return nil, &ErrDenied{
+				msg: fmt.Sprintf("jwt verify failed, consumer: %s, token: %s, reason: remote jwks refresh is throttled",
+					consumer.Name,
+					tokenStr,
+				),
+				denied: deniedJWTVerificationFails,
+			}
+		}
+		return nil, &ErrDenied{
 			msg: fmt.Sprintf("jwt parse failed, consumer: %s, token: %s, reason: %s",
 				consumer.Name,
 				tokenStr,
@@ -98,9 +127,9 @@ func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderP
 	}
 
 	out := jwt.Claims{}
-	rawClaims := map[string]any{}
 
-	// 提前确认 kid 状态
+	// Check the token key ID before signature verification so remote JWKS can
+	// refresh on unknown keys without trying an arbitrary cached key.
 	var kid string
 	var key jose.JSONWebKey
 	for _, header := range token.Headers {
@@ -109,13 +138,29 @@ func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderP
 			break
 		}
 	}
-	// 没有 kid 时选择第一个 key
-	if kid == "" {
-		key = jwks.Keys[0]
-	}
-
 	keys := jwks.Key(kid)
-	if len(keys) == 0 { // kid 不存在时选择第一个 key
+	if len(keys) == 0 {
+		if consumer.JWKsURI != "" {
+			if kid == "" {
+				return nil, &ErrDenied{
+					msg: fmt.Sprintf("jwt verify failed, consumer: %s, token: %s, reason: kid is required for remote jwks",
+						consumer.Name,
+						tokenStr,
+					),
+					denied: deniedJWTVerificationFails,
+				}
+			}
+			if !remoteJWKsKeyRefreshAllowed(consumer, verifyTime) {
+				return nil, &ErrDenied{
+					msg: fmt.Sprintf("jwt verify failed, consumer: %s, token: %s, reason: kid does not match remote jwks",
+						consumer.Name,
+						tokenStr,
+					),
+					denied: deniedJWTVerificationFails,
+				}
+			}
+			return nil, errRemoteJWKsCacheMiss
+		}
 		key = jwks.Keys[0]
 	} else {
 		key = keys[0]
@@ -123,9 +168,10 @@ func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderP
 
 	// Claims 支持直接传入 jose 的 jwk
 	// 无需额外调用verify，claims内部已进行验证
-	err = token.Claims(key, &out)
+	rawClaims := map[string]any{}
+	err = token.Claims(key, &out, &rawClaims)
 	if err != nil {
-		return &ErrDenied{
+		return nil, &ErrDenied{
 			msg: fmt.Sprintf("jwt verify failed, consumer: %s, token: %s, reason: %s",
 				consumer.Name,
 				tokenStr,
@@ -134,10 +180,9 @@ func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderP
 			denied: deniedJWTVerificationFails,
 		}
 	}
-	token.UnsafeClaimsWithoutVerification(&rawClaims)
 
 	if out.Issuer != consumer.Issuer {
-		return &ErrDenied{
+		return nil, &ErrDenied{
 			msg: fmt.Sprintf("jwt verify failed, consumer: %s, token: %s, reason: issuer does not equal",
 				consumer.Name,
 				tokenStr,
@@ -155,7 +200,7 @@ func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderP
 		time.Duration(*consumer.ClockSkewSeconds)*time.Second,
 	)
 	if err != nil {
-		return &ErrDenied{
+		return nil, &ErrDenied{
 			msg: fmt.Sprintf("jwt verify failed, consumer: %s, token: %s, reason: %s",
 				consumer.Name,
 				tokenStr,
@@ -165,10 +210,16 @@ func consumerVerify(consumer *cfg.Consumer, verifyTime time.Time, header HeaderP
 		}
 	}
 
-	if consumer.ClaimsToHeaders != nil {
-		claimsToHeader(rawClaims, *consumer.ClaimsToHeaders)
+	return &verifiedConsumer{claims: rawClaims}, nil
+}
+
+func applyConsumerSideEffects(consumer *cfg.Consumer, verified *verifiedConsumer, header HeaderProvider, log Logger) {
+	if !*consumer.KeepToken {
+		_ = extractToken(false, consumer, header, log)
 	}
-	return nil
+	if consumer.ClaimsToHeaders != nil {
+		claimsToHeader(verified.claims, *consumer.ClaimsToHeaders)
+	}
 }
 
 func deniedJWTMissing() types.Action {

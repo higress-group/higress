@@ -33,17 +33,25 @@ description: JWT 认证插件配置参考
 | 名称                    | 数据类型          | 填写要求 | 默认值                                            | 描述                     |
 | ----------------------- | ----------------- | -------- | ------------------------------------------------- | ------------------------ |
 | `name`                  | string            | 必填     | -                                                 | 配置该consumer的名称     |
-| `jwks`                  | string            | 必填     | -                                                 | https://www.rfc-editor.org/rfc/rfc7517 指定的json格式字符串，是由验证JWT中签名的公钥（或对称密钥）组成的Json Web Key Set  |
+| `jwks`                  | string            | wasm-cpp 必填；wasm-go 未配置 `jwks_uri` 时必填 | -             | https://www.rfc-editor.org/rfc/rfc7517 指定的json格式字符串，是由验证JWT中签名的公钥（或对称密钥）组成的Json Web Key Set  |
+| `jwks_uri`              | string            | wasm-go 实现选填 | -                                      | 远程 JWKS 地址，用于动态获取验证 JWT 签名的公钥集合。必须使用 HTTPS，网关需要能够访问该域名 |
+| `jwks_cache_duration`   | number            | wasm-go 实现选填 | 600                                   | 远程 JWKS 缓存时间，单位为秒，最大值为 604800。缓存按 `jwks_uri` 共享；任一 consumer 刷新同一 URI 后，其他 consumer 会复用该最新内容 |
+| `jwks_fetch_timeout`    | number            | wasm-go 实现选填 | 1500                                  | 远程 JWKS 拉取超时时间，单位为毫秒，最大值为 10000 |
 | `issuer`                | string            | 必填     | -                                                 | JWT的签发者，需要和payload中的iss字段保持一致              |
 | `claims_to_headers`     | array of object   | 选填     | -                                                 | 抽取JWT的payload中指定字段，设置到指定的请求头中转发给后端 |
 | `from_headers`          | array of object   | 选填     | {"name":"Authorization","value_prefix":"Bearer "} | 从指定的请求头中抽取JWT |
 | `from_params`           | array of string   | 选填     | access_token                                      | 从指定的URL参数中抽取JWT                                   |
 | `from_cookies`          | array of string   | 选填     | -                                                 | 从指定的cookie中抽取JWT                                    |
 | `clock_skew_seconds`    | number            | 选填     | 60                                                | 校验JWT的exp和iat字段时允许的时钟偏移量，单位为秒          |
-| `keep_token`            | bool              | 选填     | ture                                              | 转发给后端时是否保留JWT                                    |
+| `keep_token`            | bool              | 选填     | true                                              | 转发给后端时是否保留JWT                                    |
 
 **注意：** 
 - 只有当`from_headers`,`from_params`,`from_cookies`均未配置时，才会使用默认值
+- `jwks_uri`、`jwks_cache_duration`、`jwks_fetch_timeout` 仅适用于 wasm-go 实现；wasm-cpp 实现仍需要配置 `jwks`。
+- 在 wasm-go 实现中，`jwks` 与 `jwks_uri` 只能配置其中一个。
+- 使用 `jwks_uri` 时，远程 JWKS 拉取失败、返回非法 JWKS、刷新被限流或找不到匹配 `kid` 时会拒绝请求。
+- 远程 JWKS 的失败重试按 `jwks_uri` 限流 30 秒；冷启动首次拉取未完成期间，并发请求会被本地拒绝。
+- 如果多个 consumer 使用同一个 `jwks_uri`，JWKS 内容会共享缓存，但每个 consumer 会使用自己的 `jwks_cache_duration` 判断缓存是否过期。
 
 `from_headers` 中每一项的配置字段说明如下：
 
@@ -155,6 +163,22 @@ curl  http://xxx.hello.com/test
 # consumer1不在*.example.com的allow列表里
 curl  'http://xxx.example.com/test' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjEyMyJ9.eyJpc3MiOiJhYmNkIiwic3ViIjoidGVzdCIsImlhdCI6MTY2NTY2MDUyNywiZXhwIjoxODY1NjczODE5fQ.-vBSV0bKeDwQcuS6eeSZN9dLTUnSnZVk8eVCXdooCQ4'
 ```
+
+### 使用远程 JWKS（仅 wasm-go 实现）
+
+如果签名公钥由身份提供方维护，wasm-go 实现可以使用 `jwks_uri` 让插件自动拉取和缓存远程 JWKS。`jwks_uri` 必须使用 HTTPS。
+
+```yaml
+global_auth: false
+consumers:
+- name: remote-consumer
+  issuer: https://issuer.example.com
+  jwks_uri: https://issuer.example.com/.well-known/jwks.json
+  jwks_cache_duration: 600
+  jwks_fetch_timeout: 1500
+```
+
+配置远程 JWKS 时需要确保网关数据面能够访问 `jwks_uri` 的域名。远程 JWKS 响应体超过 64 KiB 会被视为非法响应。
 
 #### 网关实例级别开启
 

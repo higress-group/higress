@@ -28,7 +28,10 @@ The configuration fields for each item in `consumers` are as follows:
 | Name                    | Data Type         | Requirements | Default Value                                      | Description                     |
 | ----------------------- | ------------------ | ------------ | -------------------------------------------------- | ------------------------------- |
 | `name`                  | string             | Required     | -                                                  | The name of the consumer        |
-| `jwks`                  | string             | Required     | -                                                  | JSON format string specified by https://www.rfc-editor.org/rfc/rfc7517, consisting of the public key (or symmetric key) used to verify the JWT signature. |
+| `jwks`                  | string             | Required for wasm-cpp; required for wasm-go unless `jwks_uri` is set | - | JSON format string specified by https://www.rfc-editor.org/rfc/rfc7517, consisting of the public key (or symmetric key) used to verify the JWT signature. |
+| `jwks_uri`              | string             | Optional in the wasm-go implementation | -                         | Remote JWKS URL used to fetch the key set for JWT signature verification. HTTPS is required, and the gateway must be able to access the host. |
+| `jwks_cache_duration`   | number             | Optional in the wasm-go implementation | 600                       | Remote JWKS cache duration, in seconds. Maximum: 604800. The cache is shared by `jwks_uri`; when any consumer refreshes the same URI, other consumers reuse the latest payload. |
+| `jwks_fetch_timeout`    | number             | Optional in the wasm-go implementation | 1500                      | Remote JWKS fetch timeout, in milliseconds. Maximum: 10000. |
 | `issuer`                | string             | Required     | -                                                  | The issuer of the JWT, must match the `iss` field in the payload. |
 | `claims_to_headers`     | array of object    | Optional     | -                                                  | Extract the specified fields from the JWT payload and set them in the specified request headers to forward to the backend. |
 | `from_headers`          | array of object    | Optional     | {"name":"Authorization","value_prefix":"Bearer "} | Extract JWT from the specified request headers. |
@@ -39,6 +42,12 @@ The configuration fields for each item in `consumers` are as follows:
 
 **Note:**
 - The default values will only be used when `from_headers`, `from_params`, and `from_cookies` are not all configured.
+- `jwks_uri`, `jwks_cache_duration`, and `jwks_fetch_timeout` apply only to the wasm-go implementation. The wasm-cpp implementation still requires `jwks`.
+- In the wasm-go implementation, only one of `jwks` and `jwks_uri` can be configured.
+- When `jwks_uri` is used, requests fail closed if the remote JWKS fetch fails, the response is invalid, refresh is throttled, or no matching `kid` can be found.
+- Failed remote JWKS fetches are throttled per `jwks_uri` for 30 seconds. Concurrent requests during the initial cold fetch are denied locally.
+- When multiple consumers use the same `jwks_uri`, the JWKS payload is shared, while each consumer applies its own `jwks_cache_duration` when checking expiry.
+
 The configuration fields for each item in `from_headers` are as follows:
 | Name            | Data Type        | Requirements | Default Value | Description                                     |
 | --------------- | ---------------- | ------------ | ------------- | ----------------------------------------------- |
@@ -138,6 +147,22 @@ curl  http://xxx.hello.com/test
 # consumer1 is not in the allow list for *.example.com
 curl  'http://xxx.example.com/test' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjEyMyJ9.eyJpc3MiOiJhYmNkIiwic3ViIjoidGVzdCIsImlhdCI6MTY2NTY2MDUyNywiZXhwIjoxODY1NjczODE5fQ.-vBSV0bKeDwQcuS6eeSZN9dLTUnSnZVk8eVCXdooCQ4'
 ```
+
+### Using Remote JWKS (wasm-go implementation only)
+
+If the signing keys are maintained by an identity provider, the wasm-go implementation can use `jwks_uri` to fetch and cache the remote JWKS automatically. `jwks_uri` must use HTTPS.
+
+```yaml
+global_auth: false
+consumers:
+- name: remote-consumer
+  issuer: https://issuer.example.com
+  jwks_uri: https://issuer.example.com/.well-known/jwks.json
+  jwks_cache_duration: 600
+  jwks_fetch_timeout: 1500
+```
+
+When remote JWKS is configured, make sure the gateway data plane can access the `jwks_uri` host. Remote JWKS responses larger than 64 KiB are treated as invalid responses.
 
 #### Enable at Gateway Instance Level
 The following configuration will enable JWT Auth authentication at the instance level, requiring all requests to be authenticated before accessing.

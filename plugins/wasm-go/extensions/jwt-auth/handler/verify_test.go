@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,7 +113,7 @@ func TestConsumerVerify(t *testing.T) {
 	}
 
 	header := &testProvider{headerMap: map[string]string{"jwt": "Bearer " + ES256Allow}}
-	err := consumerVerify(&config.Consumer{
+	_, err := consumerVerify(&config.Consumer{
 		Name:             "consumer1",
 		JWKs:             JWKs,
 		Issuer:           "higress-test",
@@ -126,4 +128,158 @@ func TestConsumerVerify(t *testing.T) {
 			t.Error(v.msg)
 		}
 	}
+}
+
+func TestConsumerVerifyWithCachedRemoteJWKs(t *testing.T) {
+	log := &testLogger{T: t}
+	cacheRemoteJWKsForTest("consumer-remote", "https://auth.example.com/.well-known/jwks.json", JWKs, time.Now().Add(time.Minute))
+	defer clearRemoteJWKsCacheForTest()
+
+	header := &testProvider{headerMap: map[string]string{"jwt": "Bearer " + ES256Allow}}
+	_, err := consumerVerify(&config.Consumer{
+		Name:              "consumer-remote",
+		JWKsURI:           "https://auth.example.com/.well-known/jwks.json",
+		Issuer:            "higress-test",
+		ClaimsToHeaders:   &[]config.ClaimsToHeader{},
+		FromHeaders:       &[]config.FromHeader{{Name: "jwt", ValuePrefix: "Bearer "}},
+		ClockSkewSeconds:  &config.DefaultClockSkewSeconds,
+		KeepToken:         &config.DefaultKeepToken,
+		JWKsCacheDuration: &config.DefaultJWKsCacheDuration,
+		JWKsFetchTimeout:  &config.DefaultJWKsFetchTimeout,
+	}, time.Now(), header, log)
+
+	if err != nil {
+		if v, ok := err.(*ErrDenied); ok {
+			t.Error(v.msg)
+		} else {
+			t.Error(err)
+		}
+	}
+}
+
+func TestConsumerVerifyWithRemoteJWKsReturnsCacheMissOnUnknownKid(t *testing.T) {
+	log := &testLogger{T: t}
+	staleJWKs := "{\"keys\":[{\"kty\":\"RSA\",\"kid\":\"rsa\",\"n\":\"pFKAKJ0V3vFwGTvBSHbPwrNdvPyr-zMTh7Y9IELFIMNUQfG9_d2D1wZcrX5CPvtEISHin3GdPyfqEX6NjPyqvCLFTuNh80-r5Mvld-A5CHwITZXz5krBdqY5Z0wu64smMbzst3HNxHbzLQvHUY-KS6hceOB84d9B4rhkIJEEAWxxIA7yPJYjYyIC_STpPddtJkkweVvoa0m0-_FQkDFsbRS0yGgMNG4-uc7qLIU4kSwMQWcw1Rwy39LUDP4zNzuZABbWsDDBsMlVUaszRdKIlk5AQ-Fkah3E247dYGUQjSQ0N3dFLlMDv_e62BT3IBXGLg7wvGosWFNT_LpIenIW6Q\",\"e\":\"AQAB\"}]}"
+	cacheRemoteJWKsForTest("consumer-remote", "https://auth.example.com/.well-known/jwks.json", staleJWKs, time.Now().Add(time.Minute))
+	defer clearRemoteJWKsCacheForTest()
+
+	header := &testProvider{headerMap: map[string]string{"jwt": "Bearer " + ES256Allow}}
+	_, err := consumerVerify(&config.Consumer{
+		Name:              "consumer-remote",
+		JWKsURI:           "https://auth.example.com/.well-known/jwks.json",
+		Issuer:            "higress-test",
+		ClaimsToHeaders:   &[]config.ClaimsToHeader{},
+		FromHeaders:       &[]config.FromHeader{{Name: "jwt", ValuePrefix: "Bearer "}},
+		ClockSkewSeconds:  &config.DefaultClockSkewSeconds,
+		KeepToken:         &config.DefaultKeepToken,
+		JWKsCacheDuration: &config.DefaultJWKsCacheDuration,
+		JWKsFetchTimeout:  &config.DefaultJWKsFetchTimeout,
+	}, time.Now(), header, log)
+
+	if !isRemoteJWKsCacheMiss(err) {
+		t.Fatalf("expected remote jwks cache miss for unknown kid, got: %v", err)
+	}
+}
+
+func TestConsumerVerifyWithRemoteJWKsRejectsMissingKid(t *testing.T) {
+	log := &testLogger{T: t}
+	uri := "https://auth.example.com/.well-known/jwks.json"
+	cacheRemoteJWKsForTest("consumer-remote", uri, JWKs, time.Now().Add(time.Minute))
+	defer clearRemoteJWKsCacheForTest()
+
+	tokenWithoutKid := jwtWithHeader(ES256Allow, `{"alg":"ES256","typ":"JWT"}`)
+	header := &testProvider{headerMap: map[string]string{"jwt": "Bearer " + tokenWithoutKid}}
+	_, err := consumerVerify(&config.Consumer{
+		Name:              "consumer-remote",
+		JWKsURI:           uri,
+		Issuer:            "higress-test",
+		ClaimsToHeaders:   &[]config.ClaimsToHeader{},
+		FromHeaders:       &[]config.FromHeader{{Name: "jwt", ValuePrefix: "Bearer "}},
+		ClockSkewSeconds:  &config.DefaultClockSkewSeconds,
+		KeepToken:         &config.DefaultKeepToken,
+		JWKsCacheDuration: &config.DefaultJWKsCacheDuration,
+		JWKsFetchTimeout:  &config.DefaultJWKsFetchTimeout,
+	}, time.Now(), header, log)
+
+	if err == nil {
+		t.Fatalf("expected remote jwks token without kid to fail")
+	}
+	if isRemoteJWKsCacheMiss(err) {
+		t.Fatalf("missing kid should be denied without remote jwks refresh")
+	}
+}
+
+func TestConsumerVerifyWithRemoteJWKsThrottlesUnknownKidRefresh(t *testing.T) {
+	log := &testLogger{T: t}
+	uri := "https://auth.example.com/.well-known/jwks.json"
+	staleJWKs := "{\"keys\":[{\"kty\":\"RSA\",\"kid\":\"rsa\",\"n\":\"pFKAKJ0V3vFwGTvBSHbPwrNdvPyr-zMTh7Y9IELFIMNUQfG9_d2D1wZcrX5CPvtEISHin3GdPyfqEX6NjPyqvCLFTuNh80-r5Mvld-A5CHwITZXz5krBdqY5Z0wu64smMbzst3HNxHbzLQvHUY-KS6hceOB84d9B4rhkIJEEAWxxIA7yPJYjYyIC_STpPddtJkkweVvoa0m0-_FQkDFsbRS0yGgMNG4-uc7qLIU4kSwMQWcw1Rwy39LUDP4zNzuZABbWsDDBsMlVUaszRdKIlk5AQ-Fkah3E247dYGUQjSQ0N3dFLlMDv_e62BT3IBXGLg7wvGosWFNT_LpIenIW6Q\",\"e\":\"AQAB\"}]}"
+	now := time.Now()
+	cacheRemoteJWKsForTest("consumer-remote", uri, staleJWKs, now.Add(time.Minute))
+	markRemoteJWKsFetchCompletedForTest("consumer-remote", uri, now)
+	defer clearRemoteJWKsCacheForTest()
+
+	header := &testProvider{headerMap: map[string]string{"jwt": "Bearer " + ES256Allow}}
+	_, err := consumerVerify(&config.Consumer{
+		Name:              "consumer-remote",
+		JWKsURI:           uri,
+		Issuer:            "higress-test",
+		ClaimsToHeaders:   &[]config.ClaimsToHeader{},
+		FromHeaders:       &[]config.FromHeader{{Name: "jwt", ValuePrefix: "Bearer "}},
+		ClockSkewSeconds:  &config.DefaultClockSkewSeconds,
+		KeepToken:         &config.DefaultKeepToken,
+		JWKsCacheDuration: &config.DefaultJWKsCacheDuration,
+		JWKsFetchTimeout:  &config.DefaultJWKsFetchTimeout,
+	}, now, header, log)
+
+	if isRemoteJWKsCacheMiss(err) {
+		t.Fatalf("recently fetched remote jwks should deny unknown kid instead of fetching again")
+	}
+	if err == nil {
+		t.Fatalf("expected unknown kid to fail")
+	}
+}
+
+func TestConsumerVerifyWithRemoteJWKsSkipsIssuerMismatchBeforeFetch(t *testing.T) {
+	log := &testLogger{T: t}
+	defer clearRemoteJWKsCacheForTest()
+
+	header := &testProvider{headerMap: map[string]string{"jwt": "Bearer " + ES256Allow}}
+	_, err := consumerVerify(&config.Consumer{
+		Name:              "consumer-remote",
+		JWKsURI:           "https://auth.example.com/.well-known/jwks.json",
+		Issuer:            "other-issuer",
+		ClaimsToHeaders:   &[]config.ClaimsToHeader{},
+		FromHeaders:       &[]config.FromHeader{{Name: "jwt", ValuePrefix: "Bearer "}},
+		ClockSkewSeconds:  &config.DefaultClockSkewSeconds,
+		KeepToken:         &config.DefaultKeepToken,
+		JWKsCacheDuration: &config.DefaultJWKsCacheDuration,
+		JWKsFetchTimeout:  &config.DefaultJWKsFetchTimeout,
+	}, time.Now(), header, log)
+
+	if isRemoteJWKsCacheMiss(err) {
+		t.Fatalf("issuer mismatch should not trigger remote jwks fetch")
+	}
+	if err == nil {
+		t.Fatalf("expected issuer mismatch to fail")
+	}
+}
+
+func TestExtractTokenRemovesQueryParamWhenKeepTokenFalse(t *testing.T) {
+	header := &testProvider{headerMap: map[string]string{":path": "/resource?access_token=token-value&keep=1"}}
+	token := extractToken(false, &config.Consumer{
+		FromParams: &[]string{"access_token"},
+	}, header, &testLogger{T: t})
+
+	if token != "token-value" {
+		t.Fatalf("unexpected token: %q", token)
+	}
+	if got := header.headerMap[":path"]; got != "/resource?keep=1" {
+		t.Fatalf("expected token query param to be removed, got: %q", got)
+	}
+}
+
+func jwtWithHeader(token, headerJSON string) string {
+	parts := strings.Split(token, ".")
+	parts[0] = base64.RawURLEncoding.EncodeToString([]byte(headerJSON))
+	return strings.Join(parts, ".")
 }
