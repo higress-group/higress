@@ -292,6 +292,15 @@ func TestFireworks(t *testing.T) {
 	test.RunFireworksOnHttpRequestBodyTests(t)
 }
 
+func TestGaladriel(t *testing.T) {
+	test.RunGaladrielParseConfigTests(t)
+	test.RunGaladrielOnHttpRequestHeadersTests(t)
+	test.RunGaladrielOnHttpRequestBodyTests(t)
+	test.RunGaladrielOnHttpResponseHeadersTests(t)
+	test.RunGaladrielOnHttpResponseBodyTests(t)
+	test.RunGaladrielOnStreamingResponseBodyTests(t)
+}
+
 func TestMinimax(t *testing.T) {
 	test.RunMinimaxBasePathHandlingTests(t)
 }

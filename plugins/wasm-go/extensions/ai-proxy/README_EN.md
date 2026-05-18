@@ -163,6 +163,10 @@ For OpenRouter, the corresponding `type` is `openrouter`. It has no unique confi
 
 For Fireworks AI, the corresponding `type` is `fireworks`. It has no unique configuration fields.
 
+#### Galadriel
+
+For Galadriel, the corresponding `type` is `galadriel`. It has no unique configuration fields.
+
 #### ERNIE Bot
 
 For ERNIE Bot, the corresponding `type` is `baidu`. It has no unique configuration fields.
@@ -1080,6 +1084,62 @@ provider:
     "completion_tokens": 38,
     "total_tokens": 53
   }
+}
+```
+
+### Using OpenAI Protocol Proxy for Galadriel Service
+
+**Configuration Information**
+
+```yaml
+provider:
+  type: galadriel
+  apiTokens:
+    - "YOUR_GALADRIEL_API_TOKEN"
+  modelMapping:
+    "gpt-4": "llama3.1"
+    "gpt-3.5-turbo": "llama3.1"
+    "*": "llama3.1"
+```
+
+**Example Request**
+
+```json
+{
+  "model": "llama3.1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello, who are you?"
+    }
+  ]
+}
+```
+
+**Example Response**
+
+```json
+{
+  "id": "id",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Hello! I am an AI assistant built on the Llama 3.1 model. I run through the Galadriel network, which is a decentralized AI inference platform. I can help answer questions, engage in conversations, and assist with various tasks. What can I help you with today?",
+        "refusal": null,
+        "role": "assistant",
+        "function_call": null,
+        "tool_calls": null
+      }
+    }
+  ],
+  "created": 1728558433,
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": null
 }
 ```
 

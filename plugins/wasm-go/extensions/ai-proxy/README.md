@@ -192,6 +192,10 @@ OpenRouter 所对应的 `type` 为 `openrouter`。它并无特有的配置字段
 
 Fireworks AI 所对应的 `type` 为 `fireworks`。它并无特有的配置字段。
 
+#### Galadriel
+
+Galadriel 所对应的 `type` 为 `galadriel`。它并无特有的配置字段。
+
 #### 文心一言（Baidu）
 
 文心一言所对应的 `type` 为 `baidu`。它并无特有的配置字段。
@@ -1143,6 +1147,62 @@ provider:
     "completion_tokens": 45,
     "total_tokens": 60
   }
+}
+```
+
+### 使用 OpenAI 协议代理 Galadriel 服务
+
+**配置信息**
+
+```yaml
+provider:
+  type: galadriel
+  apiTokens:
+    - "YOUR_GALADRIEL_API_TOKEN"
+  modelMapping:
+    "gpt-4": "llama3.1"
+    "gpt-3.5-turbo": "llama3.1"
+    "*": "llama3.1"
+```
+
+**请求示例**
+
+```json
+{
+  "model": "llama3.1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你好，你是谁？"
+    }
+  ]
+}
+```
+
+**响应示例**
+
+```json
+{
+  "id": "id",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "你好！我是一个AI助手，基于Llama 3.1模型构建。我通过Galadriel网络运行，这是一个去中心化的AI推理平台。我可以帮助回答问题、进行对话、协助完成各种任务。有什么我可以帮助你的吗？",
+        "refusal": null,
+        "role": "assistant",
+        "function_call": null,
+        "tool_calls": null
+      }
+    }
+  ],
+  "created": 1728558433,
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": null
 }
 ```
 
