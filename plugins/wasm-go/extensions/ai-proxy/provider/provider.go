@@ -315,7 +315,7 @@ type ProviderConfig struct {
 	typ string `required:"true" yaml:"type" json:"type"`
 	// @Title zh-CN API Tokens
 	// @Description zh-CN 在请求AI服务时用于认证的API Token列表。不同的AI服务提供商可能有不同的名称。部分供应商只支持配置一个API Token（如Azure OpenAI）。
-	apiTokens []string `required:"false" yaml:"apiToken" json:"apiTokens"`
+	apiTokens []string `required:"false" yaml:"apiTokens" json:"apiTokens"`
 	// @Title zh-CN 请求超时
 	// @Description zh-CN 请求AI服务的超时时间，单位为毫秒。默认值为120000，即2分钟。此项配置目前仅用于获取上下文信息，并不影响实际转发大模型请求。
 	timeout uint32 `required:"false" yaml:"timeout" json:"timeout"`
