@@ -86,7 +86,7 @@ func TestChatMessage2QwenMessagePreservesReasoningContent(t *testing.T) {
 func TestBuildQwenTextGenerationRequestEnablesPreserveThinkingForReasoningHistory(t *testing.T) {
 	provider := &qwenProvider{}
 	request := &chatCompletionRequest{
-		Model: "qwen-plus",
+		Model: "qwen3.6-plus",
 		Messages: []chatMessage{
 			{Role: "assistant", Content: "visible answer", ReasoningContent: "historical reasoning"},
 		},
@@ -99,6 +99,22 @@ func TestBuildQwenTextGenerationRequestEnablesPreserveThinkingForReasoningHistor
 	var qwenRequest qwenTextGenRequest
 	require.NoError(t, json.Unmarshal(body, &qwenRequest))
 	assert.True(t, qwenRequest.Parameters.PreserveThinking)
+}
+
+func TestBuildQwenTextGenerationRequestOmitsPreserveThinkingForUnsupportedModel(t *testing.T) {
+	provider := &qwenProvider{}
+	request := &chatCompletionRequest{
+		Model: "qwen-plus",
+		Messages: []chatMessage{
+			{Role: "assistant", Content: "visible answer", ReasoningContent: "historical reasoning"},
+		},
+		MaxTokens: 256,
+	}
+
+	body, err := provider.buildQwenTextGenerationRequest(nil, request, false)
+	require.NoError(t, err)
+
+	assert.False(t, gjson.GetBytes(body, "parameters.preserve_thinking").Exists())
 }
 
 func TestBuildQwenTextGenerationRequestOmitsPreserveThinkingWithoutReasoningHistory(t *testing.T) {
@@ -125,6 +141,25 @@ func TestTransformRequestBodyHeadersCompatibleModeEnablesPreserveThinkingForReas
 	}
 
 	body := []byte(`{
+		"model":"qwen3.6-plus",
+		"messages":[
+			{"role":"assistant","content":"visible answer","reasoning_content":"historical reasoning"}
+		]
+	}`)
+
+	modifiedBody, err := provider.TransformRequestBodyHeaders(nil, ApiNameChatCompletion, body, http.Header{})
+	require.NoError(t, err)
+	assert.Equal(t, true, gjson.GetBytes(modifiedBody, "preserve_thinking").Bool())
+}
+
+func TestTransformRequestBodyHeadersCompatibleModeOmitsPreserveThinkingForUnsupportedModel(t *testing.T) {
+	provider := &qwenProvider{
+		config: ProviderConfig{
+			qwenEnableCompatible: true,
+		},
+	}
+
+	body := []byte(`{
 		"model":"qwen-plus",
 		"messages":[
 			{"role":"assistant","content":"visible answer","reasoning_content":"historical reasoning"}
@@ -133,6 +168,29 @@ func TestTransformRequestBodyHeadersCompatibleModeEnablesPreserveThinkingForReas
 
 	modifiedBody, err := provider.TransformRequestBodyHeaders(nil, ApiNameChatCompletion, body, http.Header{})
 	require.NoError(t, err)
+	assert.False(t, gjson.GetBytes(modifiedBody, "preserve_thinking").Exists())
+}
+
+func TestTransformRequestBodyHeadersCompatibleModeEnablesPreserveThinkingAfterModelMapping(t *testing.T) {
+	provider := &qwenProvider{
+		config: ProviderConfig{
+			qwenEnableCompatible: true,
+			modelMapping: map[string]string{
+				"alias-model": "qwen3.6-plus-2026-04-02",
+			},
+		},
+	}
+
+	body := []byte(`{
+		"model":"alias-model",
+		"messages":[
+			{"role":"assistant","content":"visible answer","reasoning_content":"historical reasoning"}
+		]
+	}`)
+
+	modifiedBody, err := provider.TransformRequestBodyHeaders(nil, ApiNameChatCompletion, body, http.Header{})
+	require.NoError(t, err)
+	assert.Equal(t, "qwen3.6-plus-2026-04-02", gjson.GetBytes(modifiedBody, "model").String())
 	assert.Equal(t, true, gjson.GetBytes(modifiedBody, "preserve_thinking").Bool())
 }
 

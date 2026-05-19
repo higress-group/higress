@@ -125,24 +125,26 @@ func (m *qwenProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiName 
 func (m *qwenProvider) TransformRequestBodyHeaders(ctx wrapper.HttpContext, apiName ApiName, body []byte, headers http.Header) ([]byte, error) {
 	if m.config.qwenEnableCompatible {
 		modifiedBody := body
-		if requestBodyHasMessageReasoningContent(modifiedBody) {
-			// Qwen OpenAI-compatible mode requires top-level preserve_thinking=true
-			// before historical reasoning_content can be reused by the model.
-			var err error
-			modifiedBody, err = sjson.SetBytes(modifiedBody, "preserve_thinking", true)
-			if err != nil {
-				return modifiedBody, err
-			}
-		}
-		if gjson.GetBytes(modifiedBody, "model").Exists() {
-			rawModel := gjson.GetBytes(modifiedBody, "model").String()
-			mappedModel := getMappedModel(rawModel, m.config.modelMapping)
+		model := gjson.GetBytes(modifiedBody, "model")
+		mappedModel := ""
+		if model.Exists() {
+			rawModel := model.String()
+			mappedModel = getMappedModel(rawModel, m.config.modelMapping)
 			newBody, err := sjson.SetBytes(modifiedBody, "model", mappedModel)
 			if err != nil {
 				log.Errorf("Replace model error: %v", err)
 				return newBody, err
 			}
-			return newBody, err
+			modifiedBody = newBody
+		}
+		if mappedModel != "" && requestBodyHasMessageReasoningContent(modifiedBody) && qwenSupportsPreserveThinking(mappedModel) {
+			// Qwen OpenAI-compatible mode requires top-level preserve_thinking=true
+			// before historical reasoning_content can be reused by supported models.
+			var err error
+			modifiedBody, err = sjson.SetBytes(modifiedBody, "preserve_thinking", true)
+			if err != nil {
+				return modifiedBody, err
+			}
 		}
 		return modifiedBody, nil
 	}
@@ -296,7 +298,7 @@ func (m *qwenProvider) buildQwenTextGenerationRequest(ctx wrapper.HttpContext, o
 			TopP:              math.Max(qwenTopPMin, math.Min(origRequest.TopP, qwenTopPMax)),
 			IncrementalOutput: streaming && (origRequest.Tools == nil || len(origRequest.Tools) == 0),
 			EnableSearch:      m.config.qwenEnableSearch,
-			PreserveThinking:  chatMessagesHaveReasoningContent(origRequest.Messages),
+			PreserveThinking:  shouldEnableQwenPreserveThinking(origRequest.Model, origRequest.Messages),
 			Tools:             origRequest.Tools,
 		},
 	}
@@ -692,6 +694,23 @@ func chatMessagesHaveReasoningContent(messages []chatMessage) bool {
 		}
 	}
 	return false
+}
+
+func shouldEnableQwenPreserveThinking(model string, messages []chatMessage) bool {
+	return chatMessagesHaveReasoningContent(messages) && qwenSupportsPreserveThinking(model)
+}
+
+func qwenSupportsPreserveThinking(model string) bool {
+	switch {
+	case model == "qwen3.6-max-preview":
+		return true
+	case strings.HasPrefix(model, "qwen3.6-plus"):
+		return true
+	case model == "kimi-k2.6":
+		return true
+	default:
+		return false
+	}
 }
 
 func requestBodyHasMessageReasoningContent(body []byte) bool {

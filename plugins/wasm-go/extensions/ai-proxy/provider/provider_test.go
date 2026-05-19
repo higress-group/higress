@@ -468,6 +468,27 @@ func TestProviderConfig_GetPromoteThinkingOnEmpty(t *testing.T) {
 	}
 }
 
+func TestProviderConfig_GetLogUpstreamErrorResponseBody(t *testing.T) {
+	tests := []struct {
+		name                         string
+		logUpstreamErrorResponseBody bool
+		expected                     bool
+	}{
+		{"enabled", true, true},
+		{"default_disabled", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &ProviderConfig{
+				logUpstreamErrorResponseBody: tt.logUpstreamErrorResponseBody,
+			}
+			result := config.GetLogUpstreamErrorResponseBody()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 // ============ Failover Tests ============
 
 func TestFailover_FromJson_Defaults(t *testing.T) {

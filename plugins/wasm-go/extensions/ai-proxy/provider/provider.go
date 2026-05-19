@@ -502,6 +502,9 @@ type ProviderConfig struct {
 	// @Title zh-CN 空内容时提升思考为正文
 	// @Description zh-CN 开启后，若模型响应只包含 reasoning_content/thinking 而没有正文内容，将 reasoning 内容提升为正文内容返回，避免客户端收到空回复。
 	promoteThinkingOnEmpty bool `required:"false" yaml:"promoteThinkingOnEmpty" json:"promoteThinkingOnEmpty"`
+	// @Title zh-CN 记录上游错误响应体
+	// @Description zh-CN 开启后，将上游 4xx/5xx 响应体以 warn 日志输出，便于排查 provider 兼容性问题。默认关闭，避免误记录敏感错误内容。
+	logUpstreamErrorResponseBody bool `required:"false" yaml:"logUpstreamErrorResponseBody" json:"logUpstreamErrorResponseBody"`
 	// @Title zh-CN HiClaw 模式
 	// @Description zh-CN 开启后同时启用 mergeConsecutiveMessages 和 promoteThinkingOnEmpty，适用于 HiClaw 多 Agent 协作场景。
 	hiclawMode bool `required:"false" yaml:"hiclawMode" json:"hiclawMode"`
@@ -755,6 +758,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	c.mergeConsecutiveMessages = json.Get("mergeConsecutiveMessages").Bool()
 	c.providerDomain = json.Get("providerDomain").String()
 	c.promoteThinkingOnEmpty = json.Get("promoteThinkingOnEmpty").Bool()
+	c.logUpstreamErrorResponseBody = json.Get("logUpstreamErrorResponseBody").Bool()
 	c.hiclawMode = json.Get("hiclawMode").Bool()
 	if c.hiclawMode {
 		c.mergeConsecutiveMessages = true
@@ -901,6 +905,10 @@ func (c *ProviderConfig) IsGeneric() bool {
 
 func (c *ProviderConfig) GetPromoteThinkingOnEmpty() bool {
 	return c.promoteThinkingOnEmpty
+}
+
+func (c *ProviderConfig) GetLogUpstreamErrorResponseBody() bool {
+	return c.logUpstreamErrorResponseBody
 }
 
 func (c *ProviderConfig) ReplaceByCustomSettings(body []byte) ([]byte, error) {

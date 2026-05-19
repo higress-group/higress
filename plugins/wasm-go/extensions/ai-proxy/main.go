@@ -351,7 +351,9 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginCo
 			log.Errorf("unable to load :status header from response: %v", err)
 		}
 		action := providerConfig.OnRequestFailed(activeProvider, ctx, apiTokenInUse, apiTokens, status)
-		if action == types.ActionContinue && shouldLogUpstreamErrorResponse(status) {
+		if action == types.ActionContinue &&
+			providerConfig.GetLogUpstreamErrorResponseBody() &&
+			shouldLogUpstreamErrorResponse(status) {
 			ctx.SetContext(ctxUpstreamErrorResponseStatus, status)
 			ctx.BufferResponseBody()
 			ctx.SetResponseBodyBufferLimit(errorResponseBodyBufferLimit)
