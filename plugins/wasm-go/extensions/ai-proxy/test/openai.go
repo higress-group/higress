@@ -25,6 +25,20 @@ var basicOpenAIConfig = func() json.RawMessage {
 	return data
 }()
 
+var openAIWithUpstreamErrorResponseBodyLogConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":                         "openai",
+			"apiTokens":                    []string{"sk-openai-test123456789"},
+			"logUpstreamErrorResponseBody": true,
+			"modelMapping": map[string]string{
+				"*": "gpt-3.5-turbo",
+			},
+		},
+	})
+	return data
+}()
+
 // 测试配置：OpenAI多模型配置
 var openAIMultiModelConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -824,6 +838,83 @@ func RunOpenAIOnHttpResponseBodyTests(t *testing.T) {
 				}
 			}
 			require.True(t, hasResponseBodyLogs, "Should have response body processing logs")
+		})
+
+		t.Run("openai upstream error response body warn log disabled by default", func(t *testing.T) {
+			host, status := test.NewTestHost(basicOpenAIConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"test"}]}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.NoError(t, host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream")))
+			responseHeaders := [][2]string{
+				{":status", "400"},
+				{"Content-Type", "application/json"},
+				{"x-request-id", "upstream-req-123"},
+			}
+			action := host.CallOnHttpResponseHeaders(responseHeaders)
+			require.Equal(t, types.ActionContinue, action)
+
+			errorBody := `{"error":{"type":"invalid_request_error","message":"thinking is enabled but reasoning_content is missing"}}`
+			action = host.CallOnHttpResponseBody([]byte(errorBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			for _, logEntry := range host.GetWarnLogs() {
+				require.NotContains(t, logEntry, "[upstream_error_response]")
+			}
+		})
+
+		t.Run("openai upstream error response body logs warn", func(t *testing.T) {
+			host, status := test.NewTestHost(openAIWithUpstreamErrorResponseBodyLogConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"test"}]}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.NoError(t, host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream")))
+			responseHeaders := [][2]string{
+				{":status", "400"},
+				{"Content-Type", "application/json"},
+				{"x-request-id", "upstream-req-123"},
+			}
+			action := host.CallOnHttpResponseHeaders(responseHeaders)
+			require.Equal(t, types.ActionContinue, action)
+
+			errorBody := `{"error":{"type":"invalid_request_error","message":"thinking is enabled but reasoning_content is missing"}}`
+			action = host.CallOnHttpResponseBody([]byte(errorBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			warnLogs := host.GetWarnLogs()
+			hasUpstreamErrorLog := false
+			for _, logEntry := range warnLogs {
+				if strings.Contains(logEntry, "[upstream_error_response]") &&
+					strings.Contains(logEntry, "provider=openai") &&
+					strings.Contains(logEntry, "status=400") &&
+					strings.Contains(logEntry, "request_id=upstream-req-123") &&
+					strings.Contains(logEntry, "final_model=gpt-3.5-turbo") &&
+					strings.Contains(logEntry, "reasoning_content is missing") {
+					hasUpstreamErrorLog = true
+					break
+				}
+			}
+			require.True(t, hasUpstreamErrorLog, "Should log upstream 400 response body at warn level, logs: %v", warnLogs)
 		})
 
 		// 测试OpenAI响应体处理（嵌入接口）
