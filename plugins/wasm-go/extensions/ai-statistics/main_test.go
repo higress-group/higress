@@ -21,6 +21,7 @@ import (
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -106,6 +107,33 @@ var streamingBodyConfig = func() json.RawMessage {
 			},
 		},
 		"disable_openai_usage": false,
+	})
+	return data
+}()
+
+var streamingModelExtractionConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"attributes": []map[string]interface{}{
+			{
+				"key":                   "first_model",
+				"value_source":          "response_streaming_body",
+				"value":                 "model",
+				"rule":                  "first",
+				"apply_to_log":          true,
+				"apply_to_span":         false,
+				"as_separate_log_field": false,
+			},
+			{
+				"key":                   "replace_model",
+				"value_source":          "response_streaming_body",
+				"value":                 "model",
+				"rule":                  "replace",
+				"apply_to_log":          true,
+				"apply_to_span":         false,
+				"as_separate_log_field": false,
+			},
+		},
+		"disable_openai_usage": true,
 	})
 	return data
 }()
@@ -467,6 +495,17 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 	})
 }
 
+func getAILogAttributes(t *testing.T, host test.TestHost) map[string]interface{} {
+	t.Helper()
+
+	raw, err := host.GetProperty([]string{wrapper.AILogKey})
+	require.NoError(t, err)
+
+	var attrs map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(wrapper.UnmarshalStr(`"`+string(raw)+`"`)), &attrs))
+	return attrs
+}
+
 func TestOnHttpStreamingBody(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试流式响应体处理
@@ -507,6 +546,68 @@ func TestOnHttpStreamingBody(t *testing.T) {
 
 			result = host.GetResponseBody()
 			require.Equal(t, lastChunk, result)
+
+			host.CompleteHttp()
+		})
+
+		t.Run("streaming first and replace skip empty model chunks", func(t *testing.T) {
+			host, status := test.NewTestHost(streamingModelExtractionConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			action = host.CallOnHttpStreamingResponseBody([]byte("data: {\"model\":\"\"}\n\n"), false)
+			require.Equal(t, types.ActionContinue, action)
+			action = host.CallOnHttpStreamingResponseBody([]byte("data: {\"model\":null}\n\n"), false)
+			require.Equal(t, types.ActionContinue, action)
+			action = host.CallOnHttpStreamingResponseBody([]byte("data: {\"model\":\"gpt-4o\"}\n\n"), true)
+			require.Equal(t, types.ActionContinue, action)
+
+			attrs := getAILogAttributes(t, host)
+			require.Equal(t, "gpt-4o", attrs["first_model"])
+			require.Equal(t, "gpt-4o", attrs["replace_model"])
+
+			host.CompleteHttp()
+		})
+
+		t.Run("streaming first and replace return nil when model path is missing", func(t *testing.T) {
+			host, status := test.NewTestHost(streamingModelExtractionConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			action = host.CallOnHttpStreamingResponseBody([]byte("data: {\"choices\":[]}\n\n"), false)
+			require.Equal(t, types.ActionContinue, action)
+			action = host.CallOnHttpStreamingResponseBody([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"), true)
+			require.Equal(t, types.ActionContinue, action)
+
+			attrs := getAILogAttributes(t, host)
+			require.Nil(t, attrs["first_model"])
+			require.Nil(t, attrs["replace_model"])
 
 			host.CompleteHttp()
 		})
