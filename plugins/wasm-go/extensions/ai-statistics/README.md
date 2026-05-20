@@ -62,6 +62,8 @@ Attribute 配置说明:
 - `replace`：多个 chunk 中取最后一个有效 chunk 的值
 - `append`：拼接多个有效 chunk 中的值，可用于获取回答内容
 
+注意：对于 `first` 和 `replace`，有效 chunk 不包含路径不存在、JSON `null` 或空字符串 `""` 的结果。如果所有 chunk 都没有有效值，最终提取结果为 `nil`；依赖空字符串作为“上游显式清空”信号的配置需要注意此行为差异。`append` 规则保持原有拼接行为。
+
 ### 内置属性 (Built-in Attributes)
 
 插件提供了一些内置属性键（key），可以直接使用而无需配置 `value_source` 和 `value`。这些内置属性会自动从请求/响应中提取相应的值：

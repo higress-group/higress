@@ -1452,6 +1452,58 @@ func TestSessionIdExtraction(t *testing.T) {
 	})
 }
 
+// TestExtractStreamingBodyByJsonPath 单独测试流式响应 body 的 JSONPath 提取规则
+func TestExtractStreamingBodyByJsonPath(t *testing.T) {
+	t.Run("first skips empty string chunk", func(t *testing.T) {
+		// Azure/OpenAI 兼容流可能先返回带空 model 的过滤结果 chunk，后续 chunk 才有真实模型名。
+		chunks := []byte(`data: {"choices":[],"created":0,"id":"","model":"","object":""}
+
+data: {"choices":[{"delta":{"content":""}}],"created":1777444731,"id":"chatcmpl-1","model":"gpt-5.4-2026-03-05","object":"chat.completion.chunk"}`)
+
+		value := extractStreamingBodyByJsonPath(chunks, "model", RuleFirst)
+
+		require.Equal(t, "gpt-5.4-2026-03-05", value)
+	})
+
+	t.Run("replace skips trailing empty string chunk", func(t *testing.T) {
+		chunks := []byte(`data: {"model":"gpt-4o"}
+
+data: {"model":""}`)
+
+		value := extractStreamingBodyByJsonPath(chunks, "model", RuleReplace)
+
+		require.Equal(t, "gpt-4o", value)
+	})
+
+	t.Run("first returns nil when path is missing in all chunks", func(t *testing.T) {
+		chunks := []byte(`data: {"choices":[]}
+
+data: {"choices":[{"delta":{"content":"hello"}}]}`)
+
+		value := extractStreamingBodyByJsonPath(chunks, "model", RuleFirst)
+
+		require.Nil(t, value)
+	})
+
+	t.Run("first skips explicit null chunk", func(t *testing.T) {
+		chunks := []byte(`data: {"model":null}
+
+data: {"model":"gpt-4o"}`)
+
+		value := extractStreamingBodyByJsonPath(chunks, "model", RuleFirst)
+
+		require.Equal(t, "gpt-4o", value)
+	})
+
+	t.Run("zero and false remain valid values", func(t *testing.T) {
+		numberValue := extractStreamingBodyByJsonPath([]byte(`data: {"usage":{"total_tokens":0}}`), "usage.total_tokens", RuleFirst)
+		boolValue := extractStreamingBodyByJsonPath([]byte(`data: {"filtered":false}`), "filtered", RuleFirst)
+
+		require.Equal(t, float64(0), numberValue)
+		require.Equal(t, false, boolValue)
+	})
+}
+
 // TestExtractStreamingToolCalls 单独测试 extractStreamingToolCalls 函数
 func TestExtractStreamingToolCalls(t *testing.T) {
 	t.Run("single tool call assembly", func(t *testing.T) {
