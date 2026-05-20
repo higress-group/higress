@@ -315,7 +315,7 @@ type ProviderConfig struct {
 	typ string `required:"true" yaml:"type" json:"type"`
 	// @Title zh-CN API Tokens
 	// @Description zh-CN 在请求AI服务时用于认证的API Token列表。不同的AI服务提供商可能有不同的名称。部分供应商只支持配置一个API Token（如Azure OpenAI）。
-	apiTokens []string `required:"false" yaml:"apiToken" json:"apiTokens"`
+	apiTokens []string `required:"false" yaml:"apiTokens" json:"apiTokens"`
 	// @Title zh-CN 请求超时
 	// @Description zh-CN 请求AI服务的超时时间，单位为毫秒。默认值为120000，即2分钟。此项配置目前仅用于获取上下文信息，并不影响实际转发大模型请求。
 	timeout uint32 `required:"false" yaml:"timeout" json:"timeout"`
@@ -502,6 +502,9 @@ type ProviderConfig struct {
 	// @Title zh-CN 空内容时提升思考为正文
 	// @Description zh-CN 开启后，若模型响应只包含 reasoning_content/thinking 而没有正文内容，将 reasoning 内容提升为正文内容返回，避免客户端收到空回复。
 	promoteThinkingOnEmpty bool `required:"false" yaml:"promoteThinkingOnEmpty" json:"promoteThinkingOnEmpty"`
+	// @Title zh-CN 记录上游错误响应体
+	// @Description zh-CN 开启后，将上游 4xx/5xx 响应体以 warn 日志输出，便于排查 provider 兼容性问题。默认关闭，避免误记录敏感错误内容。
+	logUpstreamErrorResponseBody bool `required:"false" yaml:"logUpstreamErrorResponseBody" json:"logUpstreamErrorResponseBody"`
 	// @Title zh-CN HiClaw 模式
 	// @Description zh-CN 开启后同时启用 mergeConsecutiveMessages 和 promoteThinkingOnEmpty，适用于 HiClaw 多 Agent 协作场景。
 	hiclawMode bool `required:"false" yaml:"hiclawMode" json:"hiclawMode"`
@@ -536,6 +539,18 @@ func (c *ProviderConfig) GetContextCleanupCommands() []string {
 
 func (c *ProviderConfig) IsOpenAIProtocol() bool {
 	return c.protocol == protocolOpenAI
+}
+
+func (c *ProviderConfig) supportsMessageReasoningContent() bool {
+	switch c.typ {
+	case providerTypeQwen, providerTypeOpenRouter, providerTypeZhipuAi:
+		return true
+	default:
+		// DeepSeek supports Anthropic Messages natively, so Claude requests usually bypass
+		// this Claude->OpenAI conversion path. Its OpenAI request-side reasoning history
+		// semantics should be validated separately before adding it here.
+		return false
+	}
 }
 
 func (c *ProviderConfig) FromJson(json gjson.Result) {
@@ -743,6 +758,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	c.mergeConsecutiveMessages = json.Get("mergeConsecutiveMessages").Bool()
 	c.providerDomain = json.Get("providerDomain").String()
 	c.promoteThinkingOnEmpty = json.Get("promoteThinkingOnEmpty").Bool()
+	c.logUpstreamErrorResponseBody = json.Get("logUpstreamErrorResponseBody").Bool()
 	c.hiclawMode = json.Get("hiclawMode").Bool()
 	if c.hiclawMode {
 		c.mergeConsecutiveMessages = true
@@ -889,6 +905,10 @@ func (c *ProviderConfig) IsGeneric() bool {
 
 func (c *ProviderConfig) GetPromoteThinkingOnEmpty() bool {
 	return c.promoteThinkingOnEmpty
+}
+
+func (c *ProviderConfig) GetLogUpstreamErrorResponseBody() bool {
+	return c.logUpstreamErrorResponseBody
 }
 
 func (c *ProviderConfig) ReplaceByCustomSettings(body []byte) ([]byte, error) {
@@ -1204,7 +1224,9 @@ func (c *ProviderConfig) handleRequestBody(
 
 		// Convert Claude protocol to OpenAI protocol
 		converter := &ClaudeToOpenAIConverter{}
-		body, err = converter.ConvertClaudeRequestToOpenAI(body)
+		body, err = converter.ConvertClaudeRequestToOpenAIWithOptions(body, ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: c.supportsMessageReasoningContent(),
+		})
 		if err != nil {
 			return types.ActionContinue, fmt.Errorf("failed to convert claude request to openai: %v", err)
 		}
@@ -1245,7 +1267,7 @@ func (c *ProviderConfig) handleRequestBody(
 	}
 
 	if needClaudeConversion && provider.GetProviderType() != providerTypeBedrock && provider.GetProviderType() != providerTypeClaude {
-		body = stripClaudeInternalMessageFields(body)
+		body = stripClaudeInternalMessageFields(body, c.supportsMessageReasoningContent())
 	}
 
 	// use openai protocol (either original openai or converted from claude)
@@ -1281,7 +1303,7 @@ func (c *ProviderConfig) handleRequestBody(
 	return types.ActionContinue, replaceRequestBody(body)
 }
 
-func stripClaudeInternalMessageFields(body []byte) []byte {
+func stripClaudeInternalMessageFields(body []byte, preserveMessageReasoningContent ...bool) []byte {
 	result := body
 	for _, field := range []string{"claude_thinking", "claude_output_config", "claude_anthropic_beta"} {
 		if updated, err := sjson.DeleteBytes(result, field); err == nil {
@@ -1294,15 +1316,19 @@ func stripClaudeInternalMessageFields(body []byte) []byte {
 		return result
 	}
 
-	for _, field := range []string{
+	fields := []string{
 		"reasoning",
-		"reasoning_content",
 		"reasoning_signature",
 		"reasoning_redacted_content",
 		"claude_content_blocks",
 		"claude_content_block_index",
 		"claude_content_block_stop",
-	} {
+	}
+	if len(preserveMessageReasoningContent) == 0 || !preserveMessageReasoningContent[0] {
+		fields = append(fields, "reasoning_content")
+	}
+
+	for _, field := range fields {
 		messages.ForEach(func(key, _ gjson.Result) bool {
 			if updated, err := sjson.DeleteBytes(result, fmt.Sprintf("messages.%d.%s", key.Int(), field)); err == nil {
 				result = updated
