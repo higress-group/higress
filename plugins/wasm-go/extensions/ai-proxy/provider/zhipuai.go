@@ -100,6 +100,11 @@ func (m *zhipuAiProvider) TransformRequestBody(ctx wrapper.HttpContext, apiName 
 		// Explicitly set thinking=disabled to prevent ZhipuAI from enabling it by default.
 		body, _ = sjson.SetBytes(body, "thinking", map[string]string{"type": "disabled"})
 	}
+	if requestBodyHasMessageReasoningContent(body) {
+		// Z.AI clears historical reasoning_content by default. Disable clearing only
+		// when the converted request actually carries reusable reasoning history.
+		body, _ = sjson.SetBytes(body, "thinking.clear_thinking", false)
+	}
 
 	return m.config.defaultTransformRequestBody(ctx, apiName, body)
 }

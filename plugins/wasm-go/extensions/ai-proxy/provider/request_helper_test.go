@@ -72,6 +72,97 @@ func TestMergeConsecutiveMessages(t *testing.T) {
 		assert.Equal(t, "第一段\n\n第二段", output.Messages[1].Content)
 	})
 
+	t.Run("merges_consecutive_assistant_reasoning_content", func(t *testing.T) {
+		input := chatCompletionRequest{
+			Messages: []chatMessage{
+				{Role: "user", Content: "问题"},
+				{Role: "assistant", Content: "第一段", ReasoningContent: "第一段推理"},
+				{Role: "assistant", Content: "第二段", ReasoningContent: "第二段推理"},
+			},
+		}
+		body, err := json.Marshal(input)
+		require.NoError(t, err)
+
+		result, err := mergeConsecutiveMessages(body)
+		assert.NoError(t, err)
+
+		var output chatCompletionRequest
+		require.NoError(t, json.Unmarshal(result, &output))
+
+		assert.Len(t, output.Messages, 2)
+		assert.Equal(t, "assistant", output.Messages[1].Role)
+		assert.Equal(t, "第一段\n\n第二段", output.Messages[1].Content)
+		assert.Equal(t, "第一段推理\n\n第二段推理", output.Messages[1].ReasoningContent)
+	})
+
+	t.Run("does_not_merge_assistant_messages_with_tool_calls", func(t *testing.T) {
+		input := chatCompletionRequest{
+			Messages: []chatMessage{
+				{Role: "user", Content: "问题"},
+				{Role: "assistant", Content: "先解释"},
+				{
+					Role:    "assistant",
+					Content: "",
+					ToolCalls: []toolCall{
+						{
+							Id:   "call_1",
+							Type: "function",
+							Function: functionCall{
+								Name:      "lookup",
+								Arguments: `{"q":"weather"}`,
+							},
+						},
+					},
+				},
+			},
+		}
+		body, err := json.Marshal(input)
+		require.NoError(t, err)
+
+		result, err := mergeConsecutiveMessages(body)
+		assert.NoError(t, err)
+
+		var output chatCompletionRequest
+		require.NoError(t, json.Unmarshal(result, &output))
+
+		assert.Len(t, output.Messages, 3)
+		assert.Equal(t, "assistant", output.Messages[1].Role)
+		assert.Equal(t, "先解释", output.Messages[1].Content)
+		require.Len(t, output.Messages[2].ToolCalls, 1)
+		assert.Equal(t, "call_1", output.Messages[2].ToolCalls[0].Id)
+	})
+
+	t.Run("does_not_merge_assistant_messages_with_legacy_function_call", func(t *testing.T) {
+		input := chatCompletionRequest{
+			Messages: []chatMessage{
+				{Role: "user", Content: "问题"},
+				{Role: "assistant", Content: "先解释"},
+				{
+					Role:    "assistant",
+					Content: "",
+					FunctionCall: &functionCall{
+						Name:      "lookup",
+						Arguments: `{"q":"weather"}`,
+					},
+				},
+			},
+		}
+		body, err := json.Marshal(input)
+		require.NoError(t, err)
+
+		result, err := mergeConsecutiveMessages(body)
+		assert.NoError(t, err)
+
+		var output chatCompletionRequest
+		require.NoError(t, json.Unmarshal(result, &output))
+
+		assert.Len(t, output.Messages, 3)
+		assert.Equal(t, "assistant", output.Messages[1].Role)
+		assert.Equal(t, "先解释", output.Messages[1].Content)
+		require.NotNil(t, output.Messages[2].FunctionCall)
+		assert.Equal(t, "lookup", output.Messages[2].FunctionCall.Name)
+	})
+
 	t.Run("merges_multiple_consecutive_same_role", func(t *testing.T) {
 		input := chatCompletionRequest{
 			Messages: []chatMessage{
