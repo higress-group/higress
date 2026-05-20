@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -158,6 +159,28 @@ var failureModeConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：带 allowed_properties 的配置
+var allowedPropertiesConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"http_service": map[string]interface{}{
+			"endpoint_mode": "envoy",
+			"endpoint": map[string]interface{}{
+				"service_name": "ext-auth.backend.svc.cluster.local",
+				"service_port": 8090,
+				"path_prefix":  "/auth",
+			},
+			"timeout": 1000,
+			"authorization_request": map[string]interface{}{
+				"allowed_properties": []map[string]interface{}{
+					{"path": []string{"route_name"}, "header": "x-route-name"},
+					{"path": []string{"metadata", "user_id"}, "header": "x-user-id"},
+				},
+			},
+		},
+	})
+	return data
+}()
+
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		// 测试基本 envoy 模式配置解析
@@ -218,6 +241,17 @@ func TestParseConfig(t *testing.T) {
 		// 测试失败模式配置解析
 		t.Run("failure mode config", func(t *testing.T) {
 			host, status := test.NewTestHost(failureModeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+		})
+
+		// 测试带 allowed_properties 的配置解析
+		t.Run("allowed properties config", func(t *testing.T) {
+			host, status := test.NewTestHost(allowedPropertiesConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
@@ -468,6 +502,98 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			}, []byte(`{"error": "Internal server error"}`))
 
 			// 验证请求是否被恢复（失败模式允许的情况下）
+			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+
+			host.CompleteHttp()
+		})
+
+		// 测试 allowed_properties 正确转发属性到 ext auth server
+		t.Run("allowed properties forward properties to ext auth server", func(t *testing.T) {
+			host, status := test.NewTestHost(allowedPropertiesConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 设置属性，供插件获取并转发到 ext auth server
+			_ = host.SetProperty([]string{"route_name"}, []byte("user-service"))
+			_ = host.SetProperty([]string{"metadata", "user_id"}, []byte("user-12345"))
+
+			// 设置请求头
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/users"},
+				{":method", "POST"},
+				{"authorization", "Bearer token123"},
+			})
+
+			// 由于需要调用外部认证服务，应该返回 HeaderStopAllIterationAndWatermark
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			// 获取发送到的 ext auth server 的请求 headers，验证属性已被正确转发
+			calloutAttrs := host.GetHttpCalloutAttributes()
+			require.Len(t, calloutAttrs, 1, "should have exactly one HTTP callout")
+			calloutHeaders := calloutAttrs[0].Headers
+
+			// 验证 x-route-name 和 x-user-id header 已被正确设置
+			foundHeaders := make(map[string]string)
+			for _, h := range calloutHeaders {
+				foundHeaders[strings.ToLower(h[0])] = h[1]
+			}
+			require.Equal(t, "user-service", foundHeaders["x-route-name"], "x-route-name should be set to property value")
+			require.Equal(t, "user-12345", foundHeaders["x-user-id"], "x-user-id should be set to property value")
+
+			// 模拟外部认证服务的HTTP调用响应
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(`{"authorized": true}`))
+
+			// 验证请求是否继续（属性转发成功，ext auth 返回 200）
+			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+
+			host.CompleteHttp()
+		})
+
+		// 测试 allowed_properties 当 GetProperty 失败时不阻塞请求
+		t.Run("allowed properties continues when property not found", func(t *testing.T) {
+			host, status := test.NewTestHost(allowedPropertiesConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 只设置部分属性，metadata.user_id 不设置，模拟 GetProperty 失败的情况
+			_ = host.SetProperty([]string{"route_name"}, []byte("user-service"))
+			// 不设置 metadata.user_id
+
+			// 设置请求头
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/users"},
+				{":method", "POST"},
+				{"authorization", "Bearer token123"},
+			})
+
+			// 由于需要调用外部认证服务，应该返回 HeaderStopAllIterationAndWatermark
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			// 获取发送到的 ext auth server 的请求 headers
+			calloutAttrs := host.GetHttpCalloutAttributes()
+			require.Len(t, calloutAttrs, 1, "should have exactly one HTTP callout")
+			calloutHeaders := calloutAttrs[0].Headers
+
+			// 验证只有 x-route-name 被发送，x-user-id 不应该存在（因为 property 获取失败）
+			foundHeaders := make(map[string]string)
+			for _, h := range calloutHeaders {
+				foundHeaders[strings.ToLower(h[0])] = h[1]
+			}
+			require.Equal(t, "user-service", foundHeaders["x-route-name"], "x-route-name should be set")
+			require.NotContains(t, foundHeaders, "x-user-id", "x-user-id should NOT be set when property not found")
+
+			// 模拟外部认证服务的HTTP调用响应
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(`{"authorized": true}`))
+
+			// 验证请求是否继续（即使部分属性获取失败也不阻塞）
 			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
 
 			host.CompleteHttp()

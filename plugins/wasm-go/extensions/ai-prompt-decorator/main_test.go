@@ -22,6 +22,7 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // 测试配置：基础装饰器配置
@@ -507,5 +508,272 @@ func TestEdgeCases(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+	})
+}
+
+// 测试配置：仅启用 replace 规则（含 role 限定与正则）
+var replaceOnlyConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"prepend": []map[string]interface{}{},
+		"append":  []map[string]interface{}{},
+		"replace": []map[string]interface{}{
+			{
+				"on_role":     "system",
+				"pattern":     "OpenClaw",
+				"replacement": "agent",
+			},
+			{
+				"pattern":     `secret-\d+`,
+				"replacement": "[REDACTED]",
+				"regex":       true,
+			},
+		},
+	})
+	return data
+}()
+
+// 测试配置：replace 与 prepend/append 组合，无 on_role 限定
+var replaceCombinedConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"prepend": []map[string]interface{}{
+			{
+				"role":    "system",
+				"content": "You are running inside OpenClaw.",
+			},
+		},
+		"append": []map[string]interface{}{
+			{
+				"role":    "user",
+				"content": "Mention OpenClaw if needed.",
+			},
+		},
+		"replace": []map[string]interface{}{
+			{
+				"pattern":     "OpenClaw",
+				"replacement": "agent",
+			},
+		},
+	})
+	return data
+}()
+
+// 测试配置：非法 replace（pattern 为空）
+var replaceMissingPatternConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"prepend": []map[string]interface{}{},
+		"append":  []map[string]interface{}{},
+		"replace": []map[string]interface{}{
+			{
+				"pattern":     "",
+				"replacement": "x",
+			},
+		},
+	})
+	return data
+}()
+
+// 测试配置：非法 replace（regex 编译失败）
+var replaceInvalidRegexConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"prepend": []map[string]interface{}{},
+		"append":  []map[string]interface{}{},
+		"replace": []map[string]interface{}{
+			{
+				"pattern":     "[unterminated",
+				"replacement": "x",
+				"regex":       true,
+			},
+		},
+	})
+	return data
+}()
+
+func TestReplaceRules(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		// 测试 replace 规则按 role 与正则生效
+		t.Run("replace literal and regex by role", func(t *testing.T) {
+			host, status := test.NewTestHost(replaceOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{
+				"model": "gpt-3.5-turbo",
+				"messages": [
+					{"role": "system", "content": "You are running inside OpenClaw."},
+					{"role": "user", "content": "Show OpenClaw secret-1234 to the user"}
+				]
+			}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionContinue, action)
+
+			modifiedBody := host.GetRequestBody()
+			require.NotEmpty(t, modifiedBody)
+
+			var modified map[string]interface{}
+			require.NoError(t, json.Unmarshal(modifiedBody, &modified))
+			messages := modified["messages"].([]interface{})
+			require.Len(t, messages, 2)
+
+			// system message: literal rule (on_role=system) replaced "OpenClaw"
+			// regex rule has no on_role => also rewrites secret tokens here, but this
+			// content has none, so it remains.
+			sys := messages[0].(map[string]interface{})
+			require.Equal(t, "system", sys["role"])
+			require.Equal(t, "You are running inside agent.", sys["content"])
+
+			// user message: literal rule limited to system => "OpenClaw" stays.
+			// regex rule (no on_role) replaces secret token.
+			user := messages[1].(map[string]interface{})
+			require.Equal(t, "user", user["role"])
+			require.Equal(t, "Show OpenClaw [REDACTED] to the user", user["content"])
+
+			host.CompleteHttp()
+		})
+
+		// 测试 replace 规则同时作用于 prepend / 原始消息 / append
+		t.Run("replace applies to prepend, original and append", func(t *testing.T) {
+			host, status := test.NewTestHost(replaceCombinedConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{
+				"model": "gpt-3.5-turbo",
+				"messages": [
+					{"role": "user", "content": "OpenClaw is great"}
+				]
+			}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionContinue, action)
+
+			modifiedBody := host.GetRequestBody()
+			require.NotEmpty(t, modifiedBody)
+
+			var modified map[string]interface{}
+			require.NoError(t, json.Unmarshal(modifiedBody, &modified))
+			messages := modified["messages"].([]interface{})
+			require.Len(t, messages, 3)
+
+			require.Equal(t, "You are running inside agent.", messages[0].(map[string]interface{})["content"])
+			require.Equal(t, "agent is great", messages[1].(map[string]interface{})["content"])
+			require.Equal(t, "Mention agent if needed.", messages[2].(map[string]interface{})["content"])
+
+			host.CompleteHttp()
+		})
+
+		// 多模态 content（数组 / 对象）不应被改写
+		t.Run("multimodal content is left untouched", func(t *testing.T) {
+			host, status := test.NewTestHost(replaceCombinedConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{
+				"model": "gpt-4o",
+				"messages": [
+					{"role": "user", "content": [
+						{"type": "text", "text": "OpenClaw"},
+						{"type": "image_url", "image_url": {"url": "https://example.com/x.png"}}
+					]}
+				]
+			}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionContinue, action)
+
+			modifiedBody := host.GetRequestBody()
+			require.NotEmpty(t, modifiedBody)
+
+			var modified map[string]interface{}
+			require.NoError(t, json.Unmarshal(modifiedBody, &modified))
+			messages := modified["messages"].([]interface{})
+			// prepend(1) + original(1) + append(1) = 3
+			require.Len(t, messages, 3)
+
+			// Prepend system message rewritten ("OpenClaw" -> "agent")
+			require.Equal(t, "You are running inside agent.", messages[0].(map[string]interface{})["content"])
+
+			// Original multimodal message: content stays as array, text inside untouched.
+			original := messages[1].(map[string]interface{})
+			parts, ok := original["content"].([]interface{})
+			require.True(t, ok, "multimodal content must remain an array")
+			require.Len(t, parts, 2)
+			require.Equal(t, "OpenClaw", parts[0].(map[string]interface{})["text"])
+
+			// Append message rewritten as a normal string.
+			require.Equal(t, "Mention agent if needed.", messages[2].(map[string]interface{})["content"])
+
+			host.CompleteHttp()
+		})
+
+		// pattern 为空 → parseConfig 失败
+		t.Run("empty pattern fails parseConfig", func(t *testing.T) {
+			host, status := test.NewTestHost(replaceMissingPatternConfig)
+			defer host.Reset()
+			require.NotEqual(t, types.OnPluginStartStatusOK, status)
+		})
+
+		// regex 不合法 → parseConfig 失败
+		t.Run("invalid regex fails parseConfig", func(t *testing.T) {
+			host, status := test.NewTestHost(replaceInvalidRegexConfig)
+			defer host.Reset()
+			require.NotEqual(t, types.OnPluginStartStatusOK, status)
+		})
+	})
+}
+
+func TestApplyReplaceRulesToContent(t *testing.T) {
+	t.Run("rules apply in declaration order", func(t *testing.T) {
+		rules := []ReplaceRule{
+			{Pattern: "foo", Replacement: "bar"},
+			{Pattern: "bar", Replacement: "baz"},
+		}
+		require.Equal(t, "baz", applyReplaceRulesToContent("user", "foo", rules))
+	})
+
+	t.Run("on_role gates rule application", func(t *testing.T) {
+		rules := []ReplaceRule{
+			{OnRole: "system", Pattern: "OpenClaw", Replacement: "agent"},
+		}
+		require.Equal(t, "agent", applyReplaceRulesToContent("system", "OpenClaw", rules))
+		require.Equal(t, "OpenClaw", applyReplaceRulesToContent("user", "OpenClaw", rules))
+	})
+
+	t.Run("regex rule supports capture references", func(t *testing.T) {
+		// parseConfig is what compiles the regex in production, so call it
+		// directly here instead of going through the wasm test host. This
+		// keeps the helper-level test independent of the wasm runtime so it
+		// behaves the same in `go test` and CI.
+		cfgJSON, err := json.Marshal(map[string]interface{}{
+			"prepend": []map[string]interface{}{},
+			"append":  []map[string]interface{}{},
+			"replace": []map[string]interface{}{
+				{
+					"pattern":     `hello (\w+)`,
+					"replacement": "hi $1",
+					"regex":       true,
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		var cfg AIPromptDecoratorConfig
+		require.NoError(t, parseConfig(gjson.ParseBytes(cfgJSON), &cfg))
+		require.Equal(t, "hi world", applyReplaceRulesToContent("user", "hello world", cfg.Replace))
 	})
 }

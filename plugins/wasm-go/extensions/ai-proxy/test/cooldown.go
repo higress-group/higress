@@ -595,7 +595,26 @@ func RunCooldownRecoveryTests(t *testing.T) {
 
 		// 成功请求应重置失败计数
 		t.Run("successful request resets failure count", func(t *testing.T) {
-			host, status := test.NewTestHost(cooldownThreeTokensConfig)
+			resetCountConfig := func() json.RawMessage {
+				data, _ := json.Marshal(map[string]interface{}{
+					"provider": map[string]interface{}{
+						"type":      "openai",
+						"apiTokens": []string{"sk-reset-token"},
+						"modelMapping": map[string]string{
+							"*": "gpt-3.5-turbo",
+						},
+						"failover": map[string]interface{}{
+							"enabled":          true,
+							"failureThreshold": 2,
+							"cooldownDuration": 100,
+							"failoverOnStatus": []string{"429"},
+						},
+					},
+				})
+				return data
+			}()
+
+			host, status := test.NewTestHost(resetCountConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 

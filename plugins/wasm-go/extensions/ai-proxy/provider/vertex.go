@@ -56,6 +56,10 @@ const (
 // 允许任意 basePath 前缀，兼容 basePathHandling 配置
 var vertexRawPathRegex = regexp.MustCompile(`^.*/([^/]+)/projects/([^/]+)/locations/([^/]+)/publishers/([^/]+)/models/([^/:]+):([^/?]+)`)
 
+// vertexExpressRawPathRegex 匹配 Vertex AI Express Mode 专用 REST API 路径
+// 格式: [任意前缀]/{api-version}/publishers/{publisher}/models/{model}:{action}
+var vertexExpressRawPathRegex = regexp.MustCompile(`^.*/(v[^/]+)/publishers/([^/]+)/models/([^/:]+):([^/?]+)`)
+
 type vertexProviderInitializer struct{}
 
 func (v *vertexProviderInitializer) ValidateConfig(config *ProviderConfig) error {
@@ -158,7 +162,7 @@ func (v *vertexProvider) GetApiName(path string) ApiName {
 	// 优先匹配原生 Vertex AI REST API 路径，支持任意 basePath 前缀
 	// 格式: [任意前缀]/{api-version}/projects/{project}/locations/{location}/publishers/{publisher}/models/{model}:{action}
 	// 必须在其他 action 检查之前，因为 :predict、:generateContent 等 action 会被其他规则匹配
-	if vertexRawPathRegex.MatchString(path) {
+	if vertexRawPathRegex.MatchString(path) || (v.isExpressMode() && vertexExpressRawPathRegex.MatchString(path)) {
 		return ApiNameVertexRaw
 	}
 	if strings.HasSuffix(path, vertexChatCompletionAction) || strings.HasSuffix(path, vertexChatCompletionStreamAction) {

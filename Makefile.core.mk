@@ -23,6 +23,11 @@ export GOPROXY ?= https://proxy.golang.org,direct
 
 TARGET_ARCH ?= amd64
 
+VALID_ARCHS := amd64 arm64
+ifeq ($(filter $(TARGET_ARCH),$(VALID_ARCHS)),)
+  $(error "TARGET_ARCH must be one of: $(VALID_ARCHS)")
+endif
+
 GOARCH_LOCAL := $(TARGET_ARCH)
 GOOS_LOCAL := $(TARGET_OS)
 RELEASE_LDFLAGS='$(GO_LDFLAGS) -extldflags -static -s -w'
@@ -166,7 +171,7 @@ build-gateway: prebuild buildx-prepare build-golang-filter
 	USE_REAL_USER=1 TARGET_ARCH=arm64 DOCKER_TARGETS="docker.proxyv2" ./tools/hack/build-istio-image.sh init
 	DOCKER_TARGETS="docker.proxyv2" IMG_URL="${IMG_URL}" ./tools/hack/build-istio-image.sh docker.buildx
 
-build-gateway-local: prebuild build-golang-filter-amd64
+build-gateway-local: prebuild $(if $(filter amd64,$(TARGET_ARCH)),build-golang-filter-amd64,build-golang-filter-arm64)
 	TARGET_ARCH=${TARGET_ARCH} DOCKER_TARGETS="docker.proxyv2" ./tools/hack/build-istio-image.sh docker
 
 build-golang-filter-amd64:

@@ -1,10 +1,18 @@
 package test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
 )
+
+// LegacyProviderPluginJSON builds the top-level plugin JSON with a single legacy "provider"
+// object, matching historical wasm integration tests (see test/openai.go).
+func LegacyProviderPluginJSON(provider map[string]interface{}) json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{"provider": provider})
+	return json.RawMessage(data)
+}
 
 func RunMapRequestPathByCapabilityTests(t *testing.T) {
 	testCases := []struct {
@@ -74,6 +82,15 @@ func RunMapRequestPathByCapabilityTests(t *testing.T) {
 				"openai/v1/retrievevideo": "/v1/videos/{video_id}",
 			},
 			expected: "/v1/videos/video-xyz",
+		},
+		{
+			name:    "video placeholder is replaced in nested provider path",
+			apiName: "openai/v1/retrievevideo",
+			origin:  "/openai/v1/videos/video-xyz",
+			mapping: map[string]string{
+				"openai/v1/retrievevideo": "/v1/videos/text2video/{video_id}",
+			},
+			expected: "/v1/videos/text2video/video-xyz",
 		},
 		{
 			name:    "video content placeholder with query",

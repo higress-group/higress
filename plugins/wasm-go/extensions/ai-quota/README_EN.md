@@ -16,6 +16,7 @@ Plugin execution priority: `750`
 | `redis_key_prefix`  | string           | Optional                                   |   chat_quota: | Quota redis key prefix                            |
 | `admin_consumer`    | string           | Required                                   |               | Consumer name for managing quota management identity |
 | `admin_path`        | string           | Optional                                   |   /quota      | Prefix for the path to manage quota requests      |
+| `enable_path_suffixes` | []string      | Optional                                   | ["/v1/chat/completions", "/v1/messages"] | Enabled path suffixes for completion quota checks only; does not affect admin API path |
 | `redis`             | object           | Yes                                        |               | Redis related configuration                        |
 Explanation of each configuration field in `redis`
 | Configuration Item | Type   | Required | Default Value                                           | Explanation                                                                                             |

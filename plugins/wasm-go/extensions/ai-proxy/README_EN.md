@@ -99,18 +99,20 @@ For OpenAI, the corresponding `type` is `openai`. Its unique configuration field
 
 For Azure OpenAI, the corresponding `type` is `azure`. Its unique configuration field is:
 
-| Name                 | Data Type   | Filling Requirements | Default Value | Description                                                                                                    |
-|---------------------|-------------|----------------------|---------------|---------------------------------------------------------------------------------------------------------------|
-| `azureServiceUrl`   | string      | Required             | -             | The URL of the Azure OpenAI service, must include the `api-version` query parameter.                           |
+| Name                 | Data Type   | Filling Requirements | Default Value | Description                                                                                                                               |
+|---------------------|-------------|----------------------|---------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `azureServiceUrl`   | string      | Required             | -             | Azure OpenAI service URL. The `/openai/v1` path does not require a dated `api-version`; legacy paths or resource-only mode still require it. |
 
 **Note:**
 1. Azure OpenAI only supports configuring one API Token.
-2. `azureServiceUrl` accepts three formats：
-    1. Full URL. e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME/chat/completions?api-version=2024-02-15-preview`
+2. `azureServiceUrl` accepts the new `/openai/v1` format and legacy formats:
+    1. v1 URL. e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1`
+        - The plugin uses this v1 base URL directly and does not append a dated `api-version`.
+    2. Legacy full URL. e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME/chat/completions?api-version=2024-02-15-preview`
         - Request will be forwarded to the given URL, no matter what original path the request uses.
-    2. Resource name + deployment name，e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME?api-version=2024-02-15-preview`
+    3. Legacy resource name + deployment name, e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME?api-version=2024-02-15-preview`
         - The path will be updated based on the actual request path, leaving the deployment name unchanged. APIs with no deployment name in the path are also support.
-    3. Resource name only.e.g.`https://YOUR_RESOURCE_NAME.openai.azure.com?api-version=2024-02-15-preview`
+    4. Legacy resource name only, e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com?api-version=2024-02-15-preview`
         - The path will be updated based on the actual request path. The deployment name will be filled based on the model name in the request and the configured model mapping rule. APIs with no deployment name in the path are also support.
 
 #### Moonshot
@@ -337,7 +339,7 @@ provider:
   type: azure
   apiTokens:
     - "YOUR_AZURE_OPENAI_API_TOKEN"
-  azureServiceUrl: "https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME/chat/completions?api-version=2024-02-15-preview",
+  azureServiceUrl: "https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1",
 ```
 
 **Request Example**

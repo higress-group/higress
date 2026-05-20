@@ -19,12 +19,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname -- "$0")" &> /dev/null && pwd)"
 source "${SCRIPT_DIR}/setup-istio-env.sh"
 
+if ! command -v patch >/dev/null 2>&1; then
+    echo "ERROR: 'patch' command not found. Please install it first (e.g. apt install patch / yum install patch / brew install gpatch)." >&2
+    exit 1
+fi
+
 cd ${ROOT}/external/proxy
 
-if patch_output=$(patch -d . -s -f --dry-run -p1 < ${SCRIPT_DIR}/build-envoy.patch 2>&1); then
-    patch -d . -p1 < ${SCRIPT_DIR}/build-envoy.patch
-else
+if patch_output=$(patch -d . -s --dry-run -p1 < ${SCRIPT_DIR}/build-envoy.patch 2>&1); then
+    patch -d . -s -p1 < ${SCRIPT_DIR}/build-envoy.patch
+elif reverse_output=$(patch -d . -s -R --dry-run -p1 < ${SCRIPT_DIR}/build-envoy.patch 2>&1); then
     echo "build-envoy.patch was already patched"
+else
+    echo "ERROR: failed to apply build-envoy.patch" >&2
+    echo "Patch output:" >&2
+    echo "${patch_output}" >&2
+    echo "Reverse patch output:" >&2
+    echo "${reverse_output}" >&2
+    exit 1
 fi
 
 CONDITIONAL_HOST_MOUNTS+="--mount type=bind,source=${ROOT}/external/package,destination=/home/package "

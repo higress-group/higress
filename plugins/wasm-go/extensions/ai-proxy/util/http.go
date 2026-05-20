@@ -131,9 +131,7 @@ func MapRequestPathByCapability(apiName string, originPath string, mapping map[s
 					continue
 				}
 				id := subMatch[index]
-				mappedPathOnly = r.regx.ReplaceAllStringFunc(mappedPathOnly, func(s string) string {
-					return strings.Replace(s, "{"+r.key+"}", id, 1)
-				})
+				mappedPathOnly = strings.Replace(mappedPathOnly, "{"+r.key+"}", id, 1)
 			}
 		}
 	}

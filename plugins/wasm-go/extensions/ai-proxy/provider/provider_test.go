@@ -468,6 +468,27 @@ func TestProviderConfig_GetPromoteThinkingOnEmpty(t *testing.T) {
 	}
 }
 
+func TestProviderConfig_GetLogUpstreamErrorResponseBody(t *testing.T) {
+	tests := []struct {
+		name                         string
+		logUpstreamErrorResponseBody bool
+		expected                     bool
+	}{
+		{"enabled", true, true},
+		{"default_disabled", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &ProviderConfig{
+				logUpstreamErrorResponseBody: tt.logUpstreamErrorResponseBody,
+			}
+			result := config.GetLogUpstreamErrorResponseBody()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 // ============ Failover Tests ============
 
 func TestFailover_FromJson_Defaults(t *testing.T) {
@@ -721,4 +742,82 @@ func TestProviderConfig_SetDefaultCapabilities(t *testing.T) {
 		assert.Equal(t, "/v1/embeddings", config.capabilities[string(ApiNameEmbeddings)])
 		assert.Equal(t, "/v1/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
 	})
+
+	t.Run("preserve_existing_capability", func(t *testing.T) {
+		config := &ProviderConfig{
+			capabilities: map[string]string{
+				string(ApiNameChatCompletion): "/custom/chat/completions",
+			},
+		}
+
+		defaultCaps := map[string]string{
+			string(ApiNameChatCompletion): "/v1/chat/completions",
+		}
+		config.setDefaultCapabilities(defaultCaps)
+
+		assert.Equal(t, "/custom/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
+	})
+}
+
+func TestCreateProvider(t *testing.T) {
+	t.Run("generic_success", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}`))
+		p, err := CreateProvider(pc)
+		assert.NoError(t, err)
+		assert.Equal(t, providerTypeGeneric, p.GetProviderType())
+	})
+
+	t.Run("openai_minimal_success", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"openai","apiTokens":["sk-test"]}`))
+		p, err := CreateProvider(pc)
+		assert.NoError(t, err)
+		assert.Equal(t, providerTypeOpenAI, p.GetProviderType())
+	})
+
+	t.Run("unknown_type", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"no-such-provider-xyz","apiTokens":["t"]}`))
+		_, err := CreateProvider(pc)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown provider type")
+	})
+}
+
+func TestStripClaudeInternalMessageFields(t *testing.T) {
+	body := []byte(`{
+		"model":"claude",
+		"claude_thinking":{"type":"adaptive"},
+		"claude_output_config":{"effort":"high"},
+		"claude_anthropic_beta":["effort-2025-11-24"],
+		"messages":[{
+			"role":"assistant",
+			"content":"answer",
+			"reasoning_content":"reasoning",
+			"reasoning_signature":"sig",
+			"reasoning_redacted_content":"opaque",
+			"claude_content_blocks":[{"type":"thinking","thinking":"","signature":"sig"}],
+			"claude_content_block_index":1,
+			"claude_content_block_stop":1
+		}]
+	}`)
+
+	result := stripClaudeInternalMessageFields(body)
+
+	assert.False(t, gjson.GetBytes(result, "claude_thinking").Exists())
+	assert.False(t, gjson.GetBytes(result, "claude_output_config").Exists())
+	assert.False(t, gjson.GetBytes(result, "claude_anthropic_beta").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.reasoning_content").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.reasoning_signature").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.reasoning_redacted_content").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_blocks").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_block_index").Exists())
+	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_block_stop").Exists())
+	assert.Equal(t, "answer", gjson.GetBytes(result, "messages.0.content").String())
+
+	preserved := stripClaudeInternalMessageFields(body, true)
+	assert.Equal(t, "reasoning", gjson.GetBytes(preserved, "messages.0.reasoning_content").String())
+	assert.False(t, gjson.GetBytes(preserved, "messages.0.reasoning_signature").Exists())
+	assert.False(t, gjson.GetBytes(preserved, "messages.0.claude_content_blocks").Exists())
 }
