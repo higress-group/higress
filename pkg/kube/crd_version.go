@@ -33,7 +33,14 @@ type CRDVersionInfo struct {
 	Description     string
 }
 
-// RequiredCRDs defines the CRDs required by Higress with their expected versions
+// RequiredCRDs defines the CRD compatibility contract Higress expects at startup.
+//
+// The actual CRDs installed in the cluster are discovered at runtime in
+// CheckCRDVersions() through the apiextensions API. This explicit list remains
+// necessary because:
+//   - missing CRDs cannot be inferred from cluster state alone
+//   - version expectations come from the shipped Higress API/CRD contract
+//   - required field probes are feature-compatibility checks, not generic schema discovery
 //
 // NOTE: This list should be kept in sync with:
 //   - helm/core/crds/customresourcedefinitions.gen.yaml (CRD definitions)
