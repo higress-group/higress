@@ -15,10 +15,15 @@
 package kube
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	apiExtensionsV1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiExtensionsFake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgotesting "k8s.io/client-go/testing"
 )
 
 func TestFieldExistsInSchema(t *testing.T) {
@@ -468,5 +473,123 @@ func TestRequiredCRDsDefinition(t *testing.T) {
 		if _, expected := expectedCRDs[name]; !expected {
 			t.Logf("Info: Additional CRD found in RequiredCRDs: %s", name)
 		}
+	}
+}
+
+func TestCheckCRDVersionsWithClient_AllValid(t *testing.T) {
+	client := apiExtensionsFake.NewSimpleClientset(
+		&apiExtensionsV1.CustomResourceDefinition{
+			ObjectMeta: metaV1.ObjectMeta{
+				Name: "wasmplugins.extensions.higress.io",
+			},
+			Spec: apiExtensionsV1.CustomResourceDefinitionSpec{
+				Versions: []apiExtensionsV1.CustomResourceDefinitionVersion{
+					{
+						Name:    "v1alpha1",
+						Served:  true,
+						Storage: true,
+						Schema: &apiExtensionsV1.CustomResourceValidation{
+							OpenAPIV3Schema: &apiExtensionsV1.JSONSchemaProps{
+								Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+									"spec": {
+										Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+											"pluginName": {Type: "string"},
+											"url":        {Type: "string"},
+											"matchRules": {Type: "array"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	warnings := checkCRDVersionsWithClient(client.ApiextensionsV1().CustomResourceDefinitions(), []CRDVersionInfo{
+		{
+			Name:            "wasmplugins.extensions.higress.io",
+			ExpectedVersion: "v1alpha1",
+			RequiredFields:  []string{"spec.pluginName", "spec.url", "spec.matchRules"},
+			Description:     "WasmPlugin for extending Higress functionality",
+		},
+	})
+
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings for valid CRDs, got %v", warnings)
+	}
+}
+
+func TestCheckCRDVersionsWithClient_StorageVersionMismatch(t *testing.T) {
+	client := apiExtensionsFake.NewSimpleClientset(
+		&apiExtensionsV1.CustomResourceDefinition{
+			ObjectMeta: metaV1.ObjectMeta{
+				Name: "wasmplugins.extensions.higress.io",
+			},
+			Spec: apiExtensionsV1.CustomResourceDefinitionSpec{
+				Versions: []apiExtensionsV1.CustomResourceDefinitionVersion{
+					{
+						Name:    "v1alpha1",
+						Served:  true,
+						Storage: false,
+					},
+					{
+						Name:    "v1beta1",
+						Served:  true,
+						Storage: true,
+						Schema: &apiExtensionsV1.CustomResourceValidation{
+							OpenAPIV3Schema: &apiExtensionsV1.JSONSchemaProps{
+								Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+									"spec": {
+										Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+											"pluginName": {Type: "string"},
+											"url":        {Type: "string"},
+											"matchRules": {Type: "array"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	warnings := checkCRDVersionsWithClient(client.ApiextensionsV1().CustomResourceDefinitions(), []CRDVersionInfo{
+		{
+			Name:            "wasmplugins.extensions.higress.io",
+			ExpectedVersion: "v1alpha1",
+			RequiredFields:  []string{"spec.pluginName", "spec.url", "spec.matchRules"},
+			Description:     "WasmPlugin for extending Higress functionality",
+		},
+	})
+
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for storage version mismatch, got %d: %v", len(warnings), warnings)
+	}
+
+	expected := "storage version 'v1beta1'"
+	if got := warnings[0]; !strings.Contains(got, expected) {
+		t.Fatalf("expected warning to mention %q, got %q", expected, got)
+	}
+}
+
+func TestCheckCRDVersionsWithClient_ListError(t *testing.T) {
+	client := apiExtensionsFake.NewSimpleClientset()
+	client.PrependReactor("list", "customresourcedefinitions", func(action clientgotesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("boom")
+	})
+
+	warnings := checkCRDVersionsWithClient(client.ApiextensionsV1().CustomResourceDefinitions(), RequiredCRDs)
+
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for list error, got %d: %v", len(warnings), warnings)
+	}
+
+	expected := "Failed to list CRDs: boom"
+	if warnings[0] != expected {
+		t.Fatalf("expected %q, got %q", expected, warnings[0])
 	}
 }

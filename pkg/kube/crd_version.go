@@ -88,14 +88,18 @@ var RequiredCRDs = []CRDVersionInfo{
 // CheckCRDVersions checks if all required CRDs exist with correct versions
 // Returns a list of warning messages if any issues are found
 func CheckCRDVersions(config *rest.Config) []string {
-	warnings := []string{}
-
 	apiExtClientset, err := apiExtensionsClient.NewForConfig(config)
 	if err != nil {
 		return []string{fmt.Sprintf("Failed to create API extension client: %v", err)}
 	}
 
-	crdList, err := apiExtClientset.CustomResourceDefinitions().List(context.TODO(), metaV1.ListOptions{})
+	return checkCRDVersionsWithClient(apiExtClientset.CustomResourceDefinitions(), RequiredCRDs)
+}
+
+func checkCRDVersionsWithClient(client apiExtensionsClient.CustomResourceDefinitionInterface, requiredCRDs []CRDVersionInfo) []string {
+	warnings := []string{}
+
+	crdList, err := client.List(context.TODO(), metaV1.ListOptions{})
 	if err != nil {
 		return []string{fmt.Sprintf("Failed to list CRDs: %v", err)}
 	}
@@ -105,7 +109,7 @@ func CheckCRDVersions(config *rest.Config) []string {
 		crdMap[crdList.Items[i].Name] = &crdList.Items[i]
 	}
 
-	for _, required := range RequiredCRDs {
+	for _, required := range requiredCRDs {
 		crd, exists := crdMap[required.Name]
 		if !exists {
 			warnings = append(warnings, fmt.Sprintf(
@@ -115,39 +119,42 @@ func CheckCRDVersions(config *rest.Config) []string {
 			continue
 		}
 
-		// Check if expected version exists
-		versionFound := false
-		for _, version := range crd.Spec.Versions {
-			if version.Name == required.ExpectedVersion {
-				versionFound = true
-
-				// Check for required fields in schema
-				if version.Schema != nil && version.Schema.OpenAPIV3Schema != nil {
-					missingFields := checkRequiredFields(version.Schema.OpenAPIV3Schema, required.RequiredFields)
-					if len(missingFields) > 0 {
-						warnings = append(warnings, fmt.Sprintf(
-							"CRD '%s' version '%s' is missing required fields: %v. "+
-								"Please update CRDs to the latest version.",
-							required.Name, required.ExpectedVersion, missingFields,
-						))
-					}
-				} else if len(required.RequiredFields) > 0 {
-					// Schema is nil but we have required fields to check
-					warnings = append(warnings, fmt.Sprintf(
-						"CRD '%s' version '%s' has no schema configured; cannot verify required fields: %v. "+
-							"Please update CRDs to enable schema validation.",
-						required.Name, required.ExpectedVersion, required.RequiredFields,
-					))
-				}
-				break
-			}
+		storageVersion, found := getStorageVersion(crd)
+		if !found {
+			warnings = append(warnings, fmt.Sprintf(
+				"CRD '%s' has no storage version configured. Current versions: %v. "+
+					"Please update CRDs to the latest version.",
+				required.Name, getCRDVersions(crd),
+			))
+			continue
 		}
 
-		if !versionFound {
+		if storageVersion.Name != required.ExpectedVersion {
 			warnings = append(warnings, fmt.Sprintf(
-				"CRD '%s' does not have expected version '%s'. "+
-					"Current versions: %v. Please update CRDs to the latest version.",
-				required.Name, required.ExpectedVersion, getCRDVersions(crd),
+				"CRD '%s' does not have expected storage version '%s'. "+
+					"Current storage version is '%s'; available versions: %v. "+
+					"Please update CRDs to the latest version.",
+				required.Name, required.ExpectedVersion, storageVersion.Name, getCRDVersions(crd),
+			))
+			continue
+		}
+
+		// Check for required fields in the active storage schema.
+		if storageVersion.Schema != nil && storageVersion.Schema.OpenAPIV3Schema != nil {
+			missingFields := checkRequiredFields(storageVersion.Schema.OpenAPIV3Schema, required.RequiredFields)
+			if len(missingFields) > 0 {
+				warnings = append(warnings, fmt.Sprintf(
+					"CRD '%s' version '%s' is missing required fields: %v. "+
+						"Please update CRDs to the latest version.",
+					required.Name, required.ExpectedVersion, missingFields,
+				))
+			}
+		} else if len(required.RequiredFields) > 0 {
+			// Schema is nil but we have required fields to check
+			warnings = append(warnings, fmt.Sprintf(
+				"CRD '%s' version '%s' has no schema configured; cannot verify required fields: %v. "+
+					"Please update CRDs to enable schema validation.",
+				required.Name, required.ExpectedVersion, required.RequiredFields,
 			))
 		}
 	}
@@ -166,6 +173,15 @@ func checkRequiredFields(schema *apiExtensionsV1.JSONSchemaProps, requiredFields
 	}
 
 	return missing
+}
+
+func getStorageVersion(crd *apiExtensionsV1.CustomResourceDefinition) (*apiExtensionsV1.CustomResourceDefinitionVersion, bool) {
+	for i := range crd.Spec.Versions {
+		if crd.Spec.Versions[i].Storage {
+			return &crd.Spec.Versions[i], true
+		}
+	}
+	return nil, false
 }
 
 // fieldExistsInSchema checks if a field path exists in the schema
