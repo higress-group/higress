@@ -570,9 +570,12 @@ func TestCheckCRDVersionsWithClient_StorageVersionMismatch(t *testing.T) {
 		t.Fatalf("expected 1 warning for storage version mismatch, got %d: %v", len(warnings), warnings)
 	}
 
-	expected := "storage version 'v1beta1'"
-	if got := warnings[0]; !strings.Contains(got, expected) {
-		t.Fatalf("expected warning to mention %q, got %q", expected, got)
+	got := warnings[0]
+	if !strings.Contains(got, "expected storage version 'v1alpha1'") {
+		t.Fatalf("expected warning to mention expected storage version, got %q", got)
+	}
+	if !strings.Contains(got, "Current storage version is 'v1beta1'") {
+		t.Fatalf("expected warning to mention current storage version, got %q", got)
 	}
 }
 
