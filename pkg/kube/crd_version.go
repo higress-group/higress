@@ -17,86 +17,60 @@ package kube
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
+	crdmanifest "github.com/alibaba/higress/v2/api/kubernetes"
 	apiExtensionsV1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiExtensionsClient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 )
 
-// CRDVersionInfo contains expected CRD version information
+// CRDVersionInfo contains the expected CRD contract derived from the shipped manifest.
 type CRDVersionInfo struct {
 	Name            string
 	ExpectedVersion string
-	RequiredFields  []string
-	Description     string
+	StorageSchema   *apiExtensionsV1.JSONSchemaProps
 }
 
-// RequiredCRDs defines the CRD compatibility contract Higress expects at startup.
-//
-// The actual CRDs installed in the cluster are discovered at runtime in
-// CheckCRDVersions() through the apiextensions API. This explicit list remains
-// necessary because:
-//   - missing CRDs cannot be inferred from cluster state alone
-//   - version expectations come from the shipped Higress API/CRD contract
-//   - required field probes are feature-compatibility checks, not generic schema discovery
-//
-// NOTE: This list should be kept in sync with:
-//   - helm/core/crds/customresourcedefinitions.gen.yaml (CRD definitions)
-//   - api/extensions/v1alpha1/*.pb.go (API definitions)
-//   - api/networking/v1/*.pb.go (API definitions)
-//
-// When adding a new CRD:
-//  1. Add the CRD definition to helm/core/crds/customresourcedefinitions.gen.yaml
-//  2. Add the API definition to api/extensions/ or api/networking/
-//  3. Add an entry here with the expected version and required fields
-//  4. Update tests to verify the CRD
-//
-// CRD Information Sources:
-//   - Name: From CRD metadata.name in helm/core/crds/customresourcedefinitions.gen.yaml
-//   - ExpectedVersion: From CRD spec.versions[].name (the storage version)
-//   - RequiredFields: From CRD spec.versions[].schema.openAPIV3Schema.properties
-//   - Description: From API protobuf comments and CRD usage in code
-var RequiredCRDs = []CRDVersionInfo{
-	{
-		Name:            "wasmplugins.extensions.higress.io",
-		ExpectedVersion: "v1alpha1",
-		RequiredFields:  []string{"spec.pluginName", "spec.url", "spec.matchRules"},
-		Description:     "WasmPlugin for extending Higress functionality",
-		// Source: api/extensions/v1alpha1/wasmplugin.pb.go
-		// CRD: helm/core/crds/customresourcedefinitions.gen.yaml (line 7)
-	},
-	{
-		Name:            "http2rpcs.networking.higress.io",
-		ExpectedVersion: "v1",
-		RequiredFields:  []string{"spec.dubbo", "spec.grpc"},
-		Description:     "Http2Rpc for HTTP to RPC protocol conversion",
-		// Source: api/networking/v1/http_2_rpc.pb.go
-		// CRD: helm/core/crds/customresourcedefinitions.gen.yaml (line 150)
-	},
-	{
-		Name:            "mcpbridges.networking.higress.io",
-		ExpectedVersion: "v1",
-		RequiredFields:  []string{"spec.registries", "spec.proxies"},
-		Description:     "McpBridge for service registry integration (including Nacos 3 MCP Server)",
-		// Source: api/networking/v1/mcp_bridge.pb.go
-		// CRD: helm/core/crds/customresourcedefinitions.gen.yaml (line 237)
-	},
-}
+var optionalCRDFieldPaths = map[string][]string{}
 
 // CheckCRDVersions checks if all required CRDs exist with correct versions
 // Returns a list of warning messages if any issues are found
 func CheckCRDVersions(config *rest.Config) []string {
+	requiredCRDs, err := loadExpectedCRDContracts()
+	if err != nil {
+		return []string{fmt.Sprintf("Failed to load generated CRD contracts: %v", err)}
+	}
+
 	apiExtClientset, err := apiExtensionsClient.NewForConfig(config)
 	if err != nil {
 		return []string{fmt.Sprintf("Failed to create API extension client: %v", err)}
 	}
 
-	return checkCRDVersionsWithClient(apiExtClientset.CustomResourceDefinitions(), RequiredCRDs)
+	return checkCRDVersionsWithClient(apiExtClientset.CustomResourceDefinitions(), requiredCRDs, optionalCRDFieldPaths)
 }
 
-func checkCRDVersionsWithClient(client apiExtensionsClient.CustomResourceDefinitionInterface, requiredCRDs []CRDVersionInfo) []string {
+func loadExpectedCRDContracts() ([]CRDVersionInfo, error) {
+	contracts, err := crdmanifest.LoadCRDContracts()
+	if err != nil {
+		return nil, err
+	}
+
+	requiredCRDs := make([]CRDVersionInfo, 0, len(contracts))
+	for _, contract := range contracts {
+		requiredCRDs = append(requiredCRDs, CRDVersionInfo{
+			Name:            contract.Name,
+			ExpectedVersion: contract.ExpectedVersion,
+			StorageSchema:   contract.StorageSchema,
+		})
+	}
+
+	return requiredCRDs, nil
+}
+
+func checkCRDVersionsWithClient(client apiExtensionsClient.CustomResourceDefinitionInterface, requiredCRDs []CRDVersionInfo, optionalFieldPaths map[string][]string) []string {
 	warnings := []string{}
 
 	crdList, err := client.List(context.TODO(), metaV1.ListOptions{})
@@ -113,8 +87,8 @@ func checkCRDVersionsWithClient(client apiExtensionsClient.CustomResourceDefinit
 		crd, exists := crdMap[required.Name]
 		if !exists {
 			warnings = append(warnings, fmt.Sprintf(
-				"Required CRD '%s' not found. %s. Please apply the latest CRDs.",
-				required.Name, required.Description,
+				"Required CRD '%s' not found. Please apply the Higress CRDs that match this build.",
+				required.Name,
 			))
 			continue
 		}
@@ -139,22 +113,30 @@ func checkCRDVersionsWithClient(client apiExtensionsClient.CustomResourceDefinit
 			continue
 		}
 
-		// Check for required fields in the active storage schema.
-		if storageVersion.Schema != nil && storageVersion.Schema.OpenAPIV3Schema != nil {
-			missingFields := checkRequiredFields(storageVersion.Schema.OpenAPIV3Schema, required.RequiredFields)
-			if len(missingFields) > 0 {
-				warnings = append(warnings, fmt.Sprintf(
-					"CRD '%s' version '%s' is missing required fields: %v. "+
-						"Please update CRDs to the latest version.",
-					required.Name, required.ExpectedVersion, missingFields,
-				))
-			}
-		} else if len(required.RequiredFields) > 0 {
-			// Schema is nil but we have required fields to check
+		if storageVersion.Schema == nil || storageVersion.Schema.OpenAPIV3Schema == nil {
 			warnings = append(warnings, fmt.Sprintf(
-				"CRD '%s' version '%s' has no schema configured; cannot verify required fields: %v. "+
+				"CRD '%s' version '%s' has no schema configured; cannot verify the shipped Higress CRD contract. "+
 					"Please update CRDs to enable schema validation.",
-				required.Name, required.ExpectedVersion, required.RequiredFields,
+				required.Name, required.ExpectedVersion,
+			))
+			continue
+		}
+
+		if required.StorageSchema == nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"The shipped CRD contract for '%s' version '%s' has no storage schema. "+
+					"Please regenerate Higress CRD manifests for this build.",
+				required.Name, required.ExpectedVersion,
+			))
+			continue
+		}
+
+		missingFields := findMissingSchemaPaths(required.StorageSchema, storageVersion.Schema.OpenAPIV3Schema, optionalFieldPaths[required.Name])
+		if len(missingFields) > 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"CRD '%s' version '%s' is missing fields from the shipped Higress CRD schema: %v. "+
+					"Please update CRDs to the latest version.",
+				required.Name, required.ExpectedVersion, missingFields,
 			))
 		}
 	}
@@ -162,17 +144,74 @@ func checkCRDVersionsWithClient(client apiExtensionsClient.CustomResourceDefinit
 	return warnings
 }
 
-// checkRequiredFields checks if required fields exist in the schema
-func checkRequiredFields(schema *apiExtensionsV1.JSONSchemaProps, requiredFields []string) []string {
-	missing := []string{}
+func findMissingSchemaPaths(expectedSchema, liveSchema *apiExtensionsV1.JSONSchemaProps, ignoredPaths []string) []string {
+	expectedPaths := collectComparableSchemaPaths(expectedSchema)
+	missing := make([]string, 0, len(expectedPaths))
 
-	for _, field := range requiredFields {
-		if !fieldExistsInSchema(schema, field) {
+	for _, field := range expectedPaths {
+		if isIgnoredPath(field, ignoredPaths) {
+			continue
+		}
+		if !fieldExistsInSchema(liveSchema, field) {
 			missing = append(missing, field)
 		}
 	}
 
 	return missing
+}
+
+// checkRequiredFields is kept as a small helper for focused schema-path tests.
+func checkRequiredFields(schema *apiExtensionsV1.JSONSchemaProps, requiredFields []string) []string {
+	missing := make([]string, 0, len(requiredFields))
+	for _, field := range requiredFields {
+		if !fieldExistsInSchema(schema, field) {
+			missing = append(missing, field)
+		}
+	}
+	return missing
+}
+
+func collectComparableSchemaPaths(schema *apiExtensionsV1.JSONSchemaProps) []string {
+	if schema == nil {
+		return nil
+	}
+
+	specSchema, exists := schema.Properties["spec"]
+	if !exists {
+		return nil
+	}
+
+	paths := map[string]struct{}{}
+	collectSchemaPathsRecursive(&specSchema, "spec", paths)
+
+	collected := make([]string, 0, len(paths))
+	for path := range paths {
+		collected = append(collected, path)
+	}
+	sort.Strings(collected)
+	return collected
+}
+
+func collectSchemaPathsRecursive(schema *apiExtensionsV1.JSONSchemaProps, path string, paths map[string]struct{}) {
+	if schema == nil {
+		return
+	}
+
+	if schema.XPreserveUnknownFields != nil && *schema.XPreserveUnknownFields {
+		paths[path] = struct{}{}
+		return
+	}
+
+	for name, prop := range schema.Properties {
+		childPath := path + "." + name
+		paths[childPath] = struct{}{}
+
+		propCopy := prop
+		if propCopy.Items != nil && propCopy.Items.Schema != nil {
+			collectSchemaPathsRecursive(propCopy.Items.Schema, childPath, paths)
+		}
+		collectSchemaPathsRecursive(&propCopy, childPath, paths)
+	}
 }
 
 func getStorageVersion(crd *apiExtensionsV1.CustomResourceDefinition) (*apiExtensionsV1.CustomResourceDefinitionVersion, bool) {
@@ -182,6 +221,15 @@ func getStorageVersion(crd *apiExtensionsV1.CustomResourceDefinition) (*apiExten
 		}
 	}
 	return nil, false
+}
+
+func isIgnoredPath(path string, ignoredPaths []string) bool {
+	for _, ignored := range ignoredPaths {
+		if path == ignored || strings.HasPrefix(path, ignored+".") {
+			return true
+		}
+	}
+	return false
 }
 
 // fieldExistsInSchema checks if a field path exists in the schema

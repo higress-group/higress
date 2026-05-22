@@ -414,64 +414,47 @@ func TestCRDVersionHelpers_NilSchema(t *testing.T) {
 }
 
 func TestRequiredCRDsDefinition(t *testing.T) {
-	// Test that RequiredCRDs is properly defined
-	if len(RequiredCRDs) == 0 {
-		t.Error("RequiredCRDs should not be empty")
+	contracts, err := loadExpectedCRDContracts()
+	if err != nil {
+		t.Fatalf("loadExpectedCRDContracts() returned error: %v", err)
 	}
 
-	// Test that each CRD has required fields
-	for _, crd := range RequiredCRDs {
+	if len(contracts) == 0 {
+		t.Fatal("expected manifest-derived CRD contracts to be non-empty")
+	}
+
+	for _, crd := range contracts {
 		if crd.Name == "" {
 			t.Error("CRD Name should not be empty")
 		}
 		if crd.ExpectedVersion == "" {
 			t.Error("CRD ExpectedVersion should not be empty")
 		}
-		if crd.Description == "" {
-			t.Error("CRD Description should not be empty")
+		if crd.StorageSchema == nil {
+			t.Errorf("CRD %s should have a storage schema", crd.Name)
 		}
-		// RequiredFields can be empty for some CRDs
 	}
 
-	// Test specific known CRDs - verify they exist with correct properties
-	// Note: This test intentionally allows additional CRDs to be added to RequiredCRDs
-	// without breaking the test. It only verifies that the known CRDs have the expected configuration.
-	expectedCRDs := map[string]struct {
-		version string
-		fields  int
-	}{
-		"wasmplugins.extensions.higress.io": {version: "v1alpha1", fields: 3},
-		"http2rpcs.networking.higress.io":   {version: "v1", fields: 2},
-		"mcpbridges.networking.higress.io":  {version: "v1", fields: 2},
+	expectedCRDs := map[string]string{
+		"wasmplugins.extensions.higress.io": "v1alpha1",
+		"http2rpcs.networking.higress.io":   "v1",
+		"mcpbridges.networking.higress.io":  "v1",
 	}
 
-	// Build a map of actual CRDs for easy lookup
 	actualCRDs := make(map[string]CRDVersionInfo)
-	for _, crd := range RequiredCRDs {
+	for _, crd := range contracts {
 		actualCRDs[crd.Name] = crd
 	}
 
-	// Verify each expected CRD exists and has correct properties
-	for name, expected := range expectedCRDs {
+	for name, expectedVersion := range expectedCRDs {
 		actual, found := actualCRDs[name]
 		if !found {
-			t.Errorf("Expected CRD %s not found in RequiredCRDs", name)
+			t.Errorf("Expected CRD %s not found in manifest-derived contracts", name)
 			continue
 		}
 
-		if actual.ExpectedVersion != expected.version {
-			t.Errorf("CRD %s: expected version %s, got %s", name, expected.version, actual.ExpectedVersion)
-		}
-
-		if len(actual.RequiredFields) != expected.fields {
-			t.Errorf("CRD %s: expected %d required fields, got %d", name, expected.fields, len(actual.RequiredFields))
-		}
-	}
-
-	// Optional: Log additional CRDs (not an error, just informational)
-	for name := range actualCRDs {
-		if _, expected := expectedCRDs[name]; !expected {
-			t.Logf("Info: Additional CRD found in RequiredCRDs: %s", name)
+		if actual.ExpectedVersion != expectedVersion {
+			t.Errorf("CRD %s: expected version %s, got %s", name, expectedVersion, actual.ExpectedVersion)
 		}
 	}
 }
@@ -511,10 +494,19 @@ func TestCheckCRDVersionsWithClient_AllValid(t *testing.T) {
 		{
 			Name:            "wasmplugins.extensions.higress.io",
 			ExpectedVersion: "v1alpha1",
-			RequiredFields:  []string{"spec.pluginName", "spec.url", "spec.matchRules"},
-			Description:     "WasmPlugin for extending Higress functionality",
+			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
+				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+					"spec": {
+						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+							"pluginName": {Type: "string"},
+							"url":        {Type: "string"},
+							"matchRules": {Type: "array"},
+						},
+					},
+				},
+			},
 		},
-	})
+	}, nil)
 
 	if len(warnings) != 0 {
 		t.Fatalf("expected no warnings for valid CRDs, got %v", warnings)
@@ -561,10 +553,19 @@ func TestCheckCRDVersionsWithClient_StorageVersionMismatch(t *testing.T) {
 		{
 			Name:            "wasmplugins.extensions.higress.io",
 			ExpectedVersion: "v1alpha1",
-			RequiredFields:  []string{"spec.pluginName", "spec.url", "spec.matchRules"},
-			Description:     "WasmPlugin for extending Higress functionality",
+			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
+				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+					"spec": {
+						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+							"pluginName": {Type: "string"},
+							"url":        {Type: "string"},
+							"matchRules": {Type: "array"},
+						},
+					},
+				},
+			},
 		},
-	})
+	}, nil)
 
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 warning for storage version mismatch, got %d: %v", len(warnings), warnings)
@@ -585,7 +586,21 @@ func TestCheckCRDVersionsWithClient_ListError(t *testing.T) {
 		return true, nil, errors.New("boom")
 	})
 
-	warnings := checkCRDVersionsWithClient(client.ApiextensionsV1().CustomResourceDefinitions(), RequiredCRDs)
+	warnings := checkCRDVersionsWithClient(client.ApiextensionsV1().CustomResourceDefinitions(), []CRDVersionInfo{
+		{
+			Name:            "wasmplugins.extensions.higress.io",
+			ExpectedVersion: "v1alpha1",
+			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
+				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+					"spec": {
+						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+							"pluginName": {Type: "string"},
+						},
+					},
+				},
+			},
+		},
+	}, nil)
 
 	if len(warnings) != 1 {
 		t.Fatalf("expected 1 warning for list error, got %d: %v", len(warnings), warnings)
@@ -594,5 +609,117 @@ func TestCheckCRDVersionsWithClient_ListError(t *testing.T) {
 	expected := "Failed to list CRDs: boom"
 	if warnings[0] != expected {
 		t.Fatalf("expected %q, got %q", expected, warnings[0])
+	}
+}
+
+func TestCheckCRDVersionsWithClient_MissingManifestField(t *testing.T) {
+	client := apiExtensionsFake.NewSimpleClientset(
+		&apiExtensionsV1.CustomResourceDefinition{
+			ObjectMeta: metaV1.ObjectMeta{
+				Name: "wasmplugins.extensions.higress.io",
+			},
+			Spec: apiExtensionsV1.CustomResourceDefinitionSpec{
+				Versions: []apiExtensionsV1.CustomResourceDefinitionVersion{
+					{
+						Name:    "v1alpha1",
+						Served:  true,
+						Storage: true,
+						Schema: &apiExtensionsV1.CustomResourceValidation{
+							OpenAPIV3Schema: &apiExtensionsV1.JSONSchemaProps{
+								Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+									"spec": {
+										Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+											"pluginName": {Type: "string"},
+											"url":        {Type: "string"},
+											// matchRules intentionally missing
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	warnings := checkCRDVersionsWithClient(client.ApiextensionsV1().CustomResourceDefinitions(), []CRDVersionInfo{
+		{
+			Name:            "wasmplugins.extensions.higress.io",
+			ExpectedVersion: "v1alpha1",
+			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
+				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+					"spec": {
+						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+							"pluginName": {Type: "string"},
+							"url":        {Type: "string"},
+							"matchRules": {Type: "array"},
+						},
+					},
+				},
+			},
+		},
+	}, nil)
+
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for missing schema field, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "spec.matchRules") {
+		t.Fatalf("expected warning to mention missing spec.matchRules, got %q", warnings[0])
+	}
+}
+
+func TestCheckCRDVersionsWithClient_OptionalPathBypass(t *testing.T) {
+	client := apiExtensionsFake.NewSimpleClientset(
+		&apiExtensionsV1.CustomResourceDefinition{
+			ObjectMeta: metaV1.ObjectMeta{
+				Name: "wasmplugins.extensions.higress.io",
+			},
+			Spec: apiExtensionsV1.CustomResourceDefinitionSpec{
+				Versions: []apiExtensionsV1.CustomResourceDefinitionVersion{
+					{
+						Name:    "v1alpha1",
+						Served:  true,
+						Storage: true,
+						Schema: &apiExtensionsV1.CustomResourceValidation{
+							OpenAPIV3Schema: &apiExtensionsV1.JSONSchemaProps{
+								Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+									"spec": {
+										Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+											"pluginName": {Type: "string"},
+											"url":        {Type: "string"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	warnings := checkCRDVersionsWithClient(client.ApiextensionsV1().CustomResourceDefinitions(), []CRDVersionInfo{
+		{
+			Name:            "wasmplugins.extensions.higress.io",
+			ExpectedVersion: "v1alpha1",
+			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
+				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+					"spec": {
+						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
+							"pluginName": {Type: "string"},
+							"url":        {Type: "string"},
+							"matchRules": {Type: "array"},
+						},
+					},
+				},
+			},
+		},
+	}, map[string][]string{
+		"wasmplugins.extensions.higress.io": {"spec.matchRules"},
+	})
+
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings when missing field is configured optional, got %v", warnings)
 	}
 }
