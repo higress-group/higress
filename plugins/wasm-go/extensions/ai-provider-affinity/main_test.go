@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/tidwall/gjson"
@@ -110,23 +111,32 @@ func TestSelectCluster_Consistency(t *testing.T) {
 }
 
 func TestSelectCluster_Distribution(t *testing.T) {
+	clusterA := "outbound|443||llm-a.internal.dns"
+	clusterB := "outbound|443||llm-b.internal.dns"
 	slots := buildSlots([]provider{
-		{Cluster: "outbound|443||llm-a.internal.dns", Weight: 70},
-		{Cluster: "outbound|443||llm-a.internal.dns", Weight: 30},
+		{Cluster: clusterA, Weight: 70},
+		{Cluster: clusterB, Weight: 30},
 	})
 
-	counts := map[string]int{}
-	consumers := []string{
-		"alice", "bob", "carol", "dave", "eve",
-		"frank", "grace", "heidi", "ivan", "judy",
-		"mallory", "niaj", "olivia", "peggy", "rupert",
-		"sybil", "trent", "victor", "walter", "wendy",
+	hasA, hasB := false, false
+	for _, c := range slots {
+		switch c {
+		case clusterA:
+			hasA = true
+		case clusterB:
+			hasB = true
+		}
 	}
-	for _, c := range consumers {
-		counts[selectCluster(slots, c)]++
+	if !hasA || !hasB {
+		t.Fatalf("weight-expanded slots must include both clusters, hasA=%v hasB=%v", hasA, hasB)
 	}
-	if len(counts) < 2 {
-		t.Errorf("expected distribution across at least 2 clusters, got %v", counts)
+
+	seen := map[string]struct{}{}
+	for i := 0; i < 256 && len(seen) < 2; i++ {
+		seen[selectCluster(slots, fmt.Sprintf("consumer-%d", i))] = struct{}{}
+	}
+	if len(seen) < 2 {
+		t.Errorf("expected hash routing to reach at least 2 clusters, got %v", seen)
 	}
 }
 
