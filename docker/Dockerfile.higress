@@ -6,7 +6,7 @@ ARG BASE_VERSION=latest
 
 ARG HUB=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress
 
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 
 # The following section is used as base image if BASE_DISTRIBUTION=debug
 # This base image is provided by istio, see: https://github.com/istio/istio/blob/master/docker/Dockerfile.base
