@@ -19,6 +19,27 @@ const (
 	HeaderOriginalHost = "X-ENVOY-ORIGINAL-HOST"
 	HeaderOriginalAuth = "X-HI-ORIGINAL-AUTH"
 
+	// HeaderHigressFallbackFrom is set by Envoy custom_response's RedirectPolicy
+	// on internal_redirect (request_headers_to_add) and survives the redirect's
+	// mutateRequestHeaders pass (it is NOT in Envoy's hardcoded strip list). So
+	// its presence at the wasm boundary is a usable signal that the current
+	// filter-chain pass is an internal_redirect re-entry within this gateway.
+	//
+	// SAFETY DEPENDENCY: this header is NOT spoofing-proof unless the listener
+	// lists it in internal_only_headers. An upstream gateway that is itself in
+	// the middle of an internal_redirect chain may forward this header through
+	// to this gateway, causing this gateway's first hop to be misclassified as
+	// a re-entry. Operators relying on cascaded ai-proxy gateways should add
+	// `x-higress-fallback-from` and `x-hi-original-auth` to the listener's
+	// internal_only_headers list as defense-in-depth.
+	//
+	// Note: x-envoy-original-url (which Envoy sets on every internal_redirect
+	// in router.cc) is NOT usable here, because Envoy's recreateStream re-runs
+	// mutateRequestHeaders on the redirected stream and strips x-envoy-original-url
+	// from the hardcoded "headers to be stripped from edge AND intermediate-hop
+	// external requests" list — so wasm filters never see it on a redirect.
+	HeaderHigressFallbackFrom = "x-higress-fallback-from"
+
 	MimeTypeTextPlain       = "text/plain"
 	MimeTypeApplicationJson = "application/json"
 )
