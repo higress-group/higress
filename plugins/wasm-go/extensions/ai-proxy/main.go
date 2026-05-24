@@ -158,10 +158,38 @@ func initContext(ctx wrapper.HttpContext) {
 	for _, originHeader := range headerToOriginalHeaderMapping {
 		_ = proxywasm.RemoveHttpRequestHeader(originHeader)
 	}
-	originalAuth, _ := proxywasm.GetHttpRequestHeader(util.HeaderOriginalAuth)
-	if originalAuth == "" {
+
+	// Distinguish "first hop into this gateway" from "internal_redirect re-entry".
+	//
+	// Signal: x-higress-fallback-from. It is set by Envoy custom_response's
+	// RedirectPolicy on every internal_redirect within this gateway, and it
+	// survives mutateRequestHeaders on the redirected stream (it is NOT in
+	// Envoy's hardcoded strip list).
+	//
+	// Absence  => first hop. Distrust any incoming X-HI-ORIGINAL-AUTH — it may
+	//             have been set by a client or by an upstream cascaded gateway
+	//             running its own ai-proxy. Re-anchor the saved value from the
+	//             request's current Authorization, which is what this gateway
+	//             should treat as the "original" credential for later
+	//             internal_redirect hops.
+	// Presence => internal_redirect re-entry within this gateway. Leave
+	//             X-HI-ORIGINAL-AUTH alone — it preserves the value this gateway's
+	//             ai-proxy wrote on the previous pass, which key-auth needs for
+	//             re-authentication after Authorization has been replaced with
+	//             the upstream apiToken.
+	//
+	// SAFETY DEPENDENCY: this signal is reliable only when external callers
+	// cannot supply x-higress-fallback-from. For cascaded deployments where an
+	// upstream gateway may itself be in an internal_redirect chain when forwarding
+	// to this gateway, list x-higress-fallback-from (and x-hi-original-auth) in
+	// the HCM internal_only_headers as defense-in-depth.
+	fallbackFrom, _ := proxywasm.GetHttpRequestHeader(util.HeaderHigressFallbackFrom)
+	if fallbackFrom == "" {
+		_ = proxywasm.RemoveHttpRequestHeader(util.HeaderOriginalAuth)
 		value, _ := proxywasm.GetHttpRequestHeader(util.HeaderAuthorization)
-		ctx.SetContext(ctxOriginalAuth, value)
+		if value != "" {
+			ctx.SetContext(ctxOriginalAuth, value)
+		}
 	}
 }
 

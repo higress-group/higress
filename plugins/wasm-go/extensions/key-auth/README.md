@@ -32,7 +32,8 @@ description: Key 认证插件配置参考
 
 | 名称         | 数据类型 | 填写要求 | 默认值 | 描述                     |
 | ------------ | -------- | -------- | ------ | ------------------------ |
-| `credential` | string   | 必填     | -      | 配置该consumer的访问凭证 |
+| `credential` | string   | `credential` 和 `credentials` 二选一 | -      | 配置该consumer的一个访问凭证 |
+| `credentials` | array of string | `credential` 和 `credentials` 二选一 | -      | 配置该consumer的多个访问凭证，不能与 `credential` 同时配置 |
 | `name`       | string   | 必填     | -      | 配置该consumer的名称     |
 
 ### 鉴权配置（非必需）
@@ -45,7 +46,7 @@ description: Key 认证插件配置参考
 
 ### 全局配置认证和路由粒度进行鉴权
 
-以下配置将对网关特定路由或域名开启Key Auth认证和鉴权。credential字段不能重复。
+以下配置将对网关特定路由或域名开启Key Auth认证和鉴权。credential 或 credentials 中的访问凭证不能重复。
 
 在实例级别做如下插件配置：
 
