@@ -51,6 +51,7 @@ Plugin execution priority: `100`
 | `protocol`       | string                 | Optional    | -       | API contract provided by the plugin. Currently supports the following values: openai (default, uses OpenAI's interface contract), original (uses the raw interface contract of the target service provider). **Note: Auto protocol detection is now supported, no need to configure this field to support both OpenAI and Claude protocols**                                                                                                                                                                               |
 | `context`        | object                 | Optional    | -       | Configuration for AI conversation context information                                                                                                                                                                                                                                                                                                                                     |
 | `customSettings` | array of customSetting | Optional    | -       | Specifies overrides or fills parameters for AI requests                                                                                                                                                                                                                                                                                                                                   |
+| `failover`       | object                 | Optional    | -       | Configures apiToken failover. When an apiToken becomes unavailable, it is removed from the available token list and restored after a successful health check or after the cooldown period expires.                                                                                                                                                                                        |
 | `subPath`        | string                 | Optional    | -       | If subPath is configured, the prefix will be removed from the request path before further processing.                                                                                                                                                                                                                                                                                     |
 | `contextCleanupCommands` | array of string | Optional    | -       | List of context cleanup commands. When a user message in the request exactly matches any of the configured commands, that message and all non-system messages before it will be removed, keeping only system messages and messages after the command. This enables users to actively clear conversation history.                                                                           |
 
@@ -84,6 +85,21 @@ The `custom-setting` adheres to the following table, replacing the corresponding
 If raw mode is enabled, `custom-setting` will directly alter the JSON content using the input `name` and `value`, without any restrictions or modifications to the parameter names.
 For most protocols, `custom-setting` modifies or fills parameters at the root path of the JSON content. For the `qwen` protocol, ai-proxy configures under the `parameters` subpath. For the `gemini` protocol, it configures under the `generation_config` subpath.
 
+**Details for the `failover` configuration fields:**
+
+| Name                  | Data Type       | Requirement                                      | Default        | Description                                                                                                          |
+| --------------------- | --------------- | ------------------------------------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `enabled`             | bool            | Optional                                         | false          | Whether to enable apiToken failover.                                                                                 |
+| `failureThreshold`    | int             | Optional                                         | 3              | Number of consecutive request failures required before triggering failover.                                           |
+| `successThreshold`    | int             | Optional                                         | 1              | Number of successful health checks required before restoring an unavailable apiToken.                                 |
+| `healthCheckInterval` | int             | Optional                                         | 5000           | Health check interval in milliseconds.                                                                               |
+| `healthCheckTimeout`  | int             | Optional                                         | 5000           | Health check timeout in milliseconds.                                                                                |
+| `healthCheckModel`    | string          | Required when failover is enabled unless `cooldownDuration` is configured | - | Model used for health checks. When configured, unavailable apiTokens can be restored after passing health checks.     |
+| `cooldownDuration`    | int             | Required when failover is enabled unless `healthCheckModel` is configured | 0 | Cooldown duration in milliseconds after an apiToken becomes unavailable. When greater than 0, the apiToken is restored automatically after the cooldown expires. |
+| `failoverOnStatus`    | array of string | Optional                                         | ["4.*", "5.*"] | Response status codes that trigger failover for original requests. Regular expressions are supported.                 |
+
+At least one of `healthCheckModel` and `cooldownDuration` must be configured when failover is enabled. If both are configured, an apiToken can be restored either by a successful health check or after the cooldown period expires.
+
 ### Provider-Specific Configurations
 
 #### OpenAI
@@ -99,18 +115,20 @@ For OpenAI, the corresponding `type` is `openai`. Its unique configuration field
 
 For Azure OpenAI, the corresponding `type` is `azure`. Its unique configuration field is:
 
-| Name                 | Data Type   | Filling Requirements | Default Value | Description                                                                                                    |
-|---------------------|-------------|----------------------|---------------|---------------------------------------------------------------------------------------------------------------|
-| `azureServiceUrl`   | string      | Required             | -             | The URL of the Azure OpenAI service, must include the `api-version` query parameter.                           |
+| Name                 | Data Type   | Filling Requirements | Default Value | Description                                                                                                                               |
+|---------------------|-------------|----------------------|---------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `azureServiceUrl`   | string      | Required             | -             | Azure OpenAI service URL. The `/openai/v1` path does not require a dated `api-version`; legacy paths or resource-only mode still require it. |
 
 **Note:**
 1. Azure OpenAI only supports configuring one API Token.
-2. `azureServiceUrl` accepts three formats：
-    1. Full URL. e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME/chat/completions?api-version=2024-02-15-preview`
+2. `azureServiceUrl` accepts the new `/openai/v1` format and legacy formats:
+    1. v1 URL. e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1`
+        - The plugin uses this v1 base URL directly and does not append a dated `api-version`.
+    2. Legacy full URL. e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME/chat/completions?api-version=2024-02-15-preview`
         - Request will be forwarded to the given URL, no matter what original path the request uses.
-    2. Resource name + deployment name，e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME?api-version=2024-02-15-preview`
+    3. Legacy resource name + deployment name, e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME?api-version=2024-02-15-preview`
         - The path will be updated based on the actual request path, leaving the deployment name unchanged. APIs with no deployment name in the path are also support.
-    3. Resource name only.e.g.`https://YOUR_RESOURCE_NAME.openai.azure.com?api-version=2024-02-15-preview`
+    4. Legacy resource name only, e.g. `https://YOUR_RESOURCE_NAME.openai.azure.com?api-version=2024-02-15-preview`
         - The path will be updated based on the actual request path. The deployment name will be filled based on the model name in the request and the configured model mapping rule. APIs with no deployment name in the path are also support.
 
 #### Moonshot
@@ -337,7 +355,7 @@ provider:
   type: azure
   apiTokens:
     - "YOUR_AZURE_OPENAI_API_TOKEN"
-  azureServiceUrl: "https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME/chat/completions?api-version=2024-02-15-preview",
+  azureServiceUrl: "https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1",
 ```
 
 **Request Example**
@@ -2082,6 +2100,8 @@ Vertex AI supported resolutions (imageSize): `1k`, `2k`, `4k`
 - If you need model mapping (e.g., mapping `dall-e-3` to a Gemini model), configure `modelMapping`
 
 ### Utilizing OpenAI Protocol Proxy for AWS Bedrock Services
+
+For Bedrock, `/v1/chat/completions` continues to be converted to the Bedrock Runtime Converse API. `/v1/messages` is forwarded directly to the Bedrock Mantle Anthropic Messages API: `https://bedrock-mantle.{awsRegion}.api.aws/anthropic/v1/messages`. The request body, response body, and streaming SSE keep the native Anthropic format; the plugin only applies model mapping and authentication handling. When `apiTokens` are used with Mantle, the plugin sends the token in the `x-api-key` request header.
 
 AWS Bedrock supports two authentication methods:
 

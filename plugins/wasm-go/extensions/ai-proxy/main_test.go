@@ -368,6 +368,12 @@ func TestZhipuAI(t *testing.T) {
 	test.RunZhipuAIClaudeAutoConversionTests(t)
 }
 
+func TestCooldown(t *testing.T) {
+	test.RunCooldownParseConfigTests(t)
+	test.RunCooldownOnHttpResponseHeadersTests(t)
+	test.RunCooldownRecoveryTests(t)
+}
+
 func TestDeepSeek(t *testing.T) {
 	test.RunDeepSeekParseConfigTests(t)
 	test.RunDeepSeekOnHttpRequestHeadersTests(t)
