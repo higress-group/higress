@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tidwall/sjson"
 )
@@ -920,3 +921,377 @@ func TestRestServerSecurityFallback(t *testing.T) {
 
 	t.Logf("REST server security fallback test completed successfully")
 }
+
+// ---------------------------------------------------------------------------
+// parseIP
+// ---------------------------------------------------------------------------
+
+func TestParseIP(t *testing.T) {
+	cases := []struct {
+		name       string
+		source     string
+		fromHeader bool
+		want       string
+	}{
+		{"ipv4 only", "10.0.0.1", false, "10.0.0.1"},
+		{"ipv4 with port", "10.0.0.1:8080", false, "10.0.0.1"},
+		{"ipv4 with leading whitespace", " 10.0.0.1:80", false, "10.0.0.1"},
+		{"ipv4 X-Forwarded-For first hop", "10.0.0.1, 10.0.0.2, 10.0.0.3", true, "10.0.0.1"},
+		{"ipv4 X-Forwarded-For with spaces", " 10.0.0.1 , 10.0.0.2 ", true, "10.0.0.1"},
+		{"ipv6 bracketed with port", "[2001:db8::1]:443", false, "2001:db8::1"},
+		{"ipv6 bracketed no port", "[2001:db8::1]", false, "2001:db8::1"},
+		{"ipv6 bare passes through", "2001:db8::1", false, "2001:db8::1"},
+		{"empty string", "", false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := parseIP(c.source, c.fromHeader)
+			assert.Equal(t, c.want, got)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseTemplates — fill remaining error branches
+// ---------------------------------------------------------------------------
+
+func TestParseTemplates_DirectResponseMissingBody(t *testing.T) {
+	// No RequestTemplate.URL → direct-response mode. ResponseTemplate.Body must be set.
+	tool := RestTool{}
+	err := tool.parseTemplates()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "direct response mode")
+	}
+}
+
+func TestParseTemplates_DirectResponseWithBodyOk(t *testing.T) {
+	tool := RestTool{
+		ResponseTemplate: RestToolResponseTemplate{Body: "{{.}}"},
+	}
+	assert.NoError(t, tool.parseTemplates())
+	assert.True(t, tool.isDirectResponseTool)
+}
+
+func TestParseTemplates_URLTemplateParseError(t *testing.T) {
+	tool := RestTool{
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "http://x/{{ .unclosed ", // missing closing braces
+			Method: "GET",
+		},
+	}
+	err := tool.parseTemplates()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "URL template")
+	}
+}
+
+func TestParseTemplates_HeaderTemplateParseError(t *testing.T) {
+	tool := RestTool{
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "http://x",
+			Method: "GET",
+			Headers: []RestToolHeader{
+				{Key: "X-Bad", Value: "{{ .unclosed "},
+			},
+		},
+	}
+	err := tool.parseTemplates()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "header template")
+	}
+}
+
+func TestParseTemplates_BodyTemplateParseError(t *testing.T) {
+	tool := RestTool{
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "http://x",
+			Method: "POST",
+			Body:   "{{ .unclosed ",
+		},
+	}
+	err := tool.parseTemplates()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "body template")
+	}
+}
+
+func TestParseTemplates_ResponseTemplateParseError(t *testing.T) {
+	tool := RestTool{
+		RequestTemplate: RestToolRequestTemplate{URL: "http://x", Method: "GET"},
+		ResponseTemplate: RestToolResponseTemplate{
+			Body: "{{ .unclosed ",
+		},
+	}
+	err := tool.parseTemplates()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "response template")
+	}
+}
+
+func TestParseTemplates_ErrorResponseTemplateParseError(t *testing.T) {
+	tool := RestTool{
+		RequestTemplate:       RestToolRequestTemplate{URL: "http://x", Method: "GET"},
+		ErrorResponseTemplate: "{{ .unclosed ",
+	}
+	err := tool.parseTemplates()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "error response template")
+	}
+}
+
+func TestParseTemplates_HeaderWithEmptyKeySkipped(t *testing.T) {
+	tool := RestTool{
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "http://x",
+			Method: "GET",
+			Headers: []RestToolHeader{
+				{Key: "", Value: "ignored"},
+				{Key: "X-Real", Value: "real"},
+			},
+		},
+	}
+	assert.NoError(t, tool.parseTemplates())
+	_, hasReal := tool.parsedHeaderTemplates["X-Real"]
+	assert.True(t, hasReal)
+	_, hasEmpty := tool.parsedHeaderTemplates[""]
+	assert.False(t, hasEmpty)
+}
+
+func TestParseTemplates_PopulatesArgPositions(t *testing.T) {
+	tool := RestTool{
+		RequestTemplate: RestToolRequestTemplate{URL: "http://x", Method: "GET"},
+		ResponseTemplate: RestToolResponseTemplate{Body: "{{.}}"},
+		Args: []RestToolArg{
+			{Name: "q", Position: "QUERY"},  // lower-cased in argPositions
+			{Name: "h", Position: "Header"},
+			{Name: "noPos"},                   // no position → not stored
+		},
+	}
+	require := assert.New(t)
+	require.NoError(tool.parseTemplates())
+	require.Equal("query", tool.argPositions["q"])
+	require.Equal("header", tool.argPositions["h"])
+	_, ok := tool.argPositions["noPos"]
+	require.False(ok)
+}
+
+// ---------------------------------------------------------------------------
+// executeTemplate — nil + execution error
+// ---------------------------------------------------------------------------
+
+func TestExecuteTemplate_NilReturnsError(t *testing.T) {
+	_, err := executeTemplate(nil, []byte(`{}`))
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RestMCPServer accessors — GetSecurityScheme, GetPassthroughAuthHeader,
+// AddMCPTool, GetConfig, GetToolConfig
+// ---------------------------------------------------------------------------
+
+func TestRestServer_AddMCPTool_DelegatesToBase(t *testing.T) {
+	s := NewRestMCPServer("rest")
+	tool := &stubTool{desc: "x"}
+	ret := s.AddMCPTool("plain", tool)
+	assert.Same(t, s, ret)
+	got, ok := s.GetMCPTools()["plain"]
+	assert.True(t, ok)
+	assert.Same(t, tool, got)
+}
+
+func TestRestServer_GetSecurityScheme_HitAndMiss(t *testing.T) {
+	s := NewRestMCPServer("rest")
+	scheme := SecurityScheme{ID: "K", Type: "apiKey", In: "header", Name: "X-K"}
+	s.AddSecurityScheme(scheme)
+
+	got, ok := s.GetSecurityScheme("K")
+	assert.True(t, ok)
+	assert.Equal(t, "K", got.ID)
+
+	_, ok = s.GetSecurityScheme("missing")
+	assert.False(t, ok)
+}
+
+func TestRestServer_PassthroughAuthHeader(t *testing.T) {
+	s := NewRestMCPServer("rest")
+	assert.False(t, s.GetPassthroughAuthHeader())
+	s.SetPassthroughAuthHeader(true)
+	assert.True(t, s.GetPassthroughAuthHeader())
+}
+
+func TestRestServer_GetToolConfig(t *testing.T) {
+	s := NewRestMCPServer("rest")
+	require.NoError(t, s.AddRestTool(RestTool{
+		Name:             "t",
+		ResponseTemplate: RestToolResponseTemplate{Body: "{{.}}"},
+	}))
+	cfg, ok := s.GetToolConfig("t")
+	assert.True(t, ok)
+	assert.Equal(t, "t", cfg.Name)
+
+	_, ok = s.GetToolConfig("missing")
+	assert.False(t, ok)
+}
+
+// ---------------------------------------------------------------------------
+// RestMCPServer.Clone — independence
+// ---------------------------------------------------------------------------
+
+func TestRestServer_Clone_Independence(t *testing.T) {
+	orig := NewRestMCPServer("rest")
+	orig.SetPassthroughAuthHeader(true)
+	orig.SetConfig([]byte(`{"v":1}`))
+	orig.AddSecurityScheme(SecurityScheme{ID: "K", Type: "apiKey", In: "header", Name: "X"})
+	require.NoError(t, orig.AddRestTool(RestTool{
+		Name:             "t",
+		ResponseTemplate: RestToolResponseTemplate{Body: "{{.}}"},
+	}))
+
+	clonedI := orig.Clone()
+	require.NotNil(t, clonedI)
+	cloned, ok := clonedI.(*RestMCPServer)
+	require.True(t, ok)
+
+	// Mutate the original: cloned must not see the change.
+	orig.AddSecurityScheme(SecurityScheme{ID: "K2", Type: "apiKey", In: "header", Name: "Y"})
+	_, hasK2 := cloned.GetSecurityScheme("K2")
+	assert.False(t, hasK2, "cloned server must not see security scheme added to original after Clone")
+
+	// Tools map was deep-copied at Clone time.
+	_, hasT := cloned.GetToolConfig("t")
+	assert.True(t, hasT)
+}
+
+// ---------------------------------------------------------------------------
+// RestMCPTool.Create — type coercion matrix
+// ---------------------------------------------------------------------------
+
+func newRestToolForCreate(t *testing.T) *RestMCPTool {
+	t.Helper()
+	tool := RestTool{
+		Name: "t",
+		Args: []RestToolArg{
+			{Name: "b", Type: "boolean"},
+			{Name: "i", Type: "integer"},
+			{Name: "n", Type: "number"},
+			{Name: "s", Type: "string"},
+			{Name: "d", Type: "integer", Default: 7},
+		},
+		ResponseTemplate: RestToolResponseTemplate{Body: "{{.}}"},
+	}
+	require.NoError(t, tool.parseTemplates())
+	return &RestMCPTool{
+		serverName: "rest",
+		name:       "t",
+		toolConfig: tool,
+	}
+}
+
+func TestRestMCPTool_Create_BooleanCoercion(t *testing.T) {
+	tool := newRestToolForCreate(t)
+	// Boolean from native true, native false, string "true", string "false",
+	// string with garbage (passthrough), and other types (passthrough).
+	cases := []struct {
+		raw  any
+		want any
+	}{
+		{true, true},
+		{false, false},
+		{"true", true},
+		{"false", false},
+		{"yes", "yes"},
+		// JSON unmarshal turns any number into float64; non-bool/non-string
+		// hits the default arm and is stored verbatim.
+		{42, float64(42)},
+	}
+	for _, c := range cases {
+		body, err := json.Marshal(map[string]any{"b": c.raw})
+		require.NoError(t, err)
+		created := tool.Create(body).(*RestMCPTool)
+		assert.Equal(t, c.want, created.arguments["b"], "raw=%v", c.raw)
+	}
+}
+
+func TestRestMCPTool_Create_IntegerCoercion(t *testing.T) {
+	tool := newRestToolForCreate(t)
+	cases := []struct {
+		raw  any
+		want any
+	}{
+		{float64(10), 10},
+		{"42", 42},
+		{"not-int", "not-int"},
+		{true, true},
+	}
+	for _, c := range cases {
+		body, err := json.Marshal(map[string]any{"i": c.raw})
+		require.NoError(t, err)
+		created := tool.Create(body).(*RestMCPTool)
+		assert.Equal(t, c.want, created.arguments["i"], "raw=%v", c.raw)
+	}
+}
+
+func TestRestMCPTool_Create_NumberCoercion(t *testing.T) {
+	tool := newRestToolForCreate(t)
+	cases := []struct {
+		raw  any
+		want any
+	}{
+		{"3.14", 3.14},
+		{"abc", "abc"},
+		{float64(2.5), 2.5}, // default: passthrough
+	}
+	for _, c := range cases {
+		body, err := json.Marshal(map[string]any{"n": c.raw})
+		require.NoError(t, err)
+		created := tool.Create(body).(*RestMCPTool)
+		assert.Equal(t, c.want, created.arguments["n"], "raw=%v", c.raw)
+	}
+}
+
+func TestRestMCPTool_Create_DefaultApplied(t *testing.T) {
+	tool := newRestToolForCreate(t)
+	body := []byte(`{}`)
+	created := tool.Create(body).(*RestMCPTool)
+	assert.Equal(t, 7, created.arguments["d"])
+	// Args without defaults are not present when omitted.
+	_, hasI := created.arguments["i"]
+	assert.False(t, hasI)
+}
+
+func TestRestMCPTool_Create_StringPassthrough(t *testing.T) {
+	tool := newRestToolForCreate(t)
+	body, _ := json.Marshal(map[string]any{"s": "hello"})
+	created := tool.Create(body).(*RestMCPTool)
+	assert.Equal(t, "hello", created.arguments["s"])
+}
+
+func TestRestMCPTool_Create_MalformedJSONStillProducesTool(t *testing.T) {
+	tool := newRestToolForCreate(t)
+	// Bad JSON is logged + ignored; defaults still applied.
+	created := tool.Create([]byte("{not json")).(*RestMCPTool)
+	assert.Equal(t, 7, created.arguments["d"], "default still applied when params unparseable")
+}
+
+// ---------------------------------------------------------------------------
+// hasContentType — case + charset suffix
+// ---------------------------------------------------------------------------
+
+func TestHasContentType_CaseAndCharsetSuffix(t *testing.T) {
+	headers := [][2]string{
+		{"content-type", "Application/JSON; charset=utf-8"},
+	}
+	assert.True(t, hasContentType(headers, "application/json"))
+	assert.True(t, hasContentType(headers, "json"))
+	assert.False(t, hasContentType(headers, "xml"))
+
+	emptyHeaders := [][2]string{}
+	assert.False(t, hasContentType(emptyHeaders, "application/json"))
+}
+
+// pull in `require` for newer tests above without disturbing existing imports.
+var _ = url.Parse
+var _ = sjson.Set
+var _ = strings.TrimSpace
