@@ -22,7 +22,7 @@ import (
 
 	crdmanifest "github.com/alibaba/higress/v2/api/kubernetes"
 	apiExtensionsV1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	apiExtensionsClient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	apiExtensionsV1Client "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 )
@@ -44,12 +44,12 @@ func CheckCRDVersions(config *rest.Config) []string {
 		return []string{fmt.Sprintf("Failed to load generated CRD contracts: %v", err)}
 	}
 
-	apiExtClientset, err := apiExtensionsClient.NewForConfig(config)
+	apiExtensionsClient, err := apiExtensionsV1Client.NewForConfig(config)
 	if err != nil {
 		return []string{fmt.Sprintf("Failed to create API extension client: %v", err)}
 	}
 
-	return checkCRDVersionsWithClient(apiExtClientset.CustomResourceDefinitions(), requiredCRDs, optionalCRDFieldPaths)
+	return checkCRDVersionsWithClient(apiExtensionsClient.CustomResourceDefinitions(), requiredCRDs, optionalCRDFieldPaths)
 }
 
 func loadExpectedCRDContracts() ([]CRDVersionInfo, error) {
@@ -70,7 +70,7 @@ func loadExpectedCRDContracts() ([]CRDVersionInfo, error) {
 	return requiredCRDs, nil
 }
 
-func checkCRDVersionsWithClient(client apiExtensionsClient.CustomResourceDefinitionInterface, requiredCRDs []CRDVersionInfo, optionalFieldPaths map[string][]string) []string {
+func checkCRDVersionsWithClient(client apiExtensionsV1Client.CustomResourceDefinitionInterface, requiredCRDs []CRDVersionInfo, optionalFieldPaths map[string][]string) []string {
 	warnings := []string{}
 
 	crdList, err := client.List(context.TODO(), metaV1.ListOptions{})
@@ -159,18 +159,6 @@ func findMissingSchemaPaths(expectedSchema, liveSchema *apiExtensionsV1.JSONSche
 
 	return missing
 }
-
-// checkRequiredFields is kept as a small helper for focused schema-path tests.
-func checkRequiredFields(schema *apiExtensionsV1.JSONSchemaProps, requiredFields []string) []string {
-	missing := make([]string, 0, len(requiredFields))
-	for _, field := range requiredFields {
-		if !fieldExistsInSchema(schema, field) {
-			missing = append(missing, field)
-		}
-	}
-	return missing
-}
-
 func collectComparableSchemaPaths(schema *apiExtensionsV1.JSONSchemaProps) []string {
 	if schema == nil {
 		return nil

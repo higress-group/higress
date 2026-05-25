@@ -26,6 +26,16 @@ import (
 	clientgotesting "k8s.io/client-go/testing"
 )
 
+func checkRequiredFields(schema *apiExtensionsV1.JSONSchemaProps, requiredFields []string) []string {
+	missing := make([]string, 0, len(requiredFields))
+	for _, field := range requiredFields {
+		if !fieldExistsInSchema(schema, field) {
+			missing = append(missing, field)
+		}
+	}
+	return missing
+}
+
 func TestFieldExistsInSchema(t *testing.T) {
 	tests := []struct {
 		name      string
