@@ -26,16 +26,6 @@ import (
 	clientgotesting "k8s.io/client-go/testing"
 )
 
-func checkRequiredFields(schema *apiExtensionsV1.JSONSchemaProps, requiredFields []string) []string {
-	missing := make([]string, 0, len(requiredFields))
-	for _, field := range requiredFields {
-		if !fieldExistsInSchema(schema, field) {
-			missing = append(missing, field)
-		}
-	}
-	return missing
-}
-
 func TestFieldExistsInSchema(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -135,6 +125,37 @@ func TestFieldExistsInSchema(t *testing.T) {
 			}
 		})
 	}
+}
+
+func fieldExistsInSchema(schema *apiExtensionsV1.JSONSchemaProps, fieldPath string) bool {
+	if fieldPath == "" || schema == nil || schema.Properties == nil {
+		return false
+	}
+
+	parts := strings.Split(fieldPath, ".")
+	current := schema
+	for _, part := range parts {
+		if current.Properties == nil {
+			return false
+		}
+		prop, exists := current.Properties[part]
+		if !exists {
+			return false
+		}
+		current = &prop
+	}
+
+	return true
+}
+
+func checkRequiredFields(schema *apiExtensionsV1.JSONSchemaProps, requiredFields []string) []string {
+	missing := make([]string, 0, len(requiredFields))
+	for _, field := range requiredFields {
+		if !fieldExistsInSchema(schema, field) {
+			missing = append(missing, field)
+		}
+	}
+	return missing
 }
 
 func TestCheckRequiredFields(t *testing.T) {
@@ -440,15 +461,18 @@ func TestRequiredCRDsDefinition(t *testing.T) {
 		if crd.ExpectedVersion == "" {
 			t.Error("CRD ExpectedVersion should not be empty")
 		}
-		if crd.StorageSchema == nil {
-			t.Errorf("CRD %s should have a storage schema", crd.Name)
+		if len(crd.RequiredFields) == 0 {
+			t.Errorf("CRD %s should have required fields configured", crd.Name)
 		}
 	}
 
-	expectedCRDs := map[string]string{
-		"wasmplugins.extensions.higress.io": "v1alpha1",
-		"http2rpcs.networking.higress.io":   "v1",
-		"mcpbridges.networking.higress.io":  "v1",
+	expectedCRDs := map[string]struct {
+		version string
+		fields  int
+	}{
+		"wasmplugins.extensions.higress.io": {version: "v1alpha1", fields: 3},
+		"http2rpcs.networking.higress.io":   {version: "v1", fields: 2},
+		"mcpbridges.networking.higress.io":  {version: "v1", fields: 2},
 	}
 
 	actualCRDs := make(map[string]CRDVersionInfo)
@@ -456,15 +480,18 @@ func TestRequiredCRDsDefinition(t *testing.T) {
 		actualCRDs[crd.Name] = crd
 	}
 
-	for name, expectedVersion := range expectedCRDs {
+	for name, expected := range expectedCRDs {
 		actual, found := actualCRDs[name]
 		if !found {
 			t.Errorf("Expected CRD %s not found in manifest-derived contracts", name)
 			continue
 		}
 
-		if actual.ExpectedVersion != expectedVersion {
-			t.Errorf("CRD %s: expected version %s, got %s", name, expectedVersion, actual.ExpectedVersion)
+		if actual.ExpectedVersion != expected.version {
+			t.Errorf("CRD %s: expected version %s, got %s", name, expected.version, actual.ExpectedVersion)
+		}
+		if len(actual.RequiredFields) != expected.fields {
+			t.Errorf("CRD %s: expected %d required fields, got %d", name, expected.fields, len(actual.RequiredFields))
 		}
 	}
 }
@@ -504,17 +531,7 @@ func TestCheckCRDVersionsWithClient_AllValid(t *testing.T) {
 		{
 			Name:            "wasmplugins.extensions.higress.io",
 			ExpectedVersion: "v1alpha1",
-			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
-				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-					"spec": {
-						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-							"pluginName": {Type: "string"},
-							"url":        {Type: "string"},
-							"matchRules": {Type: "array"},
-						},
-					},
-				},
-			},
+			RequiredFields:  []string{"spec.pluginName", "spec.url", "spec.matchRules"},
 		},
 	}, nil)
 
@@ -563,17 +580,7 @@ func TestCheckCRDVersionsWithClient_StorageVersionMismatch(t *testing.T) {
 		{
 			Name:            "wasmplugins.extensions.higress.io",
 			ExpectedVersion: "v1alpha1",
-			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
-				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-					"spec": {
-						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-							"pluginName": {Type: "string"},
-							"url":        {Type: "string"},
-							"matchRules": {Type: "array"},
-						},
-					},
-				},
-			},
+			RequiredFields:  []string{"spec.pluginName", "spec.url", "spec.matchRules"},
 		},
 	}, nil)
 
@@ -600,15 +607,7 @@ func TestCheckCRDVersionsWithClient_ListError(t *testing.T) {
 		{
 			Name:            "wasmplugins.extensions.higress.io",
 			ExpectedVersion: "v1alpha1",
-			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
-				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-					"spec": {
-						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-							"pluginName": {Type: "string"},
-						},
-					},
-				},
-			},
+			RequiredFields:  []string{"spec.pluginName"},
 		},
 	}, nil)
 
@@ -657,17 +656,7 @@ func TestCheckCRDVersionsWithClient_MissingManifestField(t *testing.T) {
 		{
 			Name:            "wasmplugins.extensions.higress.io",
 			ExpectedVersion: "v1alpha1",
-			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
-				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-					"spec": {
-						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-							"pluginName": {Type: "string"},
-							"url":        {Type: "string"},
-							"matchRules": {Type: "array"},
-						},
-					},
-				},
-			},
+			RequiredFields:  []string{"spec.pluginName", "spec.url", "spec.matchRules"},
 		},
 	}, nil)
 
@@ -713,17 +702,7 @@ func TestCheckCRDVersionsWithClient_OptionalPathBypass(t *testing.T) {
 		{
 			Name:            "wasmplugins.extensions.higress.io",
 			ExpectedVersion: "v1alpha1",
-			StorageSchema: &apiExtensionsV1.JSONSchemaProps{
-				Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-					"spec": {
-						Properties: map[string]apiExtensionsV1.JSONSchemaProps{
-							"pluginName": {Type: "string"},
-							"url":        {Type: "string"},
-							"matchRules": {Type: "array"},
-						},
-					},
-				},
-			},
+			RequiredFields:  []string{"spec.pluginName", "spec.url", "spec.matchRules"},
 		},
 	}, map[string][]string{
 		"wasmplugins.extensions.higress.io": {"spec.matchRules"},

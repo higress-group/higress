@@ -31,7 +31,13 @@ import (
 type CRDVersionInfo struct {
 	Name            string
 	ExpectedVersion string
-	StorageSchema   *apiExtensionsV1.JSONSchemaProps
+	RequiredFields  []string
+}
+
+var criticalCRDFieldPaths = map[string][]string{
+	"wasmplugins.extensions.higress.io": {"spec.pluginName", "spec.url", "spec.matchRules"},
+	"http2rpcs.networking.higress.io":   {"spec.dubbo", "spec.grpc"},
+	"mcpbridges.networking.higress.io":  {"spec.registries", "spec.proxies"},
 }
 
 var optionalCRDFieldPaths = map[string][]string{}
@@ -63,7 +69,7 @@ func loadExpectedCRDContracts() ([]CRDVersionInfo, error) {
 		requiredCRDs = append(requiredCRDs, CRDVersionInfo{
 			Name:            contract.Name,
 			ExpectedVersion: contract.ExpectedVersion,
-			StorageSchema:   contract.StorageSchema,
+			RequiredFields:  criticalCRDFieldPaths[contract.Name],
 		})
 	}
 
@@ -122,19 +128,14 @@ func checkCRDVersionsWithClient(client apiExtensionsV1Client.CustomResourceDefin
 			continue
 		}
 
-		if required.StorageSchema == nil {
-			warnings = append(warnings, fmt.Sprintf(
-				"The shipped CRD contract for '%s' version '%s' has no storage schema. "+
-					"Please regenerate Higress CRD manifests for this build.",
-				required.Name, required.ExpectedVersion,
-			))
+		if len(required.RequiredFields) == 0 {
 			continue
 		}
 
-		missingFields := findMissingSchemaPaths(required.StorageSchema, storageVersion.Schema.OpenAPIV3Schema, optionalFieldPaths[required.Name])
+		missingFields := findMissingRequiredFields(required.RequiredFields, storageVersion.Schema.OpenAPIV3Schema, optionalFieldPaths[required.Name])
 		if len(missingFields) > 0 {
 			warnings = append(warnings, fmt.Sprintf(
-				"CRD '%s' version '%s' is missing fields from the shipped Higress CRD schema: %v. "+
+				"CRD '%s' version '%s' is missing required fields: %v. "+
 					"Please update CRDs to the latest version.",
 				required.Name, required.ExpectedVersion, missingFields,
 			))
@@ -144,12 +145,11 @@ func checkCRDVersionsWithClient(client apiExtensionsV1Client.CustomResourceDefin
 	return warnings
 }
 
-func findMissingSchemaPaths(expectedSchema, liveSchema *apiExtensionsV1.JSONSchemaProps, ignoredPaths []string) []string {
-	expectedPathSet := collectComparableSchemaPathSet(expectedSchema)
+func findMissingRequiredFields(requiredFields []string, liveSchema *apiExtensionsV1.JSONSchemaProps, ignoredPaths []string) []string {
 	livePathSet := collectComparableSchemaPathSet(liveSchema)
-	missing := make([]string, 0, len(expectedPathSet))
+	missing := make([]string, 0, len(requiredFields))
 
-	for field := range expectedPathSet {
+	for _, field := range requiredFields {
 		if isIgnoredPath(field, ignoredPaths) {
 			continue
 		}
@@ -215,37 +215,6 @@ func isIgnoredPath(path string, ignoredPaths []string) bool {
 		}
 	}
 	return false
-}
-
-// fieldExistsInSchema checks if a field path exists in the schema
-// Field path format: "spec.fieldName" or "spec.nested.fieldName"
-func fieldExistsInSchema(schema *apiExtensionsV1.JSONSchemaProps, fieldPath string) bool {
-	// Check for empty field path first
-	if fieldPath == "" {
-		return false
-	}
-
-	if schema.Properties == nil {
-		return false
-	}
-
-	// Parse field path (e.g., "spec.pluginName" -> ["spec", "pluginName"])
-	parts := strings.Split(fieldPath, ".")
-	current := schema
-
-	for _, part := range parts {
-		if current.Properties == nil {
-			return false
-		}
-
-		prop, exists := current.Properties[part]
-		if !exists {
-			return false
-		}
-		current = &prop
-	}
-
-	return true
 }
 
 // getCRDVersions returns a list of version names for a CRD

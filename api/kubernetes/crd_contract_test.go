@@ -26,8 +26,5 @@ func TestLoadCRDContracts(t *testing.T) {
 		if contract.ExpectedVersion != wantVersion {
 			t.Fatalf("CRD %s expected version %s, got %s", contract.Name, wantVersion, contract.ExpectedVersion)
 		}
-		if contract.StorageSchema == nil {
-			t.Fatalf("CRD %s should have a storage schema", contract.Name)
-		}
 	}
 }

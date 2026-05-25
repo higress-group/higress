@@ -17,7 +17,6 @@ var customResourceDefinitionsYAML embed.FS
 type CRDContract struct {
 	Name            string
 	ExpectedVersion string
-	StorageSchema   *apiExtensionsV1.JSONSchemaProps
 }
 
 var (
@@ -62,7 +61,6 @@ func loadCRDContracts() ([]CRDContract, error) {
 		contracts = append(contracts, CRDContract{
 			Name:            crd.Name,
 			ExpectedVersion: storageVersion.Name,
-			StorageSchema:   schemaOrNil(storageVersion),
 		})
 	}
 
@@ -76,11 +74,4 @@ func storageVersionFromDefinition(crd *apiExtensionsV1.CustomResourceDefinition)
 		}
 	}
 	return nil, false
-}
-
-func schemaOrNil(version *apiExtensionsV1.CustomResourceDefinitionVersion) *apiExtensionsV1.JSONSchemaProps {
-	if version.Schema == nil {
-		return nil
-	}
-	return version.Schema.OpenAPIV3Schema
 }
