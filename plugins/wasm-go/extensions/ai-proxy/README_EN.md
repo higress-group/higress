@@ -101,6 +101,15 @@ For most protocols, `custom-setting` modifies or fills parameters at the root pa
 
 At least one of `healthCheckModel` and `cooldownDuration` must be configured when failover is enabled. If both are configured, an apiToken can be restored either by a successful health check or after the cooldown period expires.
 
+**Details for the `retryOnFailure` configuration fields:**
+
+| Name          | Data Type       | Requirement | Default        | Description                                                                           |
+| ------------- | --------------- | ----------- | -------------- | ------------------------------------------------------------------------------------- |
+| `enabled`     | bool            | Optional    | false          | Whether to enable retry for failed requests                                           |
+| `maxRetries`  | int             | Optional    | 1              | Maximum number of retries                                                             |
+| `retryTimeout` | int            | Optional    | 30000          | Retry timeout, in milliseconds                                                        |
+| `retryOnStatus` | array of string | Optional   | ["4.*", "5.*"] | Status codes of the original request that trigger retries. Regular expressions are supported. |
+
 ### Provider-Specific Configurations
 
 #### OpenAI
