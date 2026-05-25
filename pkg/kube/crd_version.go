@@ -145,39 +145,36 @@ func checkCRDVersionsWithClient(client apiExtensionsV1Client.CustomResourceDefin
 }
 
 func findMissingSchemaPaths(expectedSchema, liveSchema *apiExtensionsV1.JSONSchemaProps, ignoredPaths []string) []string {
-	expectedPaths := collectComparableSchemaPaths(expectedSchema)
-	missing := make([]string, 0, len(expectedPaths))
+	expectedPathSet := collectComparableSchemaPathSet(expectedSchema)
+	livePathSet := collectComparableSchemaPathSet(liveSchema)
+	missing := make([]string, 0, len(expectedPathSet))
 
-	for _, field := range expectedPaths {
+	for field := range expectedPathSet {
 		if isIgnoredPath(field, ignoredPaths) {
 			continue
 		}
-		if !fieldExistsInSchema(liveSchema, field) {
+		if _, exists := livePathSet[field]; !exists {
 			missing = append(missing, field)
 		}
 	}
 
+	sort.Strings(missing)
 	return missing
 }
-func collectComparableSchemaPaths(schema *apiExtensionsV1.JSONSchemaProps) []string {
+
+func collectComparableSchemaPathSet(schema *apiExtensionsV1.JSONSchemaProps) map[string]struct{} {
 	if schema == nil {
-		return nil
+		return map[string]struct{}{}
 	}
 
 	specSchema, exists := schema.Properties["spec"]
 	if !exists {
-		return nil
+		return map[string]struct{}{}
 	}
 
 	paths := map[string]struct{}{}
 	collectSchemaPathsRecursive(&specSchema, "spec", paths)
-
-	collected := make([]string, 0, len(paths))
-	for path := range paths {
-		collected = append(collected, path)
-	}
-	sort.Strings(collected)
-	return collected
+	return paths
 }
 
 func collectSchemaPathsRecursive(schema *apiExtensionsV1.JSONSchemaProps, path string, paths map[string]struct{}) {
