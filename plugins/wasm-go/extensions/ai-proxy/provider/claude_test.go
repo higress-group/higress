@@ -572,6 +572,12 @@ func TestClaudeProvider_GetApiName(t *testing.T) {
 	t.Run("unknown_path", func(t *testing.T) {
 		assert.Equal(t, ApiName(""), provider.GetApiName("/unknown"))
 	})
+
+	t.Run("sub_paths_should_not_match", func(t *testing.T) {
+		assert.Equal(t, ApiName(""), provider.GetApiName("/v1/messages/count_tokens"))
+		assert.Equal(t, ApiName(""), provider.GetApiName("/v1/messages/batches"))
+		assert.Equal(t, ApiName(""), provider.GetApiName("/v1/complete/something"))
+	})
 }
 
 func TestClaudeProvider_BuildClaudeTextGenRequest_ToolRoleConversion(t *testing.T) {
