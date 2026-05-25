@@ -82,14 +82,20 @@ func extractFromParams(keepToken bool, params []string, header HeaderProvider, l
 		return ""
 	}
 
-	url, _ := url.Parse(urlparams)
-	query := url.Query()
+	parsedURL, err := url.Parse(urlparams)
+	if err != nil {
+		log.Warnf("failed to parse path: invalid request path")
+		return ""
+	}
+	query := parsedURL.Query()
 
 	for i := range params {
 		token := query.Get(params[i])
 		if token != "" {
 			if !keepToken {
 				query.Del(params[i])
+				parsedURL.RawQuery = query.Encode()
+				_ = header.ReplaceHttpRequestHeader(":path", parsedURL.RequestURI())
 			}
 			return token
 		}
