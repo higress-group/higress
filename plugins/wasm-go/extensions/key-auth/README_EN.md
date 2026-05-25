@@ -27,7 +27,8 @@ Plugin Execution Priority: `310`
 The configuration field descriptions for each item in `consumers` are as follows:
 | Name         | Data Type | Requirements | Default Value | Description                   |
 | ------------ | --------- | ------------ | ------------- | ------------------------------ |
-| `credential` | string    | Required     | -             | Configures the access credential for this consumer. |
+| `credential` | string    | Either `credential` or `credentials` must be configured | -             | Configures one access credential for this consumer. |
+| `credentials` | array of string | Either `credential` or `credentials` must be configured | -             | Configures multiple access credentials for this consumer. Cannot be used together with `credential`. |
 | `name`       | string    | Required     | -             | Configures the name for this consumer.     |
 
 ### Authorization Configuration (Optional)
@@ -37,7 +38,7 @@ The configuration field descriptions for each item in `consumers` are as follows
 
 ## Configuration Example
 ### Global Configuration for Authentication and Granular Route Authorization
-The following configuration will enable Key Auth authentication and authorization for specific routes or hostnames in the gateway. The `credential` field must not repeat.
+The following configuration will enable Key Auth authentication and authorization for specific routes or hostnames in the gateway. The `credential` or `credentials` values must not repeat.
 
 At the instance level, do the following plugin configuration:
 ```yaml
