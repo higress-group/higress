@@ -512,3 +512,64 @@ func TestVertexAnthropicPassthrough_StreamingChunkUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, chunk, out, "vertex Anthropic SSE chunk must be returned byte-for-byte")
 }
+
+// TestVertexTransformRequestHeaders_StripsAnthropicCredentialHeaders ensures
+// that Anthropic-style client auth headers (carried by SDKs like the Anthropic
+// Python/TypeScript SDKs and Claude Code) are NOT forwarded to vertex.
+// Vertex uses OAuth Bearer / API key in URL — these headers are meaningless to
+// vertex and forwarding them would leak the client's sk-ant-... credential to
+// Google logs.
+func TestVertexTransformRequestHeaders_StripsAnthropicCredentialHeaders(t *testing.T) {
+	v := newAnthropicVertexProvider(false)
+	ctx := newMapCtx()
+	headers := http.Header{}
+	headers.Set("x-api-key", "sk-ant-api03-secret")
+	headers.Set("anthropic-api-key", "sk-ant-api03-secret")
+	headers.Set("content-type", "application/json")
+
+	v.TransformRequestHeaders(ctx, ApiNameAnthropicMessages, headers)
+
+	assert.Empty(t, headers.Get("x-api-key"), "x-api-key must be stripped before forwarding to vertex")
+	assert.Empty(t, headers.Get("anthropic-api-key"), "anthropic-api-key must be stripped before forwarding to vertex")
+	// Sanity: unrelated headers untouched.
+	assert.Equal(t, "application/json", headers.Get("content-type"))
+}
+
+// TestVertexAnthropicPassthrough_MaxTokensDefault ensures that when the client
+// omits max_tokens, the passthrough handler injects claudeDefaultMaxTokens.
+// Vertex's Anthropic endpoint rejects requests without max_tokens with a 400 —
+// some SDKs (and lenient clients) leave it unset, expecting the upstream to
+// default. Matches buildClaudeTextGenRequest's behavior in claude.go.
+func TestVertexAnthropicPassthrough_MaxTokensDefault(t *testing.T) {
+	t.Run("missing max_tokens gets defaulted", func(t *testing.T) {
+		v := newAnthropicVertexProvider(false)
+		ctx := newMapCtx()
+		headers := http.Header{}
+		body := []byte(`{
+			"model": "claude-sonnet-4",
+			"messages": [{"role": "user", "content": "hi"}]
+		}`)
+
+		out, err := v.onAnthropicMessagesRequestBody(ctx, body, headers)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(claudeDefaultMaxTokens), gjson.GetBytes(out, "max_tokens").Int())
+	})
+
+	t.Run("client-supplied max_tokens preserved", func(t *testing.T) {
+		v := newAnthropicVertexProvider(false)
+		ctx := newMapCtx()
+		headers := http.Header{}
+		body := []byte(`{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1024,
+			"messages": [{"role": "user", "content": "hi"}]
+		}`)
+
+		out, err := v.onAnthropicMessagesRequestBody(ctx, body, headers)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(1024), gjson.GetBytes(out, "max_tokens").Int(),
+			"client-supplied max_tokens must not be overwritten by the default")
+	})
+}

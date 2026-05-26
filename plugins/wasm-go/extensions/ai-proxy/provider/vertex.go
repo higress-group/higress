@@ -196,6 +196,12 @@ func (v *vertexProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiNam
 	}
 
 	util.OverwriteRequestHostHeader(headers, finalVertexDomain)
+
+	// 剥除 Anthropic 客户端可能携带的凭据头, 避免泄漏到 Google.
+	// vertex 一律用 OAuth Bearer (标准模式) 或 ?key= (Express 模式) 鉴权,
+	// 这些头对 vertex 没有任何意义, 留着只会把 sk-ant-... 这类密钥转发到上游日志.
+	headers.Del("x-api-key")
+	headers.Del("anthropic-api-key")
 }
 
 func (v *vertexProvider) getToken() (cached bool, err error) {
@@ -419,6 +425,15 @@ func (v *vertexProvider) onAnthropicMessagesRequestBody(ctx wrapper.HttpContext,
 	body, err = sjson.SetBytes(body, "anthropic_version", vertexAnthropicVersion)
 	if err != nil {
 		return nil, fmt.Errorf("unable to inject anthropic_version: %v", err)
+	}
+
+	// vertex Anthropic 端点要求 max_tokens 必填, 客户端漏传会被 400.
+	// 跟 claude provider buildClaudeTextGenRequest 保持一致, 缺省补 claudeDefaultMaxTokens.
+	if !gjson.GetBytes(body, "max_tokens").Exists() {
+		body, err = sjson.SetBytes(body, "max_tokens", claudeDefaultMaxTokens)
+		if err != nil {
+			return nil, fmt.Errorf("unable to inject default max_tokens: %v", err)
+		}
 	}
 
 	return body, nil
