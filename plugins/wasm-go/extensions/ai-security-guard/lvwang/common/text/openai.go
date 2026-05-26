@@ -21,6 +21,7 @@ import (
 const (
 	responseFallbackPathsCtxKey       = "response_fallback_paths"
 	responseStreamFallbackPathsCtxKey = "response_stream_fallback_paths"
+	responseStartTimeCtxKey           = "response_start_time"
 )
 
 func HandleTextGenerationResponseHeader(ctx wrapper.HttpContext, config cfg.AISecurityConfig) types.Action {
@@ -28,6 +29,7 @@ func HandleTextGenerationResponseHeader(ctx wrapper.HttpContext, config cfg.AISe
 	ctx.SetContext("end_of_stream_received", false)
 	ctx.SetContext("during_call", false)
 	ctx.SetContext("risk_detected", false)
+	ctx.SetContext(responseStartTimeCtxKey, time.Now().UnixMilli())
 	ctx.SetContext(responseFallbackPathsCtxKey, buildEffectiveFallbackPaths(config.ResponseContentJsonPath, config.ResponseContentFallbackJsonPaths))
 	ctx.SetContext(responseStreamFallbackPathsCtxKey, buildEffectiveFallbackPaths(config.ResponseStreamContentJsonPath, config.ResponseStreamContentFallbackJsonPaths))
 	sessionID, _ := utils.GenerateHexID(20)
@@ -73,22 +75,48 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			return
 		}
 		if !cfg.IsRiskLevelAcceptable(config.Action, response.Data, config, consumer) {
-			denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
+			xHigressBody, err := cfg.BuildOpenAIDenyResponseBody(response, config, consumer)
 			if err != nil {
+				// Build failure → fail-open: inject the buffered upstream content as-is.
+				// Make this path observable so operators can spot the silent passthrough
+				// instead of mistakenly attributing observed denies-only to the success
+				// path's metrics. Symmetric with the success path's observability suite
+				// (counter / safecheck_response_rt / safecheck_status / log / risk_detected).
 				log.Errorf("failed to build deny response body: %v", err)
 				endStream := ctx.GetContext("end_of_stream_received").(bool) && ctx.BufferQueueSize() == 0
 				proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endStream)
 				bufferQueue = [][]byte{}
+				config.IncrementCounter("ai_sec_response_deny_buildfail", 1)
+				startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
+				ctx.SetUserAttribute("safecheck_response_rt", time.Now().UnixMilli()-startTime)
+				ctx.SetUserAttribute("safecheck_status", "build_fallback_pass")
+				if response.Data.Advice != nil {
+					ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
+					ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
+				}
+				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 				if !endStream {
 					ctx.SetContext("during_call", false)
 					singleCall()
 				}
 				return
 			}
-			marshalledDenyMessage := wrapper.MarshalStr(string(denyBody))
+			marshalledDenyMessage := wrapper.MarshalStr(cfg.ResolveDenyMessage(config))
 			randomID := utils.GenerateRandomChatID()
-			jsonData := []byte(fmt.Sprintf(cfg.OpenAIStreamResponseFormat, randomID, marshalledDenyMessage, randomID))
+			createdTs := time.Now().Unix()
+			jsonData := []byte(fmt.Sprintf(cfg.OpenAIStreamResponseFormat, randomID, createdTs, marshalledDenyMessage, randomID, createdTs, string(xHigressBody)))
 			proxywasm.InjectEncodedDataToFilterChain(jsonData, true)
+			ctx.SetContext("risk_detected", true)
+			ctx.SetContext("during_call", false)
+			config.IncrementCounter("ai_sec_response_deny", 1)
+			startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
+			ctx.SetUserAttribute("safecheck_response_rt", time.Now().UnixMilli()-startTime)
+			ctx.SetUserAttribute("safecheck_status", "response deny")
+			if response.Data.Advice != nil {
+				ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
+				ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
+			}
+			ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 			return
 		}
 		endStream := ctx.GetContext("end_of_stream_received").(bool) && ctx.BufferQueueSize() == 0
@@ -224,24 +252,31 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 			}
 			return
 		}
-		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
-		if err != nil {
-			log.Errorf("failed to build deny response body: %v", err)
-			proxywasm.ResumeHttpResponse()
-			return
-		}
 		if config.ProtocolOriginal {
+			denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
+			if err != nil {
+				log.Errorf("failed to build deny response body: %v", err)
+				proxywasm.ResumeHttpResponse()
+				return
+			}
 			proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, denyBody, -1)
-		} else if isStreamingResponse {
-			randomID := utils.GenerateRandomChatID()
-			marshalledDenyMessage := wrapper.MarshalStr(string(denyBody))
-			jsonData := []byte(fmt.Sprintf(cfg.OpenAIStreamResponseFormat, randomID, marshalledDenyMessage, randomID))
-			proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "text/event-stream;charset=UTF-8"}}, jsonData, -1)
 		} else {
+			xHigressBody, err := cfg.BuildOpenAIDenyResponseBody(response, config, consumer)
+			if err != nil {
+				log.Errorf("failed to build deny response body: %v", err)
+				proxywasm.ResumeHttpResponse()
+				return
+			}
+			marshalledDenyMessage := wrapper.MarshalStr(cfg.ResolveDenyMessage(config))
 			randomID := utils.GenerateRandomChatID()
-			marshalledDenyMessage := wrapper.MarshalStr(string(denyBody))
-			jsonData := []byte(fmt.Sprintf(cfg.OpenAIResponseFormat, randomID, marshalledDenyMessage))
-			proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, jsonData, -1)
+			createdTs := time.Now().Unix()
+			if isStreamingResponse {
+				jsonData := []byte(fmt.Sprintf(cfg.OpenAIStreamResponseFormat, randomID, createdTs, marshalledDenyMessage, randomID, createdTs, string(xHigressBody)))
+				proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "text/event-stream;charset=UTF-8"}}, jsonData, -1)
+			} else {
+				jsonData := []byte(fmt.Sprintf(cfg.OpenAIResponseFormat, randomID, createdTs, marshalledDenyMessage, string(xHigressBody)))
+				proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, jsonData, -1)
+			}
 		}
 		config.IncrementCounter("ai_sec_response_deny", 1)
 		endTime := time.Now().UnixMilli()

@@ -35,9 +35,18 @@ const (
 	WaterMarkType              = "waterMark"
 
 	// Default configurations
-	OpenAIResponseFormat       = `{"id": "%s","object":"chat.completion","model":"from-security-guard","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
-	OpenAIStreamResponseChunk  = `data:{"id":"%s","object":"chat.completion.chunk","model":"from-security-guard","choices":[{"index":0,"delta":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":null}]}`
-	OpenAIStreamResponseEnd    = `data:{"id":"%s","object":"chat.completion.chunk","model":"from-security-guard","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
+	// Template parameter order:
+	//   OpenAIResponseFormat:       id, created (unix sec), content, x_higress JSON
+	//   OpenAIStreamResponseChunk:  id, created, content
+	//   OpenAIStreamResponseEnd:    id, created, x_higress JSON
+	//   OpenAIStreamResponseFormat: id, created, content, id, created, x_higress JSON
+	// `created` is required by openai-python (ChatCompletion.created is non-Optional);
+	// `finish_reason: "content_filter"` lets observability stacks (LangChain / LiteLLM
+	// / Langfuse / Helicone) classify the deny as a moderation event rather than a
+	// normal stop.
+	OpenAIResponseFormat       = `{"id":"%s","object":"chat.completion","created":%d,"model":"from-security-guard","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":"content_filter","x_higress":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
+	OpenAIStreamResponseChunk  = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":null}]}`
+	OpenAIStreamResponseEnd    = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"content_filter","x_higress":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
 	OpenAIStreamResponseFormat = OpenAIStreamResponseChunk + "\n\n" + OpenAIStreamResponseEnd + "\n\n" + `data: [DONE]`
 
 	DefaultDenyCode    = 200
@@ -947,6 +956,53 @@ func BuildDenyResponseBody(response Response, config AISecurityConfig, consumer 
 		Code:           response.Code,
 		DenyMessage:    config.DenyMessage,
 		BlockedDetails: blocked,
+	}
+	return json.Marshal(body)
+}
+
+// ResolveDenyMessage returns the human-readable deny text used both for
+// non-original OpenAI wrappers (message.content / delta.content) and for the
+// x_higress.denyMessage field, ensuring the two stay aligned.
+func ResolveDenyMessage(config AISecurityConfig) string {
+	if config.DenyMessage != "" {
+		return config.DenyMessage
+	}
+	return DefaultDenyMessage
+}
+
+// BuildOpenAIDenyResponseBody builds the JSON object embedded as
+// choices[0].x_higress for non-original OpenAI deny responses. Its shape
+// mirrors DenyResponseBody, but DenyMessage is filled via ResolveDenyMessage so
+// the field is always present and consistent with the rendered content.
+// Code is sourced from config.DenyCode so that x_higress.code consistently
+// represents "the HTTP status this gateway returns to the client", aligned with
+// BuildOpenAIFallbackDenyResponseBody.
+func BuildOpenAIDenyResponseBody(response Response, config AISecurityConfig, consumer string) ([]byte, error) {
+	details := GetUnacceptableDetail(response.Data, config, consumer)
+	blocked := make([]BlockedDetail, 0, len(details))
+	for _, d := range details {
+		blocked = append(blocked, BlockedDetail{
+			Type:  d.Type,
+			Level: d.Level,
+		})
+	}
+	body := DenyResponseBody{
+		Code:           int(config.DenyCode),
+		DenyMessage:    ResolveDenyMessage(config),
+		BlockedDetails: blocked,
+	}
+	return json.Marshal(body)
+}
+
+// BuildOpenAIFallbackDenyResponseBody builds choices[0].x_higress for the
+// mask→block fallback path under non-original OpenAI wrapping. The fallback is
+// triggered by ReplaceJsonFieldTextContent failure or empty desensitization,
+// so there is no upstream Response object to derive blockedDetails from.
+func BuildOpenAIFallbackDenyResponseBody(config AISecurityConfig) ([]byte, error) {
+	body := DenyResponseBody{
+		Code:           int(config.DenyCode),
+		DenyMessage:    ResolveDenyMessage(config),
+		BlockedDetails: []BlockedDetail{},
 	}
 	return json.Marshal(body)
 }

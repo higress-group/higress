@@ -76,9 +76,9 @@ description: 阿里云内容安全检测
 
 各协议承载位置：
 
-- **`text_generation`（OpenAI 非流式）**：上述结构体序列化为 JSON 字符串后放入 `choices[0].message.content`
-- **`text_generation`（OpenAI 流式 SSE）**：同上，放入首个 chunk 的 `delta.content`
-- **`text_generation`（`protocol=original`）**：上述结构体直接作为 JSON 响应 body 返回
+- **`text_generation`（OpenAI 非流式）**：`choices[0].message.content` 承载可读拦截文案（即 `denyMessage`，未配置时默认为 `很抱歉，我无法回答您的问题`）；上述结构体作为嵌入对象放入 `choices[0].x_higress`（不是 JSON 字符串）
+- **`text_generation`（OpenAI 流式 SSE）**：首帧 `delta.content` 承载可读拦截文案；上述结构体仅在最后一个 chunk 中作为嵌入对象放入 `choices[0].x_higress`，随后以 `data: [DONE]` 结束流
+- **`text_generation`（`protocol=original`）**：上述结构体直接作为 JSON 响应 body 返回（不包 OpenAI 外壳，不新增 `x_higress`)
 - **`image_generation`**：上述结构体直接作为 JSON 响应 body 返回（HTTP 403）
 - **`mcp`（JSON-RPC）**：上述结构体序列化为 JSON 字符串后放入 `error.message`
 - **`mcp`（SSE）**：同上，通过 SSE 事件返回
@@ -273,19 +273,36 @@ curl http://localhost/v1/chat/completions \
 {
   "id": "chatcmpl-AAy3hK1dE4ODaegbGOMoC9VY4Sizv",
   "object": "chat.completion",
-  "created": 1677652288,
-  "model": "gpt-4o-mini",
-  "system_fingerprint": "fp_44709d6fcb",
+  "created": 1727078400,
+  "model": "from-security-guard",
   "choices": [
     {
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "作为一名人工智能助手，我不能提供涉及色情、暴力、政治等敏感话题的内容。如果您有其他相关问题，欢迎您提问。",
+        "content": "作为一名人工智能助手，我不能提供涉及色情、暴力、政治等敏感话题的内容。如果您有其他相关问题，欢迎您提问。"
       },
       "logprobs": null,
-      "finish_reason": "stop"
+      "finish_reason": "content_filter",
+      "x_higress": {
+        "code": 200,
+        "denyMessage": "作为一名人工智能助手，我不能提供涉及色情、暴力、政治等敏感话题的内容。如果您有其他相关问题，欢迎您提问。",
+        "blockedDetails": [
+          {
+            "type": "contentModeration",
+            "level": "high",
+            "suggestion": "block"
+          }
+        ],
+        "requestId": "AAAAAA-BBBB-CCCC-DDDD-EEEEEEE****",
+        "guardCode": 200
+      }
     }
-  ]
+  ],
+  "usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
+  }
 }
 ```

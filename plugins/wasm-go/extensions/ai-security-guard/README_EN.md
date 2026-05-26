@@ -100,9 +100,9 @@ Field descriptions:
 
 How the body is embedded per protocol:
 
-- **`text_generation` (OpenAI non-streaming)**: serialised as a JSON string and placed in `choices[0].message.content`
-- **`text_generation` (OpenAI streaming SSE)**: same, placed in `delta.content` of the first chunk
-- **`text_generation` (`protocol=original`)**: returned directly as the JSON response body
+- **`text_generation` (OpenAI non-streaming)**: `choices[0].message.content` carries the human-readable deny text (`denyMessage`, defaults to `Sorry, I cannot answer your question.` when unconfigured); the structure above is placed at `choices[0].x_higress` as an embedded object (not a JSON string)
+- **`text_generation` (OpenAI streaming SSE)**: the first frame's `delta.content` carries the human-readable deny text; the structure above is attached only to the last chunk at `choices[0].x_higress` as an embedded object, followed by `data: [DONE]`
+- **`text_generation` (`protocol=original`)**: returned directly as the JSON response body (no OpenAI wrapper, no `x_higress`)
 - **`image_generation`**: returned directly as the JSON response body (HTTP 403)
 - **`mcp` (JSON-RPC)**: serialised as a JSON string and placed in `error.message`
 - **`mcp` (SSE)**: same, returned via SSE event
