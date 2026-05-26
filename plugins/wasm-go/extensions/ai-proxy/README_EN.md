@@ -210,6 +210,8 @@ For Anthropic Claude, the corresponding `type` is `claude`. Its unique configura
 |------------|-------------|----------------------|---------------|---------------------------------------------------------------------------------------------------------------|
 | `claudeVersion` | string | Optional             | -             | The version of the Claude service's API, default is 2023-06-01.                                               |
 | `claudeCodeMode` | boolean | Optional             | false         | Enable Claude Code mode for OAuth token authentication. When enabled, requests will be formatted as Claude Code client requests. |
+| `claudeCodeUserAgent`    | string    | Optional             | -             | `user-agent` header in Claude Code mode. Uses the built-in Claude CLI default when unset and the request does not carry this header. |
+| `claudeCodeBetaFeatures` | string    | Optional             | -             | `anthropic-beta` header in Claude Code mode. Uses the built-in beta feature list when unset and the request does not carry this header. |
 
 **Claude Code Mode**
 
