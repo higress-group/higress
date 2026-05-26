@@ -17,7 +17,9 @@ package main
 import (
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/jwt-auth/config"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/jwt-auth/handler"
+	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
+	"github.com/tidwall/gjson"
 )
 
 // @Name jwt-proxy
@@ -33,7 +35,29 @@ import (
 // @Contact.email ink33@smlk.org
 //
 // @Example
-// {}
+//
+//	{
+//	  "consumers": [
+//	    {
+//	      "name": "example-consumer",
+//	      "issuer": "https://issuer.example.com",
+//	      "remote_jwks": {
+//	        "service_name": "issuer.example.com.dns",
+//	        "service_host": "issuer.example.com",
+//	        "service_port": 443,
+//	        "path": "/.well-known/jwks.json"
+//	      },
+//	      "jwks_cache_duration": 600,
+//	      "jwks_fetch_timeout": 1500
+//	    },
+//	    {
+//	      "name": "inline-consumer",
+//	      "issuer": "https://issuer.example.com",
+//	      "jwks": "{\"keys\":[...]}"
+//	    }
+//	  ]
+//	}
+//
 // @End
 func main() {}
 
@@ -42,9 +66,17 @@ func init() {
 		// 插件名称
 		"jwt-auth",
 		// 为解析插件配置，设置自定义函数
-		wrapper.ParseConfigBy(config.ParseGlobalConfig),
-		wrapper.ParseOverrideConfigBy(config.ParseGlobalConfig, config.ParseRuleConfig),
+		wrapper.ParseConfigBy(parseGlobalConfig),
+		wrapper.ParseOverrideConfigBy(parseGlobalConfig, config.ParseRuleConfig),
 		// 为处理请求头，设置自定义函数
 		wrapper.ProcessRequestHeadersBy(handler.OnHTTPRequestHeaders),
 	)
+}
+
+func parseGlobalConfig(json gjson.Result, cfg *config.JWTAuthConfig, logger log.Log) error {
+	if err := config.ParseGlobalConfig(json, cfg, logger); err != nil {
+		return err
+	}
+	handler.PruneRemoteJWKsCache(cfg.Consumers)
+	return nil
 }
