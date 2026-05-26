@@ -415,6 +415,10 @@ func HandleQwenImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.A
 		if cfg.IsRiskLevelAcceptable(config.Action, response.Data, config, consumer) {
 			if imageIndex >= len(imgUrls) {
 				ctx.SetUserAttribute("safecheck_response_rt", endTime-startTime)
+				// Transitional double-write: this handler historically wrote safecheck_request_rt
+				// for response-phase emissions; existing dashboards key off the old name.
+				// Remove after 1–2 release cycles.
+				ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 				ctx.SetUserAttribute("safecheck_status", "response pass")
 			}
 			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultPass)
@@ -435,7 +439,13 @@ func HandleQwenImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.A
 		}
 		proxywasm.SendHttpResponse(403, [][2]string{{"content-type", "application/json"}}, denyBody, -1)
 		config.IncrementCounter("ai_sec_response_deny", 1)
+		// Transitional double-write: this handler historically incremented ai_sec_request_deny
+		// and wrote safecheck_request_rt for response-phase denies; existing dashboards/alerts
+		// key off the old names. The legacy safecheck_status="reqeust deny" (typo) is dropped
+		// in this transition. Remove after 1–2 release cycles.
+		config.IncrementCounter("ai_sec_request_deny", 1)
 		ctx.SetUserAttribute("safecheck_response_rt", endTime-startTime)
+		ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 		ctx.SetUserAttribute("safecheck_status", "response deny")
 		cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
 		cfg.WriteGuardrailLog(ctx)

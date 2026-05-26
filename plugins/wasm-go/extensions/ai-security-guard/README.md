@@ -51,15 +51,14 @@ description: 阿里云内容安全检测
 
 ```json
 {
+  "code": 200,
+  "denyMessage": "很抱歉，我无法回答您的问题",
   "blockedDetails": [
     {
-      "Type": "contentModeration",
-      "Level": "high",
-      "Suggestion": "block"
+      "type": "contentModeration",
+      "level": "high"
     }
-  ],
-  "requestId": "AAAAAA-BBBB-CCCC-DDDD-EEEEEEE****",
-  "guardCode": 200
+  ]
 }
 ```
 
@@ -67,12 +66,13 @@ description: 阿里云内容安全检测
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `blockedDetails` | array | 命中拦截的维度明细；若安全服务未返回明细，则根据顶层风险信号自动合成 |
-| `blockedDetails[].Type` | string | 风险类型：`contentModeration` / `promptAttack` / `sensitiveData` / `maliciousUrl` / `modelHallucination` |
-| `blockedDetails[].Level` | string | 风险等级：`high` / `medium` / `low` 等 |
-| `blockedDetails[].Suggestion` | string | 安全服务建议操作，通常为 `block` |
-| `requestId` | string | 安全服务的请求 ID，用于追踪 |
-| `guardCode` | int | 安全服务返回的业务码（非 HTTP 状态码，成功检测时为 `200`） |
+| `code` | int | 在 `text_generation`(OpenAI 包装) 与 `image_generation` 路径下为网关返回的 HTTP 状态码，取自 `denyCode`(默认 `200`)；在 `protocol=original` 与 `mcp` 路径下为安全服务返回的业务码（`Response.Code`，成功检测时为 `200`） |
+| `denyMessage` | string | 人类可读拦截文案。OpenAI 包装路径下始终存在，取 `denyMessage`(默认 `很抱歉，我无法回答您的问题`)；`protocol=original` / `image_generation` / `mcp` 路径下取 `denyMessage`，未配置时省略该字段（`omitempty`） |
+| `blockedDetails` | array | 命中拦截的维度明细；若安全服务未返回 `Detail`，则根据顶层 `RiskLevel`/`AttackLevel` 自动合成。命中维度为空时返回 `[]` |
+| `blockedDetails[].type` | string | 风险类型：`contentModeration` / `promptAttack` / `sensitiveData` / `maliciousUrl` / `modelHallucination` / `customLabel` |
+| `blockedDetails[].level` | string | 风险等级：`high` / `medium` / `low`；敏感数据为 `S1`–`S4` |
+
+> 说明：当前实现的拒答 body 仅包含上述字段。不输出安全服务的 `RequestId`、单条 `Suggestion` 与原始业务码（`guardCode`）；安全服务的 `RequestId` 通过 AI 日志 `safecheck_request_ids` 字段暴露（见下文 AI Log 章节）。
 
 各协议承载位置：
 
@@ -247,6 +247,18 @@ ai-security-guard 插件提供了以下监控指标：
 - `ai_sec_request_deny`: 请求内容安全检测失败请求数
 - `ai_sec_response_deny`: 模型回答安全检测失败请求数
 
+#### 图像响应阶段 metric/ai_log 字段重命名（过渡期）
+
+历史上图像生成插件（`lvwang/multi_modal_guard/image/openai.go`、`lvwang/multi_modal_guard/image/qwen.go`）在**响应阶段**命中风险时错误地写入了请求阶段字段。本次版本修正了语义，并在 1~2 个发版周期内保留**双写过渡**：
+
+| 行为 | 旧值（错误，将在后续版本移除） | 新值（推荐） |
+| --- | --- | --- |
+| 计数器(deny) | `ai_sec_request_deny` | `ai_sec_response_deny` |
+| ai_log 耗时(pass + deny) | `safecheck_request_rt` | `safecheck_response_rt` |
+| ai_log 状态(deny) | `safecheck_status="reqeust deny"`（典型拼写错误，**本次直接废弃，不再写入**） | `safecheck_status="response deny"` |
+
+过渡期内图像响应阶段会同时写入新旧两组 `*_deny` 计数器和 `safecheck_*_rt` 字段；`safecheck_status` 只写新值。看板与告警请尽快切换到 `response_*` 字段名；当前依赖 `reqeust deny`（拼写错误版本）状态串的图像响应告警需要立即改为 `response deny`。
+
 ### Trace
 如果开启了链路追踪，ai-security-guard 插件会在请求 span 中添加以下 attributes:
 - `ai_sec_risklabel`: 表示请求命中的风险类型
@@ -321,19 +333,16 @@ curl http://localhost/v1/chat/completions \
         "content": "作为一名人工智能助手，我不能提供涉及色情、暴力、政治等敏感话题的内容。如果您有其他相关问题，欢迎您提问。"
       },
       "logprobs": null,
-      "finish_reason": "content_filter",
+      "finish_reason": "stop",
       "x_higress": {
         "code": 200,
         "denyMessage": "作为一名人工智能助手，我不能提供涉及色情、暴力、政治等敏感话题的内容。如果您有其他相关问题，欢迎您提问。",
         "blockedDetails": [
           {
             "type": "contentModeration",
-            "level": "high",
-            "suggestion": "block"
+            "level": "high"
           }
-        ],
-        "requestId": "AAAAAA-BBBB-CCCC-DDDD-EEEEEEE****",
-        "guardCode": 200
+        ]
       }
     }
   ],

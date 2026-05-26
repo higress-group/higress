@@ -3423,10 +3423,11 @@ func TestRequestDenyXHigressStreamFrames(t *testing.T) {
 
 			require.True(t, gjson.Get(endFrame, "choices.0.x_higress").IsObject(),
 				"final chunk should carry x_higress as object")
-			// B-R2-08 contract: deny stream's terminator carries content_filter,
-			// not "stop" — LangChain/LiteLLM/Langfuse pipelines key off this to
-			// distinguish moderation events from a normal completion.
-			require.Equal(t, "content_filter", gjson.Get(endFrame, "choices.0.finish_reason").String())
+			// Deny stream's terminator carries `stop` for wire-level compatibility
+			// with downstream consumers (LangChain / LiteLLM / SDKs / BI) that key
+			// off `stop` as a valid completion. The moderation-event signal lives
+			// in choices[0].x_higress (denyCode / blockedDetails) instead.
+			require.Equal(t, "stop", gjson.Get(endFrame, "choices.0.finish_reason").String())
 			require.False(t, gjson.Get(endFrame, "choices.0.delta.content").Exists(),
 				"final chunk delta should be empty")
 
@@ -3674,8 +3675,9 @@ func TestResponseStreamingDenyXHigress(t *testing.T) {
 			require.True(t, xHigress.IsObject(), "x_higress must be a JSON object, not a string")
 			require.Equal(t, cfg.DefaultDenyMessage, xHigress.Get("denyMessage").String())
 			require.True(t, xHigress.Get("blockedDetails").Exists())
-			// B-R2-08: streaming deny terminator carries content_filter.
-			require.Equal(t, "content_filter", gjson.Get(secondPayload, "choices.0.finish_reason").String())
+			// Streaming deny terminator carries `stop` for wire-level compatibility;
+			// moderation signal lives in choices[0].x_higress.
+			require.Equal(t, "stop", gjson.Get(secondPayload, "choices.0.finish_reason").String())
 
 			// Design contract: x_higress lives ONLY nested under choices[0].
 			require.False(t, gjson.Get(secondPayload, "x_higress").Exists(),

@@ -75,15 +75,14 @@ When content is blocked, the plugin (`MultiModalGuard` action) returns the follo
 
 ```json
 {
+  "code": 200,
+  "denyMessage": "Sorry, I cannot answer your question.",
   "blockedDetails": [
     {
-      "Type": "contentModeration",
-      "Level": "high",
-      "Suggestion": "block"
+      "type": "contentModeration",
+      "level": "high"
     }
-  ],
-  "requestId": "AAAAAA-BBBB-CCCC-DDDD-EEEEEEE****",
-  "guardCode": 200
+  ]
 }
 ```
 
@@ -91,12 +90,13 @@ Field descriptions:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `blockedDetails` | array | Details of the triggered blocking dimensions. Synthesised from top-level risk signals when the security service returns no detail entries. |
-| `blockedDetails[].Type` | string | Risk type: `contentModeration` / `promptAttack` / `sensitiveData` / `maliciousUrl` / `modelHallucination` |
-| `blockedDetails[].Level` | string | Risk level: `high` / `medium` / `low` etc. |
-| `blockedDetails[].Suggestion` | string | Action recommended by the security service, usually `block` |
-| `requestId` | string | Request ID from the security service, for tracing |
-| `guardCode` | int | Business code returned by the security service (not an HTTP status code; `200` indicates a successful check that detected a risk) |
+| `code` | int | For `text_generation` (OpenAI wrapping) and `image_generation` paths, this is the HTTP status the gateway returns, sourced from `denyCode` (default `200`). For `protocol=original` and `mcp` paths, this is the business code returned by the security service (`Response.Code`; `200` indicates a successful check that detected a risk). |
+| `denyMessage` | string | Human-readable deny text. Always present on OpenAI-wrapping paths, taken from `denyMessage` (defaults to `Sorry, I cannot answer your question.`). On `protocol=original` / `image_generation` / `mcp` paths the value is taken from `denyMessage` and omitted (`omitempty`) when unconfigured. |
+| `blockedDetails` | array | Details of the triggered blocking dimensions. Synthesised from top-level `RiskLevel`/`AttackLevel` when the security service returns no `Detail` entries. Returns `[]` when no dimension is hit. |
+| `blockedDetails[].type` | string | Risk type: `contentModeration` / `promptAttack` / `sensitiveData` / `maliciousUrl` / `modelHallucination` / `customLabel` |
+| `blockedDetails[].level` | string | Risk level: `high` / `medium` / `low`; for sensitive data: `S1`–`S4` |
+
+> Note: the current implementation emits only the fields above. The security service's `RequestId`, per-detail `Suggestion`, and raw business code (`guardCode`) are not embedded in the deny body. The security service's `RequestId` is exposed via the AI access log field `safecheck_request_ids` (see the AI Log section below).
 
 How the body is embedded per protocol:
 
@@ -164,6 +164,18 @@ responseStreamContentFallbackJsonPaths: []
 ai-security-guard plugin provides following metrics:
 - `ai_sec_request_deny`: count of requests denied at request phase
 - `ai_sec_response_deny`: count of requests denied at response phase
+
+#### Image response-phase metric / ai_log rename (transition window)
+
+The image generation handlers (`lvwang/multi_modal_guard/image/openai.go` and `lvwang/multi_modal_guard/image/qwen.go`) historically emitted request-phase field names for **response-phase** events. This release corrects the semantics and keeps a **double-write transition** for 1–2 release cycles:
+
+| Signal | Legacy value (wrong; removed in a future release) | New value (recommended) |
+| --- | --- | --- |
+| Counter (deny) | `ai_sec_request_deny` | `ai_sec_response_deny` |
+| ai_log latency (pass + deny) | `safecheck_request_rt` | `safecheck_response_rt` |
+| ai_log status (deny) | `safecheck_status="reqeust deny"` (typo; **dropped immediately, no longer emitted**) | `safecheck_status="response deny"` |
+
+During the transition window, the image response phase emits both the new and the legacy `*_deny` counters and `safecheck_*_rt` attributes; `safecheck_status` only emits the new value. Migrate dashboards / alerts to the `response_*` names; any image-response alert that still keys off the typo'd `reqeust deny` status string must move to `response deny` immediately.
 
 ### Trace
 ai-security-guard plugin provides following span attributes:

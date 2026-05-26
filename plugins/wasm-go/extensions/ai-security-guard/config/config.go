@@ -40,13 +40,14 @@ const (
 	//   OpenAIStreamResponseChunk:  id, created, content
 	//   OpenAIStreamResponseEnd:    id, created, x_higress JSON
 	//   OpenAIStreamResponseFormat: id, created, content, id, created, x_higress JSON
-	// `created` is required by openai-python (ChatCompletion.created is non-Optional);
-	// `finish_reason: "content_filter"` lets observability stacks (LangChain / LiteLLM
-	// / Langfuse / Helicone) classify the deny as a moderation event rather than a
-	// normal stop.
-	OpenAIResponseFormat       = `{"id":"%s","object":"chat.completion","created":%d,"model":"from-security-guard","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":"content_filter","x_higress":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
+	// `created` is required by openai-python (ChatCompletion.created is non-Optional).
+	// `finish_reason: "stop"` preserves wire-level compatibility with downstream
+	// consumers (LangChain / LiteLLM / SDKs / BI dashboards) that treat `stop` as
+	// "valid completion"; the moderation-event signal lives in the nested
+	// `choices[0].x_higress` block (denyCode / blockedDetails) instead.
+	OpenAIResponseFormat       = `{"id":"%s","object":"chat.completion","created":%d,"model":"from-security-guard","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":"stop","x_higress":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
 	OpenAIStreamResponseChunk  = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":null}]}`
-	OpenAIStreamResponseEnd    = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"content_filter","x_higress":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
+	OpenAIStreamResponseEnd    = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop","x_higress":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
 	OpenAIStreamResponseFormat = OpenAIStreamResponseChunk + "\n\n" + OpenAIStreamResponseEnd + "\n\n" + `data: [DONE]`
 
 	DefaultDenyCode    = 200
