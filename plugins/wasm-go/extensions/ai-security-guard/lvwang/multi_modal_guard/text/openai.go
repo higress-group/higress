@@ -67,6 +67,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 	hasMasked := false
 	maskedContent := []byte(content)
 	sessionID, _ := utils.GenerateHexID(20)
+	currentSubmissionIndex := 0
+	currentImageSubmissionIndex := 0
 	var singleCall func()
 	var singleCallForImage func()
 	// prevContentIndex tracks the start of the current chunk for masking replacement
@@ -74,12 +76,16 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 	callback := func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		log.Info(string(responseBody))
 		if statusCode != 200 || gjson.GetBytes(responseBody, "Code").Int() != 200 {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
 		var response cfg.Response
 		err := json.Unmarshal(responseBody, &response)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			log.Errorf("%+v", err)
 			proxywasm.ResumeHttpRequest()
 			return
@@ -103,6 +109,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 						} else {
 							xHigressBody, buildErr := cfg.BuildOpenAIFallbackDenyResponseBody(config)
 							if buildErr != nil {
+								cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+								cfg.WriteGuardrailLog(ctx)
 								log.Errorf("failed to build deny response body: %v", buildErr)
 								proxywasm.ResumeHttpRequest()
 								return
@@ -120,7 +128,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 						ctx.DontReadResponseBody()
 						config.IncrementCounter("ai_sec_request_deny", 1)
 						ctx.SetUserAttribute("safecheck_status", "reqeust deny")
-						ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+						cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+						cfg.WriteGuardrailLog(ctx)
 						return
 					}
 					proxywasm.ReplaceHttpRequestBody(newBody)
@@ -129,10 +138,13 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 				} else {
 					ctx.SetUserAttribute("safecheck_status", "request pass")
 				}
-				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+			}
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultPass)
+			if contentIndex >= len(maskedContent) {
 				if len(images) > 0 && config.CheckRequestImage {
 					singleCallForImage()
 				} else {
+					cfg.WriteGuardrailLog(ctx)
 					proxywasm.ResumeHttpRequest()
 				}
 			} else {
@@ -157,6 +169,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 				} else {
 					xHigressBody, buildErr := cfg.BuildOpenAIFallbackDenyResponseBody(config)
 					if buildErr != nil {
+						cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+						cfg.WriteGuardrailLog(ctx)
 						log.Errorf("failed to build deny response body: %v", buildErr)
 						proxywasm.ResumeHttpRequest()
 						return
@@ -176,7 +190,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 				endTime := time.Now().UnixMilli()
 				ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 				ctx.SetUserAttribute("safecheck_status", "reqeust deny")
-				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+				cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+				cfg.WriteGuardrailLog(ctx)
 				return
 			} else {
 				// Replace only the current chunk portion in maskedContent
@@ -200,6 +215,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 						} else {
 							xHigressBody, buildErr := cfg.BuildOpenAIFallbackDenyResponseBody(config)
 							if buildErr != nil {
+								cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+								cfg.WriteGuardrailLog(ctx)
 								log.Errorf("failed to build deny response body: %v", buildErr)
 								proxywasm.ResumeHttpRequest()
 								return
@@ -219,7 +236,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 						endTime := time.Now().UnixMilli()
 						ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 						ctx.SetUserAttribute("safecheck_status", "reqeust deny")
-						ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+						cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+						cfg.WriteGuardrailLog(ctx)
 						return
 					}
 					proxywasm.ReplaceHttpRequestBody(newBody)
@@ -227,13 +245,15 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 					endTime := time.Now().UnixMilli()
 					ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 					ctx.SetUserAttribute("safecheck_status", "request mask")
-					ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+					cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultMask)
 					if len(images) > 0 && config.CheckRequestImage {
 						singleCallForImage()
 					} else {
+						cfg.WriteGuardrailLog(ctx)
 						proxywasm.ResumeHttpRequest()
 					}
 				} else {
+					cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultMask)
 					singleCall()
 				}
 				return
@@ -242,6 +262,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 			if config.ProtocolOriginal {
 				denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
 				if err != nil {
+					cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+					cfg.WriteGuardrailLog(ctx)
 					log.Errorf("failed to build deny response body: %v", err)
 					proxywasm.ResumeHttpRequest()
 					return
@@ -250,6 +272,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 			} else {
 				xHigressBody, err := cfg.BuildOpenAIDenyResponseBody(response, config, consumer)
 				if err != nil {
+					cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+					cfg.WriteGuardrailLog(ctx)
 					log.Errorf("failed to build deny response body: %v", err)
 					proxywasm.ResumeHttpRequest()
 					return
@@ -274,10 +298,12 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 				ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 				ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 			}
-			ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+			cfg.WriteGuardrailLog(ctx)
 		}
 	}
 	singleCall = func() {
+		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseRequest, cfg.GuardrailModalityText)
 		prevContentIndex = contentIndex
 		var nextContentIndex int
 		if contentIndex+cfg.LengthLimit >= len(maskedContent) {
@@ -292,6 +318,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
+			cfg.CompleteGuardrailSubmissionEventWithRequestID(ctx, currentSubmissionIndex, "", cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpRequest()
 		}
 	}
@@ -300,9 +328,11 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		imageIndex += 1
 		log.Info(string(responseBody))
 		if statusCode != 200 || gjson.GetBytes(responseBody, "Code").Int() != 200 {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultError)
 			if imageIndex < len(images) {
 				singleCallForImage()
 			} else {
+				cfg.WriteGuardrailLog(ctx)
 				proxywasm.ResumeHttpRequest()
 			}
 			return
@@ -310,10 +340,12 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		var response cfg.Response
 		err := json.Unmarshal(responseBody, &response)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultError)
 			log.Errorf("%+v", err)
 			if imageIndex < len(images) {
 				singleCallForImage()
 			} else {
+				cfg.WriteGuardrailLog(ctx)
 				proxywasm.ResumeHttpRequest()
 			}
 			return
@@ -323,7 +355,10 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 			if imageIndex >= len(images) {
 				ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 				ctx.SetUserAttribute("safecheck_status", "request pass")
-				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+			}
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultPass)
+			if imageIndex >= len(images) {
+				cfg.WriteGuardrailLog(ctx)
 				proxywasm.ResumeHttpRequest()
 			} else {
 				singleCallForImage()
@@ -334,6 +369,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		if config.ProtocolOriginal {
 			denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
 			if err != nil {
+				cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultError)
+				cfg.WriteGuardrailLog(ctx)
 				log.Errorf("failed to build deny response body: %v", err)
 				proxywasm.ResumeHttpRequest()
 				return
@@ -342,6 +379,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		} else {
 			xHigressBody, err := cfg.BuildOpenAIDenyResponseBody(response, config, consumer)
 			if err != nil {
+				cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultError)
+				cfg.WriteGuardrailLog(ctx)
 				log.Errorf("failed to build deny response body: %v", err)
 				proxywasm.ResumeHttpRequest()
 				return
@@ -365,9 +404,11 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 			ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 			ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 		}
-		ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+		cfg.CompleteGuardrailSubmissionEvent(ctx, currentImageSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+		cfg.WriteGuardrailLog(ctx)
 	}
 	singleCallForImage = func() {
+		currentImageSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseRequest, cfg.GuardrailModalityImage)
 		img := images[imageIndex]
 		imgUrl := ""
 		imgBase64 := ""
@@ -380,6 +421,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		err := config.Client.Post(path, headers, body, callbackForImage, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
+			cfg.CompleteGuardrailSubmissionEventWithRequestID(ctx, currentImageSubmissionIndex, "", cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpRequest()
 		}
 	}

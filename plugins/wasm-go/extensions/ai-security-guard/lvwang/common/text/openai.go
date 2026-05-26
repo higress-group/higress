@@ -54,10 +54,13 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 		sessionID, _ = ctx.GetContext("sessionID").(string)
 	}
 	var bufferQueue [][]byte
+	currentSubmissionIndex := 0
 	var singleCall func()
 	callback := func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		log.Info(string(responseBody))
 		if statusCode != 200 || gjson.GetBytes(responseBody, "Code").Int() != 200 {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			if ctx.GetContext("end_of_stream_received").(bool) {
 				proxywasm.ResumeHttpResponse()
 			}
@@ -67,7 +70,9 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 		var response cfg.Response
 		err := json.Unmarshal(responseBody, &response)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
 			log.Error("failed to unmarshal aliyun content security response at response phase")
+			cfg.WriteGuardrailLog(ctx)
 			if ctx.GetContext("end_of_stream_received").(bool) {
 				proxywasm.ResumeHttpResponse()
 			}
@@ -82,6 +87,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 				// instead of mistakenly attributing observed denies-only to the success
 				// path's metrics. Symmetric with the success path's observability suite
 				// (counter / safecheck_response_rt / safecheck_status / log / risk_detected).
+				cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
 				log.Errorf("failed to build deny response body: %v", err)
 				endStream := ctx.GetContext("end_of_stream_received").(bool) && ctx.BufferQueueSize() == 0
 				proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endStream)
@@ -101,6 +107,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 				}
 				return
 			}
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
 			marshalledDenyMessage := wrapper.MarshalStr(cfg.ResolveDenyMessage(config))
 			randomID := utils.GenerateRandomChatID()
 			createdTs := time.Now().Unix()
@@ -119,6 +126,8 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 			return
 		}
+		cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultPass)
+		cfg.WriteGuardrailLog(ctx)
 		endStream := ctx.GetContext("end_of_stream_received").(bool) && ctx.BufferQueueSize() == 0
 		proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endStream)
 		bufferQueue = [][]byte{}
@@ -154,10 +163,13 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			ctx.SetContext("during_call", true)
 			log.Debugf("current content piece: %s", buffer)
 			checkService := config.GetResponseCheckService(consumer)
+			currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText)
 			path, headers, body := common.GenerateRequestForText(config, config.Action, checkService, buffer, sessionID)
 			err := config.Client.Post(path, headers, body, callback, config.Timeout)
 			if err != nil {
 				log.Errorf("failed call the safe check service: %v", err)
+				cfg.CompleteGuardrailSubmissionEventWithRequestID(ctx, currentSubmissionIndex, "", cfg.GuardrailResultError)
+				cfg.WriteGuardrailLog(ctx)
 				if ctx.GetContext("end_of_stream_received").(bool) {
 					proxywasm.ResumeHttpResponse()
 				}
@@ -226,17 +238,22 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 	}
 	contentIndex := 0
 	sessionID, _ := utils.GenerateHexID(20)
+	currentSubmissionIndex := 0
 	var singleCall func()
 	callback := func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		log.Info(string(responseBody))
 		if statusCode != 200 || gjson.GetBytes(responseBody, "Code").Int() != 200 {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpResponse()
 			return
 		}
 		var response cfg.Response
 		err := json.Unmarshal(responseBody, &response)
 		if err != nil {
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
 			log.Error("failed to unmarshal aliyun content security response at response phase")
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpResponse()
 			return
 		}
@@ -245,7 +262,10 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 				endTime := time.Now().UnixMilli()
 				ctx.SetUserAttribute("safecheck_response_rt", endTime-startTime)
 				ctx.SetUserAttribute("safecheck_status", "response pass")
-				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+			}
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultPass)
+			if contentIndex >= len(content) {
+				cfg.WriteGuardrailLog(ctx)
 				proxywasm.ResumeHttpResponse()
 			} else {
 				singleCall()
@@ -255,6 +275,8 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 		if config.ProtocolOriginal {
 			denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
 			if err != nil {
+				cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+				cfg.WriteGuardrailLog(ctx)
 				log.Errorf("failed to build deny response body: %v", err)
 				proxywasm.ResumeHttpResponse()
 				return
@@ -263,6 +285,8 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 		} else {
 			xHigressBody, err := cfg.BuildOpenAIDenyResponseBody(response, config, consumer)
 			if err != nil {
+				cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
+				cfg.WriteGuardrailLog(ctx)
 				log.Errorf("failed to build deny response body: %v", err)
 				proxywasm.ResumeHttpResponse()
 				return
@@ -286,7 +310,8 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 			ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 			ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 		}
-		ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+		cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+		cfg.WriteGuardrailLog(ctx)
 	}
 	singleCall = func() {
 		var nextContentIndex int
@@ -299,10 +324,13 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
 		checkService := config.GetResponseCheckService(consumer)
+		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText)
 		path, headers, body := common.GenerateRequestForText(config, config.Action, checkService, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
+			cfg.CompleteGuardrailSubmissionEventWithRequestID(ctx, currentSubmissionIndex, "", cfg.GuardrailResultError)
+			cfg.WriteGuardrailLog(ctx)
 			proxywasm.ResumeHttpResponse()
 		}
 	}
