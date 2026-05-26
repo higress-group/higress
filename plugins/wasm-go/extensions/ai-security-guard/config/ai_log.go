@@ -2,6 +2,7 @@ package config
 
 import (
 	"strings"
+	"time"
 
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
@@ -64,6 +65,26 @@ func CompleteGuardrailSubmissionEventWithRequestID(ctx wrapper.HttpContext, inde
 // Call after submission events are updated; Complete* does not flush the log.
 func WriteGuardrailLog(ctx wrapper.HttpContext) {
 	ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+}
+
+// MarkGuardrailRequestError finalizes a request-phase safecheck submission that failed
+// upstream (HTTP, unmarshal, downstream build, or dispatch error). It overwrites the
+// legacy safecheck_status with "request error" so consumers that only watch the single
+// status field do not see a stale "request pass" left over from a prior chunk, and
+// records safecheck_request_rt so latency metrics cover failures too.
+func MarkGuardrailRequestError(ctx wrapper.HttpContext, index int, responseBody []byte, startTime int64) {
+	ctx.SetUserAttribute("safecheck_request_rt", time.Now().UnixMilli()-startTime)
+	ctx.SetUserAttribute("safecheck_status", "request error")
+	CompleteGuardrailSubmissionEvent(ctx, index, responseBody, GuardrailResultError)
+	WriteGuardrailLog(ctx)
+}
+
+// MarkGuardrailResponseError is the response-phase counterpart of MarkGuardrailRequestError.
+func MarkGuardrailResponseError(ctx wrapper.HttpContext, index int, responseBody []byte, startTime int64) {
+	ctx.SetUserAttribute("safecheck_response_rt", time.Now().UnixMilli()-startTime)
+	ctx.SetUserAttribute("safecheck_status", "response error")
+	CompleteGuardrailSubmissionEvent(ctx, index, responseBody, GuardrailResultError)
+	WriteGuardrailLog(ctx)
 }
 
 func ExtractValidRequestID(responseBody []byte) string {

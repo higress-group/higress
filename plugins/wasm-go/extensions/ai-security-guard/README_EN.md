@@ -178,7 +178,32 @@ ai-security-guard writes each submission to the content security service into th
 | `safecheck_requests` | array | Submission event array. Each item is `{"requestId"?: string, "phase": string, "modality": string, "result": string}` |
 | `safecheck_request_ids` | array | All valid content security `RequestId` values for the current gateway request, preserved in submission completion order without deduplication or truncation |
 | `safecheck_request_id` | string | The latest valid content security `RequestId`, kept for consumers that only read a single value |
+| `safecheck_status` | string | Legacy compatibility field reflecting the last status transition for this gateway request (see enum below) |
+| `safecheck_request_rt` / `safecheck_response_rt` | int | Latency (ms) of the security check during the request / response phase |
+| `safecheck_riskLabel` / `safecheck_riskWords` | string | Risk label and risk words when a risk is hit (taken from the first result returned by the security service) |
 
-`safecheck_requests[].phase` is `request` or `response`; `modality` is `text`, `image`, or `mcp`; `result` is the final gateway action and can be `pass`, `deny`, `mask`, or `error`. The plugin writes `requestId`, `safecheck_request_ids`, and `safecheck_request_id` only when the security service response contains a JSON string `RequestId` and `strings.TrimSpace(RequestId) != ""`; missing, empty, whitespace-only, or non-string values do not produce empty placeholders.
+`safecheck_requests[].phase` is `request` or `response`; `modality` is `text`, `image`, or `mcp`; `result` describes **the processing outcome of that submission event itself** (not the gateway's final outbound action). Values:
 
-Every submission attempt emits one `safecheck_requests` event, including HTTP non-200 responses, business failures, and failures to dispatch the security service call. These error paths are recorded as `result=error`. The legacy `safecheck_status` field remains for compatibility with existing log consumers; use `safecheck_requests` for precise auditing across multiple submissions, streaming chunks, or multiple image checks.
+| `result` value | Meaning |
+| --- | --- |
+| `pass` | The submission passed the check |
+| `deny` | The submission hit a risk; the gateway returned a deny response |
+| `mask` | The submission hit a risk with `Action=Mask`; the security service returned desensitized text and the request body was rewritten |
+| `error` | The submission itself failed (HTTP non-200, business `Code` non-200, unmarshal failure, deny-response build failure, dispatch failure, etc.). When the failure occurs in the **streaming response callback** because building the deny response failed, the gateway fails open (injects buffered upstream content as-is); in that case `safecheck_status=build_fallback_pass` and the corresponding event has `result=error` to indicate the security submission did not complete |
+
+The plugin writes `requestId`, `safecheck_request_ids`, and `safecheck_request_id` only when the security service response contains a JSON string `RequestId` and `strings.TrimSpace(RequestId) != ""`; missing, empty, whitespace-only, or non-string values do not produce empty placeholders.
+
+Every submission attempt emits one `safecheck_requests` event, including HTTP non-200 responses, business failures, and failures to dispatch the security service call. These error paths are recorded as `result=error`. Use `safecheck_requests` for precise auditing across multiple submissions, streaming chunks, or multiple image checks.
+
+`safecheck_status` enum (legacy field; overwritten on each status transition, so only the last transition's value is preserved when there are multiple submissions):
+
+| `safecheck_status` value | Meaning |
+| --- | --- |
+| `request pass` | All request-phase submissions passed |
+| `request mask` | A request-phase submission hit mask; the request body was rewritten with desensitized text |
+| `reqeust deny` | A request-phase submission hit a risk; the gateway returned a deny response (note: typo `reqeust` is preserved for backward compatibility) |
+| `request error` | A request-phase security submission itself failed (HTTP / unmarshal / dispatch / etc.); the gateway fails open |
+| `response pass` | All response-phase submissions passed |
+| `response deny` | A response-phase submission hit a risk; the gateway returned a deny response |
+| `response error` | A response-phase security submission itself failed; the gateway fails open |
+| `build_fallback_pass` | In the streaming response callback, building the deny response failed; the gateway fails open and injects the buffered upstream content as-is |
