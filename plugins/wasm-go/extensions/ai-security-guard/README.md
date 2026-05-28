@@ -34,6 +34,7 @@ description: 阿里云内容安全检测
 | `denyCode` | int | optional | 200 | 指定内容非法时的响应状态码 |
 | `denyMessage` | string | optional | openai格式的流式/非流式响应 | 指定内容非法时的响应内容 |
 | `protocol` | string | optional | openai | 协议格式，非openai协议填`original` |
+| `openAIDenyResponseFormat` | string | optional | legacy | OpenAI 包装拒答的响应形态，取值为 `legacy` 或 `structured`。默认 `legacy` 保持历史兼容；配置为 `structured` 时在 `choices[0].x_higress_guardrail` 输出结构化拦截详情 |
 | `contentModerationLevelBar` | string | optional | max | 内容合规检测拦截风险等级，取值为 `max`, `high`, `medium` or `low` |
 | `promptAttackLevelBar` | string | optional | max | 提示词攻击检测拦截风险等级，取值为 `max`, `high`, `medium` or `low` |
 | `sensitiveDataLevelBar` | string | optional | S4 | 敏感内容检测拦截风险等级，取值为  `S4`, `S3`, `S2` or `S1` |
@@ -47,7 +48,7 @@ description: 阿里云内容安全检测
 
 ### 拒绝响应结构
 
-内容被拦截时，插件（`MultiModalGuard` action）统一返回以下结构化 JSON 对象，各协议的承载位置如下：
+内容被拦截时，插件（`MultiModalGuard` action）会构造以下结构化 JSON 对象。`protocol: original`、MCP 与图像生成路径直接或间接返回该对象；OpenAI 文本生成包装路径默认保持历史兼容形态，只有配置 `openAIDenyResponseFormat: structured` 时才会把该对象嵌入到 OpenAI 响应中。
 
 ```json
 {
@@ -76,12 +77,15 @@ description: 阿里云内容安全检测
 
 各协议承载位置：
 
-- **`text_generation`（OpenAI 非流式）**：`choices[0].message.content` 承载可读拦截文案（即 `denyMessage`，未配置时默认为 `很抱歉，我无法回答您的问题`）；上述结构体作为嵌入对象放入 `choices[0].x_higress`（不是 JSON 字符串）
-- **`text_generation`（OpenAI 流式 SSE）**：首帧 `delta.content` 承载可读拦截文案；上述结构体仅在最后一个 chunk 中作为嵌入对象放入 `choices[0].x_higress`，随后以 `data: [DONE]` 结束流
-- **`text_generation`（`protocol=original`）**：上述结构体直接作为 JSON 响应 body 返回（不包 OpenAI 外壳，不新增 `x_higress`)
+- **`text_generation`（OpenAI，默认 `legacy`）**：不输出 `x_higress_guardrail` 或历史 `x_higress` 字段；`choices[0].message.content` / 首帧 `delta.content` 保持历史内容形态（RiskBlock 为 JSON 字符串，mask fallback 为拒答文案），`finish_reason` 为 `"stop"`，流式响应仍以 `data: [DONE]` 结束
+- **`text_generation`（OpenAI，`structured` 非流式）**：`choices[0].message.content` 承载可读拦截文案（即 `denyMessage`，未配置时默认为 `很抱歉，我无法回答您的问题`）；上述结构体作为嵌入对象放入 `choices[0].x_higress_guardrail`（不是 JSON 字符串）
+- **`text_generation`（OpenAI，`structured` 流式 SSE）**：首帧 `delta.content` 承载可读拦截文案；上述结构体仅在最后一个 chunk 中作为嵌入对象放入 `choices[0].x_higress_guardrail`，随后以 `data: [DONE]` 结束流
+- **`text_generation`（`protocol=original`）**：上述结构体直接作为 JSON 响应 body 返回（不包 OpenAI 外壳，不新增 `x_higress_guardrail`)
 - **`image_generation`**：上述结构体直接作为 JSON 响应 body 返回（HTTP 403）
 - **`mcp`（JSON-RPC）**：上述结构体序列化为 JSON 字符串后放入 `error.message`
 - **`mcp`（SSE）**：同上，通过 SSE 事件返回
+
+`openAIDenyResponseFormat` 只影响 OpenAI 包装拒答的 body 形态；拦截判断、fail-open 行为、metric 与 AI Log 字段不随该配置变化。该字段只能配置在插件全局，不能放入 `consumerRiskLevel`。
 
 补充说明一下内容合规检测、提示词攻击检测、敏感内容检测三种风险的四个等级：
 
@@ -148,6 +152,14 @@ accessKey: "XXXXXXXXX"
 secretKey: "XXXXXXXXXXXXXXX"
 checkRequest: true
 checkResponse: true
+```
+
+### 配置 OpenAI 结构化拒答
+
+默认 `openAIDenyResponseFormat: legacy` 保持历史响应形态。若需要在 OpenAI 响应中输出结构化拦截详情，可配置：
+
+```yaml
+openAIDenyResponseFormat: structured
 ```
 
 ### 使用临时安全凭证
@@ -317,7 +329,7 @@ curl http://localhost/v1/chat/completions \
 }'
 ```
 
-请求内容会被发送到阿里云内容安全服务进行检测，如果请求内容检测结果为非法，网关将返回形如以下的回答：
+当配置 `openAIDenyResponseFormat: structured` 时，请求内容会被发送到阿里云内容安全服务进行检测。如果请求内容检测结果为非法，网关将返回形如以下的回答：
 
 ```json
 {
@@ -334,7 +346,7 @@ curl http://localhost/v1/chat/completions \
       },
       "logprobs": null,
       "finish_reason": "stop",
-      "x_higress": {
+      "x_higress_guardrail": {
         "code": 200,
         "denyMessage": "作为一名人工智能助手，我不能提供涉及色情、暴力、政治等敏感话题的内容。如果您有其他相关问题，欢迎您提问。",
         "blockedDetails": [

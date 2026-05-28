@@ -3,7 +3,6 @@ package text
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -80,7 +79,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			return
 		}
 		if !cfg.IsRiskLevelAcceptable(config.Action, response.Data, config, consumer) {
-			xHigressBody, err := cfg.BuildOpenAIDenyResponseBody(response, config, consumer)
+			jsonData, err := cfg.BuildOpenAIDenyData(config, response, consumer, true)
 			if err != nil {
 				// Build failure → fail-open: inject the buffered upstream content as-is.
 				// Make this path observable so operators can spot the silent passthrough
@@ -96,7 +95,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 				startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
 				ctx.SetUserAttribute("safecheck_response_rt", time.Now().UnixMilli()-startTime)
 				ctx.SetUserAttribute("safecheck_status", "build_fallback_pass")
-				if response.Data.Advice != nil {
+				if len(response.Data.Result) > 0 {
 					ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 					ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 				}
@@ -108,10 +107,6 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 				return
 			}
 			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
-			marshalledDenyMessage := wrapper.MarshalStr(cfg.ResolveDenyMessage(config))
-			randomID := utils.GenerateRandomChatID()
-			createdTs := time.Now().Unix()
-			jsonData := []byte(fmt.Sprintf(cfg.OpenAIStreamResponseFormat, randomID, createdTs, marshalledDenyMessage, randomID, createdTs, string(xHigressBody)))
 			proxywasm.InjectEncodedDataToFilterChain(jsonData, true)
 			ctx.SetContext("risk_detected", true)
 			ctx.SetContext("during_call", false)
@@ -119,7 +114,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
 			ctx.SetUserAttribute("safecheck_response_rt", time.Now().UnixMilli()-startTime)
 			ctx.SetUserAttribute("safecheck_status", "response deny")
-			if response.Data.Advice != nil {
+			if len(response.Data.Result) > 0 {
 				ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 				ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 			}
@@ -270,39 +265,17 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 			}
 			return
 		}
-		if config.ProtocolOriginal {
-			denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
-			if err != nil {
-				log.Errorf("failed to build deny response body: %v", err)
-				cfg.MarkGuardrailResponseError(ctx, currentSubmissionIndex, responseBody, startTime)
-				proxywasm.ResumeHttpResponse()
-				return
-			}
-			proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, denyBody, -1)
-		} else {
-			xHigressBody, err := cfg.BuildOpenAIDenyResponseBody(response, config, consumer)
-			if err != nil {
-				log.Errorf("failed to build deny response body: %v", err)
-				cfg.MarkGuardrailResponseError(ctx, currentSubmissionIndex, responseBody, startTime)
-				proxywasm.ResumeHttpResponse()
-				return
-			}
-			marshalledDenyMessage := wrapper.MarshalStr(cfg.ResolveDenyMessage(config))
-			randomID := utils.GenerateRandomChatID()
-			createdTs := time.Now().Unix()
-			if isStreamingResponse {
-				jsonData := []byte(fmt.Sprintf(cfg.OpenAIStreamResponseFormat, randomID, createdTs, marshalledDenyMessage, randomID, createdTs, string(xHigressBody)))
-				proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "text/event-stream;charset=UTF-8"}}, jsonData, -1)
-			} else {
-				jsonData := []byte(fmt.Sprintf(cfg.OpenAIResponseFormat, randomID, createdTs, marshalledDenyMessage, string(xHigressBody)))
-				proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, jsonData, -1)
-			}
+		if err := cfg.SendDenyResponse(config, response, consumer, isStreamingResponse); err != nil {
+			log.Errorf("failed to build deny response body: %v", err)
+			cfg.MarkGuardrailResponseError(ctx, currentSubmissionIndex, responseBody, startTime)
+			proxywasm.ResumeHttpResponse()
+			return
 		}
 		config.IncrementCounter("ai_sec_response_deny", 1)
 		endTime := time.Now().UnixMilli()
 		ctx.SetUserAttribute("safecheck_response_rt", endTime-startTime)
 		ctx.SetUserAttribute("safecheck_status", "response deny")
-		if response.Data.Advice != nil {
+		if len(response.Data.Result) > 0 {
 			ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 			ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 		}

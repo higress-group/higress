@@ -34,6 +34,7 @@ Plugin Priority: `300`
 | `denyCode` | int | optional | 200 | Response status code when the specified content is illegal |
 | `denyMessage` | string | optional | Drainage/non-streaming response in openai format, the answer content is the suggested answer from Alibaba Cloud content security | Response content when the specified content is illegal |
 | `protocol` | string | optional | openai | protocol format, `openai` or `original` |
+| `openAIDenyResponseFormat` | string | optional | legacy | OpenAI-wrapped deny response format, `legacy` or `structured`. The default `legacy` preserves historical compatibility; `structured` embeds blocking details at `choices[0].x_higress_guardrail` |
 | `contentModerationLevelBar` | string | optional | max | contentModeration risk level threshold, `max`, `high`, `medium` or `low` |
 | `promptAttackLevelBar` | string | optional | max | promptAttack risk level threshold， `max`, `high`, `medium` or `low` |
 | `sensitiveDataLevelBar` | string | optional | S4 | sensitiveData risk level threshold,  `S4`, `S3`, `S2` or `S1` |
@@ -71,7 +72,7 @@ Risk level explanations for each detection dimension:
 
 ### Deny Response Body
 
-When content is blocked, the plugin (`MultiModalGuard` action) returns the following structured JSON object. The location in the response depends on the protocol:
+When content is blocked, the plugin (`MultiModalGuard` action) builds the following structured JSON object. `protocol: original`, MCP, and image-generation paths return it directly or indirectly; OpenAI text-generation wrapping keeps the historical response shape by default, and embeds this object only when `openAIDenyResponseFormat: structured` is configured.
 
 ```json
 {
@@ -100,12 +101,15 @@ Field descriptions:
 
 How the body is embedded per protocol:
 
-- **`text_generation` (OpenAI non-streaming)**: `choices[0].message.content` carries the human-readable deny text (`denyMessage`, defaults to `Sorry, I cannot answer your question.` when unconfigured); the structure above is placed at `choices[0].x_higress` as an embedded object (not a JSON string)
-- **`text_generation` (OpenAI streaming SSE)**: the first frame's `delta.content` carries the human-readable deny text; the structure above is attached only to the last chunk at `choices[0].x_higress` as an embedded object, followed by `data: [DONE]`
-- **`text_generation` (`protocol=original`)**: returned directly as the JSON response body (no OpenAI wrapper, no `x_higress`)
+- **`text_generation` (OpenAI, default `legacy`)**: emits neither `x_higress_guardrail` nor the historical `x_higress` field; `choices[0].message.content` / the first `delta.content` frame keeps the historical content shape (a JSON string for RiskBlock, deny text for mask fallback), `finish_reason` is `"stop"`, and streaming responses still end with `data: [DONE]`
+- **`text_generation` (OpenAI, `structured` non-streaming)**: `choices[0].message.content` carries the human-readable deny text (`denyMessage`, defaults to `Sorry, I cannot answer your question.` when unconfigured); the structure above is placed at `choices[0].x_higress_guardrail` as an embedded object (not a JSON string)
+- **`text_generation` (OpenAI, `structured` streaming SSE)**: the first frame's `delta.content` carries the human-readable deny text; the structure above is attached only to the last chunk at `choices[0].x_higress_guardrail` as an embedded object, followed by `data: [DONE]`
+- **`text_generation` (`protocol=original`)**: returned directly as the JSON response body (no OpenAI wrapper, no `x_higress_guardrail`)
 - **`image_generation`**: returned directly as the JSON response body (HTTP 403)
 - **`mcp` (JSON-RPC)**: serialised as a JSON string and placed in `error.message`
 - **`mcp` (SSE)**: same, returned via SSE event
+
+`openAIDenyResponseFormat` only changes the OpenAI-wrapped deny body shape; blocking decisions, fail-open behavior, metrics, and AI Log fields do not vary by format. Configure this field only at plugin global scope, not under `consumerRiskLevel`.
 
 ## Examples of configuration
 ### Check if the input is legal
@@ -129,6 +133,14 @@ accessKey: "XXXXXXXXX"
 secretKey: "XXXXXXXXXXXXXXX"
 checkRequest: true
 checkResponse: true
+```
+
+### Configure OpenAI Structured Deny Responses
+
+The default `openAIDenyResponseFormat: legacy` keeps the historical response shape. To emit structured blocking details in OpenAI responses, configure:
+
+```yaml
+openAIDenyResponseFormat: structured
 ```
 
 ### Configure response fallback extraction paths

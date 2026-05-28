@@ -263,6 +263,14 @@ func TestResolveJsonPathEdgeCases(t *testing.T) {
 	})
 }
 
+func TestReplaceJsonFieldTextContentReportsReadableNoOp(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"敏感内容"}]}`)
+	result, err := ReplaceJsonFieldTextContent(body, "@this.messages.0.content", "masked")
+	if err == nil {
+		t.Fatalf("expected error for readable path that sjson leaves unchanged, got nil with %s", string(result))
+	}
+}
+
 // TestReplaceJsonFieldContent covers the simple ReplaceJsonFieldContent function
 func TestReplaceJsonFieldContent(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":"original"}]}`)

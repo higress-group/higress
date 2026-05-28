@@ -2,7 +2,6 @@ package text
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -59,40 +58,18 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 			}
 			return
 		}
-		if config.ProtocolOriginal {
-			denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
-			if err != nil {
-				log.Errorf("failed to build deny response body: %v", err)
-				cfg.MarkGuardrailRequestError(ctx, currentSubmissionIndex, responseBody, startTime)
-				proxywasm.ResumeHttpRequest()
-				return
-			}
-			proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, denyBody, -1)
-		} else {
-			xHigressBody, err := cfg.BuildOpenAIDenyResponseBody(response, config, consumer)
-			if err != nil {
-				log.Errorf("failed to build deny response body: %v", err)
-				cfg.MarkGuardrailRequestError(ctx, currentSubmissionIndex, responseBody, startTime)
-				proxywasm.ResumeHttpRequest()
-				return
-			}
-			marshalledDenyMessage := wrapper.MarshalStr(cfg.ResolveDenyMessage(config))
-			randomID := utils.GenerateRandomChatID()
-			createdTs := time.Now().Unix()
-			if gjson.GetBytes(body, "stream").Bool() {
-				jsonData := []byte(fmt.Sprintf(cfg.OpenAIStreamResponseFormat, randomID, createdTs, marshalledDenyMessage, randomID, createdTs, string(xHigressBody)))
-				proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "text/event-stream;charset=UTF-8"}}, jsonData, -1)
-			} else {
-				jsonData := []byte(fmt.Sprintf(cfg.OpenAIResponseFormat, randomID, createdTs, marshalledDenyMessage, string(xHigressBody)))
-				proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, jsonData, -1)
-			}
+		if err := cfg.SendDenyResponse(config, response, consumer, gjson.GetBytes(body, "stream").Bool()); err != nil {
+			log.Errorf("failed to build deny response body: %v", err)
+			cfg.MarkGuardrailRequestError(ctx, currentSubmissionIndex, responseBody, startTime)
+			proxywasm.ResumeHttpRequest()
+			return
 		}
 		ctx.DontReadResponseBody()
 		config.IncrementCounter("ai_sec_request_deny", 1)
 		endTime := time.Now().UnixMilli()
 		ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 		ctx.SetUserAttribute("safecheck_status", "reqeust deny")
-		if response.Data.Advice != nil {
+		if len(response.Data.Result) > 0 {
 			ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 			ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 		}
