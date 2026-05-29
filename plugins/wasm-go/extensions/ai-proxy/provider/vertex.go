@@ -102,12 +102,13 @@ func (v *vertexProviderInitializer) ValidateConfig(config *ProviderConfig) error
 
 func (v *vertexProviderInitializer) DefaultCapabilities() map[string]string {
 	return map[string]string{
-		string(ApiNameChatCompletion):  vertexPathTemplate,
-		string(ApiNameEmbeddings):      vertexPathTemplate,
-		string(ApiNameImageGeneration): vertexPathTemplate,
-		string(ApiNameImageEdit):       vertexPathTemplate,
-		string(ApiNameImageVariation):  vertexPathTemplate,
-		string(ApiNameVertexRaw):       "", // 空字符串表示保持原路径，不做路径转换
+		string(ApiNameChatCompletion):    vertexPathTemplate,
+		string(ApiNameEmbeddings):        vertexPathTemplate,
+		string(ApiNameImageGeneration):   vertexPathTemplate,
+		string(ApiNameImageEdit):         vertexPathTemplate,
+		string(ApiNameImageVariation):    vertexPathTemplate,
+		string(ApiNameAnthropicMessages): vertexPathAnthropicTemplate, // 原生支持 Anthropic Messages API, 透传到 :rawPredict
+		string(ApiNameVertexRaw):         "",                          // 空字符串表示保持原路径，不做路径转换
 	}
 }
 
@@ -195,6 +196,12 @@ func (v *vertexProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiNam
 	}
 
 	util.OverwriteRequestHostHeader(headers, finalVertexDomain)
+
+	// 剥除 Anthropic 客户端可能携带的凭据头, 避免泄漏到 Google.
+	// vertex 一律用 OAuth Bearer (标准模式) 或 ?key= (Express 模式) 鉴权,
+	// 这些头对 vertex 没有任何意义, 留着只会把 sk-ant-... 这类密钥转发到上游日志.
+	headers.Del("x-api-key")
+	headers.Del("anthropic-api-key")
 }
 
 func (v *vertexProvider) getToken() (cached bool, err error) {
@@ -295,7 +302,10 @@ func (v *vertexProvider) OnRequestBody(ctx wrapper.HttpContext, apiName ApiName,
 	headers := util.GetRequestHeaders()
 
 	// OpenAI 兼容模式: 不转换请求体，只设置路径和进行模型映射
-	if v.isOpenAICompatibleMode() {
+	// 注意: Anthropic Messages API (/v1/messages) 一律走 native passthrough,
+	// 不受 vertexOpenAICompatible 配置影响 —— vertex 的 OpenAI 兼容端点只为 Gemini 设计,
+	// 用它转译 Claude 请求是无谓的 OpenAI 中转, 还会丢失 Anthropic 特有字段.
+	if v.isOpenAICompatibleMode() && apiName != ApiNameAnthropicMessages {
 		ctx.SetContext(contextOpenAICompatibleMarker, true)
 		body, err := v.onOpenAICompatibleRequestBody(ctx, apiName, body, headers)
 		if err != nil {
@@ -346,6 +356,8 @@ func (v *vertexProvider) TransformRequestBodyHeaders(ctx wrapper.HttpContext, ap
 	switch apiName {
 	case ApiNameChatCompletion:
 		return v.onChatCompletionRequestBody(ctx, body, headers)
+	case ApiNameAnthropicMessages:
+		return v.onAnthropicMessagesRequestBody(ctx, body, headers)
 	case ApiNameEmbeddings:
 		return v.onEmbeddingsRequestBody(ctx, body, headers)
 	case ApiNameImageGeneration:
@@ -382,6 +394,48 @@ func (v *vertexProvider) onOpenAICompatibleRequestBody(ctx wrapper.HttpContext, 
 	}
 
 	// 保持 OpenAI 格式，直接返回（可能更新了模型字段）
+	return body, nil
+}
+
+// onAnthropicMessagesRequestBody 处理 /v1/messages 请求, 透传 Anthropic body 到 vertex 的
+// :rawPredict / :streamRawPredict 端点. 不做任何协议转换, 仅做必要的 vertex-side adjustment:
+//  1. 模型映射 (modelMapping) —— vertex 上 Claude 模型必须用全限定名 (e.g. claude-sonnet-4@20250514)
+//  2. 构造 :rawPredict / :streamRawPredict path
+//  3. 删除 body 里的 "model" 字段 (vertex Anthropic 端点不接受 body 里的 model)
+//  4. 注入 "anthropic_version": "vertex-2023-10-16"
+//
+// 这条路径让 builtin tool (web_search_*, bash_*, computer_*, text_editor_*, code_execution_*)
+// 的 `type` 字段以及 custom tool 的 cache_control / thinking block 等 Anthropic 特有字段
+// 全部原样传到上游, 不会触发 `tools.0.custom.name` 这类校验错误.
+func (v *vertexProvider) onAnthropicMessagesRequestBody(ctx wrapper.HttpContext, body []byte, headers http.Header) ([]byte, error) {
+	stream := gjson.GetBytes(body, "stream").Bool()
+
+	model := gjson.GetBytes(body, "model").String()
+	if err := v.config.mapModel(ctx, &model); err != nil {
+		return nil, err
+	}
+
+	path := v.getAhthropicRequestPath(ctx, ApiNameAnthropicMessages, model, stream)
+	util.OverwriteRequestPathHeader(headers, path)
+
+	body, err := sjson.DeleteBytes(body, "model")
+	if err != nil {
+		return nil, fmt.Errorf("unable to strip model from anthropic body: %v", err)
+	}
+	body, err = sjson.SetBytes(body, "anthropic_version", vertexAnthropicVersion)
+	if err != nil {
+		return nil, fmt.Errorf("unable to inject anthropic_version: %v", err)
+	}
+
+	// vertex Anthropic 端点要求 max_tokens 必填, 客户端漏传会被 400.
+	// 跟 claude provider buildClaudeTextGenRequest 保持一致, 缺省补 claudeDefaultMaxTokens.
+	if !gjson.GetBytes(body, "max_tokens").Exists() {
+		body, err = sjson.SetBytes(body, "max_tokens", claudeDefaultMaxTokens)
+		if err != nil {
+			return nil, fmt.Errorf("unable to inject default max_tokens: %v", err)
+		}
+	}
+
 	return body, nil
 }
 
@@ -654,6 +708,11 @@ func (v *vertexProvider) parseImageSize(size string) (aspectRatio, imageSize str
 }
 
 func (v *vertexProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name ApiName, chunk []byte, isLastChunk bool) ([]byte, error) {
+	// Anthropic Messages API: vertex 的 :streamRawPredict 已经返回标准 Anthropic SSE, 原样透传
+	if name == ApiNameAnthropicMessages {
+		return chunk, nil
+	}
+
 	// OpenAI 兼容模式: 透传响应，但需要解码 Unicode 转义序列
 	// Vertex AI OpenAI-compatible API 返回 ASCII-safe JSON，将非 ASCII 字符编码为 \uXXXX
 	if ctx.GetContext(contextOpenAICompatibleMarker) != nil && ctx.GetContext(contextOpenAICompatibleMarker).(bool) {
@@ -733,6 +792,11 @@ func (v *vertexProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name A
 }
 
 func (v *vertexProvider) TransformResponseBody(ctx wrapper.HttpContext, apiName ApiName, body []byte) ([]byte, error) {
+	// Anthropic Messages API: vertex 的 :rawPredict 已经返回标准 Anthropic JSON, 原样透传
+	if apiName == ApiNameAnthropicMessages {
+		return body, nil
+	}
+
 	// OpenAI 兼容模式: 透传响应，但需要解码 Unicode 转义序列
 	// Vertex AI OpenAI-compatible API 返回 ASCII-safe JSON，将非 ASCII 字符编码为 \uXXXX
 	if ctx.GetContext(contextOpenAICompatibleMarker) != nil && ctx.GetContext(contextOpenAICompatibleMarker).(bool) {

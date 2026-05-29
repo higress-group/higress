@@ -44,6 +44,27 @@ var basicKeyAuthConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：consumer 使用多个 credentials
+var pluralCredentialsConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{
+				"name":        "consumer1",
+				"credentials": []string{"token1", "token1-alt"},
+			},
+			{
+				"name":       "consumer2",
+				"credential": "token2",
+			},
+		},
+		"keys":        []string{"x-api-key", "apikey"},
+		"in_header":   true,
+		"in_query":    false,
+		"global_auth": true,
+	})
+	return data
+}()
+
 // 测试配置：全局认证关闭
 var globalAuthFalseConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -187,6 +208,62 @@ var invalidDuplicateCredentialConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：无效配置 - credentials 中的重复 credential
+var invalidDuplicatePluralCredentialConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{
+				"name":       "consumer1",
+				"credential": "token1",
+			},
+			{
+				"name":        "consumer2",
+				"credentials": []string{"token1"},
+			},
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"in_query":    false,
+		"global_auth": true,
+	})
+	return data
+}()
+
+// 测试配置：无效配置 - credential 和 credentials 同时配置
+var invalidMixedCredentialFormsConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{
+				"name":        "consumer1",
+				"credential":  "token1",
+				"credentials": []string{"token1-alt"},
+			},
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"in_query":    false,
+		"global_auth": true,
+	})
+	return data
+}()
+
+// 测试配置：无效配置 - 空的 credentials
+var invalidEmptyPluralCredentialsConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{
+				"name":        "consumer1",
+				"credentials": []string{},
+			},
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"in_query":    false,
+		"global_auth": true,
+	})
+	return data
+}()
+
 // 测试配置：规则配置 - 带 allow 列表
 var ruleConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -257,6 +334,24 @@ func TestParseGlobalConfig(t *testing.T) {
 			require.Equal(t, "apikey", keyAuthConfig.Keys[1])
 			require.True(t, keyAuthConfig.InHeader)
 			require.False(t, keyAuthConfig.InQuery)
+		})
+
+		// 测试 consumer credentials 数组配置解析
+		t.Run("plural credentials config", func(t *testing.T) {
+			host, status := test.NewTestHost(pluralCredentialsConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+
+			keyAuthConfig := config.(*KeyAuthConfig)
+			require.Len(t, keyAuthConfig.consumers, 2)
+			require.Equal(t, []string{"token1", "token1-alt"}, keyAuthConfig.consumers[0].Credentials)
+			require.Equal(t, "consumer1", keyAuthConfig.credential2Name["token1"])
+			require.Equal(t, "consumer1", keyAuthConfig.credential2Name["token1-alt"])
+			require.Equal(t, "consumer2", keyAuthConfig.credential2Name["token2"])
 		})
 
 		// 测试全局认证关闭配置
@@ -355,6 +450,27 @@ func TestParseGlobalConfig(t *testing.T) {
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusFailed, status)
 		})
+
+		// 测试无效配置 - credentials 中的重复 credential
+		t.Run("invalid duplicate plural credential config", func(t *testing.T) {
+			host, status := test.NewTestHost(invalidDuplicatePluralCredentialConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		// 测试无效配置 - credential 和 credentials 互斥
+		t.Run("invalid mixed credential forms config", func(t *testing.T) {
+			host, status := test.NewTestHost(invalidMixedCredentialFormsConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		// 测试无效配置 - 空的 credentials
+		t.Run("invalid empty plural credentials config", func(t *testing.T) {
+			host, status := test.NewTestHost(invalidEmptyPluralCredentialsConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
 	})
 }
 
@@ -408,6 +524,38 @@ func TestOnHTTPRequestHeaders(t *testing.T) {
 			require.Nil(t, localResponse, "Valid API key should pass through")
 
 			// 验证是否添加了 X-Mse-Consumer 头
+			headers := host.GetRequestHeaders()
+			consumerHeaderFound := false
+			for _, header := range headers {
+				if header[0] == "x-mse-consumer" && header[1] == "consumer1" {
+					consumerHeaderFound = true
+					break
+				}
+			}
+			require.True(t, consumerHeaderFound, "X-Mse-Consumer header should be added")
+
+			host.CompleteHttp()
+		})
+
+		// 测试全局认证开启 - credentials 数组中的 API key
+		t.Run("global auth true - valid plural credentials api key", func(t *testing.T) {
+			host, status := test.NewTestHost(pluralCredentialsConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "GET"},
+				{"x-api-key", "token1-alt"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+
+			localResponse := host.GetLocalResponse()
+			require.Nil(t, localResponse, "Valid API key from credentials should pass through")
+
 			headers := host.GetRequestHeaders()
 			consumerHeaderFound := false
 			for _, header := range headers {

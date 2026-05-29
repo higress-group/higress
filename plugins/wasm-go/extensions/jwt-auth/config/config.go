@@ -14,6 +14,8 @@
 
 package config
 
+import "github.com/go-jose/go-jose/v3"
+
 var (
 	// DefaultClaimToHeaderOverride 是 claim_to_override 中 override 字段的默认值
 	DefaultClaimToHeaderOverride = true
@@ -23,6 +25,12 @@ var (
 
 	// DefaultKeepToken 是 KeepToken 的默认值
 	DefaultKeepToken = true
+
+	// DefaultJWKsCacheDuration is the default remote JWKS cache duration in seconds.
+	DefaultJWKsCacheDuration = int64(600)
+
+	// DefaultJWKsFetchTimeout is the default remote JWKS fetch timeout in milliseconds.
+	DefaultJWKsFetchTimeout = int64(1500)
 
 	// DefaultFromHeader 是 from_header 的默认值
 	DefaultFromHeader = []FromHeader{{
@@ -37,6 +45,9 @@ var (
 	DefaultFromCookies = []string{}
 )
 
+// RemoteJWKsMinRefreshIntervalSeconds is the shared lower bound for remote JWKS cache TTL and retry backoff.
+const RemoteJWKsMinRefreshIntervalSeconds = int64(30)
+
 // JWTAuthConfig defines the struct of the global config of higress wasm plugin jwt-auth.
 // https://higress.io/zh-cn/docs/plugins/jwt-auth
 type JWTAuthConfig struct {
@@ -44,6 +55,9 @@ type JWTAuthConfig struct {
 	//
 	// Consumers 配置服务的调用者，用于对请求进行认证
 	Consumers []*Consumer `json:"consumers"`
+
+	// RuleSet records whether at least one domain or route rule is configured.
+	RuleSet bool `json:"-"`
 
 	// 全局配置
 	//
@@ -67,6 +81,20 @@ type Consumer struct {
 	//
 	// https://www.rfc-editor.org/rfc/rfc7517
 	JWKs string `json:"jwks"`
+
+	// ParsedJWKs caches parsed inline JWKS after config validation.
+	ParsedJWKs *jose.JSONWebKeySet `json:"-"`
+
+	// RemoteJWKs specifies a remote JWKS endpoint referenced by service.
+	// The service must be configured or discovered by Higress, for example via McpBridge.
+	RemoteJWKs *RemoteJWKs `json:"remote_jwks,omitempty"`
+
+	// JWKsCacheDuration is the remote JWKS cache duration in seconds.
+	// Requests are denied while the first fetch is in flight or after recent fetch failures.
+	JWKsCacheDuration *int64 `json:"jwks_cache_duration,omitempty"`
+
+	// JWKsFetchTimeout is the remote JWKS fetch timeout in milliseconds.
+	JWKsFetchTimeout *int64 `json:"jwks_fetch_timeout,omitempty"`
 
 	// Issuer JWT的签发者，需要和payload中的iss字段保持一致
 	Issuer string `json:"issuer"`
@@ -100,6 +128,20 @@ type Consumer struct {
 	//
 	// 默认值为 true
 	KeepToken *bool `json:"keep_token,omitempty"`
+}
+
+type RemoteJWKs struct {
+	// ServiceName is the FQDN service name used to build the outbound cluster.
+	ServiceName string `json:"service_name"`
+
+	// ServiceHost is the HTTP Host/:authority header for the JWKS request.
+	ServiceHost string `json:"service_host,omitempty"`
+
+	// ServicePort is the service port used to build the outbound cluster. Defaults to 443.
+	ServicePort *int64 `json:"service_port,omitempty"`
+
+	// Path is the JWKS request path, for example "/.well-known/jwks.json".
+	Path string `json:"path"`
 }
 
 // ClaimsToHeader 抽取JWT的payload中指定字段，设置到指定的请求头中转发给后端
