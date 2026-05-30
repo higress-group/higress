@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-security-guard/utils"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 )
+
+type OpenAIDenyResponseFormat string
 
 const (
 	MaxRisk    = "max"
@@ -35,10 +39,31 @@ const (
 	WaterMarkType              = "waterMark"
 
 	// Default configurations
-	OpenAIResponseFormat       = `{"id": "%s","object":"chat.completion","model":"from-security-guard","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
-	OpenAIStreamResponseChunk  = `data:{"id":"%s","object":"chat.completion.chunk","model":"from-security-guard","choices":[{"index":0,"delta":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":null}]}`
-	OpenAIStreamResponseEnd    = `data:{"id":"%s","object":"chat.completion.chunk","model":"from-security-guard","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
-	OpenAIStreamResponseFormat = OpenAIStreamResponseChunk + "\n\n" + OpenAIStreamResponseEnd + "\n\n" + `data: [DONE]`
+	// Template parameter order:
+	//   OpenAIResponseFormatLegacy:          id, created (unix sec), content
+	//   OpenAIResponseFormatStructured:      id, created (unix sec), content, x_higress_guardrail JSON
+	//   OpenAIStreamResponseChunk:           id, created, content
+	//   OpenAIStreamResponseEndLegacy:       id, created
+	//   OpenAIStreamResponseEndStructured:   id, created, x_higress_guardrail JSON
+	//   OpenAIStreamResponseFormatLegacy:    id, created, content, id, created
+	//   OpenAIStreamResponseFormatStructured: id, created, content, id, created, x_higress_guardrail JSON
+	// `created` is required by openai-python (ChatCompletion.created is non-Optional).
+	// `finish_reason: "stop"` preserves wire-level compatibility with downstream
+	// consumers (LangChain / LiteLLM / SDKs / BI dashboards) that treat `stop` as
+	// "valid completion"; the moderation-event signal lives in the nested
+	// `choices[0].x_higress_guardrail` block (denyCode / blockedDetails) instead.
+	OpenAIResponseFormatLegacy           = `{"id":"%s","object":"chat.completion","created":%d,"model":"from-security-guard","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
+	OpenAIResponseFormatStructured       = `{"id":"%s","object":"chat.completion","created":%d,"model":"from-security-guard","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":"stop","x_higress_guardrail":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
+	OpenAIStreamResponseChunk            = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":null}]}`
+	OpenAIStreamResponseEndLegacy        = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
+	OpenAIStreamResponseEndStructured    = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop","x_higress_guardrail":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
+	OpenAIStreamResponseFormatLegacy     = OpenAIStreamResponseChunk + "\n\n" + OpenAIStreamResponseEndLegacy + "\n\n" + `data: [DONE]`
+	OpenAIStreamResponseFormatStructured = OpenAIStreamResponseChunk + "\n\n" + OpenAIStreamResponseEndStructured + "\n\n" + `data: [DONE]`
+
+	OpenAIDenyResponseFormatLegacy     OpenAIDenyResponseFormat = "legacy"
+	OpenAIDenyResponseFormatStructured OpenAIDenyResponseFormat = "structured"
+
+	OpenAIDenyResponseFormatConsumerScopeError = "openAIDenyResponseFormat must be configured at plugin global scope, not under consumerRiskLevel"
 
 	DefaultDenyCode    = 200
 	DefaultDenyMessage = "很抱歉，我无法回答您的问题"
@@ -184,6 +209,7 @@ type AISecurityConfig struct {
 	DenyCode                               int64
 	DenyMessage                            string
 	ProtocolOriginal                       bool
+	OpenAIDenyResponseFormat               OpenAIDenyResponseFormat
 	RiskLevelBar                           string
 	ContentModerationLevelBar              string
 	PromptAttackLevelBar                   string
@@ -296,6 +322,16 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 	config.CheckRequestImage = json.Get("checkRequestImage").Bool()
 	config.CheckResponse = json.Get("checkResponse").Bool()
 	config.ProtocolOriginal = json.Get("protocol").String() == "original"
+	if obj := json.Get("openAIDenyResponseFormat"); obj.Exists() {
+		switch OpenAIDenyResponseFormat(obj.String()) {
+		case OpenAIDenyResponseFormatLegacy:
+			config.OpenAIDenyResponseFormat = OpenAIDenyResponseFormatLegacy
+		case OpenAIDenyResponseFormatStructured:
+			config.OpenAIDenyResponseFormat = OpenAIDenyResponseFormatStructured
+		default:
+			return errors.New("invalid openAIDenyResponseFormat, value must be one of [legacy, structured]")
+		}
+	}
 	config.DenyMessage = json.Get("denyMessage").String()
 	if obj := json.Get("denyCode"); obj.Exists() {
 		config.DenyCode = obj.Int()
@@ -410,6 +446,9 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 			m := make(map[string]interface{})
 			for k, v := range item.Map() {
 				m[k] = v.Value()
+			}
+			if _, ok := m["openAIDenyResponseFormat"]; ok {
+				return errors.New(OpenAIDenyResponseFormatConsumerScopeError)
 			}
 			consumerName, ok1 := m["name"]
 			matchType, ok2 := m["matchType"]
@@ -531,6 +570,7 @@ func (config *AISecurityConfig) SetDefaultValues() {
 	config.ApiType = ApiTextGeneration
 	config.ProviderType = ProviderOpenAI
 	config.RiskAction = "block"
+	config.OpenAIDenyResponseFormat = OpenAIDenyResponseFormatLegacy
 }
 
 func (config *AISecurityConfig) IncrementCounter(metricName string, inc uint64) {
@@ -949,6 +989,151 @@ func BuildDenyResponseBody(response Response, config AISecurityConfig, consumer 
 		BlockedDetails: blocked,
 	}
 	return json.Marshal(body)
+}
+
+// ResolveDenyMessage returns the human-readable deny text used both for
+// non-original OpenAI wrappers (message.content / delta.content) and for the
+// x_higress_guardrail.denyMessage field, ensuring the two stay aligned.
+func ResolveDenyMessage(config AISecurityConfig) string {
+	if config.DenyMessage != "" {
+		return config.DenyMessage
+	}
+	return DefaultDenyMessage
+}
+
+// BuildOpenAIDenyResponseBody builds the guardrail JSON object embedded by the
+// outer OpenAI structured template as choices[0].x_higress_guardrail. Its shape
+// mirrors DenyResponseBody, but DenyMessage is filled via ResolveDenyMessage so
+// the field is always present and consistent with the rendered content.
+// Code is sourced from config.DenyCode so that x_higress_guardrail.code
+// consistently represents "the HTTP status this gateway returns to the client",
+// aligned with BuildOpenAIFallbackDenyResponseBody.
+func BuildOpenAIDenyResponseBody(response Response, config AISecurityConfig, consumer string) ([]byte, error) {
+	details := GetUnacceptableDetail(response.Data, config, consumer)
+	blocked := make([]BlockedDetail, 0, len(details))
+	for _, d := range details {
+		blocked = append(blocked, BlockedDetail{
+			Type:  d.Type,
+			Level: d.Level,
+		})
+	}
+	body := DenyResponseBody{
+		Code:           int(config.DenyCode),
+		DenyMessage:    ResolveDenyMessage(config),
+		BlockedDetails: blocked,
+	}
+	return json.Marshal(body)
+}
+
+// BuildOpenAIFallbackDenyResponseBody builds the guardrail JSON object embedded
+// by the outer OpenAI structured template as choices[0].x_higress_guardrail for
+// mask→block fallback paths. The fallback is triggered by
+// ReplaceJsonFieldTextContent failure or empty desensitization, so there is no
+// upstream Response object to derive blockedDetails from.
+func BuildOpenAIFallbackDenyResponseBody(config AISecurityConfig) ([]byte, error) {
+	body := DenyResponseBody{
+		Code:           int(config.DenyCode),
+		DenyMessage:    ResolveDenyMessage(config),
+		BlockedDetails: []BlockedDetail{},
+	}
+	return json.Marshal(body)
+}
+
+func openAIDenyContentType(isStream bool) [][2]string {
+	if isStream {
+		return [][2]string{{"content-type", "text/event-stream;charset=UTF-8"}}
+	}
+	return [][2]string{{"content-type", "application/json"}}
+}
+
+// BuildOpenAIDenyData builds the complete OpenAI-formatted deny response bytes
+// (structured or legacy). Callers that need raw bytes (e.g. streaming response
+// handlers using InjectEncodedDataToFilterChain) use this directly; callers that
+// want a full SendHttpResponse dispatch should use SendDenyResponse instead.
+func BuildOpenAIDenyData(config AISecurityConfig, response Response, consumer string, isStream bool) ([]byte, error) {
+	if config.OpenAIDenyResponseFormat == OpenAIDenyResponseFormatStructured {
+		guardrailBody, err := BuildOpenAIDenyResponseBody(response, config, consumer)
+		if err != nil {
+			return nil, err
+		}
+		marshalledDenyMessage := wrapper.MarshalStr(ResolveDenyMessage(config))
+		randomID := utils.GenerateRandomChatID()
+		createdTs := time.Now().Unix()
+		if isStream {
+			return []byte(fmt.Sprintf(OpenAIStreamResponseFormatStructured, randomID, createdTs, marshalledDenyMessage, randomID, createdTs, string(guardrailBody))), nil
+		}
+		return []byte(fmt.Sprintf(OpenAIResponseFormatStructured, randomID, createdTs, marshalledDenyMessage, string(guardrailBody))), nil
+	}
+	denyBody, err := BuildDenyResponseBody(response, config, consumer)
+	if err != nil {
+		return nil, err
+	}
+	marshalledDenyBody := wrapper.MarshalStr(string(denyBody))
+	randomID := utils.GenerateRandomChatID()
+	createdTs := time.Now().Unix()
+	if isStream {
+		return []byte(fmt.Sprintf(OpenAIStreamResponseFormatLegacy, randomID, createdTs, marshalledDenyBody, randomID, createdTs)), nil
+	}
+	return []byte(fmt.Sprintf(OpenAIResponseFormatLegacy, randomID, createdTs, marshalledDenyBody)), nil
+}
+
+// SendDenyResponse dispatches a deny HTTP response in the appropriate format
+// (ProtocolOriginal, Structured, or Legacy). It returns an error only if
+// building the response body fails; the caller should handle the error
+// (e.g. log, mark guardrail error, resume request/response).
+func SendDenyResponse(config AISecurityConfig, response Response, consumer string, isStream bool) error {
+	if config.ProtocolOriginal {
+		denyBody, err := BuildDenyResponseBody(response, config, consumer)
+		if err != nil {
+			return err
+		}
+		proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, denyBody, -1)
+		return nil
+	}
+	data, err := BuildOpenAIDenyData(config, response, consumer, isStream)
+	if err != nil {
+		return err
+	}
+	proxywasm.SendHttpResponse(uint32(config.DenyCode), openAIDenyContentType(isStream), data, -1)
+	return nil
+}
+
+// SendFallbackDenyResponse dispatches a fallback deny HTTP response when no
+// upstream Response object is available (e.g. mask-to-block on replace error
+// or empty desensitization). For ProtocolOriginal it sends the plain deny
+// message; for OpenAI formats it wraps it in the appropriate template with
+// an empty-blockedDetails guardrail object (structured) or the deny message
+// as content (legacy).
+func SendFallbackDenyResponse(config AISecurityConfig, isStream bool) error {
+	marshalledDenyMessage := wrapper.MarshalStr(ResolveDenyMessage(config))
+	if config.ProtocolOriginal {
+		proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, []byte(marshalledDenyMessage), -1)
+		return nil
+	}
+	randomID := utils.GenerateRandomChatID()
+	createdTs := time.Now().Unix()
+	if config.OpenAIDenyResponseFormat == OpenAIDenyResponseFormatStructured {
+		guardrailBody, err := BuildOpenAIFallbackDenyResponseBody(config)
+		if err != nil {
+			return err
+		}
+		var data []byte
+		if isStream {
+			data = []byte(fmt.Sprintf(OpenAIStreamResponseFormatStructured, randomID, createdTs, marshalledDenyMessage, randomID, createdTs, string(guardrailBody)))
+		} else {
+			data = []byte(fmt.Sprintf(OpenAIResponseFormatStructured, randomID, createdTs, marshalledDenyMessage, string(guardrailBody)))
+		}
+		proxywasm.SendHttpResponse(uint32(config.DenyCode), openAIDenyContentType(isStream), data, -1)
+		return nil
+	}
+	var data []byte
+	if isStream {
+		data = []byte(fmt.Sprintf(OpenAIStreamResponseFormatLegacy, randomID, createdTs, marshalledDenyMessage, randomID, createdTs))
+	} else {
+		data = []byte(fmt.Sprintf(OpenAIResponseFormatLegacy, randomID, createdTs, marshalledDenyMessage))
+	}
+	proxywasm.SendHttpResponse(uint32(config.DenyCode), openAIDenyContentType(isStream), data, -1)
+	return nil
 }
 
 func GetUnacceptableDetail(data Data, config AISecurityConfig, consumer string) []Detail {

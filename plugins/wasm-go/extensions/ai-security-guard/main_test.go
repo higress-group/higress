@@ -312,6 +312,29 @@ var protocolOriginalConfig = func() json.RawMessage {
 	return data
 }()
 
+func withConfigOverrides(base json.RawMessage, overrides map[string]interface{}) json.RawMessage {
+	var config map[string]interface{}
+	_ = json.Unmarshal(base, &config)
+	for k, v := range overrides {
+		config[k] = v
+	}
+	data, _ := json.Marshal(config)
+	return data
+}
+
+func withStructuredFormat(base json.RawMessage) json.RawMessage {
+	return withConfigOverrides(base, map[string]interface{}{
+		"openAIDenyResponseFormat": string(cfg.OpenAIDenyResponseFormatStructured),
+	})
+}
+
+func mustDecodeLegacyDenyContent(t *testing.T, content string) cfg.DenyResponseBody {
+	t.Helper()
+	var denyBody cfg.DenyResponseBody
+	require.NoError(t, json.Unmarshal([]byte(content), &denyBody))
+	return denyBody
+}
+
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		// 测试基础配置解析
@@ -335,6 +358,69 @@ func TestParseConfig(t *testing.T) {
 			require.Equal(t, 1000, securityConfig.BufferLimit)
 			require.Equal(t, cfg.DefaultResponseFallbackJsonPaths(), securityConfig.ResponseContentFallbackJsonPaths)
 			require.Equal(t, cfg.DefaultStreamingResponseFallbackJsonPaths(), securityConfig.ResponseStreamContentFallbackJsonPaths)
+			require.Equal(t, cfg.OpenAIDenyResponseFormatLegacy, securityConfig.OpenAIDenyResponseFormat)
+		})
+
+		t.Run("openai deny response format explicit legacy", func(t *testing.T) {
+			host, status := test.NewTestHost(withConfigOverrides(requestOnlyConfig, map[string]interface{}{
+				"openAIDenyResponseFormat": "legacy",
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			securityConfig := config.(*cfg.AISecurityConfig)
+			require.Equal(t, cfg.OpenAIDenyResponseFormatLegacy, securityConfig.OpenAIDenyResponseFormat)
+		})
+
+		t.Run("openai deny response format explicit structured", func(t *testing.T) {
+			host, status := test.NewTestHost(withStructuredFormat(requestOnlyConfig))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			securityConfig := config.(*cfg.AISecurityConfig)
+			require.Equal(t, cfg.OpenAIDenyResponseFormatStructured, securityConfig.OpenAIDenyResponseFormat)
+		})
+
+		t.Run("invalid openai deny response format", func(t *testing.T) {
+			host, status := test.NewTestHost(withConfigOverrides(requestOnlyConfig, map[string]interface{}{
+				"openAIDenyResponseFormat": "json",
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		t.Run("empty openai deny response format is invalid", func(t *testing.T) {
+			host, status := test.NewTestHost(withConfigOverrides(requestOnlyConfig, map[string]interface{}{
+				"openAIDenyResponseFormat": "",
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		t.Run("consumer risk level cannot override openai deny response format", func(t *testing.T) {
+			configJSON, err := json.Marshal(map[string]interface{}{
+				"serviceName":               "security-service",
+				"servicePort":               8080,
+				"serviceHost":               "security.example.com",
+				"accessKey":                 "test-ak",
+				"secretKey":                 "test-sk",
+				"checkRequest":              true,
+				"action":                    "MultiModalGuard",
+				"contentModerationLevelBar": "high",
+				"consumerRiskLevel": []map[string]interface{}{
+					{
+						"name":                     "consumer-a",
+						"matchType":                "exact",
+						"openAIDenyResponseFormat": "structured",
+					},
+				},
+			})
+			require.NoError(t, err)
+			var securityConfig cfg.AISecurityConfig
+			parseErr := securityConfig.Parse(gjson.ParseBytes(configJSON))
+			require.EqualError(t, parseErr, cfg.OpenAIDenyResponseFormatConsumerScopeError)
 		})
 
 		// 测试仅检查请求的配置
@@ -509,7 +595,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试启用请求检查的情况
 		t.Run("request checking enabled", func(t *testing.T) {
-			host, status := test.NewTestHost(basicConfig)
+			host, status := test.NewTestHost(withStructuredFormat(basicConfig))
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
@@ -547,7 +633,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试请求体安全检查通过
 		t.Run("request body security check pass", func(t *testing.T) {
-			host, status := test.NewTestHost(basicConfig)
+			host, status := test.NewTestHost(withStructuredFormat(basicConfig))
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
@@ -2655,7 +2741,7 @@ func TestTextModerationPlusResponseDeny(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// TextModerationPlus response deny → exercises text_moderation_plus/text (via common/text) BuildDenyResponseBody response path
 		t.Run("text moderation plus response deny returns blockedDetails", func(t *testing.T) {
-			host, status := test.NewTestHost(basicConfig)
+			host, status := test.NewTestHost(withStructuredFormat(basicConfig))
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
@@ -2684,22 +2770,26 @@ func TestTextModerationPlusResponseDeny(t *testing.T) {
 			require.NotNil(t, local, "expected SendHttpResponse for response deny")
 			require.Contains(t, string(local.Data), "blockedDetails")
 
-			// Verify OpenAI completion shape wrapper
+			// Verify OpenAI completion shape wrapper in structured mode:
+			// message.content carries only the human-readable deny text and the
+			// structured deny payload moves to choices[0].x_higress_guardrail.
 			type openAIChatCompletion struct {
 				Choices []struct {
 					Message struct {
 						Content string `json:"content"`
 					} `json:"message"`
+					Guardrail cfg.DenyResponseBody `json:"x_higress_guardrail"`
 				} `json:"choices"`
 			}
 			var outer openAIChatCompletion
 			require.NoError(t, json.Unmarshal(local.Data, &outer))
 			require.Len(t, outer.Choices, 1)
 
-			var deny cfg.DenyResponseBody
-			require.NoError(t, json.Unmarshal([]byte(outer.Choices[0].Message.Content), &deny))
-			require.Equal(t, 200, deny.Code)
-			require.NotEmpty(t, deny.BlockedDetails)
+			require.Equal(t, cfg.DefaultDenyMessage, outer.Choices[0].Message.Content)
+			require.Equal(t, 200, outer.Choices[0].Guardrail.Code)
+			require.Equal(t, cfg.DefaultDenyMessage, outer.Choices[0].Guardrail.DenyMessage)
+			require.NotEmpty(t, outer.Choices[0].Guardrail.BlockedDetails)
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists())
 		})
 	})
 }
@@ -3286,6 +3376,838 @@ func TestMultiModalGuardMaskStreamDeny(t *testing.T) {
 				}
 			}
 			require.True(t, foundSSE, "expected SSE content-type for stream deny")
+		})
+	})
+}
+
+func TestOpenAIDenyLegacyDefaultNonStream(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("default legacy non-stream response keeps deny body in content", func(t *testing.T) {
+			host, status := test.NewTestHost(multiModalGuardTextConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "trigger deny"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-legacy-default", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+
+			require.Equal(t, "stop", gjson.GetBytes(local.Data, "choices.0.finish_reason").String())
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail").Exists())
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists())
+
+			content := gjson.GetBytes(local.Data, "choices.0.message.content").String()
+			denyBody := mustDecodeLegacyDenyContent(t, content)
+			require.Equal(t, 200, denyBody.Code)
+			require.NotEmpty(t, denyBody.BlockedDetails)
+		})
+	})
+}
+
+func TestOpenAIDenyLegacyDefaultStream(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("default legacy stream response keeps deny body in first content frame", func(t *testing.T) {
+			host, status := test.NewTestHost(multiModalGuardTextConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "trigger deny"}], "stream": true}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-legacy-stream", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+
+			raw := string(local.Data)
+			require.True(t, strings.HasSuffix(strings.TrimSpace(raw), "data: [DONE]"))
+			parts := strings.Split(raw, "\n\n")
+			require.GreaterOrEqual(t, len(parts), 3)
+
+			firstFrame := strings.TrimSpace(strings.TrimPrefix(parts[0], "data:"))
+			endFrame := strings.TrimSpace(strings.TrimPrefix(parts[1], "data:"))
+
+			firstContent := gjson.Get(firstFrame, "choices.0.delta.content").String()
+			denyBody := mustDecodeLegacyDenyContent(t, firstContent)
+			require.Equal(t, 200, denyBody.Code)
+			require.NotEmpty(t, denyBody.BlockedDetails)
+
+			require.False(t, gjson.Get(firstFrame, "choices.0.x_higress_guardrail").Exists())
+			require.False(t, gjson.Get(firstFrame, "choices.0.x_higress").Exists())
+			require.False(t, gjson.Get(endFrame, "choices.0.x_higress_guardrail").Exists())
+			require.False(t, gjson.Get(endFrame, "choices.0.x_higress").Exists())
+			require.Equal(t, "stop", gjson.Get(endFrame, "choices.0.finish_reason").String())
+		})
+	})
+}
+
+func TestOpenAIDenyLegacyDenyCodeKeepsResponseCodeInContent(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("legacy content code remains safecheck response code when denyCode differs", func(t *testing.T) {
+			host, status := test.NewTestHost(withConfigOverrides(multiModalGuardTextConfig, map[string]interface{}{
+				"denyCode": 451,
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "trigger deny"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-legacy-451", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Equal(t, uint32(451), local.StatusCode)
+
+			content := gjson.GetBytes(local.Data, "choices.0.message.content").String()
+			denyBody := mustDecodeLegacyDenyContent(t, content)
+			require.Equal(t, 200, denyBody.Code)
+		})
+	})
+}
+
+func TestMaskEmptyDesensitizationOpenAIFormats(t *testing.T) {
+	securityResponse := `{
+		"Code": 200, "Message": "Success", "RequestId": "req-mask-empty-openai",
+		"Data": {
+			"RiskLevel": "none",
+			"Detail": [{
+				"Suggestion": "mask", "Type": "sensitiveData", "Level": "S3",
+				"Result": [{"Label": "phone", "Confidence": 99.0,
+					"Ext": {"Desensitization": ""}}]
+			}]
+		}
+	}`
+
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("legacy empty desensitization uses json-stringified deny body", func(t *testing.T) {
+			host, status := test.NewTestHost(maskConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "敏感内容"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+			host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail").Exists())
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists())
+
+			content := gjson.GetBytes(local.Data, "choices.0.message.content").String()
+			denyBody := mustDecodeLegacyDenyContent(t, content)
+			require.Equal(t, 200, denyBody.Code)
+			require.Empty(t, denyBody.BlockedDetails)
+		})
+
+		t.Run("structured empty desensitization uses fallback guardrail", func(t *testing.T) {
+			host, status := test.NewTestHost(withStructuredFormat(maskConfig))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "敏感内容"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+			host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Equal(t, cfg.DefaultDenyMessage, gjson.GetBytes(local.Data, "choices.0.message.content").String())
+			require.True(t, gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail").IsObject())
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists())
+			require.Equal(t, int64(0), gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail.blockedDetails.#").Int())
+		})
+	})
+}
+
+func TestMaskReplaceJsonFieldFailureOpenAIFormats(t *testing.T) {
+	securityResponse := `{
+		"Code": 200, "Message": "Success", "RequestId": "req-mask-replace-failure",
+		"Data": {
+			"RiskLevel": "none",
+			"Detail": [{
+				"Suggestion": "mask", "Type": "sensitiveData", "Level": "S3",
+				"Result": [{"Label": "phone", "Confidence": 99.0,
+					"Ext": {"Desensitization": "masked"}}]
+			}]
+		}
+	}`
+
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("legacy replace failure keeps pure deny message content", func(t *testing.T) {
+			host, status := test.NewTestHost(withConfigOverrides(maskConfig, map[string]interface{}{
+				"requestContentJsonPath": "@this.messages.0.content",
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "敏感内容"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+			host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Equal(t, cfg.DefaultDenyMessage, gjson.GetBytes(local.Data, "choices.0.message.content").String())
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail").Exists())
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists())
+		})
+
+		t.Run("structured replace failure emits fallback guardrail", func(t *testing.T) {
+			host, status := test.NewTestHost(withConfigOverrides(withStructuredFormat(maskConfig), map[string]interface{}{
+				"requestContentJsonPath": "@this.messages.0.content",
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "敏感内容"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+			host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Equal(t, cfg.DefaultDenyMessage, gjson.GetBytes(local.Data, "choices.0.message.content").String())
+			require.True(t, gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail").IsObject())
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists())
+			require.Equal(t, int64(0), gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail.blockedDetails.#").Int())
+		})
+	})
+}
+
+// =============================================================================
+// x_higress_guardrail 扩展字段链路与模板测试
+// =============================================================================
+
+// openAIChoiceWithGuardrail is the minimal OpenAI choice shape used by
+// x_higress_guardrail assertions. Guardrail is unmarshaled directly into the strongly
+// typed cfg.DenyResponseBody so tests assert the documented contract — code
+// is int, denyMessage is string, blockedDetails is a slice — instead of
+// silently tolerating shape drift through map[string]interface{}.
+type openAIChoiceWithGuardrail struct {
+	Index   int `json:"index"`
+	Message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"message"`
+	Delta struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"delta"`
+	FinishReason *string              `json:"finish_reason"`
+	Guardrail    cfg.DenyResponseBody `json:"x_higress_guardrail"`
+}
+
+// openAIBodyWithGuardrail also carries top-level extension fields so tests can
+// assert the design contract that x_higress_guardrail lives ONLY inside choices[0] —
+// a regression where it leaks to the body root would deserialize into this
+// field and the require.Empty check at the call site would fail.
+type openAIBodyWithGuardrail struct {
+	Choices   []openAIChoiceWithGuardrail `json:"choices"`
+	Guardrail *cfg.DenyResponseBody       `json:"x_higress_guardrail,omitempty"`
+	XHigress  *cfg.DenyResponseBody       `json:"x_higress,omitempty"`
+}
+
+// TestRequestDenyGuardrailNonStream verifies that 请求阶段非流式 deny renders
+// content as plain text and embeds x_higress_guardrail as a JSON object.
+func TestRequestDenyGuardrailNonStream(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("non-stream request deny carries guardrail object", func(t *testing.T) {
+			host, status := test.NewTestHost(withStructuredFormat(multiModalGuardTextConfig))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "trigger deny"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-x-higress", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+
+			// x_higress_guardrail must be a JSON object, not a string
+			require.True(t, gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail").IsObject(),
+				"x_higress_guardrail should be an embedded JSON object, not a string literal")
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists(),
+				"structured deny must not emit the old choices[0].x_higress field")
+
+			var outer openAIBodyWithGuardrail
+			require.NoError(t, json.Unmarshal(local.Data, &outer))
+			require.Len(t, outer.Choices, 1)
+
+			require.Equal(t, cfg.DefaultDenyMessage, outer.Choices[0].Message.Content,
+				"content should carry only the human-readable deny text")
+			require.Equal(t, cfg.DefaultDenyMessage, outer.Choices[0].Guardrail.DenyMessage)
+			// A-R1F4 contract: x_higress_guardrail.code carries the gateway-emitted HTTP deny
+			// status (config.DenyCode, default 200), NOT the upstream security
+			// service's Response.Code. multiModalGuardTextConfig leaves denyCode
+			// unset, so this resolves to cfg.DefaultDenyCode.
+			require.Equal(t, int(cfg.DefaultDenyCode), outer.Choices[0].Guardrail.Code,
+				"x_higress_guardrail.code must equal the gateway-emitted HTTP deny status")
+			require.NotNil(t, outer.Choices[0].Guardrail.BlockedDetails)
+
+			// Design contract: x_higress_guardrail lives ONLY nested under choices[0].
+			require.Nil(t, outer.Guardrail,
+				"x_higress_guardrail must not leak to body root; only choices[0].x_higress_guardrail is valid")
+			require.Nil(t, outer.XHigress, "old x_higress must not leak to body root")
+			require.False(t, gjson.GetBytes(local.Data, "x_higress_guardrail").Exists(),
+				"x_higress_guardrail must not leak to body root; only choices[0].x_higress_guardrail is valid")
+			require.False(t, gjson.GetBytes(local.Data, "x_higress").Exists(),
+				"old x_higress must not leak to body root")
+		})
+	})
+}
+
+// TestRequestDenyGuardrailStreamFrames verifies that 请求阶段流式 deny only
+// embeds x_higress_guardrail in the final chunk and the first chunk carries plain text.
+func TestRequestDenyGuardrailStreamFrames(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("stream request deny only attaches guardrail in last chunk", func(t *testing.T) {
+			host, status := test.NewTestHost(withStructuredFormat(multiModalGuardTextConfig))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "trigger deny"}], "stream": true}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-stream-x-higress", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+
+			raw := string(local.Data)
+			require.True(t, strings.HasSuffix(strings.TrimSpace(raw), "data: [DONE]"))
+			parts := strings.Split(raw, "\n\n")
+			// 模板格式: data:<chunk>\n\ndata:<end>\n\ndata: [DONE]
+			require.GreaterOrEqual(t, len(parts), 3, "expected at least chunk + end + DONE")
+
+			firstFrame := strings.TrimPrefix(parts[0], "data:")
+			endFrame := strings.TrimPrefix(parts[1], "data:")
+
+			require.False(t, gjson.Get(firstFrame, "choices.0.x_higress_guardrail").Exists(),
+				"first chunk should not carry x_higress_guardrail")
+			require.False(t, gjson.Get(firstFrame, "choices.0.x_higress").Exists(),
+				"first chunk should not carry old x_higress")
+			require.Equal(t, cfg.DefaultDenyMessage,
+				gjson.Get(firstFrame, "choices.0.delta.content").String(),
+				"first chunk delta.content should be plain text")
+
+			require.True(t, gjson.Get(endFrame, "choices.0.x_higress_guardrail").IsObject(),
+				"final chunk should carry x_higress_guardrail as object")
+			require.False(t, gjson.Get(endFrame, "choices.0.x_higress").Exists(),
+				"final chunk should not carry old x_higress")
+			// Deny stream's terminator carries `stop` for wire-level compatibility
+			// with downstream consumers (LangChain / LiteLLM / SDKs / BI) that key
+			// off `stop` as a valid completion. The moderation-event signal lives
+			// in choices[0].x_higress_guardrail (denyCode / blockedDetails) instead.
+			require.Equal(t, "stop", gjson.Get(endFrame, "choices.0.finish_reason").String())
+			require.False(t, gjson.Get(endFrame, "choices.0.delta.content").Exists(),
+				"final chunk delta should be empty")
+
+			// Design contract: x_higress_guardrail lives ONLY nested under choices[0].
+			require.False(t, gjson.Get(endFrame, "x_higress_guardrail").Exists(),
+				"x_higress_guardrail must not leak to body root of the end frame")
+			require.False(t, gjson.Get(firstFrame, "x_higress_guardrail").Exists(),
+				"x_higress_guardrail must not leak to body root of the first frame")
+			require.False(t, gjson.Get(endFrame, "x_higress").Exists(),
+				"old x_higress must not leak to body root of the end frame")
+			require.False(t, gjson.Get(firstFrame, "x_higress").Exists(),
+				"old x_higress must not leak to body root of the first frame")
+
+			require.Contains(t, parts[2], "[DONE]")
+		})
+	})
+}
+
+// TestRequestDenyDefaultDenyMessage verifies that without a configured
+// denyMessage, both content and x_higress_guardrail.denyMessage fall back to the default
+// text.
+func TestRequestDenyDefaultDenyMessage(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("default deny message used when not configured", func(t *testing.T) {
+			host, status := test.NewTestHost(withStructuredFormat(multiModalGuardTextConfig))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "trigger deny"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-default", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+
+			content := gjson.GetBytes(local.Data, "choices.0.message.content").String()
+			denyMessage := gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail.denyMessage").String()
+			require.Equal(t, cfg.DefaultDenyMessage, content)
+			require.Equal(t, cfg.DefaultDenyMessage, denyMessage)
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists())
+		})
+	})
+}
+
+// TestProtocolOriginalDenyShapePreserved guards the regression that the
+// protocol: "original" normal deny path keeps the bare DenyResponseBody shape
+// without OpenAI wrapping or x_higress_guardrail.
+func TestProtocolOriginalDenyShapePreserved(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			config json.RawMessage
+		}{
+			{name: "default format", config: protocolOriginalConfig},
+			{name: "legacy format", config: withConfigOverrides(protocolOriginalConfig, map[string]interface{}{"openAIDenyResponseFormat": "legacy"})},
+			{name: "structured format", config: withStructuredFormat(protocolOriginalConfig)},
+		} {
+			tc := tc
+			t.Run("original protocol deny stays as bare DenyResponseBody "+tc.name, func(t *testing.T) {
+				host, status := test.NewTestHost(tc.config)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/v1/chat/completions"},
+					{":method", "POST"},
+				})
+
+				body := `{"messages": [{"role": "user", "content": "trigger deny"}]}`
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+				securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-orig-shape", "Data": {"RiskLevel": "high"}}`
+				host.CallOnHttpCall([][2]string{
+					{":status", "200"},
+					{"content-type", "application/json"},
+				}, []byte(securityResponse))
+
+				local := host.GetLocalResponse()
+				require.NotNil(t, local)
+
+				require.False(t, gjson.GetBytes(local.Data, "choices").Exists(),
+					"original protocol should not OpenAI-wrap the body")
+				require.False(t, gjson.GetBytes(local.Data, "x_higress_guardrail").Exists(),
+					"original protocol should not introduce x_higress_guardrail")
+				require.False(t, gjson.GetBytes(local.Data, "x_higress").Exists(),
+					"original protocol should not introduce old x_higress")
+				require.True(t, gjson.GetBytes(local.Data, "blockedDetails").Exists())
+				require.Equal(t, int64(200), gjson.GetBytes(local.Data, "code").Int())
+			})
+		}
+	})
+}
+
+// TestMaskEmptyDesensitizationOriginalShape guards the A-R1F2 alignment:
+// when riskAction=mask and the upstream returns empty Desensitization under
+// protocol: "original", the response body must be the bare JSON string literal
+// produced by wrapper.MarshalStr(ResolveDenyMessage(config)) — i.e.
+// `"<deny message>"` — mirroring the ReplaceJsonFieldTextContent failure path
+// at lvwang/multi_modal_guard/text/openai.go:102 / :159.
+//
+// Before A-R1F2 this branch fell through to RiskBlock and called
+// BuildDenyResponseBody, returning a structured {code, blockedDetails, ...}
+// object instead. The fallthrough was inconsistent with design Section 5 and
+// has been replaced with the self-handled MarshalStr path; this regression
+// test locks in the new contract so the divergence cannot reappear silently.
+func TestMaskEmptyDesensitizationOriginalShape(t *testing.T) {
+	maskOriginalConfig := func() json.RawMessage {
+		data, _ := json.Marshal(map[string]interface{}{
+			"serviceName":               "security-service",
+			"servicePort":               8080,
+			"serviceHost":               "security.example.com",
+			"accessKey":                 "test-ak",
+			"secretKey":                 "test-sk",
+			"checkRequest":              true,
+			"checkResponse":             false,
+			"action":                    "MultiModalGuard",
+			"riskAction":                "mask",
+			"protocol":                  "original",
+			"contentModerationLevelBar": "high",
+			"promptAttackLevelBar":      "high",
+			"sensitiveDataLevelBar":     "S3",
+			"timeout":                   2000,
+		})
+		return data
+	}()
+
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("mask empty desensitization under original emits MarshalStr literal", func(t *testing.T) {
+			host, status := test.NewTestHost(maskOriginalConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "敏感内容"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			// mask 但脱敏内容空 → 走 A-R1F2 自处理分支
+			securityResponse := `{
+				"Code": 200, "Message": "Success", "RequestId": "req-mask-empty-orig",
+				"Data": {
+					"RiskLevel": "none",
+					"Detail": [{
+						"Suggestion": "mask", "Type": "sensitiveData", "Level": "S3",
+						"Result": [{"Label": "phone", "Confidence": 99.0,
+							"Ext": {"Desensitization": ""}}]
+					}]
+				}
+			}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+
+			// 不是 OpenAI 包装
+			require.False(t, gjson.GetBytes(local.Data, "choices").Exists(),
+				"mask empty-desensitization under original must not be OpenAI-wrapped")
+			require.False(t, gjson.GetBytes(local.Data, "object").Exists(),
+				"mask empty-desensitization under original must not include OpenAI 'object' field")
+
+			// 不再是 DenyResponseBody {code, blockedDetails} 结构;
+			// 现在是 wrapper.MarshalStr 产物 —— 裸 JSON 字符串字面量
+			require.False(t, gjson.GetBytes(local.Data, "code").Exists(),
+				"A-R1F2: body should now be a JSON string literal, not a {code, blockedDetails} object")
+			require.False(t, gjson.GetBytes(local.Data, "blockedDetails").Exists(),
+				"A-R1F2: body should now be a JSON string literal, not a {code, blockedDetails} object")
+
+			// 实际形态:wrapper.MarshalStr 产物。该 wrapper 在 Higress 的实现里返回
+			// 已剥除外层双引号的字符串(见 C-R1F9 备注),所以 body 是原始 deny 文本
+			// 字节(不可 json.Unmarshal 回字符串)。
+			require.Equal(t, cfg.DefaultDenyMessage, string(local.Data),
+				"body should equal raw deny message (wrapper.MarshalStr strips outer quotes — C-R1F9)")
+		})
+	})
+}
+
+// TestResponseStreamingDenyGuardrail drives HandleTextGenerationStreamingResponseBody
+// (lvwang/common/text/openai.go) — the only response-side structured stream
+// writer — and asserts the injected SSE carries:
+//   - first chunk: human-readable content, no x_higress_guardrail
+//   - end chunk: x_higress_guardrail as a JSON object with code/denyMessage/blockedDetails
+//   - terminator: "data: [DONE]"
+func TestResponseStreamingDenyGuardrail(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("response streaming deny injects guardrail only in last frame", func(t *testing.T) {
+			host, status := test.NewTestHost(withStructuredFormat(basicConfig))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			// Skip request-phase check by using a non-deny request body.
+			body := `{"messages": [{"role": "user", "content": "hello"}]}`
+			host.CallOnHttpRequestBody([]byte(body))
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(`{"Code": 200, "Message": "Success", "RequestId": "req-stream-resp-pass", "Data": {"RiskLevel": "none"}}`))
+
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			// Single chunk + end_of_stream=true triggers the security check.
+			chunk := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"bad response\"}}]}\n\n")
+			host.CallOnHttpStreamingResponseBody(chunk, true)
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-stream-resp-deny", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			injected := host.GetResponseBody()
+			require.NotEmpty(t, injected, "expected InjectEncodedDataToFilterChain to deliver SSE deny payload")
+
+			injectedStr := string(injected)
+			require.True(t, strings.HasSuffix(strings.TrimSpace(injectedStr), "data: [DONE]"),
+				"expected SSE stream to end with [DONE], got: %s", injectedStr)
+
+			// Strip "data:" prefixes and split into events.
+			events := strings.Split(strings.TrimSpace(injectedStr), "\n\n")
+			require.GreaterOrEqual(t, len(events), 2, "expected at least first chunk + end chunk")
+
+			// First event: content present, no x_higress_guardrail.
+			firstPayload := strings.TrimPrefix(events[0], "data:")
+			firstPayload = strings.TrimSpace(firstPayload)
+			require.Equal(t, cfg.DefaultDenyMessage, gjson.Get(firstPayload, "choices.0.delta.content").String())
+			require.False(t, gjson.Get(firstPayload, "choices.0.x_higress_guardrail").Exists(),
+				"first chunk must NOT carry x_higress_guardrail")
+			require.False(t, gjson.Get(firstPayload, "choices.0.x_higress").Exists(),
+				"first chunk must NOT carry old x_higress")
+
+			// Second event: x_higress_guardrail as JSON object on choices[0].
+			secondPayload := strings.TrimPrefix(events[1], "data:")
+			secondPayload = strings.TrimSpace(secondPayload)
+			guardrail := gjson.Get(secondPayload, "choices.0.x_higress_guardrail")
+			require.True(t, guardrail.Exists(), "end chunk must carry x_higress_guardrail")
+			require.True(t, guardrail.IsObject(), "x_higress_guardrail must be a JSON object, not a string")
+			require.Equal(t, cfg.DefaultDenyMessage, guardrail.Get("denyMessage").String())
+			require.True(t, guardrail.Get("blockedDetails").Exists())
+			require.False(t, gjson.Get(secondPayload, "choices.0.x_higress").Exists(),
+				"end chunk must not carry old x_higress")
+			// Streaming deny terminator carries `stop` for wire-level compatibility;
+			// moderation signal lives in choices[0].x_higress_guardrail.
+			require.Equal(t, "stop", gjson.Get(secondPayload, "choices.0.finish_reason").String())
+
+			// Design contract: x_higress_guardrail lives ONLY nested under choices[0].
+			require.False(t, gjson.Get(secondPayload, "x_higress_guardrail").Exists(),
+				"x_higress_guardrail must not leak to body root of the end chunk")
+			require.False(t, gjson.Get(firstPayload, "x_higress_guardrail").Exists(),
+				"x_higress_guardrail must not leak to body root of the first chunk")
+			require.False(t, gjson.Get(secondPayload, "x_higress").Exists(),
+				"old x_higress must not leak to body root of the end chunk")
+			require.False(t, gjson.Get(firstPayload, "x_higress").Exists(),
+				"old x_higress must not leak to body root of the first chunk")
+		})
+	})
+}
+
+// A-R2-16(a): multi_modal_guard 图像审核 deny 通道未被前文 guardrail 测试覆盖,
+// 而 R1-F6 修复(BuildOpenAIFallbackDenyResponseBody err 不再静默)依赖
+// callbackForImage 与 singleCallForImage 调用 BuildOpenAIDenyResponseBody。
+// 本测试发送纯 image_url 请求体直接命中 singleCallForImage 路径,断言图像
+// 审核 deny 同样把 x_higress_guardrail 嵌入 choices[0],与文本 deny 形态对称。
+//
+// 文件:lvwang/multi_modal_guard/text/openai.go:299-369(callbackForImage / OpenAI 包装)
+func TestImageDenyGuardrailShape(t *testing.T) {
+	imageCheckConfig := func() json.RawMessage {
+		data, _ := json.Marshal(map[string]interface{}{
+			"serviceName":               "security-service",
+			"servicePort":               8080,
+			"serviceHost":               "security.example.com",
+			"accessKey":                 "test-ak",
+			"secretKey":                 "test-sk",
+			"checkRequest":              true,
+			"checkRequestImage":         true,
+			"action":                    "MultiModalGuard",
+			"apiType":                   "text_generation",
+			"contentModerationLevelBar": "high",
+			"promptAttackLevelBar":      "high",
+			"sensitiveDataLevelBar":     "S3",
+			"timeout":                   2000,
+			"bufferLimit":               1000,
+		})
+		return data
+	}()
+
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("multi_modal_guard image deny embeds guardrail on choices[0]", func(t *testing.T) {
+			host, status := test.NewTestHost(withStructuredFormat(imageCheckConfig))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			// 纯 image_url 内容:content==""，parseContent 跳过文本审核直接走
+			// singleCallForImage，让 callbackForImage 渲染 deny。
+			body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/bad.jpg"}}]}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-img-deny", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local, "expected SendHttpResponse for image deny")
+
+			// x_higress_guardrail 必须作为对象嵌在 choices[0] 内
+			require.True(t, gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail").IsObject(),
+				"image deny should embed x_higress_guardrail as JSON object on choices[0]")
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists(),
+				"image deny should not emit old x_higress on choices[0]")
+
+			var outer openAIBodyWithGuardrail
+			require.NoError(t, json.Unmarshal(local.Data, &outer))
+			require.Len(t, outer.Choices, 1)
+
+			require.Equal(t, cfg.DefaultDenyMessage, outer.Choices[0].Message.Content,
+				"content carries human-readable deny text")
+			require.Equal(t, cfg.DefaultDenyMessage, outer.Choices[0].Guardrail.DenyMessage)
+			require.Equal(t, int(cfg.DefaultDenyCode), outer.Choices[0].Guardrail.Code,
+				"x_higress_guardrail.code = gateway HTTP deny status (A-R1F4 contract)")
+			require.NotNil(t, outer.Choices[0].Guardrail.BlockedDetails)
+
+			// 不可泄漏到 body 根
+			require.Nil(t, outer.Guardrail, "x_higress_guardrail must not leak to body root")
+			require.Nil(t, outer.XHigress, "old x_higress must not leak to body root")
+			require.False(t, gjson.GetBytes(local.Data, "x_higress_guardrail").Exists(),
+				"x_higress_guardrail must not leak to body root")
+			require.False(t, gjson.GetBytes(local.Data, "x_higress").Exists(),
+				"old x_higress must not leak to body root")
+		})
+	})
+}
+
+// A-R2-16(b): text_moderation_plus 请求阶段 deny 通道未被前文 guardrail 测试覆盖。
+// 已有 TestTextModerationPlusResponseDeny 覆盖响应阶段,本测试补齐请求阶段对称
+// 用例,确保 OpenAI 协议下 structured deny body 把 x_higress_guardrail 放在 choices[0]。
+//
+// 文件:lvwang/text_moderation_plus/text/openai.go:56-92(请求阶段 deny 渲染)
+func TestTextModerationPlusRequestDenyGuardrailShape(t *testing.T) {
+	tmpRequestConfig := func() json.RawMessage {
+		data, _ := json.Marshal(map[string]interface{}{
+			"serviceName":               "security-service",
+			"servicePort":               8080,
+			"serviceHost":               "security.example.com",
+			"accessKey":                 "test-ak",
+			"secretKey":                 "test-sk",
+			"checkRequest":              true,
+			"action":                    "TextModerationPlus",
+			"contentModerationLevelBar": "high",
+			"timeout":                   2000,
+		})
+		return data
+	}()
+
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("text_moderation_plus request deny embeds guardrail on choices[0]", func(t *testing.T) {
+			host, status := test.NewTestHost(withStructuredFormat(tmpRequestConfig))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"messages": [{"role": "user", "content": "trigger deny"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-tmp-deny", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local, "expected SendHttpResponse for text_moderation_plus request deny")
+
+			require.True(t, gjson.GetBytes(local.Data, "choices.0.x_higress_guardrail").IsObject(),
+				"text_moderation_plus request deny should embed x_higress_guardrail as JSON object on choices[0]")
+			require.False(t, gjson.GetBytes(local.Data, "choices.0.x_higress").Exists(),
+				"text_moderation_plus request deny should not emit old x_higress")
+
+			var outer openAIBodyWithGuardrail
+			require.NoError(t, json.Unmarshal(local.Data, &outer))
+			require.Len(t, outer.Choices, 1)
+
+			require.Equal(t, cfg.DefaultDenyMessage, outer.Choices[0].Message.Content)
+			require.Equal(t, cfg.DefaultDenyMessage, outer.Choices[0].Guardrail.DenyMessage)
+			require.Equal(t, int(cfg.DefaultDenyCode), outer.Choices[0].Guardrail.Code,
+				"x_higress_guardrail.code = gateway HTTP deny status (A-R1F4 contract)")
+			require.NotNil(t, outer.Choices[0].Guardrail.BlockedDetails)
+
+			require.Nil(t, outer.Guardrail, "x_higress_guardrail must not leak to body root")
+			require.Nil(t, outer.XHigress, "old x_higress must not leak to body root")
+			require.False(t, gjson.GetBytes(local.Data, "x_higress_guardrail").Exists(),
+				"x_higress_guardrail must not leak to body root")
+			require.False(t, gjson.GetBytes(local.Data, "x_higress").Exists(),
+				"old x_higress must not leak to body root")
 		})
 	})
 }
