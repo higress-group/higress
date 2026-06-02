@@ -197,11 +197,16 @@ func (v *vertexProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiNam
 
 	util.OverwriteRequestHostHeader(headers, finalVertexDomain)
 
-	// 剥除 Anthropic 客户端可能携带的凭据头, 避免泄漏到 Google.
-	// vertex 一律用 OAuth Bearer (标准模式) 或 ?key= (Express 模式) 鉴权,
-	// 这些头对 vertex 没有任何意义, 留着只会把 sk-ant-... 这类密钥转发到上游日志.
+	// 剥除 Anthropic 客户端携带的凭据头和协议头.
+	// 凭据头: vertex 一律用 OAuth Bearer 或 ?key= 鉴权, 留着只会把 sk-ant-... 泄漏到上游日志.
 	headers.Del("x-api-key")
 	headers.Del("anthropic-api-key")
+	// 协议头: vertex 的 Anthropic 端点不接受这些头 —
+	//   anthropic-beta  → vertex 不支持 Anthropic beta feature flags, 会 400
+	//   anthropic-version → vertex 的版本通过 body 里的 anthropic_version 字段传递,
+	//                       头里的 "2023-06-01" 与 vertex 预期的 "vertex-2023-10-16" 不符
+	headers.Del("anthropic-beta")
+	headers.Del("anthropic-version")
 }
 
 func (v *vertexProvider) getToken() (cached bool, err error) {
@@ -425,6 +430,14 @@ func (v *vertexProvider) onAnthropicMessagesRequestBody(ctx wrapper.HttpContext,
 	body, err = sjson.SetBytes(body, "anthropic_version", vertexAnthropicVersion)
 	if err != nil {
 		return nil, fmt.Errorf("unable to inject anthropic_version: %v", err)
+	}
+
+	// 剥除 Anthropic beta-only 的 body 字段, vertex 的 :rawPredict 不认这些字段会 400.
+	// 例如 Claude Code 交互模式会发 context_management (上下文压缩配置).
+	for _, betaField := range []string{"context_management"} {
+		if gjson.GetBytes(body, betaField).Exists() {
+			body, _ = sjson.DeleteBytes(body, betaField)
+		}
 	}
 
 	// vertex Anthropic 端点要求 max_tokens 必填, 客户端漏传会被 400.
