@@ -432,6 +432,14 @@ func (v *vertexProvider) onAnthropicMessagesRequestBody(ctx wrapper.HttpContext,
 		return nil, fmt.Errorf("unable to inject anthropic_version: %v", err)
 	}
 
+	// 剥除 Anthropic beta-only 的 body 字段, vertex 的 :rawPredict 不认这些字段会 400.
+	// 例如 Claude Code 交互模式会发 context_management (上下文压缩配置).
+	for _, betaField := range []string{"context_management"} {
+		if gjson.GetBytes(body, betaField).Exists() {
+			body, _ = sjson.DeleteBytes(body, betaField)
+		}
+	}
+
 	// vertex Anthropic 端点要求 max_tokens 必填, 客户端漏传会被 400.
 	// 跟 claude provider buildClaudeTextGenRequest 保持一致, 缺省补 claudeDefaultMaxTokens.
 	if !gjson.GetBytes(body, "max_tokens").Exists() {
