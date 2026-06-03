@@ -513,24 +513,29 @@ func TestVertexAnthropicPassthrough_StreamingChunkUnchanged(t *testing.T) {
 	assert.Equal(t, chunk, out, "vertex Anthropic SSE chunk must be returned byte-for-byte")
 }
 
-// TestVertexTransformRequestHeaders_StripsAnthropicCredentialHeaders ensures
-// that Anthropic-style client auth headers (carried by SDKs like the Anthropic
-// Python/TypeScript SDKs and Claude Code) are NOT forwarded to vertex.
-// Vertex uses OAuth Bearer / API key in URL — these headers are meaningless to
-// vertex and forwarding them would leak the client's sk-ant-... credential to
-// Google logs.
-func TestVertexTransformRequestHeaders_StripsAnthropicCredentialHeaders(t *testing.T) {
+// TestVertexTransformRequestHeaders_StripsAnthropicHeaders ensures that
+// Anthropic-specific headers (credentials + protocol) are NOT forwarded to
+// vertex. The regular Anthropic SDK sends these but vertex's Anthropic
+// endpoint rejects or misinterprets them:
+//   - x-api-key / anthropic-api-key: credential leak to Google logs
+//   - anthropic-beta: vertex 400 "Unexpected value(s) ... for the anthropic-beta header"
+//   - anthropic-version: conflicts with body-level anthropic_version "vertex-2023-10-16"
+func TestVertexTransformRequestHeaders_StripsAnthropicHeaders(t *testing.T) {
 	v := newAnthropicVertexProvider(false)
 	ctx := newMapCtx()
 	headers := http.Header{}
 	headers.Set("x-api-key", "sk-ant-api03-secret")
 	headers.Set("anthropic-api-key", "sk-ant-api03-secret")
+	headers.Set("anthropic-beta", "advanced-tool-use-2025-11-20,prompt-caching-scope-2026-01-05")
+	headers.Set("anthropic-version", "2023-06-01")
 	headers.Set("content-type", "application/json")
 
 	v.TransformRequestHeaders(ctx, ApiNameAnthropicMessages, headers)
 
 	assert.Empty(t, headers.Get("x-api-key"), "x-api-key must be stripped before forwarding to vertex")
 	assert.Empty(t, headers.Get("anthropic-api-key"), "anthropic-api-key must be stripped before forwarding to vertex")
+	assert.Empty(t, headers.Get("anthropic-beta"), "anthropic-beta must be stripped — vertex rejects unknown beta flags with 400")
+	assert.Empty(t, headers.Get("anthropic-version"), "anthropic-version must be stripped — vertex uses body-level anthropic_version instead")
 	// Sanity: unrelated headers untouched.
 	assert.Equal(t, "application/json", headers.Get("content-type"))
 }

@@ -335,6 +335,72 @@ func mustDecodeLegacyDenyContent(t *testing.T, content string) cfg.DenyResponseB
 	return denyBody
 }
 
+// 测试配置：Embedding API
+var embeddingConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"serviceName":                  "security-service",
+		"servicePort":                  8080,
+		"serviceHost":                  "security.example.com",
+		"accessKey":                    "test-ak",
+		"secretKey":                    "test-sk",
+		"checkRequest":                 true,
+		"checkResponse":                true,
+		"action":                       "MultiModalGuard",
+		"apiType":                      "embedding",
+		"requestContentJsonPath":       "input",
+		"responseContentJsonPath":      "data",
+		"responseErrorContentJsonPath": "error.message",
+		"contentModerationLevelBar":    "high",
+		"promptAttackLevelBar":         "high",
+		"sensitiveDataLevelBar":        "S3",
+		"timeout":                      2000,
+	})
+	return data
+}()
+
+// 测试配置：Embedding API 仅请求检测
+var embeddingRequestOnlyConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"serviceName":               "security-service",
+		"servicePort":               8080,
+		"serviceHost":               "security.example.com",
+		"accessKey":                 "test-ak",
+		"secretKey":                 "test-sk",
+		"checkRequest":              true,
+		"checkResponse":             false,
+		"action":                    "MultiModalGuard",
+		"apiType":                   "embedding",
+		"requestContentJsonPath":    "input",
+		"contentModerationLevelBar": "high",
+		"promptAttackLevelBar":      "high",
+		"sensitiveDataLevelBar":     "S3",
+		"timeout":                   2000,
+	})
+	return data
+}()
+
+// 测试配置：Embedding API 仅响应检测
+var embeddingResponseOnlyConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"serviceName":                  "security-service",
+		"servicePort":                  8080,
+		"serviceHost":                  "security.example.com",
+		"accessKey":                    "test-ak",
+		"secretKey":                    "test-sk",
+		"checkRequest":                 false,
+		"checkResponse":                true,
+		"action":                       "MultiModalGuard",
+		"apiType":                      "embedding",
+		"responseContentJsonPath":      "data",
+		"responseErrorContentJsonPath": "error.message",
+		"contentModerationLevelBar":    "high",
+		"promptAttackLevelBar":         "high",
+		"sensitiveDataLevelBar":        "S3",
+		"timeout":                      2000,
+	})
+	return data
+}()
+
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		// 测试基础配置解析
@@ -4208,6 +4274,405 @@ func TestTextModerationPlusRequestDenyGuardrailShape(t *testing.T) {
 				"x_higress_guardrail must not leak to body root")
 			require.False(t, gjson.GetBytes(local.Data, "x_higress").Exists(),
 				"old x_higress must not leak to body root")
+		})
+	})
+}
+
+func TestEmbeddingConfig(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		t.Run("embedding config with responseErrorContentJsonPath", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+
+			securityConfig := config.(*cfg.AISecurityConfig)
+			require.Equal(t, "embedding", securityConfig.ApiType)
+			require.Equal(t, "input", securityConfig.RequestContentJsonPath)
+			require.Equal(t, "data", securityConfig.ResponseContentJsonPath)
+			require.Equal(t, "error.message", securityConfig.ResponseErrorContentJsonPath)
+			require.Equal(t, true, securityConfig.CheckRequest)
+			require.Equal(t, true, securityConfig.CheckResponse)
+		})
+
+		t.Run("embedding config without responseErrorContentJsonPath", func(t *testing.T) {
+			// Test backward compatibility when responseErrorContentJsonPath is not provided
+			configWithoutErrorPath := func() json.RawMessage {
+				data, _ := json.Marshal(map[string]interface{}{
+					"serviceName":               "security-service",
+					"servicePort":               8080,
+					"serviceHost":               "security.example.com",
+					"accessKey":                 "test-ak",
+					"secretKey":                 "test-sk",
+					"checkRequest":              true,
+					"checkResponse":             true,
+					"action":                    "MultiModalGuard",
+					"apiType":                   "embedding",
+					"requestContentJsonPath":    "input",
+					"responseContentJsonPath":   "data",
+					"contentModerationLevelBar": "high",
+					"timeout":                   2000,
+				})
+				return data
+			}()
+			host, status := test.NewTestHost(configWithoutErrorPath)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+
+			securityConfig := config.(*cfg.AISecurityConfig)
+			require.Equal(t, "embedding", securityConfig.ApiType)
+			require.Equal(t, "", securityConfig.ResponseErrorContentJsonPath)
+		})
+	})
+}
+
+func TestEmbeddingRequest(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("embedding request with string input pass", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingRequestOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			body := `{"input": "Hello, how are you?", "model": "text-embedding-ada-002"}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionPause, action)
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-embed-pass", "Data": {"RiskLevel": "low"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			action = host.GetHttpStreamAction()
+			require.Equal(t, types.ActionContinue, action)
+			host.CompleteHttp()
+		})
+
+		t.Run("embedding request with string array input pass", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingRequestOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			body := `{"input": ["Hello", "World"], "model": "text-embedding-ada-002"}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionPause, action)
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-embed-array-pass", "Data": {"RiskLevel": "low"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			action = host.GetHttpStreamAction()
+			require.Equal(t, types.ActionContinue, action)
+			host.CompleteHttp()
+		})
+
+		t.Run("embedding request with token ID array skip", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingRequestOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			// Token ID array input - should skip detection
+			body := `{"input": [1234, 5678, 9012], "model": "text-embedding-ada-002"}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			// Should continue without checking (unsupported input type)
+			require.Equal(t, types.ActionContinue, action)
+		})
+
+		t.Run("embedding request deny with embedding error format", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingRequestOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			body := `{"input": "bad content", "model": "text-embedding-ada-002"}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionPause, action)
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-embed-deny", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local, "expected SendHttpResponse for Embedding request deny")
+			// Verify the response uses Embedding error format
+			var errorResp map[string]interface{}
+			require.NoError(t, json.Unmarshal(local.Data, &errorResp))
+			require.Contains(t, errorResp, "error")
+			errorObj := errorResp["error"].(map[string]interface{})
+			require.Contains(t, errorObj, "message")
+			require.Contains(t, errorObj, "type")
+			require.Contains(t, errorObj, "code")
+		})
+	})
+}
+
+func TestEmbeddingResponse(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("embedding response with error message", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingResponseOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			// Response with error.message field
+			body := `{"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}, "data": []}`
+			action := host.CallOnHttpResponseBody([]byte(body))
+			require.Equal(t, types.ActionPause, action)
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-embed-resp-error", "Data": {"RiskLevel": "low"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			action = host.GetHttpStreamAction()
+			require.Equal(t, types.ActionContinue, action)
+			host.CompleteHttp()
+		})
+
+		t.Run("embedding response vector only skip", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingResponseOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			// Standard embedding response with only vectors - no text content
+			body := `{
+				"object": "list",
+				"data": [
+					{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]},
+					{"object": "embedding", "index": 1, "embedding": [0.4, 0.5, 0.6]}
+				],
+				"model": "text-embedding-ada-002",
+				"usage": {"prompt_tokens": 10, "total_tokens": 10}
+			}`
+			action := host.CallOnHttpResponseBody([]byte(body))
+			// Should skip since no text content
+			require.Equal(t, types.ActionContinue, action)
+		})
+
+		t.Run("embedding response base64 vector skip", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingResponseOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			// Embedding response with base64 encoding_format - embedding is a string, not an array
+			body := `{
+				"object": "list",
+				"data": [
+					{"object": "embedding", "index": 0, "embedding": "AGC3PAAAtzzAQLc8gEC3PEBAtzy"}
+				],
+				"model": "text-embedding-ada-002",
+				"usage": {"prompt_tokens": 10, "total_tokens": 10}
+			}`
+			action := host.CallOnHttpResponseBody([]byte(body))
+			// Should skip since base64 embedding strings are not user content
+			require.Equal(t, types.ActionContinue, action)
+		})
+
+		t.Run("embedding response deny with embedding error format", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingResponseOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			// Response with text content in error.message
+			body := `{"error": {"message": "bad response content"}, "data": []}`
+			action := host.CallOnHttpResponseBody([]byte(body))
+			require.Equal(t, types.ActionPause, action)
+
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-embed-resp-deny", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local, "expected SendHttpResponse for Embedding response deny")
+			// Verify the response uses Embedding error format
+			var errorResp map[string]interface{}
+			require.NoError(t, json.Unmarshal(local.Data, &errorResp))
+			require.Contains(t, errorResp, "error")
+			errorObj := errorResp["error"].(map[string]interface{})
+			require.Contains(t, errorObj, "message")
+			require.Contains(t, errorObj, "type")
+			require.Contains(t, errorObj, "code")
+		})
+	})
+}
+
+func TestEmbeddingStreamingIgnored(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("embedding streaming response ignores responseStreamContentJsonPath", func(t *testing.T) {
+			host, status := test.NewTestHost(embeddingConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			// Simulate streaming response headers
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			// Even if streaming content path is set, embedding should process non-streaming
+			body := `{
+				"object": "list",
+				"data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+				"model": "text-embedding-ada-002"
+			}`
+			action := host.CallOnHttpResponseBody([]byte(body))
+			// Should continue since there's no text content
+			require.Equal(t, types.ActionContinue, action)
+		})
+	})
+}
+
+func TestEmbeddingNon200Response(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("embedding API should check response body for non-200 status", func(t *testing.T) {
+			// Embedding API with responseErrorContentJsonPath should check error.message
+			// even when status code is not 200
+			host, status := test.NewTestHost(embeddingResponseOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/embeddings"},
+				{":method", "POST"},
+			})
+
+			// Non-200 response (e.g., 400 Bad Request)
+			// For embedding API, response body should be buffered for later processing
+			// HandleEmbeddingResponseHeaders returns HeaderStopIteration (ActionPause)
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "400"},
+				{"content-type", "application/json"},
+			})
+			// HeaderStopIteration = ActionPause indicates body will be buffered and processed
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			// Response body with error.message should be checked
+			body := `{"error": {"message": "Invalid input: sensitive content detected", "type": "invalid_request_error"}}`
+			action = host.CallOnHttpResponseBody([]byte(body))
+			require.Equal(t, types.ActionPause, action)
+
+			// Simulate security service response with high risk
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-embed-non200", "Data": {"RiskLevel": "high"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			// Verify deny response was sent (Embedding error format)
+			local := host.GetLocalResponse()
+			require.NotNil(t, local, "expected SendHttpResponse for Embedding deny")
+			var errorResp map[string]interface{}
+			require.NoError(t, json.Unmarshal(local.Data, &errorResp))
+			require.Contains(t, errorResp, "error")
+			errorObj := errorResp["error"].(map[string]interface{})
+			require.Contains(t, errorObj, "message")
+		})
+
+		t.Run("non-embedding API should skip response body for non-200 status", func(t *testing.T) {
+			// Non-embedding API should maintain existing behavior: skip response body
+			// for non-200 responses
+			host, status := test.NewTestHost(multiModalGuardTextConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			// Non-200 response
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "500"},
+				{"content-type", "application/json"},
+			})
+			// For non-embedding API, should skip response body check
+			require.Equal(t, types.ActionContinue, action)
 		})
 	})
 }
