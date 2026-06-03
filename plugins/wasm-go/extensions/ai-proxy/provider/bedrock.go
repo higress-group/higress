@@ -12,6 +12,7 @@ import (
 	"hash"
 	"hash/crc32"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -40,21 +41,33 @@ const (
 	// converseStream路径 /model/{modelId}/converse-stream
 	bedrockStreamChatCompletionPath = "/model/%s/converse-stream"
 	// invoke_model 路径 /model/{modelId}/invoke
-	bedrockInvokeModelPath    = "/model/%s/invoke"
-	bedrockMantleMessagesPath = "/anthropic/v1/messages"
-	bedrockSignedHeaders      = "host;x-amz-date"
-	requestIdHeader           = "X-Amzn-Requestid"
-	bedrockCacheTypeDefault   = "default"
-	bedrockCacheTTL5m         = "5m"
-	bedrockCacheTTL1h         = "1h"
-	bedrockPromptCacheNova    = "amazon.nova"
-	bedrockPromptCacheClaude  = "anthropic.claude"
+	bedrockInvokeModelPath         = "/model/%s/invoke"
+	bedrockStreamInvokeModelPath   = "/model/%s/invoke-with-response-stream"
+	bedrockMantleMessagesPath      = "/anthropic/v1/messages"
+	bedrockSignedHeaders           = "host;x-amz-date"
+	requestIdHeader                = "X-Amzn-Requestid"
+	bedrockCacheTypeDefault        = "default"
+	bedrockCacheTTL5m              = "5m"
+	bedrockCacheTTL1h              = "1h"
+	bedrockPromptCacheNova         = "amazon.nova"
+	bedrockPromptCacheClaude       = "anthropic.claude"
+	bedrockAnthropicInvokeVersion  = "bedrock-2023-05-31"
+	bedrockComputerUseBeta20241022 = "computer-use-2024-10-22"
+	bedrockComputerUseBeta20250124 = "computer-use-2025-01-24"
+	bedrockFilesAPIBeta            = "files-api-2025-04-14"
+	bedrockCodeExecutionBeta       = "code-execution-2025-05-22"
+	bedrockMCPClientBeta           = "mcp-client-2025-04-04"
+	// Bedrock uses this beta tag even when clients send date-versioned tool_search_tool_*_20251119 tool types.
+	bedrockToolSearchBeta20251019 = "tool-search-tool-2025-10-19"
 
 	bedrockCachePointPositionSystemPrompt    = "systemPrompt"
 	bedrockCachePointPositionLastUserMessage = "lastUserMessage"
 	bedrockCachePointPositionLastMessage     = "lastMessage"
 
-	ctxKeyBedrockToolCallState = "bedrock_tool_call_state"
+	ctxKeyBedrockToolCallState             = "bedrock_tool_call_state"
+	ctxKeyBedrockAnthropicMessagesEndpoint = "bedrock_anthropic_messages_endpoint"
+	bedrockAnthropicMessagesEndpointInvoke = "invoke"
+	bedrockAnthropicMessagesEndpointMantle = "mantle"
 )
 
 var (
@@ -73,6 +86,9 @@ func (b *bedrockProviderInitializer) ValidateConfig(config *ProviderConfig) erro
 	}
 	if len(config.awsRegion) == 0 {
 		return errors.New("missing bedrock region parameters")
+	}
+	if endpoint := strings.TrimSpace(config.bedrockAnthropicMessagesEndpoint); endpoint != "" && normalizeBedrockAnthropicMessagesEndpoint(endpoint) == "" {
+		return errors.New("invalid bedrockAnthropicMessagesEndpoint: expected mantle or runtime")
 	}
 	return nil
 }
@@ -100,7 +116,10 @@ type bedrockProvider struct {
 
 func (b *bedrockProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name ApiName, chunk []byte, isLastChunk bool) ([]byte, error) {
 	if name == ApiNameAnthropicMessages {
-		return chunk, nil
+		if b.anthropicMessagesEndpoint() == bedrockAnthropicMessagesEndpointMantle {
+			return chunk, nil
+		}
+		return b.convertAnthropicMessagesInvokeStreamToSSE(ctx, chunk, isLastChunk)
 	}
 
 	events := extractAmazonEventStreamEvents(ctx, chunk)
@@ -702,7 +721,7 @@ func validateCRC(r io.Reader, expect uint32) error {
 
 func (b *bedrockProvider) TransformResponseHeaders(ctx wrapper.HttpContext, apiName ApiName, headers http.Header) {
 	ctx.SetContext(requestIdHeader, headers.Get(requestIdHeader))
-	if headers.Get("Content-Type") == "application/vnd.amazon.eventstream" {
+	if strings.HasPrefix(strings.ToLower(headers.Get("Content-Type")), "application/vnd.amazon.eventstream") {
 		headers.Set("Content-Type", "text/event-stream; charset=utf-8")
 	}
 	headers.Del("Content-Length")
@@ -730,13 +749,26 @@ func (b *bedrockProvider) OnRequestHeaders(ctx wrapper.HttpContext, apiName ApiN
 
 func (b *bedrockProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiName ApiName, headers http.Header) {
 	if apiName == ApiNameAnthropicMessages {
-		util.OverwriteRequestHostHeader(headers, fmt.Sprintf(bedrockMantleDomain, strings.TrimSpace(b.config.awsRegion)))
-		util.OverwriteRequestPathHeaderByCapability(headers, string(apiName), b.config.capabilities)
-		headers.Set("anthropic-version", b.anthropicVersion())
+		endpoint := b.anthropicMessagesEndpoint()
+		ctx.SetContext(ctxKeyBedrockAnthropicMessagesEndpoint, endpoint)
 
+		if endpoint == bedrockAnthropicMessagesEndpointMantle {
+			util.OverwriteRequestHostHeader(headers, fmt.Sprintf(bedrockMantleDomain, strings.TrimSpace(b.config.awsRegion)))
+			b.overwriteMantleMessagesPath(headers)
+			headers.Set("anthropic-version", b.anthropicVersion())
+
+			if len(b.config.apiTokens) > 0 {
+				headers.Set("x-api-key", b.config.GetApiTokenInUse(ctx))
+				headers.Del(util.HeaderAuthorization)
+			}
+			return
+		}
+
+		util.OverwriteRequestHostHeader(headers, fmt.Sprintf(bedrockDefaultDomain, strings.TrimSpace(b.config.awsRegion)))
+		headers.Del("anthropic-version")
+		headers.Del("x-api-key")
 		if len(b.config.apiTokens) > 0 {
-			headers.Set("x-api-key", b.config.GetApiTokenInUse(ctx))
-			headers.Del(util.HeaderAuthorization)
+			util.OverwriteRequestAuthorizationHeader(headers, "Bearer "+b.config.GetApiTokenInUse(ctx))
 		}
 		return
 	}
@@ -787,6 +819,9 @@ func (b *bedrockProvider) TransformRequestBodyHeaders(ctx wrapper.HttpContext, a
 
 	// Always apply auth after request body/path are finalized.
 	// For Bearer token mode this is a no-op; for AK/SK mode this generates SigV4 headers.
+	if b.config.providerBasePath != "" {
+		headers.Set(":path", b.config.applyProviderBasePath(headers.Get(":path")))
+	}
 	b.setAuthHeaders(apiName, transformedBody, headers)
 	return transformedBody, nil
 }
@@ -825,10 +860,27 @@ func (b *bedrockProvider) onImageGenerationRequestBody(ctx wrapper.HttpContext, 
 }
 
 func (b *bedrockProvider) onAnthropicMessagesRequestBody(ctx wrapper.HttpContext, body []byte, headers http.Header) ([]byte, error) {
-	if gjson.GetBytes(body, "stream").Bool() {
-		headers.Set("Accept", "text/event-stream")
+	if b.anthropicMessagesEndpoint() == bedrockAnthropicMessagesEndpointMantle {
+		if gjson.GetBytes(body, "stream").Bool() {
+			headers.Set("Accept", "text/event-stream")
+			ctx.SetContext(ctxKeyIsStreaming, true)
+		} else {
+			ctx.SetContext(ctxKeyIsStreaming, false)
+		}
+
+		model := gjson.GetBytes(body, "model").String()
+		if err := b.config.mapModel(ctx, &model); err != nil {
+			return nil, err
+		}
+		return sjson.SetBytes(body, "model", model)
+	}
+
+	stream := gjson.GetBytes(body, "stream").Bool()
+	if stream {
+		headers.Set("Accept", "application/vnd.amazon.eventstream")
 		ctx.SetContext(ctxKeyIsStreaming, true)
 	} else {
+		headers.Set("Accept", "application/json")
 		ctx.SetContext(ctxKeyIsStreaming, false)
 	}
 
@@ -836,7 +888,56 @@ func (b *bedrockProvider) onAnthropicMessagesRequestBody(ctx wrapper.HttpContext
 	if err := b.config.mapModel(ctx, &model); err != nil {
 		return nil, err
 	}
-	return sjson.SetBytes(body, "model", model)
+	b.overwriteAnthropicMessagesInvokePath(headers, model, stream)
+
+	var err error
+	if gjson.GetBytes(body, "model").Exists() {
+		body, err = sjson.DeleteBytes(body, "model")
+		if err != nil {
+			return nil, fmt.Errorf("unable to strip model from anthropic messages body: %v", err)
+		}
+	}
+	if gjson.GetBytes(body, "stream").Exists() {
+		body, err = sjson.DeleteBytes(body, "stream")
+		if err != nil {
+			return nil, fmt.Errorf("unable to strip stream from anthropic messages body: %v", err)
+		}
+	}
+	if !gjson.GetBytes(body, "anthropic_version").Exists() {
+		body, err = sjson.SetBytes(body, "anthropic_version", b.bedrockAnthropicVersion())
+		if err != nil {
+			return nil, fmt.Errorf("unable to inject anthropic_version: %v", err)
+		}
+	}
+	if betaHeader := headers.Get("anthropic-beta"); betaHeader != "" {
+		body, err = mergeAnthropicBetaHeaderIntoBody(body, betaHeader)
+		if err != nil {
+			return nil, err
+		}
+		headers.Del("anthropic-beta")
+	}
+	body, err = mergeAnthropicBetaValuesIntoBody(body, bedrockAnthropicMessagesAutoBetas(body, model))
+	if err != nil {
+		return nil, err
+	}
+	body, err = removeAnthropicCacheControlTTL(body)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range b.config.bedrockAdditionalFields {
+		body, err = sjson.SetBytes(body, key, value)
+		if err != nil {
+			return nil, fmt.Errorf("unable to set bedrock additional field %s: %v", key, err)
+		}
+	}
+	return body, nil
+}
+
+func (b *bedrockProvider) bedrockAnthropicVersion() string {
+	if b.config.apiVersion != "" {
+		return b.config.apiVersion
+	}
+	return bedrockAnthropicInvokeVersion
 }
 
 func (b *bedrockProvider) anthropicVersion() string {
@@ -844,6 +945,353 @@ func (b *bedrockProvider) anthropicVersion() string {
 		return b.config.apiVersion
 	}
 	return claudeDefaultVersion
+}
+
+func (b *bedrockProvider) anthropicMessagesEndpoint() string {
+	if endpoint := normalizeBedrockAnthropicMessagesEndpoint(b.config.bedrockAnthropicMessagesEndpoint); endpoint != "" {
+		return endpoint
+	}
+
+	domain := normalizeBedrockProviderDomain(b.config.providerDomain)
+	if strings.HasPrefix(domain, "bedrock-mantle.") {
+		return bedrockAnthropicMessagesEndpointMantle
+	}
+	if strings.HasPrefix(domain, "bedrock-runtime.") {
+		return bedrockAnthropicMessagesEndpointInvoke
+	}
+
+	path := strings.ToLower(strings.TrimSpace(b.config.capabilities[string(ApiNameAnthropicMessages)]))
+	if path == "" || strings.Contains(path, "/anthropic/v1/messages") {
+		return bedrockAnthropicMessagesEndpointMantle
+	}
+	return bedrockAnthropicMessagesEndpointInvoke
+}
+
+func normalizeBedrockAnthropicMessagesEndpoint(endpoint string) string {
+	switch strings.ToLower(strings.TrimSpace(endpoint)) {
+	case bedrockAnthropicMessagesEndpointMantle:
+		return bedrockAnthropicMessagesEndpointMantle
+	case "runtime", bedrockAnthropicMessagesEndpointInvoke:
+		return bedrockAnthropicMessagesEndpointInvoke
+	default:
+		return ""
+	}
+}
+
+func normalizeBedrockProviderDomain(domain string) string {
+	domain = normalizeProviderDomainHost(domain)
+	if domain == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(domain); err == nil {
+		domain = host
+	}
+	return domain
+}
+
+func (b *bedrockProvider) overwriteMantleMessagesPath(headers http.Header) {
+	path := strings.TrimSpace(b.config.capabilities[string(ApiNameAnthropicMessages)])
+	if path == "" || strings.Contains(path, "%s") || strings.Contains(path, "/invoke") {
+		path = bedrockMantleMessagesPath
+	}
+	util.OverwriteRequestPathHeader(headers, path)
+}
+
+func (b *bedrockProvider) overwriteAnthropicMessagesInvokePath(headers http.Header, model string, stream bool) {
+	pathFormat := b.anthropicMessagesInvokePathFormat(stream)
+	if strings.Contains(pathFormat, "%s") {
+		b.overwriteRequestPathHeader(headers, pathFormat, model)
+		return
+	}
+	util.OverwriteRequestPathHeader(headers, pathFormat)
+}
+
+func (b *bedrockProvider) anthropicMessagesInvokePathFormat(stream bool) string {
+	pathFormat := strings.TrimSpace(b.config.capabilities[string(ApiNameAnthropicMessages)])
+	if pathFormat == "" || strings.Contains(pathFormat, "/anthropic/v1/messages") {
+		pathFormat = bedrockInvokeModelPath
+	}
+	if stream {
+		if strings.HasSuffix(pathFormat, "/invoke") {
+			return strings.TrimSuffix(pathFormat, "/invoke") + strings.TrimPrefix(bedrockStreamInvokeModelPath, "/model/%s")
+		}
+		return pathFormat
+	}
+	if strings.HasSuffix(pathFormat, "/invoke-with-response-stream") {
+		return strings.TrimSuffix(pathFormat, "/invoke-with-response-stream") + "/invoke"
+	}
+	return pathFormat
+}
+
+func mergeAnthropicBetaHeaderIntoBody(body []byte, betaHeader string) ([]byte, error) {
+	return mergeAnthropicBetaValuesIntoBody(body, strings.Split(betaHeader, ","))
+}
+
+func mergeAnthropicBetaValuesIntoBody(body []byte, rawBetas []string) ([]byte, error) {
+	betas := make([]string, 0)
+	seen := make(map[string]bool)
+	existing := gjson.GetBytes(body, "anthropic_beta")
+	if existing.IsArray() {
+		existing.ForEach(func(_, value gjson.Result) bool {
+			beta := strings.TrimSpace(value.String())
+			if beta != "" && !seen[beta] {
+				betas = append(betas, beta)
+				seen[beta] = true
+			}
+			return true
+		})
+	}
+	for _, rawBeta := range rawBetas {
+		beta := strings.TrimSpace(rawBeta)
+		if beta != "" && !seen[beta] {
+			betas = append(betas, beta)
+			seen[beta] = true
+		}
+	}
+	if len(betas) == 0 {
+		return body, nil
+	}
+	updated, err := sjson.SetBytes(body, "anthropic_beta", betas)
+	if err != nil {
+		return nil, fmt.Errorf("unable to merge anthropic-beta into request body: %v", err)
+	}
+	return updated, nil
+}
+
+func bedrockAnthropicMessagesAutoBetas(body []byte, model string) []string {
+	modelLower := strings.ToLower(model)
+	if !strings.Contains(modelLower, "claude") {
+		return nil
+	}
+
+	betas := make([]string, 0)
+	toolSearchUsed := false
+	tools := gjson.GetBytes(body, "tools")
+	if tools.IsArray() {
+		tools.ForEach(func(_, tool gjson.Result) bool {
+			switch toolType := tool.Get("type").String(); toolType {
+			case "computer_20250124":
+				betas = append(betas, bedrockComputerUseBeta20250124)
+			case "computer_20241022":
+				betas = append(betas, bedrockComputerUseBeta20241022)
+			case "tool_search_tool_regex", "tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119":
+				toolSearchUsed = true
+			default:
+				if strings.HasPrefix(toolType, "computer_") {
+					betas = append(betas, bedrockComputerUseBeta20241022)
+				}
+			}
+			return true
+		})
+	}
+	if toolSearchUsed {
+		betas = append(betas, bedrockToolSearchBeta20251019)
+	}
+
+	if bedrockAnthropicMessagesFileIDUsed(body) {
+		betas = append(betas, bedrockFilesAPIBeta, bedrockCodeExecutionBeta)
+	}
+	if mcpServers := gjson.GetBytes(body, "mcp_servers"); mcpServers.IsArray() && len(mcpServers.Array()) > 0 {
+		betas = append(betas, bedrockMCPClientBeta)
+	}
+	return betas
+}
+
+func bedrockAnthropicMessagesFileIDUsed(body []byte) bool {
+	found := false
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return false
+	}
+	messages.ForEach(func(_, message gjson.Result) bool {
+		content := message.Get("content")
+		if !content.IsArray() {
+			return true
+		}
+		content.ForEach(func(_, item gjson.Result) bool {
+			source := item.Get("source")
+			if source.Get("type").String() == "file" && source.Get("file_id").String() != "" {
+				found = true
+				return false
+			}
+			return true
+		})
+		return !found
+	})
+	return found
+}
+
+func removeAnthropicCacheControlTTL(body []byte) ([]byte, error) {
+	result := body
+	paths := make([]string, 0)
+
+	collectAnthropicBlockCacheControlTTLPaths(gjson.GetBytes(body, "system"), "system", &paths)
+
+	messages := gjson.GetBytes(body, "messages")
+	if messages.IsArray() {
+		messages.ForEach(func(messageIndex, message gjson.Result) bool {
+			content := message.Get("content")
+			if content.IsArray() {
+				collectAnthropicBlockCacheControlTTLPaths(content, fmt.Sprintf("messages.%d.content", messageIndex.Int()), &paths)
+			}
+			return true
+		})
+	}
+
+	tools := gjson.GetBytes(body, "tools")
+	if tools.IsArray() {
+		tools.ForEach(func(toolIndex, tool gjson.Result) bool {
+			if tool.Get("cache_control.ttl").Exists() {
+				paths = append(paths, fmt.Sprintf("tools.%d.cache_control.ttl", toolIndex.Int()))
+			}
+			return true
+		})
+	}
+
+	var err error
+	for _, path := range paths {
+		result, err = sjson.DeleteBytes(result, path)
+		if err != nil {
+			break
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("unable to remove cache_control.ttl from anthropic messages body: %v", err)
+	}
+	return result, nil
+}
+
+func collectAnthropicBlockCacheControlTTLPaths(value gjson.Result, path string, paths *[]string) {
+	if value.IsArray() {
+		value.ForEach(func(index, block gjson.Result) bool {
+			collectAnthropicBlockCacheControlTTLPaths(block, fmt.Sprintf("%s.%d", path, index.Int()), paths)
+			return true
+		})
+		return
+	}
+	if !value.IsObject() {
+		return
+	}
+	if value.Get("cache_control.ttl").Exists() {
+		*paths = append(*paths, path+".cache_control.ttl")
+	}
+	if content := value.Get("content"); content.IsArray() {
+		collectAnthropicBlockCacheControlTTLPaths(content, path+".content", paths)
+	}
+}
+
+func (b *bedrockProvider) convertAnthropicMessagesInvokeStreamToSSE(ctx wrapper.HttpContext, chunk []byte, isLastChunk bool) ([]byte, error) {
+	payloads := extractAmazonEventStreamPayloads(ctx, chunk)
+	if isLastChunk {
+		logAndClearIncompleteAnthropicMessagesInvokeStreamFrame(ctx)
+	}
+	if len(payloads) == 0 {
+		return []byte(""), nil
+	}
+
+	var responseBuilder strings.Builder
+	for _, payload := range payloads {
+		payload, eventName := normalizeAnthropicMessagesInvokeStreamPayload(payload)
+		if eventName != "" {
+			responseBuilder.WriteString("event: ")
+			responseBuilder.WriteString(eventName)
+			responseBuilder.WriteString("\n")
+		}
+		responseBuilder.WriteString("data: ")
+		responseBuilder.Write(payload)
+		responseBuilder.WriteString("\n\n")
+	}
+	return []byte(responseBuilder.String()), nil
+}
+
+func normalizeAnthropicMessagesInvokeStreamPayload(payload []byte) ([]byte, string) {
+	var compactPayload bytes.Buffer
+	if err := json.Compact(&compactPayload, payload); err != nil {
+		log.Warnf("failed to parse Bedrock Invoke eventstream payload as JSON; emitting Anthropic error event: %v", err)
+		return anthropicMessagesInvokeStreamErrorPayload(), "error"
+	}
+	payload = compactPayload.Bytes()
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(payload, &data); err != nil {
+		log.Warnf("failed to parse Bedrock Invoke eventstream payload as JSON object; emitting Anthropic error event: %v", err)
+		return anthropicMessagesInvokeStreamErrorPayload(), "error"
+	}
+
+	if metrics, ok := data["amazon-bedrock-invocationMetrics"].(map[string]interface{}); ok {
+		delete(data, "amazon-bedrock-invocationMetrics")
+		usage := make(map[string]interface{})
+		if inputTokenCount, ok := metrics["inputTokenCount"]; ok {
+			usage["input_tokens"] = inputTokenCount
+		}
+		if outputTokenCount, ok := metrics["outputTokenCount"]; ok {
+			usage["output_tokens"] = outputTokenCount
+		}
+		if len(usage) > 0 {
+			data["usage"] = usage
+		}
+		payload, _ = json.Marshal(data)
+	}
+
+	eventName, _ := data["type"].(string)
+	return payload, eventName
+}
+
+func anthropicMessagesInvokeStreamErrorPayload() []byte {
+	payload, err := json.Marshal(map[string]interface{}{
+		"type": "error",
+		"error": map[string]interface{}{
+			"type":    "api_error",
+			"message": "invalid Bedrock Invoke eventstream payload",
+		},
+	})
+	if err != nil {
+		return []byte(`{"type":"error","error":{"type":"api_error","message":"invalid Bedrock Invoke eventstream payload"}}`)
+	}
+	return payload
+}
+
+func logAndClearIncompleteAnthropicMessagesInvokeStreamFrame(ctx wrapper.HttpContext) {
+	bufferedStreamingBody, has := ctx.GetContext(ctxKeyStreamingBody).([]byte)
+	if !has || len(bufferedStreamingBody) == 0 {
+		return
+	}
+	log.Warnf("discarding incomplete Bedrock Invoke eventstream frame at end of Anthropic Messages stream: %d bytes", len(bufferedStreamingBody))
+	ctx.SetContext(ctxKeyStreamingBody, nil)
+}
+
+func extractAmazonEventStreamPayloads(ctx wrapper.HttpContext, chunk []byte) [][]byte {
+	body := chunk
+	if bufferedStreamingBody, has := ctx.GetContext(ctxKeyStreamingBody).([]byte); has {
+		body = append(bufferedStreamingBody, chunk...)
+	}
+
+	r := bytes.NewReader(body)
+	var payloads [][]byte
+	var lastRead int64 = 0
+	messageBuffer := make([]byte, 1024)
+
+	for {
+		msg, err := decodeMessage(r, messageBuffer)
+		if err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				log.Errorf("failed to decode invoke response stream message: %v", err)
+			}
+			break
+		}
+		if len(msg.Payload) > 0 {
+			payload := make([]byte, len(msg.Payload))
+			copy(payload, msg.Payload)
+			payloads = append(payloads, payload)
+		}
+		lastRead = r.Size() - int64(r.Len())
+	}
+	if lastRead < int64(len(body)) {
+		ctx.SetContext(ctxKeyStreamingBody, body[lastRead:])
+	} else {
+		ctx.SetContext(ctxKeyStreamingBody, nil)
+	}
+	return payloads
 }
 
 func (b *bedrockProvider) buildBedrockImageGenerationRequest(origRequest *imageGenerationRequest, headers http.Header) ([]byte, error) {
@@ -1650,8 +2098,8 @@ func (b *bedrockProvider) setAuthHeaders(apiName ApiName, body []byte, headers h
 	amzDate := t.Format("20060102T150405Z")
 	dateStamp := t.Format("20060102")
 	path := headers.Get(":path")
-	service := bedrockAWSService(apiName)
-	signature := b.generateSignatureWithService(path, amzDate, dateStamp, body, service)
+	service := b.bedrockAWSService(apiName)
+	signature := b.generateSignatureWithServiceAndHost(path, amzDate, dateStamp, body, service, b.bedrockSigningHost(headers, service))
 	headers.Set("X-Amz-Date", amzDate)
 	util.OverwriteRequestAuthorizationHeader(headers, fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s/%s/%s/aws4_request, SignedHeaders=%s, Signature=%s", accessKey, dateStamp, region, service, bedrockSignedHeaders, signature))
 }
@@ -1661,13 +2109,16 @@ func (b *bedrockProvider) generateSignature(path, amzDate, dateStamp string, bod
 }
 
 func (b *bedrockProvider) generateSignatureWithService(path, amzDate, dateStamp string, body []byte, service string) string {
+	return b.generateSignatureWithServiceAndHost(path, amzDate, dateStamp, body, service, bedrockAWSEndpoint(service, strings.TrimSpace(b.config.awsRegion)))
+}
+
+func (b *bedrockProvider) generateSignatureWithServiceAndHost(path, amzDate, dateStamp string, body []byte, service string, host string) string {
 	canonicalURI := encodeSigV4Path(path)
 	hashedPayload := sha256Hex(body)
 	region := strings.TrimSpace(b.config.awsRegion)
 	secretKey := strings.TrimSpace(b.config.awsSecretKey)
 
-	endpoint := bedrockAWSEndpoint(service, region)
-	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-date:%s\n", endpoint, amzDate)
+	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-date:%s\n", host, amzDate)
 	canonicalRequest := fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s",
 		httpPostMethod, canonicalURI, canonicalHeaders, bedrockSignedHeaders, hashedPayload)
 
@@ -1681,8 +2132,15 @@ func (b *bedrockProvider) generateSignatureWithService(path, amzDate, dateStamp 
 	return signature
 }
 
-func bedrockAWSService(apiName ApiName) string {
-	if apiName == ApiNameAnthropicMessages {
+func (b *bedrockProvider) bedrockSigningHost(headers http.Header, service string) string {
+	if host := strings.TrimSpace(headers.Get(":authority")); host != "" {
+		return host
+	}
+	return bedrockAWSEndpoint(service, strings.TrimSpace(b.config.awsRegion))
+}
+
+func (b *bedrockProvider) bedrockAWSService(apiName ApiName) string {
+	if apiName == ApiNameAnthropicMessages && b.anthropicMessagesEndpoint() == bedrockAnthropicMessagesEndpointMantle {
 		return awsServiceBedrockMantle
 	}
 	return awsServiceBedrock

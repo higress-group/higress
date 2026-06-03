@@ -30,6 +30,24 @@ var basicBedrockConfig = func() json.RawMessage {
 	return data
 }()
 
+var bedrockInvokeAkSkConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":         "bedrock",
+			"awsAccessKey": "test-ak-for-unit-test",
+			"awsSecretKey": "test-sk-for-unit-test",
+			"awsRegion":    "us-east-1",
+			"capabilities": map[string]string{
+				"anthropic/v1/messages": "/model/%s/invoke",
+			},
+			"modelMapping": map[string]string{
+				"*": "anthropic.claude-3-5-haiku-20241022-v1:0",
+			},
+		},
+	})
+	return data
+}()
+
 // Test config: Bedrock original protocol config with AWS Access Key/Secret Key
 var bedrockOriginalAkSkConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -117,6 +135,42 @@ var bedrockApiTokenConfig = func() json.RawMessage {
 	return data
 }()
 
+var bedrockInvokeApiTokenConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type": "bedrock",
+			"apiTokens": []string{
+				"test-token-for-unit-test",
+			},
+			"awsRegion": "us-east-1",
+			"capabilities": map[string]string{
+				"anthropic/v1/messages": "/model/%s/invoke",
+			},
+			"modelMapping": map[string]string{
+				"*": "anthropic.claude-3-5-haiku-20241022-v1:0",
+			},
+		},
+	})
+	return data
+}()
+
+var bedrockExplicitRuntimeEndpointApiTokenConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type": "bedrock",
+			"apiTokens": []string{
+				"test-token-for-unit-test",
+			},
+			"awsRegion":                        "us-east-1",
+			"bedrockAnthropicMessagesEndpoint": "runtime",
+			"modelMapping": map[string]string{
+				"*": "anthropic.claude-3-5-haiku-20241022-v1:0",
+			},
+		},
+	})
+	return data
+}()
+
 var bedrockMantleApiTokenConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
 		"provider": map[string]interface{}{
@@ -125,6 +179,25 @@ var bedrockMantleApiTokenConfig = func() json.RawMessage {
 				"test-token-for-unit-test",
 			},
 			"awsRegion": "us-east-1",
+			"modelMapping": map[string]string{
+				"*": "anthropic.claude-opus-4-7",
+			},
+		},
+	})
+	return data
+}()
+
+var bedrockExplicitMantleCapabilityApiTokenConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type": "bedrock",
+			"apiTokens": []string{
+				"test-token-for-unit-test",
+			},
+			"awsRegion": "us-east-1",
+			"capabilities": map[string]string{
+				"anthropic/v1/messages": "/anthropic/v1/messages",
+			},
 			"modelMapping": map[string]string{
 				"*": "anthropic.claude-opus-4-7",
 			},
@@ -230,6 +303,62 @@ var bedrockWithAdditionalFieldsConfig = func() json.RawMessage {
 			"bedrockAdditionalFields": map[string]interface{}{
 				"top_k": 200,
 			},
+			"modelMapping": map[string]string{
+				"*": "anthropic.claude-3-5-haiku-20241022-v1:0",
+			},
+		},
+	})
+	return data
+}()
+
+var bedrockMessagesInvokeWithVersionAndAdditionalFieldsConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type": "bedrock",
+			"apiTokens": []string{
+				"test-token-for-unit-test",
+			},
+			"awsRegion":  "us-east-1",
+			"apiVersion": "bedrock-test-version",
+			"capabilities": map[string]string{
+				"anthropic/v1/messages": "/model/%s/invoke",
+			},
+			"bedrockAdditionalFields": map[string]interface{}{
+				"top_k": 200,
+			},
+			"modelMapping": map[string]string{
+				"*": "anthropic.claude-3-5-haiku-20241022-v1:0",
+			},
+		},
+	})
+	return data
+}()
+
+var bedrockMessagesInvokeWithRuntimeProviderDomainConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type": "bedrock",
+			"apiTokens": []string{
+				"test-token-for-unit-test",
+			},
+			"awsRegion":      "us-east-1",
+			"providerDomain": "https://bedrock-runtime.us-west-2.amazonaws.com:443/proxy",
+			"modelMapping": map[string]string{
+				"*": "anthropic.claude-3-5-haiku-20241022-v1:0",
+			},
+		},
+	})
+	return data
+}()
+
+var bedrockMessagesInvokeWithRuntimeProviderDomainAkSkConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":           "bedrock",
+			"awsAccessKey":   "test-ak-for-unit-test",
+			"awsSecretKey":   "test-sk-for-unit-test",
+			"awsRegion":      "us-west-2",
+			"providerDomain": "https://bedrock-runtime.us-west-2.amazonaws.com:443/proxy",
 			"modelMapping": map[string]string{
 				"*": "anthropic.claude-3-5-haiku-20241022-v1:0",
 			},
@@ -457,7 +586,361 @@ func RunBedrockOnHttpRequestBodyTests(t *testing.T) {
 			require.Contains(t, pathValue, "/converse", "Path should contain converse endpoint")
 		})
 
-		t.Run("bedrock anthropic messages request should use mantle endpoint and preserve native body", func(t *testing.T) {
+		t.Run("bedrock anthropic messages request should use runtime invoke when configured", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockInvokeApiTokenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+				{"anthropic-beta", "computer-use-2024-10-22, fine-grained-tool-streaming-2025-05-14"},
+				{"anthropic-version", "2023-06-01"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost, "Host header should exist")
+			require.Equal(t, "bedrock-runtime.us-east-1.amazonaws.com", hostValue)
+
+			authValue, hasAuth := test.GetHeaderValue(requestHeaders, "Authorization")
+			require.True(t, hasAuth, "Authorization header should exist")
+			require.Contains(t, authValue, "Bearer ")
+			require.Contains(t, authValue, "test-token-for-unit-test")
+
+			_, hasAPIKey := test.GetHeaderValue(requestHeaders, "x-api-key")
+			require.False(t, hasAPIKey, "x-api-key should not be sent to bedrock-runtime")
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"stream": false,
+					"messages": [{
+						"role": "user",
+						"content": [{
+							"type": "text",
+							"text": "Hello",
+							"cache_control": {"type": "ephemeral", "ttl": "1h"}
+						}]
+					}],
+					"tools": [{"type": "web_search_20250305"}]
+				}`
+
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.False(t, gjson.GetBytes(processedBody, "model").Exists(), "model should be moved to invoke path")
+			require.False(t, gjson.GetBytes(processedBody, "stream").Exists(), "stream should not be forwarded to Bedrock Invoke")
+			require.Equal(t, "bedrock-2023-05-31", gjson.GetBytes(processedBody, "anthropic_version").String())
+			require.Equal(t, "web_search_20250305", gjson.GetBytes(processedBody, "tools.0.type").String())
+			require.Equal(t, "ephemeral", gjson.GetBytes(processedBody, "messages.0.content.0.cache_control.type").String())
+			require.False(t, gjson.GetBytes(processedBody, "messages.0.content.0.cache_control.ttl").Exists(), "Bedrock Invoke does not support cache_control.ttl")
+			require.Equal(t, "computer-use-2024-10-22", gjson.GetBytes(processedBody, "anthropic_beta.0").String())
+			require.Equal(t, "fine-grained-tool-streaming-2025-05-14", gjson.GetBytes(processedBody, "anthropic_beta.1").String())
+
+			requestHeaders = host.GetRequestHeaders()
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/model/anthropic.claude-3-5-haiku-20241022-v1%3A0/invoke", pathValue)
+			acceptValue, hasAccept := test.GetHeaderValue(requestHeaders, "Accept")
+			require.True(t, hasAccept, "Accept header should exist")
+			require.Equal(t, "application/json", acceptValue)
+			_, hasAnthropicBeta := test.GetHeaderValue(requestHeaders, "anthropic-beta")
+			require.False(t, hasAnthropicBeta, "anthropic-beta should be moved into request body for Bedrock Invoke")
+		})
+
+		t.Run("bedrock anthropic messages request should use explicit runtime endpoint field", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockExplicitRuntimeEndpointApiTokenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"messages": [{"role": "user", "content": "Hello"}]
+				}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost, "Host header should exist")
+			require.Equal(t, "bedrock-runtime.us-east-1.amazonaws.com", hostValue)
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/model/anthropic.claude-3-5-haiku-20241022-v1%3A0/invoke", pathValue)
+		})
+
+		t.Run("bedrock anthropic messages request should apply version additional fields and remove nested cache ttl", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockMessagesInvokeWithVersionAndAdditionalFieldsConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"system": [
+						{"type": "text", "text": "System prompt", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+					],
+					"messages": [
+						{
+							"role": "user",
+							"content": [
+								{"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+								{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+									{"type": "text", "text": "Nested result", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+								]},
+								{"type": "text", "text": "World", "cache_control": {"type": "ephemeral"}}
+							]
+						},
+						{
+							"role": "assistant",
+							"content": [
+								{"type": "text", "text": "Ack", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+							]
+						},
+						{
+							"role": "user",
+							"content": "String content should stay untouched"
+						}
+					],
+					"tools": [
+						{
+							"name": "inspect_cache",
+							"description": "inspect cache settings",
+							"input_schema": {
+								"type": "object",
+								"properties": {
+									"cache_control": {
+										"type": "object",
+										"properties": {
+											"ttl": {"type": "string"}
+										}
+									}
+								}
+							},
+							"cache_control": {"type": "ephemeral", "ttl": "1h"}
+						}
+					]
+				}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.Equal(t, "bedrock-test-version", gjson.GetBytes(processedBody, "anthropic_version").String())
+			require.Equal(t, int64(200), gjson.GetBytes(processedBody, "top_k").Int())
+			require.False(t, gjson.GetBytes(processedBody, "system.0.cache_control.ttl").Exists())
+			require.Equal(t, "ephemeral", gjson.GetBytes(processedBody, "system.0.cache_control.type").String())
+			require.False(t, gjson.GetBytes(processedBody, "messages.0.content.0.cache_control.ttl").Exists())
+			require.False(t, gjson.GetBytes(processedBody, "messages.0.content.1.content.0.cache_control.ttl").Exists())
+			require.False(t, gjson.GetBytes(processedBody, "messages.1.content.0.cache_control.ttl").Exists())
+			require.Equal(t, "ephemeral", gjson.GetBytes(processedBody, "messages.0.content.2.cache_control.type").String())
+			require.Equal(t, "String content should stay untouched", gjson.GetBytes(processedBody, "messages.2.content").String())
+			require.False(t, gjson.GetBytes(processedBody, "tools.0.cache_control.ttl").Exists())
+			require.Equal(t, "ephemeral", gjson.GetBytes(processedBody, "tools.0.cache_control.type").String())
+			require.Equal(t, "string", gjson.GetBytes(processedBody, "tools.0.input_schema.properties.cache_control.properties.ttl.type").String())
+		})
+
+		t.Run("bedrock anthropic messages request should merge explicit and auto beta values", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockInvokeApiTokenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+				{"anthropic-beta", " computer-use-2024-10-22 , output-128k-2025-02-19 "},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"anthropic_beta": ["context-1m-2025-08-07", "computer-use-2024-10-22"],
+					"messages": [{
+						"role": "user",
+						"content": [{
+							"type": "document",
+							"source": {"type": "file", "file_id": "file_123"}
+						}]
+					}],
+					"tools": [{"type": "computer_20250124", "name": "computer"}],
+					"mcp_servers": [{"type": "url", "url": "https://mcp.example.com", "name": "test"}]
+				}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			betas := make(map[string]bool)
+			betaValues := gjson.GetBytes(processedBody, "anthropic_beta").Array()
+			for _, value := range betaValues {
+				betas[value.String()] = true
+			}
+			require.True(t, betas["context-1m-2025-08-07"])
+			require.True(t, betas["computer-use-2024-10-22"])
+			require.True(t, betas["output-128k-2025-02-19"])
+			require.True(t, betas["computer-use-2025-01-24"])
+			require.True(t, betas["files-api-2025-04-14"])
+			require.True(t, betas["code-execution-2025-05-22"])
+			require.True(t, betas["mcp-client-2025-04-04"])
+			require.Equal(t, 7, len(betas), "duplicate beta values should be removed")
+			require.Equal(t, len(betas), len(betaValues), "anthropic_beta array should not contain duplicates")
+			require.False(t, betas["prompt-caching-2024-07-31"], "Bedrock Invoke should not use prompt caching beta")
+		})
+
+		t.Run("bedrock anthropic messages request should keep runtime provider domain override", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockMessagesInvokeWithRuntimeProviderDomainConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"messages": [{"role": "user", "content": "Hello"}]
+				}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost)
+			require.Equal(t, "bedrock-runtime.us-west-2.amazonaws.com:443", hostValue)
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath)
+			require.Equal(t, "/model/anthropic.claude-3-5-haiku-20241022-v1%3A0/invoke", pathValue)
+		})
+
+		t.Run("bedrock anthropic messages request with ak sk should sign normalized runtime provider domain", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockMessagesInvokeWithRuntimeProviderDomainAkSkConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"messages": [{"role": "user", "content": "Hello"}]
+				}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost)
+			require.Equal(t, "bedrock-runtime.us-west-2.amazonaws.com:443", hostValue)
+			authValue, hasAuth := test.GetHeaderValue(requestHeaders, "Authorization")
+			require.True(t, hasAuth, "Authorization header should exist")
+			require.Contains(t, authValue, "AWS4-HMAC-SHA256")
+			require.Contains(t, authValue, "/us-west-2/bedrock/aws4_request")
+		})
+
+		t.Run("bedrock anthropic messages request with ak sk should sign runtime invoke service", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockInvokeAkSkConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"messages": [{"role": "user", "content": "Hello"}]
+				}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost, "Host header should exist")
+			require.Equal(t, "bedrock-runtime.us-east-1.amazonaws.com", hostValue)
+
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/model/anthropic.claude-3-5-haiku-20241022-v1%3A0/invoke", pathValue)
+
+			authValue, hasAuth := test.GetHeaderValue(requestHeaders, "Authorization")
+			require.True(t, hasAuth, "Authorization header should exist")
+			require.Contains(t, authValue, "AWS4-HMAC-SHA256")
+			require.Contains(t, authValue, "/bedrock/aws4_request")
+			require.NotContains(t, authValue, "/bedrock-mantle/aws4_request")
+		})
+
+		t.Run("bedrock anthropic messages streaming request should use runtime invoke response stream", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockInvokeApiTokenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"messages": [{"role": "user", "content": "Hello"}],
+					"stream": true
+				}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/model/anthropic.claude-3-5-haiku-20241022-v1%3A0/invoke-with-response-stream", pathValue)
+
+			acceptValue, hasAccept := test.GetHeaderValue(requestHeaders, "Accept")
+			require.True(t, hasAccept, "Accept header should exist")
+			require.Equal(t, "application/vnd.amazon.eventstream", acceptValue)
+		})
+
+		t.Run("bedrock anthropic messages request should use mantle endpoint by default and preserve native body", func(t *testing.T) {
 			host, status := test.NewTestHost(bedrockMantleApiTokenConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -553,6 +1036,28 @@ func RunBedrockOnHttpRequestBodyTests(t *testing.T) {
 			require.True(t, hasAuth, "Authorization header should exist")
 			require.Contains(t, authValue, "AWS4-HMAC-SHA256")
 			require.Contains(t, authValue, "/bedrock-mantle/aws4_request")
+		})
+
+		t.Run("bedrock anthropic messages request should keep explicit mantle capability", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockExplicitMantleCapabilityApiTokenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost, "Host header should exist")
+			require.Equal(t, "bedrock-mantle.us-east-1.api.aws", hostValue)
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Equal(t, "/anthropic/v1/messages", pathValue)
 		})
 
 		t.Run("bedrock anthropic messages streaming request should keep mantle path and accept sse", func(t *testing.T) {
@@ -2030,6 +2535,35 @@ func RunBedrockOnStreamingResponseBodyTests(t *testing.T) {
 			}
 			return ""
 		}
+		newBedrockInvokeMessagesStreamHost := func(t *testing.T) test.TestHost {
+			host, status := test.NewTestHost(bedrockInvokeApiTokenConfig)
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+				"model": "claude-request-model",
+				"max_tokens": 1024,
+				"messages": [{"role": "user", "content": "Hello"}],
+				"stream": true
+			}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "application/vnd.amazon.eventstream"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+			return host
+		}
 
 		t.Run("extract first data payload should return empty when no data line", func(t *testing.T) {
 			payload := extractFirstDataPayload([]byte("event: ping\n\n"))
@@ -2069,6 +2603,259 @@ func RunBedrockOnStreamingResponseBodyTests(t *testing.T) {
 			action = host.CallOnHttpStreamingResponseBody(chunk, false)
 			require.Equal(t, types.ActionContinue, action)
 			require.Equal(t, chunk, host.GetResponseBody())
+		})
+
+		t.Run("bedrock anthropic messages runtime stream should convert eventstream to anthropic sse", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockInvokeApiTokenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"messages": [{"role": "user", "content": "Hello"}],
+					"stream": true
+				}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "application/vnd.amazon.eventstream"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			responseHeaders := host.GetResponseHeaders()
+			contentType, hasContentType := test.GetHeaderValue(responseHeaders, "Content-Type")
+			require.True(t, hasContentType, "Content-Type should exist")
+			require.Equal(t, "text/event-stream; charset=utf-8", contentType)
+
+			streamingChunk := buildBedrockEventStreamMessage(t, map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{
+					"type": "text_delta",
+					"text": "Hi",
+				},
+			})
+			action = host.CallOnHttpStreamingResponseBody(streamingChunk, false)
+			require.Equal(t, types.ActionContinue, action)
+
+			responseBody := host.GetResponseBody()
+			require.Contains(t, string(responseBody), "event: content_block_delta")
+			payload := extractFirstDataPayload(responseBody)
+			require.Equal(t, "Hi", gjson.Parse(payload).Get("delta.text").String())
+
+			metricsChunk := buildBedrockEventStreamMessage(t, map[string]interface{}{
+				"type": "message_delta",
+				"delta": map[string]interface{}{
+					"stop_reason":   "end_turn",
+					"stop_sequence": nil,
+				},
+				"amazon-bedrock-invocationMetrics": map[string]interface{}{
+					"inputTokenCount":  10,
+					"outputTokenCount": 2,
+				},
+			})
+			action = host.CallOnHttpStreamingResponseBody(metricsChunk, false)
+			require.Equal(t, types.ActionContinue, action)
+
+			responseBody = host.GetResponseBody()
+			require.Contains(t, string(responseBody), "event: message_delta")
+			payload = extractFirstDataPayload(responseBody)
+			require.False(t, gjson.Parse(payload).Get("amazon-bedrock-invocationMetrics").Exists())
+			require.Equal(t, int64(10), gjson.Parse(payload).Get("usage.input_tokens").Int())
+			require.Equal(t, int64(2), gjson.Parse(payload).Get("usage.output_tokens").Int())
+		})
+
+		t.Run("bedrock anthropic messages runtime stream should handle split frames multiple frames and invalid payloads", func(t *testing.T) {
+			host, status := test.NewTestHost(bedrockInvokeApiTokenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestBody := `{
+					"model": "claude-request-model",
+					"max_tokens": 1024,
+					"messages": [{"role": "user", "content": "Hello"}],
+					"stream": true
+				}`
+			action = host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "application/vnd.amazon.eventstream; charset=utf-8"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			splitFrame := buildBedrockEventStreamMessage(t, map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{
+					"type": "text_delta",
+					"text": "Split",
+				},
+			})
+			midpoint := len(splitFrame) / 2
+			action = host.CallOnHttpStreamingResponseBody(splitFrame[:midpoint], false)
+			require.Equal(t, types.ActionContinue, action)
+			require.Len(t, host.GetResponseBody(), 0, "partial eventstream frame should not emit SSE")
+
+			action = host.CallOnHttpStreamingResponseBody(splitFrame[midpoint:], false)
+			require.Equal(t, types.ActionContinue, action)
+			responseBody := host.GetResponseBody()
+			require.Contains(t, string(responseBody), "event: content_block_delta")
+			require.Equal(t, "Split", gjson.Parse(extractFirstDataPayload(responseBody)).Get("delta.text").String())
+
+			firstFrame := buildBedrockEventStreamMessage(t, map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{
+					"type": "text_delta",
+					"text": "A",
+				},
+			})
+			secondFrame := buildBedrockEventStreamMessage(t, map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{
+					"type": "text_delta",
+					"text": "B",
+				},
+			})
+			action = host.CallOnHttpStreamingResponseBody(append(firstFrame, secondFrame...), false)
+			require.Equal(t, types.ActionContinue, action)
+			responseBody = host.GetResponseBody()
+			require.Equal(t, 2, strings.Count(string(responseBody), "event: content_block_delta"))
+			require.Equal(t, 2, strings.Count(string(responseBody), "\n\n"))
+
+			rawFrame := buildBedrockEventStreamPayload(t, []byte("not-json\nbad"))
+			action = host.CallOnHttpStreamingResponseBody(rawFrame, false)
+			require.Equal(t, types.ActionContinue, action)
+			responseBody = host.GetResponseBody()
+			require.Contains(t, string(responseBody), "event: error")
+			require.NotContains(t, string(responseBody), "not-json")
+			require.Equal(t, 1, strings.Count(string(responseBody), "data: "))
+			errorPayload := extractFirstDataPayload(responseBody)
+			require.Equal(t, "error", gjson.Parse(errorPayload).Get("type").String())
+			require.Equal(t, "api_error", gjson.Parse(errorPayload).Get("error.type").String())
+			require.Equal(t, "invalid Bedrock Invoke eventstream payload", gjson.Parse(errorPayload).Get("error.message").String())
+
+			trailingPartialFrame := buildBedrockEventStreamMessage(t, map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{
+					"type": "text_delta",
+					"text": "trailing",
+				},
+			})
+			action = host.CallOnHttpStreamingResponseBody(trailingPartialFrame[:len(trailingPartialFrame)/2], false)
+			require.Equal(t, types.ActionContinue, action)
+			require.Len(t, host.GetResponseBody(), 0, "partial eventstream frame should not emit SSE")
+
+			action = host.CallOnHttpStreamingResponseBody([]byte{}, true)
+			require.Equal(t, types.ActionContinue, action)
+			require.Len(t, host.GetResponseBody(), 0, "trailing partial eventstream frame should be discarded without DONE")
+			warnLogs := host.GetWarnLogs()
+			hasIncompleteFrameWarn := false
+			for _, logEntry := range warnLogs {
+				if strings.Contains(logEntry, "discarding incomplete Bedrock Invoke eventstream frame") {
+					hasIncompleteFrameWarn = true
+					break
+				}
+			}
+			require.True(t, hasIncompleteFrameWarn, "should warn about trailing incomplete frame, logs: %v", warnLogs)
+		})
+
+		t.Run("bedrock anthropic messages runtime stream should compact json and reject non object payloads", func(t *testing.T) {
+			host := newBedrockInvokeMessagesStreamHost(t)
+			defer host.Reset()
+
+			prettyPayload := []byte(`{
+				"type": "content_block_delta",
+				"index": 0,
+				"delta": {
+					"type": "text_delta",
+					"text": "Pretty"
+				}
+			}`)
+			action := host.CallOnHttpStreamingResponseBody(buildBedrockEventStreamPayload(t, prettyPayload), false)
+			require.Equal(t, types.ActionContinue, action)
+			responseBody := host.GetResponseBody()
+			require.Contains(t, string(responseBody), "event: content_block_delta")
+			payload := extractFirstDataPayload(responseBody)
+			require.Equal(t, "Pretty", gjson.Parse(payload).Get("delta.text").String())
+			require.NotContains(t, payload, "\n", "SSE data payload should stay on one line")
+
+			arrayPayload := []byte(`[{"type":"content_block_delta","delta":{"text":"array"}}]`)
+			action = host.CallOnHttpStreamingResponseBody(buildBedrockEventStreamPayload(t, arrayPayload), false)
+			require.Equal(t, types.ActionContinue, action)
+			responseBody = host.GetResponseBody()
+			require.Contains(t, string(responseBody), "event: error")
+			require.NotContains(t, string(responseBody), "array")
+			errorPayload := extractFirstDataPayload(responseBody)
+			require.Equal(t, "error", gjson.Parse(errorPayload).Get("type").String())
+			require.Equal(t, "api_error", gjson.Parse(errorPayload).Get("error.type").String())
+		})
+
+		t.Run("bedrock anthropic messages runtime stream should emit complete final frame and warn on trailing partial frame", func(t *testing.T) {
+			host := newBedrockInvokeMessagesStreamHost(t)
+			defer host.Reset()
+
+			completeFrame := buildBedrockEventStreamMessage(t, map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{
+					"type": "text_delta",
+					"text": "complete-before-trailer",
+				},
+			})
+			partialFrame := buildBedrockEventStreamMessage(t, map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{
+					"type": "text_delta",
+					"text": "trailing",
+				},
+			})
+			finalChunk := make([]byte, 0, len(completeFrame)+len(partialFrame)/2)
+			finalChunk = append(finalChunk, completeFrame...)
+			finalChunk = append(finalChunk, partialFrame[:len(partialFrame)/2]...)
+
+			action := host.CallOnHttpStreamingResponseBody(finalChunk, true)
+			require.Equal(t, types.ActionContinue, action)
+			responseBody := host.GetResponseBody()
+			require.Contains(t, string(responseBody), "event: content_block_delta")
+			require.Equal(t, "complete-before-trailer", gjson.Parse(extractFirstDataPayload(responseBody)).Get("delta.text").String())
+			require.NotContains(t, string(responseBody), "data: [DONE]")
+
+			warnLogs := host.GetWarnLogs()
+			hasIncompleteFrameWarn := false
+			for _, logEntry := range warnLogs {
+				if strings.Contains(logEntry, "discarding incomplete Bedrock Invoke eventstream frame") {
+					hasIncompleteFrameWarn = true
+					break
+				}
+			}
+			require.True(t, hasIncompleteFrameWarn, "should warn about trailing incomplete frame, logs: %v", warnLogs)
 		})
 
 		t.Run("bedrock streaming parallel tool calls should use dense OpenAI indexes", func(t *testing.T) {
@@ -2414,7 +3201,10 @@ func RunBedrockOnStreamingResponseBodyTests(t *testing.T) {
 func buildBedrockEventStreamMessage(t *testing.T, payload map[string]interface{}) []byte {
 	payloadBytes, err := json.Marshal(payload)
 	require.NoError(t, err)
+	return buildBedrockEventStreamPayload(t, payloadBytes)
+}
 
+func buildBedrockEventStreamPayload(t *testing.T, payloadBytes []byte) []byte {
 	totalLength := uint32(16 + len(payloadBytes))
 	headersLength := uint32(0)
 

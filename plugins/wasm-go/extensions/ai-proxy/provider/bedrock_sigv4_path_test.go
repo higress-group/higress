@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/sjson"
 )
 
 func TestEncodeSigV4Path(t *testing.T) {
@@ -186,6 +188,297 @@ func TestIsPromptCacheSupportedModel(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, isPromptCacheSupportedModel(tt.model))
+		})
+	}
+}
+
+func TestBedrockAnthropicMessagesEndpointDetection(t *testing.T) {
+	tests := []struct {
+		name           string
+		endpoint       string
+		providerDomain string
+		capabilities   map[string]string
+		want           string
+	}{
+		{
+			name:     "explicit runtime endpoint selects invoke",
+			endpoint: "runtime",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockMantleMessagesPath,
+			},
+			want: bedrockAnthropicMessagesEndpointInvoke,
+		},
+		{
+			name:     "explicit invoke endpoint alias selects invoke",
+			endpoint: "invoke",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockMantleMessagesPath,
+			},
+			want: bedrockAnthropicMessagesEndpointInvoke,
+		},
+		{
+			name:     "explicit mantle endpoint selects mantle",
+			endpoint: "mantle",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockInvokeModelPath,
+			},
+			want: bedrockAnthropicMessagesEndpointMantle,
+		},
+		{
+			name:           "provider domain mantle wins over default invoke capability",
+			providerDomain: "bedrock-mantle.us-east-1.api.aws",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockInvokeModelPath,
+			},
+			want: bedrockAnthropicMessagesEndpointMantle,
+		},
+		{
+			name:           "provider domain runtime selects invoke",
+			providerDomain: "bedrock-runtime.us-east-1.amazonaws.com",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockMantleMessagesPath,
+			},
+			want: bedrockAnthropicMessagesEndpointInvoke,
+		},
+		{
+			name:           "provider domain runtime with scheme port and path selects invoke",
+			providerDomain: "https://bedrock-runtime.us-east-1.amazonaws.com:443/proxy",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockMantleMessagesPath,
+			},
+			want: bedrockAnthropicMessagesEndpointInvoke,
+		},
+		{
+			name:           "proxy domain containing runtime falls back to capability",
+			providerDomain: "bedrock-runtime-proxy.internal.example.com",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockMantleMessagesPath,
+			},
+			want: bedrockAnthropicMessagesEndpointMantle,
+		},
+		{
+			name:           "proxy domain containing mantle falls back to invoke capability",
+			providerDomain: "bedrock-mantle-proxy.internal.example.com",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockInvokeModelPath,
+			},
+			want: bedrockAnthropicMessagesEndpointInvoke,
+		},
+		{
+			name: "mantle capability selects mantle",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockMantleMessagesPath,
+			},
+			want: bedrockAnthropicMessagesEndpointMantle,
+		},
+		{
+			name: "default mantle capability selects mantle",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockMantleMessagesPath,
+			},
+			want: bedrockAnthropicMessagesEndpointMantle,
+		},
+		{
+			name:         "empty capability selects mantle",
+			capabilities: map[string]string{},
+			want:         bedrockAnthropicMessagesEndpointMantle,
+		},
+		{
+			name: "invoke capability selects invoke",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockInvokeModelPath,
+			},
+			want: bedrockAnthropicMessagesEndpointInvoke,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &bedrockProvider{
+				config: ProviderConfig{
+					bedrockAnthropicMessagesEndpoint: tt.endpoint,
+					providerDomain:                   tt.providerDomain,
+					capabilities:                     tt.capabilities,
+				},
+			}
+			assert.Equal(t, tt.want, p.anthropicMessagesEndpoint())
+		})
+	}
+}
+
+func TestBedrockAnthropicMessagesInvokeProviderBasePathIsSigned(t *testing.T) {
+	p := &bedrockProvider{
+		config: ProviderConfig{
+			awsAccessKey:     "test-ak-for-unit-test",
+			awsSecretKey:     "test-sk-for-unit-test",
+			awsRegion:        "us-east-1",
+			providerBasePath: "/bedrock-proxy",
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockInvokeModelPath,
+			},
+			modelMapping: map[string]string{
+				"*": "anthropic.claude-3-5-haiku-20241022-v1:0",
+			},
+		},
+	}
+	ctx := newMockMultipartHttpContext()
+	headers := http.Header{}
+	headers.Set(":path", "/v1/messages")
+	headers.Set(":authority", "example.com")
+
+	p.TransformRequestHeaders(ctx, ApiNameAnthropicMessages, headers)
+	transformedBody, err := p.TransformRequestBodyHeaders(ctx, ApiNameAnthropicMessages, []byte(`{
+		"model": "claude-request-model",
+		"max_tokens": 100,
+		"messages": [{"role": "user", "content": "hello"}]
+	}`), headers)
+	require.NoError(t, err)
+
+	path := headers.Get(":path")
+	assert.Equal(t, "/bedrock-proxy/model/anthropic.claude-3-5-haiku-20241022-v1%3A0/invoke", path)
+	amzDate := headers.Get("X-Amz-Date")
+	require.Len(t, amzDate, len("20060102T150405Z"))
+	expectedSignature := p.generateSignatureWithService(path, amzDate, amzDate[:8], transformedBody, awsServiceBedrock)
+	assert.Contains(t, headers.Get("Authorization"), "Signature="+expectedSignature)
+}
+
+func TestBedrockAnthropicMessagesInvalidExplicitEndpoint(t *testing.T) {
+	err := (&bedrockProviderInitializer{}).ValidateConfig(&ProviderConfig{
+		apiTokens:                        []string{"test-token-for-unit-test"},
+		awsRegion:                        "us-east-1",
+		bedrockAnthropicMessagesEndpoint: "bad-endpoint",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid bedrockAnthropicMessagesEndpoint")
+}
+
+func TestBedrockAnthropicMessagesInvokeProviderDomainHostIsSigned(t *testing.T) {
+	providerDomain := normalizeProviderDomainHost("https://bedrock-runtime.us-west-2.amazonaws.com:443/proxy")
+	p := &bedrockProvider{
+		config: ProviderConfig{
+			awsAccessKey:   "test-ak-for-unit-test",
+			awsSecretKey:   "test-sk-for-unit-test",
+			awsRegion:      "us-west-2",
+			providerDomain: providerDomain,
+			capabilities: map[string]string{
+				string(ApiNameAnthropicMessages): bedrockInvokeModelPath,
+			},
+			modelMapping: map[string]string{
+				"*": "anthropic.claude-3-5-haiku-20241022-v1:0",
+			},
+		},
+	}
+	ctx := newMockMultipartHttpContext()
+	headers := http.Header{}
+	headers.Set(":path", "/v1/messages")
+	headers.Set(":authority", "example.com")
+
+	p.TransformRequestHeaders(ctx, ApiNameAnthropicMessages, headers)
+	headers.Set(":authority", providerDomain)
+	transformedBody, err := p.TransformRequestBodyHeaders(ctx, ApiNameAnthropicMessages, []byte(`{
+		"model": "claude-request-model",
+		"max_tokens": 100,
+		"messages": [{"role": "user", "content": "hello"}]
+	}`), headers)
+	require.NoError(t, err)
+
+	assert.Equal(t, "bedrock-runtime.us-west-2.amazonaws.com:443", headers.Get(":authority"))
+	amzDate := headers.Get("X-Amz-Date")
+	require.Len(t, amzDate, len("20060102T150405Z"))
+	expectedSignature := p.generateSignatureWithServiceAndHost(headers.Get(":path"), amzDate, amzDate[:8], transformedBody, awsServiceBedrock, providerDomain)
+	assert.Contains(t, headers.Get("Authorization"), "Signature="+expectedSignature)
+}
+
+func TestBedrockAnthropicMessagesAutoBetas(t *testing.T) {
+	body := []byte(`{
+		"messages": [{
+			"role": "user",
+			"content": [{
+				"type": "document",
+				"source": {"type": "file", "file_id": "file_123"}
+			}]
+		}],
+		"tools": [
+			{"type": "computer_20241022"},
+			{"type": "tool_search_tool_regex_20251119"}
+		],
+		"mcp_servers": [{"type": "url", "url": "https://mcp.example.com", "name": "mcp"}]
+	}`)
+
+	betas := bedrockAnthropicMessagesAutoBetas(body, "anthropic.claude-opus-4-20250514-v1:0")
+	assert.ElementsMatch(t, []string{
+		bedrockComputerUseBeta20241022,
+		bedrockToolSearchBeta20251019,
+		bedrockFilesAPIBeta,
+		bedrockCodeExecutionBeta,
+		bedrockMCPClientBeta,
+	}, betas)
+	assert.Contains(t, betas, "tool-search-tool-2025-10-19")
+
+	assert.Empty(t, bedrockAnthropicMessagesAutoBetas(body, "amazon.nova-pro-v1:0"))
+}
+
+func TestBedrockAnthropicMessagesAutoBetasToolSearchClaudeModels(t *testing.T) {
+	tests := []struct {
+		name     string
+		model    string
+		toolType string
+		wantBeta bool
+	}{
+		{
+			name:     "bedrock opus 4 model",
+			model:    "anthropic.claude-opus-4-20250514-v1:0",
+			toolType: "tool_search_tool_regex",
+			wantBeta: true,
+		},
+		{
+			name:     "bedrock sonnet model",
+			model:    "anthropic.claude-sonnet-4-5-20250929-v1:0",
+			toolType: "tool_search_tool_regex_20251119",
+			wantBeta: true,
+		},
+		{
+			name:     "bedrock haiku inference profile",
+			model:    "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+			toolType: "tool_search_tool_bm25_20251119",
+			wantBeta: true,
+		},
+		{
+			name:     "future claude opus 40 model",
+			model:    "anthropic.claude-opus-40-20270101-v1:0",
+			toolType: "tool_search_tool_regex",
+			wantBeta: true,
+		},
+		{
+			name:     "future claude opus 4o model",
+			model:    "anthropic.claude-opus-4o-20270101-v1:0",
+			toolType: "tool_search_tool_regex",
+			wantBeta: true,
+		},
+		{
+			name:     "non claude model",
+			model:    "amazon.nova-pro-v1:0",
+			toolType: "tool_search_tool_regex",
+			wantBeta: false,
+		},
+		{
+			name:     "claude model without tool search tool",
+			model:    "anthropic.claude-sonnet-4-5-20250929-v1:0",
+			toolType: "custom_tool",
+			wantBeta: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := sjson.SetBytes([]byte(`{"tools":[{}]}`), "tools.0.type", tt.toolType)
+			require.NoError(t, err)
+			betas := bedrockAnthropicMessagesAutoBetas(body, tt.model)
+			if tt.wantBeta {
+				assert.Contains(t, betas, bedrockToolSearchBeta20251019)
+				return
+			}
+			assert.NotContains(t, betas, bedrockToolSearchBeta20251019)
 		})
 	}
 }

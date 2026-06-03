@@ -289,6 +289,29 @@ func TestProviderDomain_Config(t *testing.T) {
 		config.FromJson(gjson.Parse(jsonStr))
 		assert.Equal(t, "universal-proxy.example.com", config.providerDomain)
 	})
+
+	t.Run("providerDomain_full_url_is_normalized_to_authority", func(t *testing.T) {
+		config := ProviderConfig{}
+		jsonStr := `{"providerDomain": "https://Bedrock-Runtime.us-west-2.amazonaws.com:443/proxy"}`
+		config.FromJson(gjson.Parse(jsonStr))
+		assert.Equal(t, "bedrock-runtime.us-west-2.amazonaws.com:443", config.providerDomain)
+	})
+}
+
+func TestBedrockAnthropicMessagesEndpointConfig(t *testing.T) {
+	t.Run("bedrockAnthropicMessagesEndpoint_parsed_from_json", func(t *testing.T) {
+		config := ProviderConfig{}
+		jsonStr := `{"type": "bedrock", "bedrockAnthropicMessagesEndpoint": "runtime"}`
+		config.FromJson(gjson.Parse(jsonStr))
+		assert.Equal(t, "runtime", config.bedrockAnthropicMessagesEndpoint)
+	})
+
+	t.Run("bedrockAnthropicMessagesEndpoint_ignored_for_other_providers", func(t *testing.T) {
+		config := ProviderConfig{}
+		jsonStr := `{"type": "openai", "bedrockAnthropicMessagesEndpoint": "runtime"}`
+		config.FromJson(gjson.Parse(jsonStr))
+		assert.Equal(t, "", config.bedrockAnthropicMessagesEndpoint)
+	})
 }
 
 func TestProviderBasePath_Config(t *testing.T) {

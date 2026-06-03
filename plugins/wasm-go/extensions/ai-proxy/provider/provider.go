@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -379,6 +380,9 @@ type ProviderConfig struct {
 	// @Title zh-CN Amazon Bedrock Prompt Cache 保留策略（默认值）
 	// @Description zh-CN 仅适用于Amazon Bedrock服务。作为请求中 prompt_cache_retention 缺省时的默认值，支持 in_memory 和 24h。
 	promptCacheRetention string `required:"false" yaml:"promptCacheRetention" json:"promptCacheRetention"`
+	// @Title zh-CN Amazon Bedrock Anthropic Messages Endpoint
+	// @Description zh-CN 仅适用于Amazon Bedrock服务。用于指定 /v1/messages 使用 mantle 端点还是 runtime invoke 端点，可选值：mantle、runtime。
+	bedrockAnthropicMessagesEndpoint string `required:"false" yaml:"bedrockAnthropicMessagesEndpoint" json:"bedrockAnthropicMessagesEndpoint"`
 	// @Title zh-CN minimax API type
 	// @Description zh-CN 仅适用于 minimax 服务。minimax API 类型，v2 和 pro 中选填一项，默认值为 v2
 	minimaxApiType string `required:"false" yaml:"minimaxApiType" json:"minimaxApiType"`
@@ -617,6 +621,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 			c.bedrockAdditionalFields[k] = v.Value()
 		}
 		c.promptCacheRetention = json.Get("promptCacheRetention").String()
+		c.bedrockAnthropicMessagesEndpoint = strings.ToLower(strings.TrimSpace(json.Get("bedrockAnthropicMessagesEndpoint").String()))
 		if rawPositions := json.Get("bedrockPromptCachePointPositions"); rawPositions.Exists() {
 			c.bedrockPromptCachePointPositions = make(map[string]bool)
 			for k, v := range rawPositions.Map() {
@@ -727,6 +732,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 			string(ApiNameAudioTranslation),
 			string(ApiNameRealtime),
 			string(ApiNameResponses),
+			string(ApiNameAnthropicMessages),
 			string(ApiNameCohereV1Rerank),
 			string(ApiNameVideos),
 			string(ApiNameRetrieveVideo),
@@ -756,7 +762,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 		}
 	}
 	c.mergeConsecutiveMessages = json.Get("mergeConsecutiveMessages").Bool()
-	c.providerDomain = json.Get("providerDomain").String()
+	c.providerDomain = normalizeProviderDomainHost(json.Get("providerDomain").String())
 	c.promoteThinkingOnEmpty = json.Get("promoteThinkingOnEmpty").Bool()
 	c.logUpstreamErrorResponseBody = json.Get("logUpstreamErrorResponseBody").Bool()
 	c.hiclawMode = json.Get("hiclawMode").Bool()
@@ -765,6 +771,18 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 		c.promoteThinkingOnEmpty = true
 	}
 	c.providerBasePath = json.Get("providerBasePath").String()
+}
+
+func normalizeProviderDomainHost(domain string) string {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(domain); err == nil && parsed.Host != "" {
+		domain = parsed.Host
+	}
+	domain = strings.Split(domain, "/")[0]
+	return strings.TrimSuffix(domain, ".")
 }
 
 func (c *ProviderConfig) Validate() error {
@@ -1383,8 +1401,8 @@ func (c *ProviderConfig) handleRequestHeaders(provider Provider, ctx wrapper.Htt
 	}
 
 	// Apply providerDomain if configured (overrides any domain set by the provider)
-	if c.providerDomain != "" {
-		util.OverwriteRequestHostHeader(headers, c.providerDomain)
+	if providerDomain := normalizeProviderDomainHost(c.providerDomain); providerDomain != "" {
+		util.OverwriteRequestHostHeader(headers, providerDomain)
 	}
 
 	util.ReplaceRequestHeaders(headers)
