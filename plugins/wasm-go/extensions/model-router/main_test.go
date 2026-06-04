@@ -288,13 +288,12 @@ func TestOnHttpRequestBody_Multipart(t *testing.T) {
 	})
 }
 
-// Config with disableProviderSplit enabled
-var disableSplitConfig = func() json.RawMessage {
+var keepOriginalModelConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
-		"modelKey":             "model",
-		"addProviderHeader":    "x-provider",
-		"modelToHeader":        "x-model",
-		"disableProviderSplit": true,
+		"modelKey":              "model",
+		"addProviderHeader":     "x-provider",
+		"modelToHeader":         "x-model",
+		"keepOriginalModelName": true,
 		"enableOnPathSuffix": []string{
 			"/v1/chat/completions",
 		},
@@ -302,28 +301,28 @@ var disableSplitConfig = func() json.RawMessage {
 	return data
 }()
 
-func TestParseConfigDisableProviderSplit(t *testing.T) {
+func TestParseConfigKeepOriginalModelName(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		t.Run("default false", func(t *testing.T) {
 			var cfg ModelRouterConfig
 			err := parseConfig(gjson.ParseBytes(basicConfig), &cfg)
 			require.NoError(t, err)
-			require.False(t, cfg.disableProviderSplit)
+			require.False(t, cfg.keepOriginalModelName)
 		})
 
 		t.Run("parse true", func(t *testing.T) {
 			var cfg ModelRouterConfig
-			err := parseConfig(gjson.ParseBytes(disableSplitConfig), &cfg)
+			err := parseConfig(gjson.ParseBytes(keepOriginalModelConfig), &cfg)
 			require.NoError(t, err)
-			require.True(t, cfg.disableProviderSplit)
+			require.True(t, cfg.keepOriginalModelName)
 		})
 	})
 }
 
-func TestDisableProviderSplit(t *testing.T) {
+func TestKeepOriginalModelName(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		t.Run("json: keep full model name and skip provider split", func(t *testing.T) {
-			host, status := test.NewTestHost(disableSplitConfig)
+		t.Run("json: provider header set but body model preserved", func(t *testing.T) {
+			host, status := test.NewTestHost(keepOriginalModelConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
@@ -342,23 +341,23 @@ func TestDisableProviderSplit(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			// model header keeps the full name for routing
+			// model header keeps the full name
 			hv, found := getHeader(headers, "x-model")
 			require.True(t, found)
 			require.Equal(t, "MiniMax/MiniMax-M2.7", hv)
-			// provider header must NOT be set
-			_, found = getHeader(headers, "x-provider")
-			require.False(t, found)
+			// provider header IS set (split still extracts provider)
+			pv, found := getHeader(headers, "x-provider")
+			require.True(t, found)
+			require.Equal(t, "MiniMax", pv)
 
-			// body model must remain intact (not split)
+			// body model must remain intact (not rewritten)
 			processed := host.GetRequestBody()
-			if processed != nil {
-				require.Equal(t, "MiniMax/MiniMax-M2.7", gjson.GetBytes(processed, "model").String())
-			}
+			require.NotNil(t, processed)
+			require.Equal(t, "MiniMax/MiniMax-M2.7", gjson.GetBytes(processed, "model").String())
 		})
 
-		t.Run("multipart: keep full model name and skip provider split", func(t *testing.T) {
-			host, status := test.NewTestHost(disableSplitConfig)
+		t.Run("multipart: provider header set but body model preserved", func(t *testing.T) {
+			host, status := test.NewTestHost(keepOriginalModelConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
@@ -386,22 +385,23 @@ func TestDisableProviderSplit(t *testing.T) {
 			hv, found := getHeader(headers, "x-model")
 			require.True(t, found)
 			require.Equal(t, "MiniMax/MiniMax-M2.7", hv)
-			_, found = getHeader(headers, "x-provider")
-			require.False(t, found)
+			// provider header IS set
+			pv, found := getHeader(headers, "x-provider")
+			require.True(t, found)
+			require.Equal(t, "MiniMax", pv)
 
-			// body should not be rewritten when split is disabled
+			// body model should not be rewritten
 			processed := host.GetRequestBody()
-			if processed != nil {
-				reader := multipart.NewReader(bytes.NewReader(processed), writer.Boundary())
-				for {
-					part, err := reader.NextPart()
-					if err != nil {
-						break
-					}
-					if part.FormName() == "model" {
-						data, _ := io.ReadAll(part)
-						require.Equal(t, "MiniMax/MiniMax-M2.7", string(data))
-					}
+			require.NotNil(t, processed)
+			reader := multipart.NewReader(bytes.NewReader(processed), writer.Boundary())
+			for {
+				part, err := reader.NextPart()
+				if err != nil {
+					break
+				}
+				if part.FormName() == "model" {
+					data, _ := io.ReadAll(part)
+					require.Equal(t, "MiniMax/MiniMax-M2.7", string(data))
 				}
 			}
 		})
