@@ -288,6 +288,126 @@ func TestOnHttpRequestBody_Multipart(t *testing.T) {
 	})
 }
 
+// Config with disableProviderSplit enabled
+var disableSplitConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"modelKey":             "model",
+		"addProviderHeader":    "x-provider",
+		"modelToHeader":        "x-model",
+		"disableProviderSplit": true,
+		"enableOnPathSuffix": []string{
+			"/v1/chat/completions",
+		},
+	})
+	return data
+}()
+
+func TestParseConfigDisableProviderSplit(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		t.Run("default false", func(t *testing.T) {
+			var cfg ModelRouterConfig
+			err := parseConfig(gjson.ParseBytes(basicConfig), &cfg)
+			require.NoError(t, err)
+			require.False(t, cfg.disableProviderSplit)
+		})
+
+		t.Run("parse true", func(t *testing.T) {
+			var cfg ModelRouterConfig
+			err := parseConfig(gjson.ParseBytes(disableSplitConfig), &cfg)
+			require.NoError(t, err)
+			require.True(t, cfg.disableProviderSplit)
+		})
+	})
+}
+
+func TestDisableProviderSplit(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("json: keep full model name and skip provider split", func(t *testing.T) {
+			host, status := test.NewTestHost(disableSplitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+			})
+
+			origBody := []byte(`{
+				"model": "MiniMax/MiniMax-M2.7",
+				"messages": [{"role": "user", "content": "hello"}]
+			}`)
+			action := host.CallOnHttpRequestBody(origBody)
+			require.Equal(t, types.ActionContinue, action)
+
+			headers := host.GetRequestHeaders()
+			// model header keeps the full name for routing
+			hv, found := getHeader(headers, "x-model")
+			require.True(t, found)
+			require.Equal(t, "MiniMax/MiniMax-M2.7", hv)
+			// provider header must NOT be set
+			_, found = getHeader(headers, "x-provider")
+			require.False(t, found)
+
+			// body model must remain intact (not split)
+			processed := host.GetRequestBody()
+			if processed != nil {
+				require.Equal(t, "MiniMax/MiniMax-M2.7", gjson.GetBytes(processed, "model").String())
+			}
+		})
+
+		t.Run("multipart: keep full model name and skip provider split", func(t *testing.T) {
+			host, status := test.NewTestHost(disableSplitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			var buf bytes.Buffer
+			writer := multipart.NewWriter(&buf)
+			modelWriter, err := writer.CreateFormField("model")
+			require.NoError(t, err)
+			_, err = modelWriter.Write([]byte("MiniMax/MiniMax-M2.7"))
+			require.NoError(t, err)
+			err = writer.Close()
+			require.NoError(t, err)
+
+			contentType := "multipart/form-data; boundary=" + writer.Boundary()
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"content-type", contentType},
+			})
+
+			action := host.CallOnHttpRequestBody(buf.Bytes())
+			require.Equal(t, types.ActionContinue, action)
+
+			headers := host.GetRequestHeaders()
+			hv, found := getHeader(headers, "x-model")
+			require.True(t, found)
+			require.Equal(t, "MiniMax/MiniMax-M2.7", hv)
+			_, found = getHeader(headers, "x-provider")
+			require.False(t, found)
+
+			// body should not be rewritten when split is disabled
+			processed := host.GetRequestBody()
+			if processed != nil {
+				reader := multipart.NewReader(bytes.NewReader(processed), writer.Boundary())
+				for {
+					part, err := reader.NextPart()
+					if err != nil {
+						break
+					}
+					if part.FormName() == "model" {
+						data, _ := io.ReadAll(part)
+						require.Equal(t, "MiniMax/MiniMax-M2.7", string(data))
+					}
+				}
+			}
+		})
+	})
+}
+
 // Auto routing config for tests
 var autoRoutingConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{

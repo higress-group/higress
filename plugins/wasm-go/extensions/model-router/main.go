@@ -44,10 +44,11 @@ type AutoRoutingRule struct {
 }
 
 type ModelRouterConfig struct {
-	modelKey           string
-	addProviderHeader  string
-	modelToHeader      string
-	enableOnPathSuffix []string
+	modelKey              string
+	addProviderHeader     string
+	modelToHeader         string
+	enableOnPathSuffix    []string
+	disableProviderSplit  bool
 	// Auto routing configuration
 	enableAutoRouting bool
 	autoRoutingRules  []AutoRoutingRule
@@ -61,6 +62,7 @@ func parseConfig(json gjson.Result, config *ModelRouterConfig) error {
 	}
 	config.addProviderHeader = json.Get("addProviderHeader").String()
 	config.modelToHeader = json.Get("modelToHeader").String()
+	config.disableProviderSplit = json.Get("disableProviderSplit").Bool()
 
 	enableOnPathSuffix := json.Get("enableOnPathSuffix")
 	if enableOnPathSuffix.Exists() && enableOnPathSuffix.IsArray() {
@@ -247,7 +249,7 @@ func handleJsonBody(ctx wrapper.HttpContext, config ModelRouterConfig, body []by
 		_ = proxywasm.ReplaceHttpRequestHeader(config.modelToHeader, modelValue)
 	}
 
-	if config.addProviderHeader != "" {
+	if config.addProviderHeader != "" && !config.disableProviderSplit {
 		parts := strings.SplitN(modelValue, "/", 2)
 		if len(parts) == 2 {
 			provider := parts[0]
@@ -313,7 +315,7 @@ func handleMultipartBody(ctx wrapper.HttpContext, config ModelRouterConfig, body
 				_ = proxywasm.ReplaceHttpRequestHeader(config.modelToHeader, modelValue)
 			}
 
-			if config.addProviderHeader != "" {
+			if config.addProviderHeader != "" && !config.disableProviderSplit {
 				parts := strings.SplitN(modelValue, "/", 2)
 				if len(parts) == 2 {
 					provider := parts[0]
