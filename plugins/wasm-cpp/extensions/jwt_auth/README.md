@@ -33,17 +33,35 @@ description: JWT 认证插件配置参考
 | 名称                    | 数据类型          | 填写要求 | 默认值                                            | 描述                     |
 | ----------------------- | ----------------- | -------- | ------------------------------------------------- | ------------------------ |
 | `name`                  | string            | 必填     | -                                                 | 配置该consumer的名称     |
-| `jwks`                  | string            | 必填     | -                                                 | https://www.rfc-editor.org/rfc/rfc7517 指定的json格式字符串，是由验证JWT中签名的公钥（或对称密钥）组成的Json Web Key Set  |
+| `jwks`                  | string            | wasm-cpp 必填；wasm-go 未配置 `remote_jwks` 时必填 | -             | https://www.rfc-editor.org/rfc/rfc7517 指定的json格式字符串，是由验证JWT中签名的公钥（或对称密钥）组成的Json Web Key Set  |
+| `remote_jwks`           | object            | wasm-go 实现选填 | -                                      | 远程 JWKS 服务引用。引用的服务需要已由 Higress 配置或发现，例如通过 McpBridge |
+| `jwks_cache_duration`   | number            | wasm-go 实现选填 | 600                                   | 远程 JWKS 缓存时间，单位为秒，最大值为 604800 |
+| `jwks_fetch_timeout`    | number            | wasm-go 实现选填 | 1500                                  | 远程 JWKS 拉取超时时间，单位为毫秒，最大值为 10000 |
 | `issuer`                | string            | 必填     | -                                                 | JWT的签发者，需要和payload中的iss字段保持一致              |
 | `claims_to_headers`     | array of object   | 选填     | -                                                 | 抽取JWT的payload中指定字段，设置到指定的请求头中转发给后端 |
 | `from_headers`          | array of object   | 选填     | {"name":"Authorization","value_prefix":"Bearer "} | 从指定的请求头中抽取JWT |
 | `from_params`           | array of string   | 选填     | access_token                                      | 从指定的URL参数中抽取JWT                                   |
 | `from_cookies`          | array of string   | 选填     | -                                                 | 从指定的cookie中抽取JWT                                    |
 | `clock_skew_seconds`    | number            | 选填     | 60                                                | 校验JWT的exp和iat字段时允许的时钟偏移量，单位为秒          |
-| `keep_token`            | bool              | 选填     | ture                                              | 转发给后端时是否保留JWT                                    |
+| `keep_token`            | bool              | 选填     | true                                              | 转发给后端时是否保留JWT                                    |
 
 **注意：** 
 - 只有当`from_headers`,`from_params`,`from_cookies`均未配置时，才会使用默认值
+- `remote_jwks`、`jwks_cache_duration`、`jwks_fetch_timeout` 仅适用于 wasm-go 实现；wasm-cpp 实现仍需要配置 `jwks`。
+- 在 wasm-go 实现中，`jwks` 与 `remote_jwks` 只能配置其中一个。
+- 使用 `remote_jwks` 时，远程 JWKS 拉取失败、返回非法 JWKS、刷新被限流或在多 key 集合中找不到匹配 `kid` 时会拒绝请求。无 `kid` 的 token 仅在拉取到的 JWKS 恰好只有一个 key 时被接受。
+- 远程 JWKS 的失败重试按远程服务引用限流 30 秒；冷启动首次拉取未完成期间，以及拉取失败后的限流窗口内，请求会被本地拒绝。过期缓存仅在刷新请求已发起且尚未完成时继续使用。
+- 超过 64 KiB 的远程 JWKS 响应会被拒绝。
+- `jwks_cache_duration` 必须至少为 30 秒，避免缓存过期时间短于远程 JWKS 失败重试窗口。
+- 在 wasm-go 实现中，空的内联 `jwks` key 集合会在配置解析阶段被拒绝。`keep_token` 为 `false` 时，从 `from_params` 提取的 token 会从转发请求路径中移除。
+
+`remote_jwks` 的配置字段说明如下：
+| 名称           | 数据类型 | 填写要求 | 默认值 | 描述 |
+| -------------- | -------- | -------- | ------ | ---- |
+| `service_name` | string   | 必填     | -      | 用于构造出站集群的 Higress 服务名称 |
+| `service_host` | string   | 必填     | -      | JWKS 请求使用的 Host 或 `:authority` 请求头，不包含端口；端口通过 `service_port` 配置 |
+| `service_port` | number   | 选填     | 443    | JWKS 请求使用的服务端口 |
+| `path`         | string   | 必填     | -      | JWKS 请求路径，例如 `/.well-known/jwks.json` |
 
 `from_headers` 中每一项的配置字段说明如下：
 
@@ -155,6 +173,26 @@ curl  http://xxx.hello.com/test
 # consumer1不在*.example.com的allow列表里
 curl  'http://xxx.example.com/test' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjEyMyJ9.eyJpc3MiOiJhYmNkIiwic3ViIjoidGVzdCIsImlhdCI6MTY2NTY2MDUyNywiZXhwIjoxODY1NjczODE5fQ.-vBSV0bKeDwQcuS6eeSZN9dLTUnSnZVk8eVCXdooCQ4'
 ```
+
+### 使用远程 JWKS（仅 wasm-go 实现）
+
+如果签名公钥由身份提供方维护，wasm-go 实现可以通过已配置的服务引用拉取和缓存远程 JWKS。该服务需要已由 Higress 配置或发现。
+
+```yaml
+global_auth: false
+consumers:
+- name: remote-consumer
+  issuer: https://issuer.example.com
+  remote_jwks:
+    service_name: issuer.example.com.dns
+    service_host: issuer.example.com
+    service_port: 443
+    path: /.well-known/jwks.json
+  jwks_cache_duration: 600
+  jwks_fetch_timeout: 1500
+```
+
+配置远程 JWKS 时需要确保网关数据面能够访问引用的服务。远程 JWKS 响应体超过 64 KiB 会被视为非法响应。
 
 #### 网关实例级别开启
 

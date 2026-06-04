@@ -65,6 +65,8 @@ const (
 	ApiNameRetrieveVideo                        ApiName = "openai/v1/retrievevideo"
 	ApiNameVideoRemix                           ApiName = "openai/v1/videoremix"
 	ApiNameRetrieveVideoContent                 ApiName = "openai/v1/retrievevideocontent"
+	ApiNameKlingImageToVideo                    ApiName = "kling/v1/image2video"
+	ApiNameKlingRetrieveImageVideo              ApiName = "kling/v1/retrieveimagevideo"
 
 	// TODO: 以下是一些非标准的API名称，需要进一步确认是否支持
 	ApiNameCohereV1Rerank              ApiName = "cohere/v1/rerank"
@@ -159,6 +161,7 @@ const (
 	providerTypeFireworks  = "fireworks"
 	providerTypeVllm       = "vllm"
 	providerTypeGeneric    = "generic"
+	providerTypeKling      = "kling"
 
 	protocolOpenAI   = "openai"
 	protocolOriginal = "original"
@@ -253,6 +256,7 @@ var (
 		providerTypeFireworks:  &fireworksProviderInitializer{},
 		providerTypeVllm:       &vllmProviderInitializer{},
 		providerTypeGeneric:    &genericProviderInitializer{},
+		providerTypeKling:      &klingProviderInitializer{},
 	}
 )
 
@@ -311,7 +315,7 @@ type ProviderConfig struct {
 	typ string `required:"true" yaml:"type" json:"type"`
 	// @Title zh-CN API Tokens
 	// @Description zh-CN 在请求AI服务时用于认证的API Token列表。不同的AI服务提供商可能有不同的名称。部分供应商只支持配置一个API Token（如Azure OpenAI）。
-	apiTokens []string `required:"false" yaml:"apiToken" json:"apiTokens"`
+	apiTokens []string `required:"false" yaml:"apiTokens" json:"apiTokens"`
 	// @Title zh-CN 请求超时
 	// @Description zh-CN 请求AI服务的超时时间，单位为毫秒。默认值为120000，即2分钟。此项配置目前仅用于获取上下文信息，并不影响实际转发大模型请求。
 	timeout uint32 `required:"false" yaml:"timeout" json:"timeout"`
@@ -417,6 +421,15 @@ type ProviderConfig struct {
 	// @Title zh-CN Vertex token刷新提前时间
 	// @Description zh-CN 用于Google服务账号认证，access token过期时间判定提前刷新，单位为秒，默认值为60秒
 	vertexTokenRefreshAhead int64 `required:"false" yaml:"vertexTokenRefreshAhead" json:"vertexTokenRefreshAhead"`
+	// @Title zh-CN Kling Access Key
+	// @Description zh-CN 仅适用于KlingAI官方服务鉴权，用于生成JWT Token
+	klingAccessKey string `required:"false" yaml:"klingAccessKey" json:"klingAccessKey"`
+	// @Title zh-CN Kling Secret Key
+	// @Description zh-CN 仅适用于KlingAI官方服务鉴权，用于签名JWT Token
+	klingSecretKey string `required:"false" yaml:"klingSecretKey" json:"klingSecretKey"`
+	// @Title zh-CN Kling token刷新提前时间
+	// @Description zh-CN Kling JWT过期前提前刷新的时间，单位为秒，默认值为60秒
+	klingTokenRefreshAhead int64 `required:"false" yaml:"klingTokenRefreshAhead" json:"klingTokenRefreshAhead"`
 	// @Title zh-CN Vertex AI OpenAI兼容模式
 	// @Description zh-CN 启用后将使用Vertex AI的OpenAI兼容API，请求和响应均使用OpenAI格式，无需协议转换。与Express Mode(apiTokens)互斥。
 	vertexOpenAICompatible bool `required:"false" yaml:"vertexOpenAICompatible" json:"vertexOpenAICompatible"`
@@ -489,6 +502,9 @@ type ProviderConfig struct {
 	// @Title zh-CN 空内容时提升思考为正文
 	// @Description zh-CN 开启后，若模型响应只包含 reasoning_content/thinking 而没有正文内容，将 reasoning 内容提升为正文内容返回，避免客户端收到空回复。
 	promoteThinkingOnEmpty bool `required:"false" yaml:"promoteThinkingOnEmpty" json:"promoteThinkingOnEmpty"`
+	// @Title zh-CN 记录上游错误响应体
+	// @Description zh-CN 开启后，将上游 4xx/5xx 响应体以 warn 日志输出，便于排查 provider 兼容性问题。默认关闭，避免误记录敏感错误内容。
+	logUpstreamErrorResponseBody bool `required:"false" yaml:"logUpstreamErrorResponseBody" json:"logUpstreamErrorResponseBody"`
 	// @Title zh-CN HiClaw 模式
 	// @Description zh-CN 开启后同时启用 mergeConsecutiveMessages 和 promoteThinkingOnEmpty，适用于 HiClaw 多 Agent 协作场景。
 	hiclawMode bool `required:"false" yaml:"hiclawMode" json:"hiclawMode"`
@@ -523,6 +539,18 @@ func (c *ProviderConfig) GetContextCleanupCommands() []string {
 
 func (c *ProviderConfig) IsOpenAIProtocol() bool {
 	return c.protocol == protocolOpenAI
+}
+
+func (c *ProviderConfig) supportsMessageReasoningContent() bool {
+	switch c.typ {
+	case providerTypeQwen, providerTypeOpenRouter, providerTypeZhipuAi:
+		return true
+	default:
+		// DeepSeek supports Anthropic Messages natively, so Claude requests usually bypass
+		// this Claude->OpenAI conversion path. Its OpenAI request-side reasoning history
+		// semantics should be validated separately before adding it here.
+		return false
+	}
 }
 
 func (c *ProviderConfig) FromJson(json gjson.Result) {
@@ -614,6 +642,12 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	if c.vertexTokenRefreshAhead == 0 {
 		c.vertexTokenRefreshAhead = 60
 	}
+	c.klingAccessKey = json.Get("klingAccessKey").String()
+	c.klingSecretKey = json.Get("klingSecretKey").String()
+	c.klingTokenRefreshAhead = json.Get("klingTokenRefreshAhead").Int()
+	if c.klingTokenRefreshAhead == 0 {
+		c.klingTokenRefreshAhead = 60
+	}
 	c.vertexOpenAICompatible = json.Get("vertexOpenAICompatible").Bool()
 	c.targetLang = json.Get("targetLang").String()
 
@@ -696,6 +730,8 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 			string(ApiNameCohereV1Rerank),
 			string(ApiNameVideos),
 			string(ApiNameRetrieveVideo),
+			string(ApiNameKlingImageToVideo),
+			string(ApiNameKlingRetrieveImageVideo),
 			string(ApiNameRetrieveVideoContent),
 			string(ApiNameVideoRemix):
 			c.capabilities[capability] = pathJson.String()
@@ -722,6 +758,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	c.mergeConsecutiveMessages = json.Get("mergeConsecutiveMessages").Bool()
 	c.providerDomain = json.Get("providerDomain").String()
 	c.promoteThinkingOnEmpty = json.Get("promoteThinkingOnEmpty").Bool()
+	c.logUpstreamErrorResponseBody = json.Get("logUpstreamErrorResponseBody").Bool()
 	c.hiclawMode = json.Get("hiclawMode").Bool()
 	if c.hiclawMode {
 		c.mergeConsecutiveMessages = true
@@ -868,6 +905,10 @@ func (c *ProviderConfig) IsGeneric() bool {
 
 func (c *ProviderConfig) GetPromoteThinkingOnEmpty() bool {
 	return c.promoteThinkingOnEmpty
+}
+
+func (c *ProviderConfig) GetLogUpstreamErrorResponseBody() bool {
+	return c.logUpstreamErrorResponseBody
 }
 
 func (c *ProviderConfig) ReplaceByCustomSettings(body []byte) ([]byte, error) {
@@ -1125,7 +1166,10 @@ func ExtractStreamingEvents(ctx wrapper.HttpContext, chunk []byte) []StreamEvent
 
 func (c *ProviderConfig) isSupportedAPI(apiName ApiName) bool {
 	_, exist := c.capabilities[string(apiName)]
-	return exist
+	if exist {
+		return true
+	}
+	return c.typ == providerTypeBedrock && apiName == ApiNameAnthropicMessages
 }
 
 func (c *ProviderConfig) IsSupportedAPI(apiName ApiName) bool {
@@ -1137,7 +1181,9 @@ func (c *ProviderConfig) setDefaultCapabilities(capabilities map[string]string) 
 		c.capabilities = make(map[string]string)
 	}
 	for capability, path := range capabilities {
-		c.capabilities[capability] = path
+		if _, exists := c.capabilities[capability]; !exists {
+			c.capabilities[capability] = path
+		}
 	}
 }
 
@@ -1181,7 +1227,9 @@ func (c *ProviderConfig) handleRequestBody(
 
 		// Convert Claude protocol to OpenAI protocol
 		converter := &ClaudeToOpenAIConverter{}
-		body, err = converter.ConvertClaudeRequestToOpenAI(body)
+		body, err = converter.ConvertClaudeRequestToOpenAIWithOptions(body, ClaudeToOpenAIConvertOptions{
+			PreserveMessageReasoningContent: c.supportsMessageReasoningContent(),
+		})
 		if err != nil {
 			return types.ActionContinue, fmt.Errorf("failed to convert claude request to openai: %v", err)
 		}
@@ -1222,7 +1270,7 @@ func (c *ProviderConfig) handleRequestBody(
 	}
 
 	if needClaudeConversion && provider.GetProviderType() != providerTypeBedrock && provider.GetProviderType() != providerTypeClaude {
-		body = stripClaudeInternalMessageFields(body)
+		body = stripClaudeInternalMessageFields(body, c.supportsMessageReasoningContent())
 	}
 
 	// use openai protocol (either original openai or converted from claude)
@@ -1258,7 +1306,7 @@ func (c *ProviderConfig) handleRequestBody(
 	return types.ActionContinue, replaceRequestBody(body)
 }
 
-func stripClaudeInternalMessageFields(body []byte) []byte {
+func stripClaudeInternalMessageFields(body []byte, preserveMessageReasoningContent ...bool) []byte {
 	result := body
 	for _, field := range []string{"claude_thinking", "claude_output_config", "claude_anthropic_beta"} {
 		if updated, err := sjson.DeleteBytes(result, field); err == nil {
@@ -1271,15 +1319,19 @@ func stripClaudeInternalMessageFields(body []byte) []byte {
 		return result
 	}
 
-	for _, field := range []string{
+	fields := []string{
 		"reasoning",
-		"reasoning_content",
 		"reasoning_signature",
 		"reasoning_redacted_content",
 		"claude_content_blocks",
 		"claude_content_block_index",
 		"claude_content_block_stop",
-	} {
+	}
+	if len(preserveMessageReasoningContent) == 0 || !preserveMessageReasoningContent[0] {
+		fields = append(fields, "reasoning_content")
+	}
+
+	for _, field := range fields {
 		messages.ForEach(func(key, _ gjson.Result) bool {
 			if updated, err := sjson.DeleteBytes(result, fmt.Sprintf("messages.%d.%s", key.Int(), field)); err == nil {
 				result = updated

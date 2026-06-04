@@ -120,26 +120,46 @@ type toolCallInfo struct {
 
 // contentConversionResult represents the result of converting Claude content to OpenAI format
 type contentConversionResult struct {
-	textParts                []string
-	reasoningContent         string
-	reasoningSignature       string
-	reasoningRedactedContent string
-	claudeContentBlocks      []claudeChatMessageContent
-	toolCalls                []toolCall
-	toolResults              []claudeChatMessageContent
-	openaiContents           []chatMessageContent
-	hasNonTextContent        bool
+	textParts           []string
+	reasoningParts      []string
+	claudeContentBlocks []claudeChatMessageContent
+	toolCalls           []toolCall
+	toolResults         []claudeChatMessageContent
+	openaiContents      []chatMessageContent
+	hasReasoningBlocks  bool
 }
 
-func applyReasoningFields(message *chatMessage, conversionResult *contentConversionResult) {
-	message.ReasoningContent = conversionResult.reasoningContent
-	message.ReasoningSignature = conversionResult.reasoningSignature
-	message.ReasoningRedactedContent = conversionResult.reasoningRedactedContent
+type ClaudeToOpenAIConvertOptions struct {
+	// PreserveMessageReasoningContent enables the non-standard message-level
+	// reasoning_content field for providers that explicitly support it.
+	PreserveMessageReasoningContent bool
+}
+
+func (r *contentConversionResult) reasoningContent() string {
+	return strings.Join(r.reasoningParts, "\n\n")
+}
+
+func (r *contentConversionResult) setReasoningContent(message *chatMessage, options ClaudeToOpenAIConvertOptions) {
+	if options.PreserveMessageReasoningContent && len(r.reasoningParts) > 0 {
+		message.ReasoningContent = r.reasoningContent()
+	}
+}
+
+func applyReasoningFields(message *chatMessage, conversionResult *contentConversionResult, options ClaudeToOpenAIConvertOptions) {
+	conversionResult.setReasoningContent(message, options)
 	message.ClaudeContentBlocks = conversionResult.claudeContentBlocks
 }
 
-// ConvertClaudeRequestToOpenAI converts a Claude chat completion request to OpenAI format
+// ConvertClaudeRequestToOpenAI converts a Claude chat completion request to strict OpenAI format.
+// Use ConvertClaudeRequestToOpenAIWithOptions for providers that support non-standard message reasoning fields.
 func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAI(body []byte) ([]byte, error) {
+	return c.ConvertClaudeRequestToOpenAIWithOptions(body, ClaudeToOpenAIConvertOptions{
+		PreserveMessageReasoningContent: false,
+	})
+}
+
+// ConvertClaudeRequestToOpenAIWithOptions converts a Claude chat completion request to OpenAI format.
+func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body []byte, options ClaudeToOpenAIConvertOptions) ([]byte, error) {
 	log.Debugf("[Claude->OpenAI] Original Claude request body: %s", string(body))
 
 	var claudeRequest claudeTextGenRequest
@@ -184,7 +204,7 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAI(body []byte) ([]b
 					Role:      claudeMsg.Role,
 					ToolCalls: conversionResult.toolCalls,
 				}
-				applyReasoningFields(&openaiMsg, conversionResult)
+				applyReasoningFields(&openaiMsg, conversionResult, options)
 
 				// Add text content if present, otherwise set to null
 				if len(conversionResult.textParts) > 0 {
@@ -207,8 +227,9 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAI(body []byte) ([]b
 					}
 					openaiRequest.Messages = append(openaiRequest.Messages, toolMsg)
 				}
-				// Also add text content if present alongside tool results
-				// This handles cases like: [tool_result, tool_result, text]
+				// Also add visible text content if present alongside tool results.
+				// This companion message intentionally does not carry reasoning_content:
+				// tool_result content is user/tool-side data, while thinking belongs to assistant turns.
 				if len(conversionResult.textParts) > 0 {
 					textMsg := chatMessage{
 						Role:    claudeMsg.Role,
@@ -220,11 +241,21 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAI(body []byte) ([]b
 
 			// Handle regular content if no tool calls or tool results
 			if len(conversionResult.toolCalls) == 0 && len(conversionResult.toolResults) == 0 {
+				var content any
+				if len(conversionResult.openaiContents) > 0 {
+					content = conversionResult.openaiContents
+				}
 				openaiMsg := chatMessage{
 					Role:    claudeMsg.Role,
-					Content: conversionResult.openaiContents,
+					Content: content,
 				}
-				applyReasoningFields(&openaiMsg, conversionResult)
+				applyReasoningFields(&openaiMsg, conversionResult, options)
+				if openaiMsg.Content == nil && openaiMsg.ReasoningContent == "" && conversionResult.hasReasoningBlocks {
+					// Strict OpenAI-style providers reject role-only messages. When Claude turns
+					// contain only non-portable reasoning blocks, degrade them to an empty visible
+					// message instead of emitting an invalid assistant/user turn.
+					openaiMsg.Content = ""
+				}
 				openaiRequest.Messages = append(openaiRequest.Messages, openaiMsg)
 			}
 		}
@@ -1012,11 +1043,12 @@ func openAIFinishReasonToClaude(reason string) string {
 // convertContentArray converts an array of Claude content to OpenAI content format
 func (c *ClaudeToOpenAIConverter) convertContentArray(claudeContents []claudeChatMessageContent) *contentConversionResult {
 	result := &contentConversionResult{
-		textParts:         []string{},
-		toolCalls:         []toolCall{},
-		toolResults:       []claudeChatMessageContent{},
-		openaiContents:    []chatMessageContent{},
-		hasNonTextContent: false,
+		textParts:          []string{},
+		reasoningParts:     []string{},
+		toolCalls:          []toolCall{},
+		toolResults:        []claudeChatMessageContent{},
+		openaiContents:     []chatMessageContent{},
+		hasReasoningBlocks: false,
 	}
 	claudeContentBlocks := make([]claudeChatMessageContent, 0, len(claudeContents))
 	preserveClaudeContentBlocks := false
@@ -1037,18 +1069,16 @@ func (c *ClaudeToOpenAIConverter) convertContentArray(claudeContents []claudeCha
 				})
 			}
 		case "thinking":
-			result.hasNonTextContent = true
+			result.hasReasoningBlocks = true
 			preserveClaudeContentBlocks = true
-			result.reasoningContent += claudeContent.Thinking
-			if claudeContent.Signature != "" {
-				result.reasoningSignature = claudeContent.Signature
+			if claudeContent.Thinking != "" {
+				result.reasoningParts = append(result.reasoningParts, claudeContent.Thinking)
 			}
 		case "redacted_thinking":
-			result.hasNonTextContent = true
+			result.hasReasoningBlocks = true
 			preserveClaudeContentBlocks = true
-			result.reasoningRedactedContent += claudeContent.Data
+			// data is an opaque Claude blob, not portable reasoning text.
 		case "image":
-			result.hasNonTextContent = true
 			if claudeContent.Source != nil {
 				if claudeContent.Source.Type == "base64" {
 					// Convert base64 image to OpenAI format
@@ -1069,7 +1099,6 @@ func (c *ClaudeToOpenAIConverter) convertContentArray(claudeContents []claudeCha
 				}
 			}
 		case "tool_use":
-			result.hasNonTextContent = true
 			preserveClaudeContentBlocks = true
 			// Convert Claude tool_use to OpenAI tool_calls format
 			if claudeContent.Id != "" && claudeContent.Name != "" {
@@ -1093,7 +1122,6 @@ func (c *ClaudeToOpenAIConverter) convertContentArray(claudeContents []claudeCha
 				log.Debugf("[Claude->OpenAI] Converted tool_use to tool_call: %s", claudeContent.Name)
 			}
 		case "tool_result":
-			result.hasNonTextContent = true
 			preserveClaudeContentBlocks = true
 			// Store tool results for processing
 			result.toolResults = append(result.toolResults, claudeContent)

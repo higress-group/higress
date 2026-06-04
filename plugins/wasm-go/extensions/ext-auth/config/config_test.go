@@ -89,6 +89,7 @@ func TestParseConfig(t *testing.T) {
 						},
 						WithRequestBody:     true,
 						MaxRequestBodyBytes: 1048576,
+						AllowedProperties:   []AllowedProperty{},
 					},
 				},
 				MatchRules:                expr.MatchRulesDefaults(),
@@ -397,6 +398,165 @@ func TestParseConfig(t *testing.T) {
 				]
 			}`,
 			expectedErr: `failed to build string matcher for rule with domain "*.bar.com", method [POST PUT DELETE], path "/headers", type "invalid_type": unknown string matcher type`,
+		},
+		{
+			name: "Valid AllowedProperties with Array Path",
+			json: `{
+				"http_service": {
+					"endpoint_mode": "envoy",
+					"endpoint": {
+						"service_name": "example.com",
+						"service_port": 80,
+						"path_prefix": "/auth"
+					},
+					"authorization_request": {
+						"allowed_properties": [
+							{"path": ["route_name"], "header": "x-route-name"},
+							{"path": ["metadata", "test"], "header": "x-metadata"}
+						]
+					}
+				}
+			}`,
+			expected: ExtAuthConfig{
+				HttpService: HttpService{
+					EndpointMode: "envoy",
+					Client: wrapper.NewClusterClient(wrapper.FQDNCluster{
+						FQDN: "example.com",
+						Port: 80,
+						Host: "",
+					}),
+					PathPrefix: "/auth",
+					Timeout:    1000,
+					AuthorizationRequest: AuthorizationRequest{
+						HeadersToAdd:        map[string]string{},
+						MaxRequestBodyBytes: 10 * 1024 * 1024,
+						AllowedProperties: []AllowedProperty{
+							{Path: []string{"route_name"}, Header: "x-route-name"},
+							{Path: []string{"metadata", "test"}, Header: "x-metadata"},
+						},
+					},
+				},
+				MatchRules:                expr.MatchRulesDefaults(),
+				FailureModeAllow:          false,
+				FailureModeAllowHeaderAdd: false,
+				StatusOnError:             403,
+			},
+		},
+		{
+			name: "Valid AllowedProperties with Single Value Path",
+			json: `{
+				"http_service": {
+					"endpoint_mode": "envoy",
+					"endpoint": {
+						"service_name": "example.com",
+						"service_port": 80,
+						"path_prefix": "/auth"
+					},
+					"authorization_request": {
+						"allowed_properties": [
+							{"path": "route_name", "header": "x-route-name"}
+						]
+					}
+				}
+			}`,
+			expected: ExtAuthConfig{
+				HttpService: HttpService{
+					EndpointMode: "envoy",
+					Client: wrapper.NewClusterClient(wrapper.FQDNCluster{
+						FQDN: "example.com",
+						Port: 80,
+						Host: "",
+					}),
+					PathPrefix: "/auth",
+					Timeout:    1000,
+					AuthorizationRequest: AuthorizationRequest{
+						HeadersToAdd:        map[string]string{},
+						MaxRequestBodyBytes: 10 * 1024 * 1024,
+						AllowedProperties: []AllowedProperty{
+							{Path: []string{"route_name"}, Header: "x-route-name"},
+						},
+					},
+				},
+				MatchRules:                expr.MatchRulesDefaults(),
+				FailureModeAllow:          false,
+				FailureModeAllowHeaderAdd: false,
+				StatusOnError:             403,
+			},
+		},
+		{
+			name: "Valid AllowedProperties Empty Array",
+			json: `{
+				"http_service": {
+					"endpoint_mode": "envoy",
+					"endpoint": {
+						"service_name": "example.com",
+						"service_port": 80,
+						"path_prefix": "/auth"
+					},
+					"authorization_request": {
+						"allowed_properties": []
+					}
+				}
+			}`,
+			expected: ExtAuthConfig{
+				HttpService: HttpService{
+					EndpointMode: "envoy",
+					Client: wrapper.NewClusterClient(wrapper.FQDNCluster{
+						FQDN: "example.com",
+						Port: 80,
+						Host: "",
+					}),
+					PathPrefix: "/auth",
+					Timeout:    1000,
+					AuthorizationRequest: AuthorizationRequest{
+						HeadersToAdd:        map[string]string{},
+						MaxRequestBodyBytes: 10 * 1024 * 1024,
+						AllowedProperties:   []AllowedProperty{},
+					},
+				},
+				MatchRules:                expr.MatchRulesDefaults(),
+				FailureModeAllow:          false,
+				FailureModeAllowHeaderAdd: false,
+				StatusOnError:             403,
+			},
+		},
+		{
+			name: "AllowedProperties Missing Path Field",
+			json: `{
+				"http_service": {
+					"endpoint_mode": "envoy",
+					"endpoint": {
+						"service_name": "example.com",
+						"service_port": 80,
+						"path_prefix": "/auth"
+					},
+					"authorization_request": {
+						"allowed_properties": [
+							{"header": "x-route-name"}
+						]
+					}
+				}
+			}`,
+			expectedErr: "allowed_properties[0]: missing required field 'path'",
+		},
+		{
+			name: "AllowedProperties Missing Header Field",
+			json: `{
+				"http_service": {
+					"endpoint_mode": "envoy",
+					"endpoint": {
+						"service_name": "example.com",
+						"service_port": 80,
+						"path_prefix": "/auth"
+					},
+					"authorization_request": {
+						"allowed_properties": [
+							{"path": ["route_name"]}
+						]
+					}
+				}
+			}`,
+			expectedErr: "allowed_properties[0]: missing required field 'header'",
 		},
 	}
 

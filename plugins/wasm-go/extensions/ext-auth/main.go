@@ -152,6 +152,15 @@ func buildExtAuthRequestHeaders(ctx wrapper.HttpContext, cfg config.ExtAuthConfi
 		extAuthReqHeaders.Set(HeaderAuthorization, authorization)
 	}
 
+	// Add filter properties forwarding
+	if requestConfig.AllowedProperties != nil {
+		for _, prop := range requestConfig.AllowedProperties {
+			if raw, err := proxywasm.GetProperty(prop.Path); err == nil {
+				extAuthReqHeaders.Set(prop.Header, string(raw))
+			}
+		}
+	}
+
 	// Add additional headers when endpoint_mode is forward_auth
 	if httpServiceConfig.EndpointMode == config.EndpointModeForwardAuth {
 		// Compatible with older versions

@@ -468,6 +468,27 @@ func TestProviderConfig_GetPromoteThinkingOnEmpty(t *testing.T) {
 	}
 }
 
+func TestProviderConfig_GetLogUpstreamErrorResponseBody(t *testing.T) {
+	tests := []struct {
+		name                         string
+		logUpstreamErrorResponseBody bool
+		expected                     bool
+	}{
+		{"enabled", true, true},
+		{"default_disabled", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &ProviderConfig{
+				logUpstreamErrorResponseBody: tt.logUpstreamErrorResponseBody,
+			}
+			result := config.GetLogUpstreamErrorResponseBody()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 // ============ Failover Tests ============
 
 func TestFailover_FromJson_Defaults(t *testing.T) {
@@ -516,6 +537,50 @@ func TestFailover_FromJson_Defaults(t *testing.T) {
 		assert.Equal(t, int64(10000), f.healthCheckInterval)
 		assert.Equal(t, int64(8000), f.healthCheckTimeout)
 		assert.Equal(t, "test-model", f.healthCheckModel)
+	})
+
+	t.Run("cooldown_duration_default", func(t *testing.T) {
+		f := &failover{}
+		jsonStr := `{"enabled": true}`
+		f.FromJson(gjson.Parse(jsonStr))
+		assert.Equal(t, int64(0), f.cooldownDuration)
+	})
+
+	t.Run("cooldown_duration_custom", func(t *testing.T) {
+		f := &failover{}
+		jsonStr := `{"enabled": true, "cooldownDuration": 60000}`
+		f.FromJson(gjson.Parse(jsonStr))
+		assert.Equal(t, int64(60000), f.cooldownDuration)
+	})
+}
+
+func TestFailover_Validate(t *testing.T) {
+	t.Run("only_healthCheckModel", func(t *testing.T) {
+		f := &failover{healthCheckModel: "gpt-3.5-turbo"}
+		assert.NoError(t, f.Validate())
+	})
+
+	t.Run("only_cooldownDuration", func(t *testing.T) {
+		f := &failover{cooldownDuration: 60000}
+		assert.NoError(t, f.Validate())
+	})
+
+	t.Run("both_healthCheckModel_and_cooldownDuration", func(t *testing.T) {
+		f := &failover{healthCheckModel: "gpt-3.5-turbo", cooldownDuration: 60000}
+		assert.NoError(t, f.Validate())
+	})
+
+	t.Run("neither_healthCheckModel_nor_cooldownDuration", func(t *testing.T) {
+		f := &failover{}
+		err := f.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "either healthCheckModel or cooldownDuration")
+	})
+
+	t.Run("negative_cooldownDuration", func(t *testing.T) {
+		f := &failover{cooldownDuration: -1}
+		err := f.Validate()
+		assert.Error(t, err)
 	})
 }
 
@@ -677,6 +742,47 @@ func TestProviderConfig_SetDefaultCapabilities(t *testing.T) {
 		assert.Equal(t, "/v1/embeddings", config.capabilities[string(ApiNameEmbeddings)])
 		assert.Equal(t, "/v1/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
 	})
+
+	t.Run("preserve_existing_capability", func(t *testing.T) {
+		config := &ProviderConfig{
+			capabilities: map[string]string{
+				string(ApiNameChatCompletion): "/custom/chat/completions",
+			},
+		}
+
+		defaultCaps := map[string]string{
+			string(ApiNameChatCompletion): "/v1/chat/completions",
+		}
+		config.setDefaultCapabilities(defaultCaps)
+
+		assert.Equal(t, "/custom/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
+	})
+}
+
+func TestCreateProvider(t *testing.T) {
+	t.Run("generic_success", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}`))
+		p, err := CreateProvider(pc)
+		assert.NoError(t, err)
+		assert.Equal(t, providerTypeGeneric, p.GetProviderType())
+	})
+
+	t.Run("openai_minimal_success", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"openai","apiTokens":["sk-test"]}`))
+		p, err := CreateProvider(pc)
+		assert.NoError(t, err)
+		assert.Equal(t, providerTypeOpenAI, p.GetProviderType())
+	})
+
+	t.Run("unknown_type", func(t *testing.T) {
+		var pc ProviderConfig
+		pc.FromJson(gjson.Parse(`{"type":"no-such-provider-xyz","apiTokens":["t"]}`))
+		_, err := CreateProvider(pc)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown provider type")
+	})
 }
 
 func TestStripClaudeInternalMessageFields(t *testing.T) {
@@ -709,4 +815,9 @@ func TestStripClaudeInternalMessageFields(t *testing.T) {
 	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_block_index").Exists())
 	assert.False(t, gjson.GetBytes(result, "messages.0.claude_content_block_stop").Exists())
 	assert.Equal(t, "answer", gjson.GetBytes(result, "messages.0.content").String())
+
+	preserved := stripClaudeInternalMessageFields(body, true)
+	assert.Equal(t, "reasoning", gjson.GetBytes(preserved, "messages.0.reasoning_content").String())
+	assert.False(t, gjson.GetBytes(preserved, "messages.0.reasoning_signature").Exists())
+	assert.False(t, gjson.GetBytes(preserved, "messages.0.claude_content_blocks").Exists())
 }

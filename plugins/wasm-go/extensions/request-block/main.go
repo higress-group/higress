@@ -87,13 +87,17 @@ func parseConfig(json gjson.Result, config *RequestBlockConfig, log log.Log) err
 		if regexpUrl == "" {
 			continue
 		}
+		var reg *regexp.Regexp
+		var err error
 		if config.caseSensitive {
-			reg := regexp.MustCompile(regexpUrl)
-			config.blockRegExpArray = append(config.blockRegExpArray, reg)
+			reg, err = regexp.Compile(regexpUrl)
 		} else {
-			reg := regexp.MustCompile(strings.ToLower(regexpUrl))
-			config.blockRegExpArray = append(config.blockRegExpArray, reg)
+			reg, err = regexp.Compile(strings.ToLower(regexpUrl))
 		}
+		if err != nil {
+			return fmt.Errorf("invalid regexp pattern %q: %w", regexpUrl, err)
+		}
+		config.blockRegExpArray = append(config.blockRegExpArray, reg)
 	}
 	for _, item := range json.Get("block_headers").Array() {
 		header := item.String()
