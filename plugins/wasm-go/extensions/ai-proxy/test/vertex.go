@@ -2280,6 +2280,27 @@ func RunVertexRawModeOnHttpRequestHeadersTests(t *testing.T) {
 				"Host header should be changed to vertex domain without region prefix")
 		})
 
+		// 测试 Vertex Raw 模式请求头处理（Express Mode 专用路径，无 project/location）
+		t.Run("vertex raw mode express - request headers with express endpoint path", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeExpressConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/publishers/google/models/gemini-3.1-flash-lite-preview:streamGenerateContent"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+			require.True(t, test.HasHeaderWithValue(requestHeaders, ":authority", "aiplatform.googleapis.com"),
+				"Host header should be changed to vertex domain without region prefix")
+		})
+
 		// 测试 Vertex Raw 模式请求头处理（标准模式 + 原生 Vertex API 路径）
 		t.Run("vertex raw mode standard - request headers with native vertex path", func(t *testing.T) {
 			host, status := test.NewTestHost(vertexRawModeStandardConfig)
@@ -2412,6 +2433,43 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 				"API key should be appended to path as query parameter")
 
 			// 验证 Authorization header 被删除
+			require.False(t, test.HasHeaderWithValue(requestHeaders, "Authorization", "Bearer some-token"),
+				"Authorization header should be removed in Express Mode")
+		})
+
+		// 测试 Vertex Raw 模式请求体处理（Express Mode 专用路径 + API Key 认证）
+		t.Run("vertex raw mode express - express endpoint request body with api key", func(t *testing.T) {
+			host, status := test.NewTestHost(vertexRawModeExpressConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/publishers/google/models/gemini-3.1-flash-lite-preview:streamGenerateContent"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+				{"Authorization", "Bearer some-token"},
+			})
+
+			requestBody := `{"contents":[{"role":"user","parts":[{"text":"Tell me a story"}]}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+
+			require.Equal(t, types.ActionContinue, action)
+
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+			require.Equal(t, requestBody, string(processedBody), "Request body should be passed through unchanged")
+
+			requestHeaders := host.GetRequestHeaders()
+			var pathHeader string
+			for _, header := range requestHeaders {
+				if header[0] == ":path" {
+					pathHeader = header[1]
+					break
+				}
+			}
+			require.Equal(t, "/v1/publishers/google/models/gemini-3.1-flash-lite-preview:streamGenerateContent?key=test-api-key-for-raw-mode", pathHeader,
+				"API key should be appended to express endpoint path as query parameter")
 			require.False(t, test.HasHeaderWithValue(requestHeaders, "Authorization", "Bearer some-token"),
 				"Authorization header should be removed in Express Mode")
 		})

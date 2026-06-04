@@ -60,6 +60,8 @@ When `value_source` is `response_streaming_body`, `rule` should be configured to
 - `replace`: extract value from the last valid chunk
 - `append`: join value pieces from all valid chunks
 
+Note: for `first` and `replace`, a valid chunk excludes missing paths, JSON `null`, and empty string `""` results. If no chunk contains a valid value, the extracted result is `nil`; configurations that depend on an empty string as an explicit upstream clear signal should account for this behavior difference. The `append` rule keeps its existing concatenation behavior.
+
 ### Built-in Attributes
 
 The plugin provides several built-in attribute keys that can be used directly without configuring `value_source` and `value`. These built-in attributes automatically extract corresponding values from requests/responses:

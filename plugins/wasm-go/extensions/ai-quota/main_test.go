@@ -30,6 +30,10 @@ var basicConfig = func() json.RawMessage {
 		"admin_consumer":   "admin",
 		"redis_key_prefix": "chat_quota:",
 		"admin_path":       "/quota",
+		"enable_path_suffixes": []string{
+			"/v1/chat/completions",
+			"/v1/messages",
+		},
 		"redis": map[string]interface{}{
 			"service_name": "redis.static",
 			"service_port": 6379,
@@ -43,6 +47,17 @@ var basicConfig = func() json.RawMessage {
 // 测试配置：缺少admin_consumer
 var missingAdminConsumerConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
+		"redis": map[string]interface{}{
+			"service_name": "redis.static",
+			"service_port": 6379,
+		},
+	})
+	return data
+}()
+
+var defaultPathSuffixesConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"admin_consumer": "admin",
 		"redis": map[string]interface{}{
 			"service_name": "redis.static",
 			"service_port": 6379,
@@ -66,6 +81,7 @@ func TestParseConfig(t *testing.T) {
 			require.Equal(t, "admin", quotaConfig.AdminConsumer)
 			require.Equal(t, "chat_quota:", quotaConfig.RedisKeyPrefix)
 			require.Equal(t, "/quota", quotaConfig.AdminPath)
+			require.Equal(t, []string{"/v1/chat/completions", "/v1/messages"}, quotaConfig.EnablePathSuffixes)
 		})
 
 		// 测试缺少admin_consumer的配置
@@ -73,6 +89,18 @@ func TestParseConfig(t *testing.T) {
 			host, status := test.NewTestHost(missingAdminConsumerConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		t.Run("default path suffixes", func(t *testing.T) {
+			host, status := test.NewTestHost(defaultPathSuffixesConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+
+			quotaConfig := config.(*QuotaConfig)
+			require.Equal(t, []string{"/v1/chat/completions", "/v1/messages"}, quotaConfig.EnablePathSuffixes)
 		})
 	})
 }
@@ -278,6 +306,7 @@ func TestGetOperationMode(t *testing.T) {
 		name      string
 		path      string
 		adminPath string
+		suffixes  []string
 		chatMode  ChatMode
 		adminMode AdminMode
 	}{
@@ -285,6 +314,7 @@ func TestGetOperationMode(t *testing.T) {
 			name:      "chat completion mode",
 			path:      "/v1/chat/completions",
 			adminPath: "/quota",
+			suffixes:  []string{"/v1/chat/completions", "/v1/messages"},
 			chatMode:  ChatModeCompletion,
 			adminMode: AdminModeNone,
 		},
@@ -292,6 +322,7 @@ func TestGetOperationMode(t *testing.T) {
 			name:      "admin query mode",
 			path:      "/v1/chat/completions/quota",
 			adminPath: "/quota",
+			suffixes:  []string{"/v1/chat/completions", "/v1/messages"},
 			chatMode:  ChatModeAdmin,
 			adminMode: AdminModeQuery,
 		},
@@ -299,6 +330,7 @@ func TestGetOperationMode(t *testing.T) {
 			name:      "admin refresh mode",
 			path:      "/v1/chat/completions/quota/refresh",
 			adminPath: "/quota",
+			suffixes:  []string{"/v1/chat/completions", "/v1/messages"},
 			chatMode:  ChatModeAdmin,
 			adminMode: AdminModeRefresh,
 		},
@@ -306,13 +338,47 @@ func TestGetOperationMode(t *testing.T) {
 			name:      "admin delta mode",
 			path:      "/v1/chat/completions/quota/delta",
 			adminPath: "/quota",
+			suffixes:  []string{"/v1/chat/completions", "/v1/messages"},
 			chatMode:  ChatModeAdmin,
 			adminMode: AdminModeDelta,
+		},
+		{
+			name:      "anthropic messages completion mode",
+			path:      "/v1/messages",
+			adminPath: "/quota",
+			suffixes:  []string{"/v1/chat/completions", "/v1/messages"},
+			chatMode:  ChatModeCompletion,
+			adminMode: AdminModeNone,
+		},
+		{
+			name:      "custom suffix completion mode",
+			path:      "/llm/invoke",
+			adminPath: "/quota",
+			suffixes:  []string{"/invoke"},
+			chatMode:  ChatModeCompletion,
+			adminMode: AdminModeNone,
+		},
+		{
+			name:      "admin path fixed to chat completions",
+			path:      "/v1/chat/completions/quota",
+			adminPath: "/quota",
+			suffixes:  []string{"/invoke"},
+			chatMode:  ChatModeAdmin,
+			adminMode: AdminModeQuery,
+		},
+		{
+			name:      "messages admin path not supported",
+			path:      "/v1/messages/quota",
+			adminPath: "/quota",
+			suffixes:  []string{"/v1/chat/completions", "/v1/messages"},
+			chatMode:  ChatModeNone,
+			adminMode: AdminModeNone,
 		},
 		{
 			name:      "none mode",
 			path:      "/other/path",
 			adminPath: "/quota",
+			suffixes:  []string{"/v1/chat/completions", "/v1/messages"},
 			chatMode:  ChatModeNone,
 			adminMode: AdminModeNone,
 		},
@@ -320,7 +386,7 @@ func TestGetOperationMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			chatMode, adminMode := getOperationMode(tt.path, tt.adminPath)
+			chatMode, adminMode := getOperationMode(tt.path, tt.adminPath, tt.suffixes)
 			require.Equal(t, tt.chatMode, chatMode)
 			require.Equal(t, tt.adminMode, adminMode)
 		})

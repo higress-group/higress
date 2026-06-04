@@ -1185,13 +1185,18 @@ func getBuiltinAttributeFallback(ctx wrapper.HttpContext, config AIStatisticsCon
 	return nil
 }
 
+// extractStreamingBodyByJsonPath 从 SSE 流式响应中按 jsonPath 提取属性值。
+// 入参 data 允许包含一个或多个已经拼接的 SSE chunk，jsonPath 使用 gjson 语法，rule 决定多 chunk 场景下取首个、覆盖或拼接。
+// 返回值为提取到的业务值；当规则为 first/replace 时，仅把路径存在且非空的 chunk 视为有效 chunk，避免首个空字符串覆盖后续真实值。
+// 边界情况：append 会保留历史行为继续拼接字符串，空 chunk 不产生额外内容；不支持的 rule 返回 nil 并记录错误日志。
 func extractStreamingBodyByJsonPath(data []byte, jsonPath string, rule string) interface{} {
 	chunks := bytes.Split(bytes.TrimSpace(wrapper.UnifySSEChunk(data)), []byte("\n\n"))
 	var value interface{}
 	if rule == RuleFirst {
 		for _, chunk := range chunks {
 			jsonObj := gjson.GetBytes(chunk, jsonPath)
-			if jsonObj.Exists() {
+			// 流式响应中首个 chunk 可能携带空 model/payload，first 语义应取首个非空有效值。
+			if isNonEmptyJSONValue(jsonObj) {
 				value = jsonObj.Value()
 				break
 			}
@@ -1199,7 +1204,8 @@ func extractStreamingBodyByJsonPath(data []byte, jsonPath string, rule string) i
 	} else if rule == RuleReplace {
 		for _, chunk := range chunks {
 			jsonObj := gjson.GetBytes(chunk, jsonPath)
-			if jsonObj.Exists() {
+			// replace 语义取最后一个非空有效值，防止后续空值把已提取的业务值清空。
+			if isNonEmptyJSONValue(jsonObj) {
 				value = jsonObj.Value()
 			}
 		}
@@ -1217,6 +1223,21 @@ func extractStreamingBodyByJsonPath(data []byte, jsonPath string, rule string) i
 		log.Errorf("unsupported rule type: %s", rule)
 	}
 	return value
+}
+
+// isNonEmptyJSONValue 判断 gjson 结果是否可以作为 first/replace 的有效流式提取值。
+// 输入必须是已经按 jsonPath 查询出的结果；路径不存在、JSON null 或空字符串都视为无效。
+// 返回 true 表示该值可以写入日志、指标或 span；数字 0、布尔 false、空对象/数组仍保留为有效值，避免破坏非字符串字段的历史兼容性。
+// 边界情况：只跳过明确的空字符串，不裁剪空白字符串，避免改变调用方对原始文本值的处理。
+func isNonEmptyJSONValue(result gjson.Result) bool {
+	if !result.Exists() {
+		return false
+	}
+	value := result.Value()
+	if value == nil || value == "" {
+		return false
+	}
+	return true
 }
 
 // shouldLogDebug returns true if the log level is debug or trace
