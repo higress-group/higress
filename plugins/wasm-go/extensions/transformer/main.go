@@ -39,7 +39,6 @@ func init() {
 		wrapper.ProcessRequestBodyBy(onHttpRequestBody),
 		wrapper.ProcessResponseHeadersBy(onHttpResponseHeaders),
 		wrapper.ProcessResponseBodyBy(onHttpResponseBody),
-		wrapper.WithRebuildAfterRequests[TransformerConfig](1000),
 	)
 }
 
