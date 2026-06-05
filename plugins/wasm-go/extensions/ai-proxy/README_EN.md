@@ -2171,6 +2171,51 @@ provider:
 }
 ```
 
+### Selecting Providers by Session Key
+
+When multiple named `providers` are configured, `sessionAffinity` can keep requests with the same session key on the same provider. The current implementation supports `hash` and `persistent` modes. The key can come from a request header, cookie, JSON request body field, or Wasm metadata.
+
+```yaml
+providers:
+  - id: provider-a
+    type: openai
+    apiTokens:
+      - "sk-****"
+    modelMapping:
+      "*": gpt-4o
+  - id: provider-b
+    type: openai
+    apiTokens:
+      - "sk-****"
+    modelMapping:
+      "*": gpt-4o
+sessionAffinity:
+  enabled: true
+  mode: persistent
+  ttlSeconds: 3600
+  onProviderUnavailable: fallbackAndUpdate
+  unavailableStatus:
+    - "5.*"
+  providerIds:
+    - provider-a
+    - provider-b
+  scope:
+    - consumer
+    - model
+  key:
+    source: body
+    jsonPath: "$.callOptions.stickySessionId"
+```
+
+`mode` supports `hash` and `persistent`; the older `type` field is also accepted for compatibility. `persistent` stores the session-key-to-provider mapping in shared data and uses `ttlSeconds` as the mapping lifetime. `key.source` supports `header`, `cookie`, `body`, and `metadata`. `source: header` reads `x-mse-consumer` by default; `source: cookie` requires `name`; `source: body` requires `jsonPath`; `source: metadata` can use `name` (mapped to `metadata.<name>`) or `propertyPath`. If `providerIds` is not configured, all `providers` are used for selection. `scope` can include `consumer`, `route`, `model`, and `metadata.<name>` to combine the session key with additional request context before selecting a provider. `onProviderUnavailable` supports `failFast`, `fallbackAndUpdate`, and `fallbackWithoutUpdate`; `unavailableStatus` configures upstream status-code patterns that trigger the unavailable policy, defaulting to `5.*`.
+
+Usage constraints:
+
+- Providers in the same `sessionAffinity.providerIds` set should use compatible request/response protocols and API capabilities. The request is transformed by the selected provider before upstream forwarding, and the response is transformed by the active provider. Mixing providers with different protocols or substantially different capabilities, such as OpenAI, Claude, Bedrock, and Triton, can make fallback or persistent remapping requests incompatible with the target provider.
+- `key.source: body` or `scope: model` requires reading the request body, so the plugin buffers the request body before selecting a provider. For large request bodies, configure `max_body_bytes` according to the proxy's acceptable buffering limit.
+- `fallbackAndUpdate` and `fallbackWithoutUpdate` only select another provider inside the same `providerIds` selection set. `fallbackAndUpdate` updates the persistent mapping only when the fallback response is 2xx; if fallback fails, the plugin resumes the original upstream response handling.
+- `failFast` returns 503 immediately when `unavailableStatus` matches and does not try another provider.
+
 ### Utilizing OpenAI Protocol Proxy for NVIDIA Triton Interference Server Services
 
 **Configuration Information**

@@ -215,7 +215,27 @@ func saveContextsToHeaders(ctx wrapper.HttpContext) {
 }
 
 func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConfig) types.Action {
-	activeProvider := pluginConfig.GetProvider()
+	// Disable the route re-calculation since the plugin may modify some headers related to the chosen route.
+	ctx.DisableReroute()
+
+	initContext(ctx)
+
+	defer func() {
+		saveContextsToHeaders(ctx)
+	}()
+
+	if pluginConfig.NeedsSessionAffinityRequestBody() && ctx.HasRequestBody() {
+		ctx.SetRequestBodyBufferLimit(pluginConfig.SessionAffinityMaxBodyBytes())
+		return types.HeaderStopIteration
+	}
+
+	if pluginConfig.IsSessionAffinityEnabled() && !pluginConfig.NeedsSessionAffinityRequestBody() {
+		if err := pluginConfig.SelectProviderBySessionAffinity(ctx, nil); err != nil {
+			log.Warnf("[onHttpRequestHeader] session affinity provider selection skipped: %v", err)
+		}
+	}
+
+	activeProvider := pluginConfig.GetProvider(ctx)
 
 	if activeProvider == nil {
 		log.Debugf("[onHttpRequestHeader] no active provider, skip processing")
@@ -224,21 +244,18 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 	}
 
 	log.Debugf("[onHttpRequestHeader] provider=%s", activeProvider.GetProviderType())
+	return processRequestHeaders(ctx, pluginConfig, activeProvider, true)
+}
 
-	// Disable the route re-calculation since the plugin may modify some headers related to the chosen route.
-	ctx.DisableReroute()
-
-	initContext(ctx)
-
+func processRequestHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginConfig, activeProvider provider.Provider, allowBodyStop bool) types.Action {
 	rawPath := ctx.Path()
-
-	defer func() {
-		saveContextsToHeaders(ctx)
-	}()
-
 	path, _ := url.Parse(rawPath)
 	apiName := getApiName(path.Path)
-	providerConfig := pluginConfig.GetProviderConfig()
+	providerConfig := pluginConfig.GetProviderConfig(ctx)
+	if providerConfig == nil {
+		ctx.DontReadRequestBody()
+		return types.ActionContinue
+	}
 	if providerConfig.IsOriginal() {
 		if handler, ok := activeProvider.(provider.ApiNameHandler); ok {
 			apiName = handler.GetApiName(path.Path)
@@ -298,7 +315,7 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 
 		_, hasRequestBodyHandler := activeProvider.(provider.RequestBodyHandler)
 		hasRequestBody := ctx.HasRequestBody()
-		if hasRequestBody && hasRequestBodyHandler {
+		if allowBodyStop && hasRequestBody && hasRequestBodyHandler {
 			_ = proxywasm.RemoveHttpRequestHeader("Content-Length")
 			ctx.SetRequestBodyBufferLimit(defaultMaxBodyBytes)
 			// Delay the header processing to allow changing in OnRequestBody
@@ -312,7 +329,20 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig, body []byte) types.Action {
-	activeProvider := pluginConfig.GetProvider()
+	if pluginConfig.NeedsSessionAffinityRequestBody() {
+		if err := pluginConfig.SelectProviderBySessionAffinity(ctx, body); err != nil {
+			log.Warnf("[onHttpRequestBody] session affinity provider selection skipped: %v", err)
+		}
+		activeProvider := pluginConfig.GetProvider(ctx)
+		if activeProvider != nil {
+			headerAction := processRequestHeaders(ctx, pluginConfig, activeProvider, false)
+			if headerAction != types.ActionContinue {
+				return headerAction
+			}
+		}
+	}
+
+	activeProvider := pluginConfig.GetProvider(ctx)
 
 	if activeProvider == nil {
 		log.Debugf("[onHttpRequestBody] no active provider, skip processing")
@@ -326,9 +356,12 @@ func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig
 
 	if handler, ok := activeProvider.(provider.RequestBodyHandler); ok {
 		apiName, _ := ctx.GetContext(provider.CtxKeyApiName).(provider.ApiName)
-		providerConfig := pluginConfig.GetProviderConfig()
+		providerConfig := pluginConfig.GetProviderConfig(ctx)
+		if providerConfig == nil {
+			return types.ActionContinue
+		}
 		// If retryOnFailure is enabled, save the transformed body to the context in case of retry
-		if providerConfig.IsRetryOnFailureEnabled() {
+		if providerConfig.IsRetryOnFailureEnabled() || pluginConfig.NeedsSessionAffinityFallback() {
 			ctx.SetContext(provider.CtxRequestBody, body)
 		}
 		newBody, settingErr := providerConfig.ReplaceByCustomSettings(body)
@@ -359,7 +392,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginCo
 		return types.ActionContinue
 	}
 
-	activeProvider := pluginConfig.GetProvider()
+	activeProvider := pluginConfig.GetProvider(ctx)
 
 	if activeProvider == nil {
 		log.Debugf("[onHttpResponseHeaders] no active provider, skip processing")
@@ -369,7 +402,11 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginCo
 
 	log.Debugf("[onHttpResponseHeaders] provider=%s", activeProvider.GetProviderType())
 
-	providerConfig := pluginConfig.GetProviderConfig()
+	providerConfig := pluginConfig.GetProviderConfig(ctx)
+	if providerConfig == nil {
+		ctx.DontReadResponseBody()
+		return types.ActionContinue
+	}
 	apiTokenInUse := providerConfig.GetApiTokenInUse(ctx)
 	apiTokens := providerConfig.GetAvailableApiToken(ctx)
 
@@ -377,6 +414,9 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginCo
 	if err != nil || status != "200" {
 		if err != nil {
 			log.Errorf("unable to load :status header from response: %v", err)
+		}
+		if action, handled := pluginConfig.HandleProviderUnavailable(ctx, activeProvider, status); handled {
+			return action
 		}
 		action := providerConfig.OnRequestFailed(activeProvider, ctx, apiTokenInUse, apiTokens, status)
 		if action == types.ActionContinue &&
@@ -424,14 +464,18 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginCo
 }
 
 func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig, chunk []byte, isLastChunk bool) []byte {
-	activeProvider := pluginConfig.GetProvider()
+	activeProvider := pluginConfig.GetProvider(ctx)
 
 	if activeProvider == nil {
 		log.Debugf("[onStreamingResponseBody] no active provider, skip processing")
 		return chunk
 	}
 
-	promoteThinking := pluginConfig.GetProviderConfig().GetPromoteThinkingOnEmpty()
+	providerConfig := pluginConfig.GetProviderConfig(ctx)
+	if providerConfig == nil {
+		return chunk
+	}
+	promoteThinking := providerConfig.GetPromoteThinkingOnEmpty()
 
 	log.Debugf("[onStreamingResponseBody] provider=%s", activeProvider.GetProviderType())
 	log.Debugf("[onStreamingResponseBody] isLastChunk=%v chunk: %s", isLastChunk, string(chunk))
@@ -533,7 +577,7 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig, body []byte) types.Action {
-	activeProvider := pluginConfig.GetProvider()
+	activeProvider := pluginConfig.GetProvider(ctx)
 
 	if activeProvider == nil {
 		log.Debugf("[onHttpResponseBody] no active provider, skip processing")
@@ -562,7 +606,8 @@ func onHttpResponseBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfi
 	}
 
 	// Promote thinking/reasoning to content when content is empty
-	if pluginConfig.GetProviderConfig().GetPromoteThinkingOnEmpty() {
+	providerConfig := pluginConfig.GetProviderConfig(ctx)
+	if providerConfig != nil && providerConfig.GetPromoteThinkingOnEmpty() {
 		promoted, err := provider.PromoteThinkingOnEmptyResponse(finalBody)
 		if err != nil {
 			log.Warnf("[promoteThinkingOnEmpty] failed: %v", err)

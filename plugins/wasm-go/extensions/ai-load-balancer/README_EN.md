@@ -245,7 +245,7 @@ lb_config:
 
 ## Introduction
 
-Reads a specified request header value and uses FNV-1a consistent hashing to route requests to a fixed upstream cluster. The same hash key always maps to the same cluster, while weighted distribution controls traffic allocation across clusters.
+Reads a configured session key and uses FNV-1a consistent hashing to route requests to a fixed upstream cluster. The same hash key always maps to the same cluster, while weighted distribution controls traffic allocation across clusters. The session key can come from a request header, cookie, JSON request body, or Wasm property metadata.
 
 Requires EnvoyFilter `cluster_header` mechanism to be enabled.
 
@@ -254,8 +254,9 @@ Requires EnvoyFilter `cluster_header` mechanism to be enabled.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `clusters` | []ClusterEntry | required | - | Cluster list. Sum of all `weight` values must be 100 |
-| `hash_header` | string | optional | `x-mse-consumer` | Request header name to read the hash key from |
+| `hash_header` | string | optional | `x-mse-consumer` | Backward-compatible header name for the hash key. If `key` is configured, `key` takes precedence |
 | `cluster_header` | string | optional | `x-higress-target-cluster` | Request header name to write the selected cluster into |
+| `key` | object | optional | `{"source":"header","name":"x-mse-consumer"}` | Session key extraction configuration |
 
 ### ClusterEntry Fields
 
@@ -263,6 +264,16 @@ Requires EnvoyFilter `cluster_header` mechanism to be enabled.
 |------|------|----------|-------------|
 | `cluster` | string | yes | Upstream cluster name, e.g. `outbound\|443\|\|llm-xxx.internal.static` |
 | `weight` | int | yes | Percentage weight. Sum of all cluster weights must be 100 |
+
+### Key Fields
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | string | no | Session key source. Supported values: `header`, `cookie`, `body`, `metadata`. Default: `header` |
+| `name` | string | depends on source | Header name for `header`, cookie name for `cookie`, or `metadata.<name>` property for `metadata` |
+| `jsonPath` | string | required for `source: body` | JSON request body path, such as `$.callOptions.stickySessionId` or `callOptions.stickySessionId` |
+| `propertyPath` | []string | optional for `source: metadata` | Wasm property path, for example `["metadata", "selected_session_key"]` |
+| `max_body_bytes` | int | no | Request body buffer limit for `source: body`. Default: 104857600 |
 
 ## Configuration Example
 
@@ -281,4 +292,51 @@ lb_config:
   cluster_header: x-higress-target-cluster
 ```
 
-If the request is missing the hash header, the plugin returns **403** directly.
+Extract the session key from a JSON request body field:
+
+```yaml
+lb_type: cluster
+lb_policy: cluster_hash
+lb_config:
+  clusters:
+    - cluster: "outbound|80||llm-test1.internal.static"
+      weight: 50
+    - cluster: "outbound|443||llm-test2.internal.dns"
+      weight: 50
+  key:
+    source: body
+    jsonPath: "$.callOptions.stickySessionId"
+  cluster_header: x-higress-target-cluster
+```
+
+Extract the session key from a cookie:
+
+```yaml
+lb_type: cluster
+lb_policy: cluster_hash
+lb_config:
+  clusters:
+    - cluster: "outbound|80||llm-test1.internal.static"
+      weight: 100
+  key:
+    source: cookie
+    name: llm_session
+```
+
+Extract the session key from Wasm property metadata:
+
+```yaml
+lb_type: cluster
+lb_policy: cluster_hash
+lb_config:
+  clusters:
+    - cluster: "outbound|80||llm-test1.internal.static"
+      weight: 100
+  key:
+    source: metadata
+    propertyPath:
+      - metadata
+      - selected_session_key
+```
+
+If the request is missing the configured hash key, the plugin returns **403** directly.

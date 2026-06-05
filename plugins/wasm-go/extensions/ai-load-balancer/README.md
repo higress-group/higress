@@ -243,7 +243,7 @@ lb_config:
 
 ## 功能说明
 
-读取指定请求头的值，使用 FNV-1a 一致性 hash 算法将请求路由到固定的上游集群，确保相同 hash key 的请求始终落到同一个 cluster，同时支持按百分比权重控制各 cluster 的流量分配。
+读取指定会话 key，使用 FNV-1a 一致性 hash 算法将请求路由到固定的上游集群，确保相同 hash key 的请求始终落到同一个 cluster，同时支持按百分比权重控制各 cluster 的流量分配。会话 key 可以来自请求头、Cookie、JSON 请求体或 Wasm property metadata。
 
 需要配合 EnvoyFilter 的 `cluster_header` 机制一起使用。
 
@@ -252,8 +252,9 @@ lb_config:
 | 名称 | 数据类型 | 填写要求 | 默认值 | 描述 |
 |------|----------|----------|--------|------|
 | `clusters` | []ClusterEntry | 必填 | - | cluster 列表，所有 `weight` 之和必须为 100 |
-| `hash_header` | string | 选填 | `x-mse-consumer` | 读取 hash key 的请求头名称 |
+| `hash_header` | string | 选填 | `x-mse-consumer` | 兼容旧配置，读取 hash key 的请求头名称。配置 `key` 后以 `key` 为准 |
 | `cluster_header` | string | 选填 | `x-higress-target-cluster` | 写入目标 cluster 的请求头名称 |
+| `key` | object | 选填 | `{"source":"header","name":"x-mse-consumer"}` | 会话 key 提取配置 |
 
 ### ClusterEntry 字段
 
@@ -261,6 +262,16 @@ lb_config:
 |------|------|------|------|
 | `cluster` | string | 是 | 上游集群名称，如 `outbound|443||llm-xxx.internal.static` |
 | `weight` | int | 是 | 百分比权重，所有 cluster 的 weight 之和必须为 100 |
+
+### Key 字段
+
+| 名称 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `source` | string | 否 | 会话 key 来源，支持 `header`、`cookie`、`body`、`metadata`，默认 `header` |
+| `name` | string | 按 source | `header` 时为请求头名称，`cookie` 时为 Cookie 名称，`metadata` 时为 `metadata.<name>` property |
+| `jsonPath` | string | `source: body` 必填 | JSON 请求体中的 key 路径，支持 `$.callOptions.stickySessionId` 或 `callOptions.stickySessionId` |
+| `propertyPath` | []string | `source: metadata` 可选 | Wasm property 路径，例如 `["metadata", "selected_session_key"]` |
+| `max_body_bytes` | int | 否 | `source: body` 时请求体缓冲上限，默认 104857600 |
 
 ## 配置示例
 
@@ -279,4 +290,51 @@ lb_config:
   cluster_header: x-higress-target-cluster
 ```
 
-若请求缺少 hash header，插件直接返回 **403**。
+从请求体字段提取会话 key：
+
+```yaml
+lb_type: cluster
+lb_policy: cluster_hash
+lb_config:
+  clusters:
+    - cluster: "outbound|80||llm-test1.internal.static"
+      weight: 50
+    - cluster: "outbound|443||llm-test2.internal.dns"
+      weight: 50
+  key:
+    source: body
+    jsonPath: "$.callOptions.stickySessionId"
+  cluster_header: x-higress-target-cluster
+```
+
+从 Cookie 提取会话 key：
+
+```yaml
+lb_type: cluster
+lb_policy: cluster_hash
+lb_config:
+  clusters:
+    - cluster: "outbound|80||llm-test1.internal.static"
+      weight: 100
+  key:
+    source: cookie
+    name: llm_session
+```
+
+从 Wasm property metadata 提取会话 key：
+
+```yaml
+lb_type: cluster
+lb_policy: cluster_hash
+lb_config:
+  clusters:
+    - cluster: "outbound|80||llm-test1.internal.static"
+      weight: 100
+  key:
+    source: metadata
+    propertyPath:
+      - metadata
+      - selected_session_key
+```
+
+若请求缺少配置的 hash key，插件直接返回 **403**。

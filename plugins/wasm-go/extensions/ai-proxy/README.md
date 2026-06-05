@@ -2399,6 +2399,51 @@ provider:
 }
 ```
 
+### 基于会话 Key 选择 Provider
+
+当配置多个具名 `providers` 时，可以启用 `sessionAffinity`，让相同会话 key 的请求稳定选择同一个 provider。当前支持 `hash` 和 `persistent` 模式，key 可以来自请求头、Cookie、JSON 请求体字段或 Wasm metadata。
+
+```yaml
+providers:
+  - id: provider-a
+    type: openai
+    apiTokens:
+      - "sk-****"
+    modelMapping:
+      "*": gpt-4o
+  - id: provider-b
+    type: openai
+    apiTokens:
+      - "sk-****"
+    modelMapping:
+      "*": gpt-4o
+sessionAffinity:
+  enabled: true
+  mode: persistent
+  ttlSeconds: 3600
+  onProviderUnavailable: fallbackAndUpdate
+  unavailableStatus:
+    - "5.*"
+  providerIds:
+    - provider-a
+    - provider-b
+  scope:
+    - consumer
+    - model
+  key:
+    source: body
+    jsonPath: "$.callOptions.stickySessionId"
+```
+
+`mode` 支持 `hash` 和 `persistent`，为了兼容也可以使用旧字段名 `type`。`persistent` 会在共享数据中保存 session key 到 provider 的映射，并通过 `ttlSeconds` 控制有效期。`key.source` 支持 `header`、`cookie`、`body`、`metadata`。`source: header` 默认读取 `x-mse-consumer`；`source: cookie` 需要配置 `name`；`source: body` 需要配置 `jsonPath`；`source: metadata` 可以配置 `name`（映射到 `metadata.<name>`）或 `propertyPath`。如果不配置 `providerIds`，默认在所有 `providers` 中做选择。`scope` 可选值包括 `consumer`、`route`、`model` 和 `metadata.<name>`，用于把会话 key 与更多上下文组合后再选择 provider。`onProviderUnavailable` 支持 `failFast`、`fallbackAndUpdate`、`fallbackWithoutUpdate`；`unavailableStatus` 用于配置触发不可用策略的上游状态码匹配规则，默认匹配 `5.*`。
+
+使用约束：
+
+- 同一个 `sessionAffinity.providerIds` 集合内的 provider 应使用兼容的请求/响应协议和 API 能力。请求会先按选中的 provider 进行请求头、请求体、响应体转换；如果把 OpenAI、Claude、Bedrock、Triton 等不同协议或能力差异较大的 provider 放在同一个集合中，fallback 或 persistent 重映射后的请求可能无法被目标 provider 正确处理。
+- `key.source: body` 或 `scope: model` 需要读取请求体，插件会缓冲请求体后再选择 provider。大请求体场景应按需配置 `max_body_bytes`，避免超过代理可接受的缓冲大小。
+- `fallbackAndUpdate` 和 `fallbackWithoutUpdate` 只会在同一个 `providerIds` 选择集合内选择下一个 provider。`fallbackAndUpdate` 仅在 fallback 响应为 2xx 时更新 persistent 映射；fallback 失败时会恢复原上游响应处理。
+- `failFast` 会在命中 `unavailableStatus` 时直接返回 503，不会尝试其他 provider。
+
 ### 使用 OpenAI 协议代理 NVIDIA Triton Interference Server 服务
 
 **配置信息**
