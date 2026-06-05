@@ -195,6 +195,9 @@ func (lb ClusterHashLoadBalancer) selectCluster(hashKey string) string {
 
 func (lb ClusterHashLoadBalancer) HandleHttpRequestHeaders(ctx wrapper.HttpContext) types.Action {
 	if lb.Key.Source == hashKeySourceBody {
+		if requestHasNoBody() {
+			return rejectMissingHashKey(fmt.Errorf("request body required for body key source"))
+		}
 		ctx.SetRequestBodyBufferLimit(lb.Key.MaxBodyBytes)
 		return types.HeaderStopIteration
 	}
@@ -261,6 +264,16 @@ func extractCookieHashKey(cookieHeader, name string) string {
 
 func extractBodyHashKey(body []byte, jsonPath string) string {
 	return gjson.GetBytes(body, jsonPath).String()
+}
+
+func requestHasNoBody() bool {
+	method, _ := proxywasm.GetHttpRequestHeader(":method")
+	switch strings.ToUpper(method) {
+	case "GET", "HEAD":
+		return true
+	}
+	contentLength, _ := proxywasm.GetHttpRequestHeader("content-length")
+	return strings.TrimSpace(contentLength) == "0"
 }
 
 func (lb ClusterHashLoadBalancer) routeByHashKey(hashKey string) types.Action {

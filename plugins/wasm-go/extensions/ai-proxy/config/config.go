@@ -611,6 +611,7 @@ func (c sessionAffinityConfig) selectPersistentProviderID(key string) (string, e
 	if err != nil {
 		return c.selectHashProviderID(key)
 	}
+	pruneExpiredPersistentRecords(records, now)
 	if record, ok := records[key]; ok && record.ExpiresAt > now && c.hasProvider(record.ProviderID) {
 		return record.ProviderID, nil
 	}
@@ -633,15 +634,25 @@ func (c sessionAffinityConfig) updatePersistentRecord(key, providerID string) {
 	if key == "" || providerID == "" {
 		return
 	}
+	now := time.Now().Unix()
 	records, cas, err := c.loadPersistentRecords()
 	if err != nil {
 		return
 	}
+	pruneExpiredPersistentRecords(records, now)
 	records[key] = sessionAffinityRecord{
 		ProviderID: providerID,
-		ExpiresAt:  time.Now().Unix() + c.TTLSeconds,
+		ExpiresAt:  now + c.TTLSeconds,
 	}
 	_ = c.storePersistentRecords(records, cas)
+}
+
+func pruneExpiredPersistentRecords(records map[string]sessionAffinityRecord, now int64) {
+	for key, record := range records {
+		if record.ExpiresAt <= now {
+			delete(records, key)
+		}
+	}
 }
 
 func (c sessionAffinityConfig) loadPersistentRecords() (map[string]sessionAffinityRecord, uint32, error) {

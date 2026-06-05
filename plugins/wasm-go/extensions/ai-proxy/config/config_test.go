@@ -402,6 +402,20 @@ func TestPluginConfig_SessionAffinity(t *testing.T) {
 			t.Fatalf("Validate() err = %v, want fallbackTimeout overflow", err)
 		}
 	})
+
+	t.Run("prunes_expired_persistent_records", func(t *testing.T) {
+		records := map[string]sessionAffinityRecord{
+			"expired": {ProviderID: "p1", ExpiresAt: 99},
+			"live":    {ProviderID: "p2", ExpiresAt: 101},
+		}
+		pruneExpiredPersistentRecords(records, 100)
+		if _, ok := records["expired"]; ok {
+			t.Fatal("expired record should be pruned")
+		}
+		if _, ok := records["live"]; !ok {
+			t.Fatal("live record should remain")
+		}
+	})
 }
 
 type configTestContext struct {

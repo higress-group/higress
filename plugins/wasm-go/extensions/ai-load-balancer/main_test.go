@@ -76,6 +76,7 @@ func TestClusterHashRuntime(t *testing.T) {
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"content-length", "51"},
 			})
 			requireEqual(t, types.HeaderStopIteration, action)
 
