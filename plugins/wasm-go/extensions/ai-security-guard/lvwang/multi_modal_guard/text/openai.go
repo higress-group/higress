@@ -133,7 +133,7 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 			}
 			return
 		case cfg.RiskMask:
-			desensitization := cfg.ExtractDesensitization(response.Data)
+			desensitization := cfg.ExtractDesensitizationForRisk(response.Data, config, consumer)
 			if desensitization == "" {
 				proxywasm.LogInfof("safecheck_action_source=mask_fallback_to_block, reason=empty_desensitization")
 				log.Warnf("desensitization content is empty, falling back to block logic")

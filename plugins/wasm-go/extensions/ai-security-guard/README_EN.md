@@ -39,7 +39,7 @@ Plugin Priority: `300`
 | `promptAttackLevelBar` | string | optional | max | promptAttack risk level threshold， `max`, `high`, `medium` or `low` |
 | `sensitiveDataLevelBar` | string | optional | S4 | sensitiveData risk level threshold,  `S4`, `S3`, `S2` or `S1` |
 | `customLabelLevelBar` | string | optional | max | Custom label detection risk level threshold, value can be max, high, medium, or low |
-| `riskAction` | string | optional | block | Risk action, value can be `block` or `mask`. `block` means blocking requests based on risk level thresholds, `mask` means replacing sensitive fields with desensitized content when API returns mask suggestion. Note: masking only works with MultiModalGuard mode |
+| `riskAction` | string | optional | block | Risk action, value can be `block` or `mask`. `block` means blocking requests based on risk level thresholds, `mask` means replacing sensitive fields with desensitized content when API returns mask suggestion; when `checkResponse: true` is enabled, writable OpenAI `text_generation` responses can also be rewritten. Note: masking only works with MultiModalGuard mode |
 | `timeout` | int | optional | 2000 | timeout for lvwang service |
 | `bufferLimit` | int | optional | 1000 | Limit the length of each text when calling the lvwang service |
 | `consumerRequestCheckService` | map | optional | - | Specify specific request detection services for different consumers |
@@ -67,7 +67,7 @@ Risk level explanations for each detection dimension:
 
 - For risk action (riskAction):
     - `block`: Block requests based on risk level thresholds for each dimension
-    - `mask`: Replace sensitive fields with desensitized content when API returns `Suggestion=mask`, still block when `Suggestion=block`
+    - `mask`: Replace sensitive fields with desensitized content when API returns `Suggestion=mask`, still block when `Suggestion=block`; with `checkResponse: true`, OpenAI `text_generation` responses can also be rewritten with desensitized text
     - Note: Masking only works with MultiModalGuard mode (action configured as MultiModalGuard), other modes do not support masking
 
 ### Deny Response Body
@@ -143,6 +143,25 @@ The default `openAIDenyResponseFormat: legacy` keeps the historical response sha
 openAIDenyResponseFormat: structured
 ```
 
+### Configure OpenAI Response Masking
+
+When `action: MultiModalGuard`, `riskAction: mask`, and `checkResponse: true` are enabled, the plugin rewrites OpenAI `text_generation` response content when the content security service returns `Suggestion=mask` with non-empty `Ext.Desensitization`:
+
+```yaml
+action: MultiModalGuard
+apiType: text_generation
+checkResponse: true
+riskAction: mask
+responseCheckService: response_security_check
+```
+
+- Non-streaming responses rewrite `responseContentJsonPath` or the fallback path that actually matched, and remove a potentially stale `content-length`
+- Streaming SSE responses rewrite only the currently buffered `data:` JSON payloads using each chunk's matched writable path, while preserving SSE framing, `[DONE]`, empty chunks, and non-content fields
+- If desensitized text is empty, or JSON/SSE rewriting fails, the plugin fails closed through the existing response deny path to avoid forwarding original sensitive content
+- `protocol: original` does not support response masking; response-phase `RiskMask` is handled as deny. Streaming original protocol returns a terminal SSE frame whose `data:` payload is the original-protocol deny JSON, without using OpenAI chunk templates
+- TextModerationPlus shares the text response handler with MultiModalGuard, but `EvaluateRisk` for non-MultiModalGuard actions does not produce `RiskMask`, so it does not enter the response masking path
+- Non-streaming response slices are aligned to UTF-8 character boundaries so multi-byte characters are not split before submission to the content security service
+
 ### Configure response fallback extraction paths
 
 When primary extraction paths are empty, you can configure ordered fallback paths to support multiple response formats:
@@ -176,6 +195,7 @@ responseStreamContentFallbackJsonPaths: []
 ai-security-guard plugin provides following metrics:
 - `ai_sec_request_deny`: count of requests denied at request phase
 - `ai_sec_response_deny`: count of requests denied at response phase
+- `ai_sec_response_mask`: count of gateway responses successfully rewritten by response masking (at most once per gateway response)
 
 #### Image response-phase metric / ai_log rename (transition window)
 
@@ -212,7 +232,7 @@ ai-security-guard writes each submission to the content security service into th
 | --- | --- |
 | `pass` | The submission passed the check |
 | `deny` | The submission hit a risk; the gateway returned a deny response |
-| `mask` | The submission hit a risk with `Action=Mask`; the security service returned desensitized text and the request body was rewritten |
+| `mask` | The submission hit a risk with `Action=Mask`; the security service returned desensitized text and the request or response body was rewritten |
 | `error` | The submission itself failed (HTTP non-200, business `Code` non-200, unmarshal failure, deny-response build failure, dispatch failure, etc.). When the failure occurs in the **streaming response callback** because building the deny response failed, the gateway fails open (injects buffered upstream content as-is); in that case `safecheck_status=build_fallback_pass` and the corresponding event has `result=error` to indicate the security submission did not complete |
 
 The plugin writes `requestId`, `safecheck_request_ids`, and `safecheck_request_id` only when the security service response contains a JSON string `RequestId` and `strings.TrimSpace(RequestId) != ""`; missing, empty, whitespace-only, or non-string values do not produce empty placeholders.
@@ -228,6 +248,7 @@ Every submission attempt emits one `safecheck_requests` event, including HTTP no
 | `reqeust deny` | A request-phase submission hit a risk; the gateway returned a deny response (note: typo `reqeust` is preserved for backward compatibility) |
 | `request error` | A request-phase security submission itself failed (HTTP / unmarshal / dispatch / etc.); the gateway fails open |
 | `response pass` | All response-phase submissions passed |
+| `response mask` | A response-phase submission hit mask and the response body or currently buffered SSE chunks were rewritten with desensitized text; later pass submissions in the same response do not overwrite this status |
 | `response deny` | A response-phase submission hit a risk; the gateway returned a deny response |
 | `response error` | A response-phase security submission itself failed; the gateway fails open |
 | `build_fallback_pass` | In the streaming response callback, building the deny response failed; the gateway fails open and injects the buffered upstream content as-is |

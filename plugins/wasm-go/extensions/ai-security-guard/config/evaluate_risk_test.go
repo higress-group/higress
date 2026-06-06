@@ -828,6 +828,34 @@ func TestTC_DESENS_005(t *testing.T) {
 	require.Equal(t, "", result)
 }
 
+func TestExtractDesensitizationForRiskSkipsBelowThresholdDetails(t *testing.T) {
+	config := baseConfig()
+	config.SensitiveDataAction = "mask"
+	config.SensitiveDataLevelBar = "S3"
+
+	data := Data{
+		RiskLevel: "none",
+		Detail: []Detail{
+			{
+				Suggestion: "mask",
+				Type:       SensitiveDataType,
+				Level:      "S1",
+				Result:     []Result{{Ext: Ext{Desensitization: "below-threshold"}}},
+			},
+			{
+				Suggestion: "mask",
+				Type:       SensitiveDataType,
+				Level:      "S3",
+				Result:     []Result{{Ext: Ext{Desensitization: "threshold-match"}}},
+			},
+		},
+	}
+
+	require.Equal(t, RiskMask, EvaluateRisk(MultiModalGuard, data, config, ""))
+	require.Equal(t, "below-threshold", ExtractDesensitization(data))
+	require.Equal(t, "threshold-match", ExtractDesensitizationForRisk(data, config, ""))
+}
+
 // TestTC_EVAL_029 未命中 consumer 规则时回退全局维度动作
 func TestTC_EVAL_029(t *testing.T) {
 	config := baseConfig()

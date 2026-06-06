@@ -968,6 +968,24 @@ func ExtractDesensitization(data Data) string {
 	return ""
 }
 
+// ExtractDesensitizationForRisk returns desensitization from the same class of
+// Detail that can make EvaluateRisk return RiskMask for MultiModalGuard.
+func ExtractDesensitizationForRisk(data Data, config AISecurityConfig, consumer string) string {
+	for _, detail := range data.Detail {
+		dimAction, _ := config.ResolveRiskActionByType(consumer, detail.Type)
+		if dimAction != "mask" || detail.Type != SensitiveDataType || detail.Suggestion != "mask" {
+			continue
+		}
+		if !detailExceedsThreshold(detail, config, consumer) {
+			continue
+		}
+		if len(detail.Result) > 0 && detail.Result[0].Ext.Desensitization != "" {
+			return detail.Result[0].Ext.Desensitization
+		}
+	}
+	return ""
+}
+
 type BlockedDetail struct {
 	Type  string `json:"type"`
 	Level string `json:"level"`

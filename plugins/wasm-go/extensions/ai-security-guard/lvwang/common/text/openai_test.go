@@ -1,7 +1,10 @@
 package text
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	cfg "github.com/alibaba/higress/plugins/wasm-go/extensions/ai-security-guard/config"
@@ -373,5 +376,185 @@ func TestGetEffectiveFallbackPathsFromContext(t *testing.T) {
 	got = getEffectiveFallbackPathsFromContext(ctx, "fallback_key", "nonexistent", []string{"another.path"})
 	if len(got) != 1 || got[0] != "cached.path" {
 		t.Fatalf("expected cached paths to take precedence, got %#v", got)
+	}
+}
+
+func TestExtractResponseContentWithTargetsResolvesQueryPath(t *testing.T) {
+	body := []byte(`{"content":[{"type":"thinking","thinking":"skip"},{"type":"text","text":"hello"},{"type":"text","text":" world"}]}`)
+
+	match := extractResponseContentWithTargets(body, "missing.path", cfg.DefaultResponseFallbackJsonPaths())
+	if match.Text != "hello world" {
+		t.Fatalf("unexpected extracted text: %q", match.Text)
+	}
+	if len(match.Targets) != 2 {
+		t.Fatalf("expected two writable targets, got %#v", match.Targets)
+	}
+	if match.Targets[0].Path != "content.1.text" || match.Targets[1].Path != "content.2.text" {
+		t.Fatalf("unexpected writable targets: %#v", match.Targets)
+	}
+
+	rewritten, err := rewriteNonStreamingResponseBody(body, match, "MASKED utf8 你好")
+	if err != nil {
+		t.Fatalf("rewriteNonStreamingResponseBody() error = %v", err)
+	}
+	got := autoExtractResponseContent(rewritten, cfg.DefaultResponseFallbackJsonPaths())
+	if got != "MASKED utf8 你好" {
+		t.Fatalf("rewritten text = %q, want masked content", got)
+	}
+}
+
+func TestRewriteNonStreamingResponseBodyFailsClosedForUnsupportedQueryPath(t *testing.T) {
+	body := []byte(`{"content":[{"text":"hello"}]}`)
+
+	match := extractResponseContentWithTargets(body, "missing.path", []string{"content.#.text"})
+	if match.Text != "hello" {
+		t.Fatalf("expected unsupported query path to still extract text, got %q", match.Text)
+	}
+	if len(match.Targets) != 0 {
+		t.Fatalf("unsupported query path should not resolve writable targets, got %#v", match.Targets)
+	}
+	if _, err := rewriteNonStreamingResponseBody(body, match, "masked"); err == nil {
+		t.Fatal("expected rewrite error for unsupported query path without writable targets")
+	}
+}
+
+func TestRewriteStreamingBufferPreservesSSEFramingAndMatchedFallbackPaths(t *testing.T) {
+	rawChunks := [][]byte{
+		[]byte("event: message\ndata: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"),
+		[]byte("event: message\ndata: {\"delta\":{\"text\":\" world\"}}\n\n"),
+		[]byte("data: [DONE]\n\n"),
+	}
+	chunks := make([]streamingBufferedChunk, 0, len(rawChunks))
+	for _, raw := range rawChunks {
+		match := extractStreamingChunkContentWithTargets(raw, "missing.primary", cfg.DefaultStreamingResponseFallbackJsonPaths())
+		chunks = append(chunks, streamingBufferedChunk{Raw: raw, Match: match})
+	}
+	if chunks[0].Match.Targets[0].Path != "choices.0.delta.content" {
+		t.Fatalf("first chunk used unexpected target: %#v", chunks[0].Match.Targets)
+	}
+	if chunks[1].Match.Targets[0].Path != "delta.text" {
+		t.Fatalf("second chunk used unexpected target: %#v", chunks[1].Match.Targets)
+	}
+	if chunks[2].Match.Text != "" || len(chunks[2].Match.Targets) != 0 {
+		t.Fatalf("[DONE] chunk should not be content-bearing, got %#v", chunks[2].Match)
+	}
+
+	rewritten, err := rewriteStreamingBuffer(chunks, "MASKED utf8 你好")
+	if err != nil {
+		t.Fatalf("rewriteStreamingBuffer() error = %v", err)
+	}
+	rewrittenString := string(rewritten)
+	if !strings.Contains(rewrittenString, "event: message") || !strings.Contains(rewrittenString, "data: [DONE]") {
+		t.Fatalf("rewritten SSE lost framing or [DONE]: %s", rewrittenString)
+	}
+	if strings.Contains(rewrittenString, "hello") || strings.Contains(rewrittenString, " world") {
+		t.Fatalf("rewritten SSE leaked original content: %s", rewrittenString)
+	}
+	got := autoExtractStreamingResponseFromSSE(rewritten, cfg.DefaultStreamingResponseFallbackJsonPaths())
+	if got != "MASKED utf8 你好" {
+		t.Fatalf("rewritten streaming content = %q, want masked content", got)
+	}
+}
+
+func TestRewriteStreamingBufferCompactsMultilineSSEPayload(t *testing.T) {
+	raw := []byte(`event: message
+data: {
+data: "choices": [{"delta": {"content": "secret"}}]
+data: }
+
+`)
+	match := extractStreamingChunkContentWithTargets(raw, "choices.0.delta.content", nil)
+	if match.Text != "secret" {
+		t.Fatalf("expected multiline SSE payload to extract content, got %q", match.Text)
+	}
+	chunks := []streamingBufferedChunk{{Raw: raw, Match: match}}
+
+	rewritten, err := rewriteStreamingBuffer(chunks, "masked")
+	if err != nil {
+		t.Fatalf("rewriteStreamingBuffer() error = %v", err)
+	}
+	rewrittenString := string(rewritten)
+	if !strings.Contains(rewrittenString, "event: message") {
+		t.Fatalf("rewritten SSE lost event line: %s", rewrittenString)
+	}
+	if strings.Contains(rewrittenString, "secret") {
+		t.Fatalf("rewritten SSE leaked original content: %s", rewrittenString)
+	}
+	payload := extractSSEDataPayload(rewritten)
+	if bytes.Contains(payload, []byte("\n")) {
+		t.Fatalf("rewritten SSE payload should be compacted to one data line, got %q", string(payload))
+	}
+	if !json.Valid(payload) {
+		t.Fatalf("rewritten SSE payload is invalid JSON: %q", string(payload))
+	}
+	got := autoExtractStreamingResponseFromSSE(rewritten, cfg.DefaultStreamingResponseFallbackJsonPaths())
+	if got != "masked" {
+		t.Fatalf("rewritten streaming content = %q, want masked", got)
+	}
+}
+
+func TestRewriteStreamingBufferPreservesBareJSONChunkSeparator(t *testing.T) {
+	rawChunks := [][]byte{
+		[]byte("{\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"),
+		[]byte("{\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n"),
+	}
+	chunks := make([]streamingBufferedChunk, 0, len(rawChunks))
+	for _, raw := range rawChunks {
+		match := extractStreamingChunkContentWithTargets(raw, "choices.0.delta.content", nil)
+		chunks = append(chunks, streamingBufferedChunk{Raw: raw, Match: match})
+	}
+
+	rewritten, err := rewriteStreamingBuffer(chunks, "MASKED")
+	if err != nil {
+		t.Fatalf("rewriteStreamingBuffer() error = %v", err)
+	}
+	parts := bytes.Split(bytes.TrimSpace(rewritten), []byte("\n\n"))
+	if len(parts) != 2 {
+		t.Fatalf("rewritten bare JSON chunks lost event separator: %q", string(rewritten))
+	}
+	for _, part := range parts {
+		if !json.Valid(part) {
+			t.Fatalf("rewritten bare JSON event is invalid: %q", string(part))
+		}
+	}
+	if strings.Contains(string(rewritten), "hello") || strings.Contains(string(rewritten), " world") {
+		t.Fatalf("rewritten bare JSON leaked original content: %s", string(rewritten))
+	}
+}
+
+func TestExtractStreamingChunkContentWithTargetsIgnoresDoneEmptyAndMalformedData(t *testing.T) {
+	tests := []struct {
+		name  string
+		chunk string
+	}{
+		{name: "done", chunk: "data: [DONE]\n\n"},
+		{name: "empty content", chunk: "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n"},
+		{name: "malformed data", chunk: "data: not-json\n\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			match := extractStreamingChunkContentWithTargets([]byte(tt.chunk), "choices.0.delta.content", cfg.DefaultStreamingResponseFallbackJsonPaths())
+			if match.Text != "" || len(match.Targets) != 0 {
+				t.Fatalf("expected no content match, got %#v", match)
+			}
+		})
+	}
+}
+
+func TestRewriteStreamingBufferFailsClosedForMalformedData(t *testing.T) {
+	chunks := []streamingBufferedChunk{
+		{
+			Raw: []byte("data: not-json\n\n"),
+			Match: responseContentMatch{
+				Text: "hello",
+				Targets: []responseContentTarget{{
+					Path: "choices.0.delta.content",
+					Text: "hello",
+				}},
+			},
+		},
+	}
+	if _, err := rewriteStreamingBuffer(chunks, "masked"); err == nil {
+		t.Fatal("expected rewrite error for malformed SSE data payload")
 	}
 }

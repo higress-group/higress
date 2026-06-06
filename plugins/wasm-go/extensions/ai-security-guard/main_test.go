@@ -328,6 +328,69 @@ func withStructuredFormat(base json.RawMessage) json.RawMessage {
 	})
 }
 
+func responseMaskTestConfig(overrides map[string]interface{}) json.RawMessage {
+	values := map[string]interface{}{
+		"checkRequest":  false,
+		"checkResponse": true,
+		"apiType":       cfg.ApiTextGeneration,
+		"bufferLimit":   1000,
+	}
+	for k, v := range overrides {
+		values[k] = v
+	}
+	return withConfigOverrides(maskConfig, values)
+}
+
+func protocolOriginalResponseMaskTestConfig(overrides map[string]interface{}) json.RawMessage {
+	values := map[string]interface{}{
+		"checkRequest":  false,
+		"checkResponse": true,
+		"riskAction":    "mask",
+		"apiType":       cfg.ApiTextGeneration,
+		"bufferLimit":   1000,
+	}
+	for k, v := range overrides {
+		values[k] = v
+	}
+	return withConfigOverrides(protocolOriginalConfig, values)
+}
+
+func jsonStringLiteral(value string) string {
+	data, _ := json.Marshal(value)
+	return string(data)
+}
+
+func responseMaskSecurityResponse(requestID, desensitization string) string {
+	return `{
+		"Code": 200, "Message": "Success", "RequestId": ` + jsonStringLiteral(requestID) + `,
+		"Data": {
+			"RiskLevel": "none",
+			"Detail": [{
+				"Suggestion": "mask", "Type": "sensitiveData", "Level": "S3",
+				"Result": [{"Label": "phone", "Confidence": 99.0,
+					"Ext": {"Desensitization": ` + jsonStringLiteral(desensitization) + `}}]
+			}]
+		}
+	}`
+}
+
+func responsePassSecurityResponse(requestID string) string {
+	return `{"Code": 200, "Message": "Success", "RequestId": ` + jsonStringLiteral(requestID) + `, "Data": {"RiskLevel": "none", "Detail": []}}`
+}
+
+func responseBlockSecurityResponse(requestID string) string {
+	return `{"Code": 200, "Message": "Success", "RequestId": ` + jsonStringLiteral(requestID) + `, "Data": {"RiskLevel": "high"}}`
+}
+
+func requireHeaderAbsent(t *testing.T, headers [][2]string, name string) {
+	t.Helper()
+	for _, header := range headers {
+		if strings.EqualFold(header[0], name) {
+			t.Fatalf("expected header %q to be removed, got %#v", name, headers)
+		}
+	}
+}
+
 func mustDecodeLegacyDenyContent(t *testing.T, content string) cfg.DenyResponseBody {
 	t.Helper()
 	var denyBody cfg.DenyResponseBody
@@ -987,6 +1050,563 @@ func TestResponseFallbackExtractionCoverage(t *testing.T) {
 			}, []byte(securityResponse))
 			host.CompleteHttp()
 		})
+	})
+}
+
+func TestOpenAIResponseMaskingNonStreaming(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("single slice response mask rewrites body and removes content length", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+				{"content-length", "95"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+			requireHeaderAbsent(t, host.GetResponseHeaders(), "content-length")
+
+			body := `{"choices":[{"message":{"role":"assistant","content":"call me at 13800138000"}}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-response-mask-single", "call me at 138****8000")))
+
+			rewritten := host.GetResponseBody()
+			require.Equal(t, "call me at 138****8000", gjson.GetBytes(rewritten, "choices.0.message.content").String())
+			require.NotContains(t, string(rewritten), "13800138000")
+			require.Nil(t, host.GetLocalResponse())
+
+			snapshot, raw := readAILogSnapshot(t, host)
+			requireAILogArraySchema(t, raw)
+			require.Len(t, snapshot.SafecheckRequests, 1)
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[0], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultMask, "req-response-mask-single")
+			require.Equal(t, "response mask", snapshot.SafecheckStatus)
+			counter, err := host.GetCounterMetric("ai_sec_response_mask")
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), counter)
+		})
+
+		t.Run("multi slice response mask remains sticky when later slice passes", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			firstPart := strings.Repeat("a", cfg.LengthLimit)
+			secondPart := strings.Repeat("z", 16)
+			body := `{"choices":[{"message":{"role":"assistant","content":"` + firstPart + secondPart + `"}}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+
+			maskedFirstPart := strings.Repeat("b", cfg.LengthLimit)
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-response-mask-first", maskedFirstPart)))
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responsePassSecurityResponse("req-response-mask-second")))
+
+			rewritten := host.GetResponseBody()
+			require.Equal(t, maskedFirstPart+secondPart, gjson.GetBytes(rewritten, "choices.0.message.content").String())
+
+			snapshot, raw := readAILogSnapshot(t, host)
+			requireAILogArraySchema(t, raw)
+			require.Len(t, snapshot.SafecheckRequests, 2)
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[0], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultMask, "req-response-mask-first")
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[1], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultPass, "req-response-mask-second")
+			require.Equal(t, "response mask", snapshot.SafecheckStatus)
+			counter, err := host.GetCounterMetric("ai_sec_response_mask")
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), counter)
+		})
+
+		t.Run("multi slice response mask is applied when later guardrail call errors", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			firstPart := strings.Repeat("a", cfg.LengthLimit)
+			secondPart := strings.Repeat("z", 16)
+			body := `{"choices":[{"message":{"role":"assistant","content":"` + firstPart + secondPart + `"}}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+
+			maskedFirstPart := "masked-prefix"
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-response-mask-before-error", maskedFirstPart)))
+			host.CallOnHttpCall([][2]string{
+				{":status", "500"},
+				{"content-type", "application/json"},
+			}, []byte(`{"Code":500}`))
+
+			rewritten := host.GetResponseBody()
+			require.Equal(t, maskedFirstPart+secondPart, gjson.GetBytes(rewritten, "choices.0.message.content").String())
+			require.NotContains(t, string(rewritten), firstPart)
+			require.Nil(t, host.GetLocalResponse())
+
+			snapshot, raw := readAILogSnapshot(t, host)
+			requireAILogArraySchema(t, raw)
+			require.Len(t, snapshot.SafecheckRequests, 2)
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[0], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultMask, "req-response-mask-before-error")
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[1], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultError, "")
+			require.Equal(t, "response mask", snapshot.SafecheckStatus)
+			counter, err := host.GetCounterMetric("ai_sec_response_mask")
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), counter)
+		})
+	})
+}
+
+func TestOpenAIResponseMaskingStreaming(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("streaming response mask rewrites terminal buffer", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			chunk := []byte("event: message\ndata: {\"delta\":{\"text\":\"secretdata\"}}\n\ndata: [DONE]\n\n")
+			host.CallOnHttpStreamingResponseBody(chunk, true)
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-stream-mask", "MASKEDDATA")))
+
+			injected := string(host.GetResponseBody())
+			require.Contains(t, injected, "event: message")
+			require.Contains(t, injected, "MASKEDDATA")
+			require.Contains(t, injected, "data: [DONE]")
+			require.NotContains(t, injected, "secretdata")
+			require.Nil(t, host.GetLocalResponse())
+
+			snapshot, raw := readAILogSnapshot(t, host)
+			requireAILogArraySchema(t, raw)
+			require.Len(t, snapshot.SafecheckRequests, 1)
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[0], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultMask, "req-stream-mask")
+			require.Equal(t, "response mask", snapshot.SafecheckStatus)
+		})
+
+		t.Run("streaming response mask continues later chunks after nonterminal buffer", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(map[string]interface{}{
+				"bufferLimit": 10,
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			firstChunk := []byte("event: message\ndata: {\"delta\":{\"text\":\"secretdata\"}}\n\n")
+			secondChunk := []byte("event: message\ndata: {\"choices\":[{\"delta\":{\"content\":\" after\"}}]}\n\ndata: [DONE]\n\n")
+			host.CallOnHttpStreamingResponseBody(firstChunk, false)
+			host.CallOnHttpStreamingResponseBody(secondChunk, true)
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-stream-mask", "MASKEDDATA")))
+			callouts := host.GetHttpCalloutAttributes()
+			require.Len(t, callouts, 1)
+			require.Contains(t, string(callouts[0].Body), "after")
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responsePassSecurityResponse("req-stream-pass")))
+
+			secondInjected := string(host.GetResponseBody())
+			require.Contains(t, secondInjected, "event: message")
+			require.Contains(t, secondInjected, " after")
+			require.Contains(t, secondInjected, "data: [DONE]")
+			require.Nil(t, host.GetLocalResponse())
+
+			snapshot, raw := readAILogSnapshot(t, host)
+			requireAILogArraySchema(t, raw)
+			require.Len(t, snapshot.SafecheckRequests, 2)
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[0], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultMask, "req-stream-mask")
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[1], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultPass, "req-stream-pass")
+			require.Equal(t, "response mask", snapshot.SafecheckStatus)
+		})
+	})
+}
+
+func TestOpenAIResponseMaskingFallbacks(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("empty desensitization falls back to deny", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			body := `{"choices":[{"message":{"role":"assistant","content":"leak 13800138000"}}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-response-mask-empty", "")))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Contains(t, string(local.Data), cfg.DefaultDenyMessage)
+			require.NotContains(t, string(local.Data), "13800138000")
+		})
+
+		t.Run("unsupported response path rewrite failure falls back to deny", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(map[string]interface{}{
+				"responseContentJsonPath":          "content.#.text",
+				"responseContentFallbackJsonPaths": []string{},
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			body := `{"content":[{"text":"leak 13800138000"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-response-mask-rewrite-fail", "masked")))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Contains(t, string(local.Data), cfg.DefaultDenyMessage)
+			require.NotContains(t, string(local.Data), "13800138000")
+		})
+
+		t.Run("mask then final pass rewrite failure records deny for final submission", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(map[string]interface{}{
+				"responseContentJsonPath":          "content.#.text",
+				"responseContentFallbackJsonPaths": []string{},
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			firstPart := strings.Repeat("a", cfg.LengthLimit)
+			secondPart := strings.Repeat("z", 16)
+			body := `{"content":[{"text":"` + firstPart + secondPart + `"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-response-mask-before-rewrite-fail", "masked-prefix")))
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responsePassSecurityResponse("req-response-pass-before-rewrite-fail")))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Contains(t, string(local.Data), cfg.DefaultDenyMessage)
+			require.NotContains(t, string(local.Data), firstPart)
+
+			snapshot, raw := readAILogSnapshot(t, host)
+			requireAILogArraySchema(t, raw)
+			require.Len(t, snapshot.SafecheckRequests, 2)
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[0], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultMask, "req-response-mask-before-rewrite-fail")
+			requireSafecheckEvent(t, snapshot.SafecheckRequests[1], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultDeny, "req-response-pass-before-rewrite-fail")
+			require.Equal(t, "response deny", snapshot.SafecheckStatus)
+		})
+	})
+}
+
+func TestProtocolOriginalResponseMaskFailsClosed(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("non streaming RiskMask uses original protocol deny body", func(t *testing.T) {
+			host, status := test.NewTestHost(protocolOriginalResponseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			body := `{"choices":[{"message":{"role":"assistant","content":"leak 13800138000"}}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-original-response-mask", "masked")))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.True(t, gjson.GetBytes(local.Data, "code").Exists())
+			require.False(t, gjson.GetBytes(local.Data, "choices").Exists())
+			require.NotContains(t, string(local.Data), "13800138000")
+		})
+
+		t.Run("streaming RiskMask emits terminal original protocol SSE deny", func(t *testing.T) {
+			host, status := test.NewTestHost(protocolOriginalResponseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			require.Equal(t, types.ActionContinue, host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			}))
+
+			chunk := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"leak 13800138000\"}}]}\n\n")
+			host.CallOnHttpStreamingResponseBody(chunk, true)
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseMaskSecurityResponse("req-original-stream-mask", "masked")))
+
+			injected := string(host.GetResponseBody())
+			require.True(t, strings.HasPrefix(injected, "data: "))
+			payload := strings.TrimSpace(strings.TrimPrefix(injected, "data:"))
+			require.True(t, gjson.Get(payload, "code").Exists())
+			require.False(t, gjson.Get(payload, "choices").Exists())
+			require.NotContains(t, injected, "13800138000")
+		})
+
+		t.Run("streaming RiskBlock emits terminal original protocol SSE deny", func(t *testing.T) {
+			host, status := test.NewTestHost(protocolOriginalResponseMaskTestConfig(map[string]interface{}{
+				"riskAction": "block",
+			}))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			require.Equal(t, types.ActionContinue, host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			}))
+
+			chunk := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"blocked content\"}}]}\n\n")
+			host.CallOnHttpStreamingResponseBody(chunk, true)
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(responseBlockSecurityResponse("req-original-stream-block")))
+
+			injected := string(host.GetResponseBody())
+			require.True(t, strings.HasPrefix(injected, "data: "))
+			payload := strings.TrimSpace(strings.TrimPrefix(injected, "data:"))
+			require.True(t, gjson.Get(payload, "code").Exists())
+			require.False(t, gjson.Get(payload, "choices").Exists())
+			require.NotContains(t, injected, "chat.completion.chunk")
+			require.NotContains(t, injected, "blocked content")
+		})
+	})
+}
+
+func TestTextModerationPlusResponseMaskCompatibility(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(withConfigOverrides(basicConfig, map[string]interface{}{
+			"checkRequest": false,
+			"riskAction":   "mask",
+		}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+		})
+		host.CallOnHttpResponseHeaders([][2]string{
+			{":status", "200"},
+			{"content-type", "application/json"},
+		})
+		body := `{"choices":[{"message":{"role":"assistant","content":"leak 13800138000"}}]}`
+		require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+
+		host.CallOnHttpCall([][2]string{
+			{":status", "200"},
+			{"content-type", "application/json"},
+		}, []byte(responseMaskSecurityResponse("req-tmp-mask-detail-pass", "masked")))
+
+		require.Nil(t, host.GetLocalResponse())
+		rewritten := host.GetResponseBody()
+		require.Equal(t, "leak 13800138000", gjson.GetBytes(rewritten, "choices.0.message.content").String())
+		snapshot, raw := readAILogSnapshot(t, host)
+		requireAILogArraySchema(t, raw)
+		require.Len(t, snapshot.SafecheckRequests, 1)
+		requireSafecheckEvent(t, snapshot.SafecheckRequests[0], cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText, cfg.GuardrailResultPass, "req-tmp-mask-detail-pass")
+		require.Equal(t, "response pass", snapshot.SafecheckStatus)
+	})
+}
+
+func TestOpenAIResponseMaskingCompatibilityOutcomes(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("RiskPass preserves original response", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			body := `{"choices":[{"message":{"role":"assistant","content":"safe response"}}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+			host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(responsePassSecurityResponse("req-response-pass")))
+
+			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+			require.Equal(t, "safe response", gjson.GetBytes(host.GetResponseBody(), "choices.0.message.content").String())
+			require.Nil(t, host.GetLocalResponse())
+		})
+
+		t.Run("RiskBlock still denies", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "example.com"}, {":path", "/v1/chat/completions"}, {":method", "POST"}})
+			host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}, {"content-type", "application/json"}})
+			body := `{"choices":[{"message":{"role":"assistant","content":"bad response"}}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+			host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(responseBlockSecurityResponse("req-response-block")))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Contains(t, string(local.Data), "blockedDetails")
+		})
+
+		t.Run("guardrail error remains fail open", func(t *testing.T) {
+			host, status := test.NewTestHost(responseMaskTestConfig(nil))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "example.com"}, {":path", "/v1/chat/completions"}, {":method", "POST"}})
+			host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}, {"content-type", "application/json"}})
+			body := `{"choices":[{"message":{"role":"assistant","content":"safe response"}}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+			host.CallOnHttpCall([][2]string{{":status", "500"}, {"content-type", "application/json"}}, []byte(`{"Code":500}`))
+
+			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+			require.Nil(t, host.GetLocalResponse())
+		})
+	})
+}
+
+func TestOpenAIResponseMaskingUTF8BoundaryLimitation(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(responseMaskTestConfig(nil))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+		})
+		host.CallOnHttpResponseHeaders([][2]string{
+			{":status", "200"},
+			{"content-type", "application/json"},
+		})
+
+		content := strings.Repeat("a", cfg.LengthLimit-1) + "你" + "b"
+		body := `{"choices":[{"message":{"role":"assistant","content":"` + content + `"}}]}`
+		require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody([]byte(body)))
+		host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(responseMaskSecurityResponse("req-utf8-boundary-mask", "masked-prefix")))
+		host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(responsePassSecurityResponse("req-utf8-boundary-pass")))
+
+		local := host.GetLocalResponse()
+		require.Nil(t, local)
+		rewritten := host.GetResponseBody()
+		require.Equal(t, "masked-prefix你b", gjson.GetBytes(rewritten, "choices.0.message.content").String())
+		require.NotContains(t, string(rewritten), strings.Repeat("a", cfg.LengthLimit-1))
 	})
 }
 
