@@ -27,7 +27,7 @@ description: 针对LLM服务的负载均衡策略
 
 `lb_type` 为 `cluster` 时支持的负载均衡策略包括：
 - `cluster_metrics`: 基于网关统计的不同service的指标进行服务之间的负载均衡
-
+- `cluster_hash`: 读取指定请求头做 FNV-1a 一致性 hash，将相同 key 的请求始终路由到同一 cluster，支持按权重分配流量
 # 全局最小请求数
 ## 功能说明
 
@@ -217,7 +217,7 @@ lb_config:
 | `mode`      | string | 必填 | | 如何使用服务级指标做负载均衡，当前支持`[LeastBusy, LeastTotalLatency, LeastFirstTokenLatency ]` |
 | `service_list`      | []string | 必填 | | 路由后端服务列表 |
 | `rate_limit`      | string | 选填 | 1 | 单个服务处理请求比例上限，取值范围0~1 |
-| `cluster_header` | string | 选填 | `x-envoy-target-cluster` | 通过取该header的值得知需要路由到哪个后端服务 |
+| `cluster_header` | string | 选填 | `x-higress-target-cluster` | 通过取该header的值得知需要路由到哪个后端服务 |
 | `queue_size`      | int | 选填 | 100 | 根据最近的多少个请求进行观测指标的计算 |
 
 `mode` 各取值含义如下：
@@ -238,3 +238,45 @@ lb_config:
   - outbound|80||test-1.dns
   - outbound|80||test-2.static
 ```
+
+# Cluster Hash（一致性 Hash 路由）
+
+## 功能说明
+
+读取指定请求头的值，使用 FNV-1a 一致性 hash 算法将请求路由到固定的上游集群，确保相同 hash key 的请求始终落到同一个 cluster，同时支持按百分比权重控制各 cluster 的流量分配。
+
+需要配合 EnvoyFilter 的 `cluster_header` 机制一起使用。
+
+## 配置说明
+
+| 名称 | 数据类型 | 填写要求 | 默认值 | 描述 |
+|------|----------|----------|--------|------|
+| `clusters` | []ClusterEntry | 必填 | - | cluster 列表，所有 `weight` 之和必须为 100 |
+| `hash_header` | string | 选填 | `x-mse-consumer` | 读取 hash key 的请求头名称 |
+| `cluster_header` | string | 选填 | `x-higress-target-cluster` | 写入目标 cluster 的请求头名称 |
+
+### ClusterEntry 字段
+
+| 名称 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `cluster` | string | 是 | 上游集群名称，如 `outbound|443||llm-xxx.internal.static` |
+| `weight` | int | 是 | 百分比权重，所有 cluster 的 weight 之和必须为 100 |
+
+## 配置示例
+
+```yaml
+lb_type: cluster
+lb_policy: cluster_hash
+lb_config:
+  clusters:
+    - cluster: "outbound|80||llm-test1.internal.static"
+      weight: 69
+    - cluster: "outbound|443||llm-test2.internal.dns"
+      weight: 30
+    - cluster: "outbound|443||llm-test3.internal.dns"
+      weight: 1
+  hash_header: x-mse-consumer
+  cluster_header: x-higress-target-cluster
+```
+
+若请求缺少 hash header，插件直接返回 **403**。
