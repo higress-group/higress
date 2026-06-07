@@ -39,7 +39,6 @@ func init() {
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingBody),
 		wrapper.ProcessResponseBody(onHttpResponseBody),
-		wrapper.WithRebuildAfterRequests[AIStatisticsConfig](1000),
 		wrapper.WithRebuildMaxMemBytes[AIStatisticsConfig](200*1024*1024),
 	)
 }

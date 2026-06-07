@@ -32,7 +32,6 @@ func init() {
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
-		wrapper.WithRebuildAfterRequests[ModelRouterConfig](1000),
 		wrapper.WithRebuildMaxMemBytes[ModelRouterConfig](200*1024*1024),
 	)
 }
