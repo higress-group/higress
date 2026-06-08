@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -314,15 +315,53 @@ func (c *claudeProviderInitializer) DefaultCapabilities() map[string]string {
 }
 
 func (c *claudeProviderInitializer) CreateProvider(config ProviderConfig) (Provider, error) {
-	config.setDefaultCapabilities(c.DefaultCapabilities())
+	if config.claudeCustomUrl == "" {
+		config.setDefaultCapabilities(c.DefaultCapabilities())
+		return &claudeProvider{
+			config:       config,
+			contextCache: createContextCache(&config),
+		}, nil
+	}
+
+	// claudeCustomUrl supports:
+	// - https://api.anthropic.com
+	// - https://example.com/anthropic (path prefix)
+	// - https://example.com/anthropic/v1/messages (direct messages endpoint)
+	customUrl := strings.TrimPrefix(strings.TrimPrefix(config.claudeCustomUrl, "http://"), "https://")
+	pairs := strings.SplitN(customUrl, "/", 2)
+	customDomain := pairs[0]
+	customPath := "/"
+	if len(pairs) == 2 {
+		customPath += pairs[1]
+	}
+
+	capabilities := c.DefaultCapabilities()
+	isDirectMessagesEndpoint := strings.HasSuffix(customPath, PathAnthropicMessages) || strings.HasSuffix(customPath, "/messages")
+	if isDirectMessagesEndpoint {
+		// Only override messages capabilities with the direct endpoint path, leave other capabilities unchanged.
+		capabilities[string(ApiNameChatCompletion)] = customPath
+		capabilities[string(ApiNameAnthropicMessages)] = customPath
+	} else if customPath != "/" {
+		// Treat customPath as a prefix and prepend it to all default capability paths.
+		for key, p := range capabilities {
+			capabilities[key] = path.Join(customPath, strings.TrimPrefix(p, "/"))
+		}
+	}
+
+	config.setDefaultCapabilities(capabilities)
+	log.Debugf("ai-proxy: claude provider customDomain:%s, customPath:%s, isDirectMessagesEndpoint:%v, capabilities:%v",
+		customDomain, customPath, isDirectMessagesEndpoint, capabilities)
+
 	return &claudeProvider{
-		config:       config,
-		contextCache: createContextCache(&config),
+		config:             config,
+		customDomain:       customDomain,
+		contextCache:       createContextCache(&config),
 	}, nil
 }
 
 type claudeProvider struct {
 	config       ProviderConfig
+	customDomain string
 	contextCache *contextCache
 
 	messageId   string
@@ -341,7 +380,12 @@ func (c *claudeProvider) OnRequestHeaders(ctx wrapper.HttpContext, apiName ApiNa
 
 func (c *claudeProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiName ApiName, headers http.Header) {
 	util.OverwriteRequestPathHeaderByCapability(headers, string(apiName), c.config.capabilities)
-	util.OverwriteRequestHostHeader(headers, claudeDomain)
+	if c.customDomain != "" {
+		util.OverwriteRequestHostHeader(headers, c.customDomain)
+	} else {
+		domain := c.config.resolveDomain("", claudeDomain)
+		util.OverwriteRequestHostHeader(headers, domain)
+	}
 
 	if c.config.apiVersion == "" {
 		c.config.apiVersion = claudeDefaultVersion

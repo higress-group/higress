@@ -331,6 +331,9 @@ type ProviderConfig struct {
 	// @Title zh-CN 基于OpenAI协议的自定义后端URL
 	// @Description zh-CN 仅适用于支持 openai 协议的服务。
 	openaiCustomUrl string `required:"false" yaml:"openaiCustomUrl" json:"openaiCustomUrl"`
+	// @Title zh-CN 基于Claude(Anthropic)协议的自定义后端URL
+	// @Description zh-CN 仅适用于 Claude(Anthropic) 协议的服务，可用于配置自定义域名/路径前缀，例如: <https://api.anthropic.com> 或 <https://example.com/anthropic>
+	claudeCustomUrl string `required:"false" yaml:"claudeCustomUrl" json:"claudeCustomUrl"`
 	// @Title zh-CN Moonshot File ID
 	// @Description zh-CN 仅适用于Moonshot AI服务。Moonshot AI服务的文件ID，其内容用于补充AI请求上下文
 	moonshotFileId string `required:"false" yaml:"moonshotFileId" json:"moonshotFileId"`
@@ -567,6 +570,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	// first byte timeout
 	c.firstByteTimeout = uint32(json.Get("firstByteTimeout").Uint())
 	c.openaiCustomUrl = json.Get("openaiCustomUrl").String()
+	c.claudeCustomUrl = json.Get("claudeCustomUrl").String()
 	c.moonshotFileId = json.Get("moonshotFileId").String()
 	c.azureServiceUrl = json.Get("azureServiceUrl").String()
 	c.qwenFileIds = make([]string, 0)
