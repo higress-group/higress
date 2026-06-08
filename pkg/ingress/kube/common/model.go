@@ -145,6 +145,47 @@ func (i *IngressDomainCache) Extract() model.IngressDomainCollection {
 	}
 }
 
+func AddDuplicateTLSHost(convertOptions *ConvertOptions, cfg *config.Config, host string) {
+	if convertOptions.DuplicateTLSHosts == nil {
+		convertOptions.DuplicateTLSHosts = map[TLSHostKey]struct{}{}
+	}
+	convertOptions.DuplicateTLSHosts[NewTLSHostKey(cfg, host)] = struct{}{}
+}
+
+func SameConfig(left *config.Config, right *config.Config) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return GetClusterId(left.Annotations) == GetClusterId(right.Annotations) &&
+		left.Namespace == right.Namespace &&
+		left.Name == right.Name
+}
+
+func IsDuplicateTLSHost(convertOptions *ConvertOptions, cfg *config.Config, host string) bool {
+	if convertOptions == nil || len(convertOptions.DuplicateTLSHosts) == 0 {
+		return false
+	}
+	_, exist := convertOptions.DuplicateTLSHosts[NewTLSHostKey(cfg, host)]
+	return exist
+}
+
+type TLSHostKey struct {
+	ClusterId cluster.ID
+	Namespace string
+	Name      string
+	Host      string
+}
+
+func NewTLSHostKey(cfg *config.Config, host string) TLSHostKey {
+	key := TLSHostKey{Host: host}
+	if cfg != nil {
+		key.ClusterId = GetClusterId(cfg.Annotations)
+		key.Namespace = cfg.Namespace
+		key.Name = cfg.Name
+	}
+	return key
+}
+
 type ConvertOptions struct {
 	HostWithRule2Ingress map[string]*config.Config
 
@@ -166,6 +207,8 @@ type ConvertOptions struct {
 	HTTPRoutes map[string][]*WrapperHTTPRoute
 
 	CanaryIngresses []*WrapperConfig
+
+	DuplicateTLSHosts map[TLSHostKey]struct{}
 
 	Service2TrafficPolicy map[ServiceKey]*WrapperTrafficPolicy
 

@@ -23,6 +23,7 @@ import (
 	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pkg/cluster"
 	"istio.io/istio/pkg/config"
+	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/schema/gvk"
 	"istio.io/istio/pkg/config/xds"
 	ingress "k8s.io/api/networking/v1"
@@ -106,6 +107,94 @@ func TestNormalizeWeightedCluster(t *testing.T) {
 				t.Fatalf("Weight sum should be 100, but actual is %d", validate(route))
 			}
 		})
+	}
+}
+
+func TestVirtualServiceNameAndClusterID(t *testing.T) {
+	cleanHost := common.CleanHost("example.com")
+	wrapperVS := &common.WrapperVirtualService{
+		WrapperConfig: &common.WrapperConfig{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "tls-ns",
+					Name:      "tls-ingress",
+					Annotations: map[string]string{
+						common.ClusterIdAnnotation: "tls-cluster",
+					},
+				},
+			},
+		},
+	}
+	routes := []*common.WrapperHTTPRoute{
+		{
+			WrapperConfig: &common.WrapperConfig{
+				Config: &config.Config{
+					Meta: config.Meta{
+						Namespace: "http-ns",
+						Name:      "http-ingress",
+					},
+				},
+			},
+			ClusterId: "http-cluster",
+		},
+	}
+
+	name, clusterID := virtualServiceNameAndClusterID(cleanHost, wrapperVS, routes)
+	if name != common.CreateConvertedName(constants.IstioIngressGatewayName, "http-ns", "http-ingress", cleanHost) {
+		t.Fatalf("http-backed virtual service name mismatch: %s", name)
+	}
+	if clusterID != "http-cluster" {
+		t.Fatalf("http-backed cluster id mismatch: %s", clusterID)
+	}
+
+	name, clusterID = virtualServiceNameAndClusterID(cleanHost, wrapperVS, nil)
+	if name != common.CreateConvertedName(constants.IstioIngressGatewayName, "tls-ns", "tls-ingress", cleanHost) {
+		t.Fatalf("tls-only virtual service name mismatch: %s", name)
+	}
+	if clusterID != "tls-cluster" {
+		t.Fatalf("tls-only cluster id mismatch: %s", clusterID)
+	}
+}
+
+func TestIngressTLSHostsForSSLPassthroughRequiresRootBackend(t *testing.T) {
+	wrapper := common.WrapperConfig{
+		Config: &config.Config{
+			Spec: ingress.IngressSpec{
+				Rules: []ingress.IngressRule{
+					{
+						Host: "non-root.example.com",
+						IngressRuleValue: ingress.IngressRuleValue{
+							HTTP: &ingress.HTTPIngressRuleValue{
+								Paths: []ingress.HTTPIngressPath{
+									{Path: "/api"},
+								},
+							},
+						},
+					},
+					{
+						Host: "root.example.com",
+						IngressRuleValue: ingress.IngressRuleValue{
+							HTTP: &ingress.HTTPIngressRuleValue{
+								Paths: []ingress.HTTPIngressPath{
+									{Path: "/"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+		},
+	}
+
+	hosts := ingressTLSHosts(wrapper, nil)
+	if len(hosts) != 1 {
+		t.Fatalf("ssl passthrough host count mismatch, want 1, got %d", len(hosts))
+	}
+	if hosts[0] != "root.example.com" {
+		t.Fatalf("ssl passthrough host mismatch, got %s", hosts[0])
 	}
 }
 

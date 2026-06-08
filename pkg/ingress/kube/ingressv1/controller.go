@@ -395,6 +395,32 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 			}
 		}
 
+		if wrapper.AnnotationsConfig.IsSSLPassthrough() {
+			if rule.HTTP == nil || len(rule.HTTP.Paths) == 0 {
+				continue
+			}
+			if _, ok := rootHTTPIngressPath(rule.HTTP.Paths); !ok {
+				continue
+			}
+
+			domainBuilder.Protocol = common.HTTPS
+			if wrapperGateway.IsHTTPS() {
+				if common.SameConfig(preDomainBuilder.Ingress, cfg) {
+					continue
+				}
+				domainBuilder.Event = common.DuplicatedTls
+				domainBuilder.PreIngress = preDomainBuilder.Ingress
+				common.AddDuplicateTLSHost(convertOptions, cfg, rule.Host)
+				convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
+					domainBuilder.Build())
+				continue
+			}
+			wrapperGateway.Gateway.Servers = append(wrapperGateway.Gateway.Servers,
+				common.CreateSSLPassthroughServer(rule.Host, c.options.GatewayHttpsPort, c.options.ClusterId))
+			convertOptions.IngressDomainCache.Valid[rule.Host] = domainBuilder
+			continue
+		}
+
 		// There are no tls settings, so just skip.
 		if len(ingressV1.TLS) == 0 {
 			continue
@@ -448,6 +474,7 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 		if wrapperGateway.IsHTTPS() {
 			domainBuilder.Event = common.DuplicatedTls
 			domainBuilder.PreIngress = preDomainBuilder.Ingress
+			common.AddDuplicateTLSHost(convertOptions, cfg, rule.Host)
 			convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
 				domainBuilder.Build())
 			continue
@@ -475,11 +502,33 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 }
 
 func (c *controller) ConvertHTTPRoute(convertOptions *common.ConvertOptions, wrapper *common.WrapperConfig) error {
+	if convertOptions == nil {
+		return fmt.Errorf("convertOptions is nil")
+	}
+	if wrapper == nil {
+		return fmt.Errorf("wrapperConfig is nil")
+	}
+
 	// Canary ingress will be processed in the end.
 	if wrapper.AnnotationsConfig.IsCanary() {
 		convertOptions.CanaryIngresses = append(convertOptions.CanaryIngresses, wrapper)
 		return nil
 	}
+
+	if convertOptions.Route2Ingress == nil {
+		convertOptions.Route2Ingress = map[string]*common.WrapperConfigWithRuleKey{}
+	}
+	if convertOptions.IngressRouteCache == nil {
+		convertOptions.IngressRouteCache = common.NewIngressRouteCache()
+	}
+	if convertOptions.VirtualServices == nil {
+		convertOptions.VirtualServices = map[string]*common.WrapperVirtualService{}
+	}
+	if convertOptions.HTTPRoutes == nil {
+		convertOptions.HTTPRoutes = map[string][]*common.WrapperHTTPRoute{}
+	}
+
+	sslPassthrough := wrapper.AnnotationsConfig.IsSSLPassthrough()
 
 	cfg := wrapper.Config
 	ingressV1, ok := cfg.Spec.(ingress.IngressSpec)
@@ -549,7 +598,11 @@ func (c *controller) ConvertHTTPRoute(convertOptions *common.ConvertOptions, wra
 					pathType = common.PrefixRegex
 				}
 			} else {
-				switch *httpPath.PathType {
+				ingressPathType := defaultPathType
+				if httpPath.PathType != nil {
+					ingressPathType = *httpPath.PathType
+				}
+				switch ingressPathType {
 				case ingress.PathTypeExact:
 					pathType = common.Exact
 				case ingress.PathTypePrefix:
@@ -626,7 +679,74 @@ func (c *controller) ConvertHTTPRoute(convertOptions *common.ConvertOptions, wra
 		}
 	}
 
+	if sslPassthrough {
+		return c.ConvertTLSRoute(convertOptions, wrapper)
+	}
+
 	return nil
+}
+
+func (c *controller) ConvertTLSRoute(convertOptions *common.ConvertOptions, wrapper *common.WrapperConfig) error {
+	if convertOptions.VirtualServices == nil {
+		convertOptions.VirtualServices = map[string]*common.WrapperVirtualService{}
+	}
+
+	cfg := wrapper.Config
+	ingressV1, ok := cfg.Spec.(ingress.IngressSpec)
+	if !ok {
+		common.IncrementInvalidIngress(c.options.ClusterId, common.Unknown)
+		return fmt.Errorf("convert type is invalid in cluster %s", c.options.ClusterId)
+	}
+	if len(ingressV1.Rules) == 0 {
+		common.IncrementInvalidIngress(c.options.ClusterId, common.EmptyRule)
+		return fmt.Errorf("invalid ingress rule %s:%s in cluster %s, `rules` must be specified", cfg.Namespace, cfg.Name, c.options.ClusterId)
+	}
+
+	for _, rule := range ingressV1.Rules {
+		if common.IsDuplicateTLSHost(convertOptions, cfg, rule.Host) {
+			IngressLog.Warnf("ignore duplicated ssl passthrough ingress rule %s:%s for host %q in cluster %s", cfg.Namespace, cfg.Name, rule.Host, c.options.ClusterId)
+			continue
+		}
+
+		if rule.HTTP == nil || len(rule.HTTP.Paths) == 0 {
+			IngressLog.Warnf("invalid ssl passthrough ingress rule %s:%s for host %q in cluster %s, no paths defined", cfg.Namespace, cfg.Name, rule.Host, c.options.ClusterId)
+			continue
+		}
+
+		httpPath, ok := rootHTTPIngressPath(rule.HTTP.Paths)
+		if !ok {
+			IngressLog.Warnf("ignore ssl passthrough ingress rule %s:%s for host %q in cluster %s, root path is not defined", cfg.Namespace, cfg.Name, rule.Host, c.options.ClusterId)
+			continue
+		}
+
+		wrapperVS, exist := convertOptions.VirtualServices[rule.Host]
+		if !exist {
+			wrapperVS = common.NewWrapperVirtualService(rule.Host, wrapper)
+			convertOptions.VirtualServices[rule.Host] = wrapperVS
+		} else if wrapperVS.HasTLSRouteForHost(rule.Host) {
+			continue
+		}
+
+		routeDestination, event := c.backendToTLSRouteDestination(&httpPath.Backend, cfg.Namespace, wrapper.AnnotationsConfig.Destination)
+		if event != common.Normal {
+			common.IncrementInvalidIngress(c.options.ClusterId, event)
+			continue
+		}
+
+		wrapperVS.VirtualService.Tls = append(wrapperVS.VirtualService.Tls,
+			common.CreateTLSRoute(rule.Host, routeDestination))
+	}
+
+	return nil
+}
+
+func rootHTTPIngressPath(paths []ingress.HTTPIngressPath) (*ingress.HTTPIngressPath, bool) {
+	for idx := range paths {
+		if paths[idx].Path == "" || paths[idx].Path == "/" {
+			return &paths[idx], true
+		}
+	}
+	return nil, false
 }
 
 func (c *controller) generateHttpMatches(pathType common.PathType, path string, wrapperVS *common.WrapperVirtualService) []*networking.HTTPMatchRequest {
@@ -782,7 +902,11 @@ func (c *controller) ApplyCanaryIngress(convertOptions *common.ConvertOptions, w
 					pathType = common.PrefixRegex
 				}
 			} else {
-				switch *httpPath.PathType {
+				ingressPathType := defaultPathType
+				if httpPath.PathType != nil {
+					ingressPathType = *httpPath.PathType
+				}
+				switch ingressPathType {
 				case ingress.PathTypeExact:
 					pathType = common.Exact
 				case ingress.PathTypePrefix:
@@ -1072,6 +1196,54 @@ func (c *controller) backendToRouteDestination(backend *ingress.IngressBackend, 
 			Weight: 100,
 		},
 	}, common.Normal
+}
+
+func (c *controller) backendToTLSRouteDestination(backend *ingress.IngressBackend, namespace string,
+	config *annotations.DestinationConfig,
+) ([]*networking.RouteDestination, common.Event) {
+	if backend == nil {
+		return nil, common.InvalidBackendService
+	}
+
+	if backend.Service == nil {
+		if config != nil {
+			return httpRouteDestinationToRouteDestination(config.McpDestination), common.Normal
+		}
+		return nil, common.InvalidBackendService
+	}
+
+	service := backend.Service
+	port := &networking.PortSelector{}
+	if service.Port.Number > 0 {
+		port.Number = uint32(service.Port.Number)
+	} else {
+		resolvedPort, err := resolveNamedPort(service, namespace, c.serviceLister)
+		if err != nil {
+			return nil, common.PortNameResolveError
+		}
+		port.Number = uint32(resolvedPort)
+	}
+
+	return []*networking.RouteDestination{
+		{
+			Destination: &networking.Destination{
+				Host: util.CreateServiceFQDN(namespace, service.Name),
+				Port: port,
+			},
+			Weight: 100,
+		},
+	}, common.Normal
+}
+
+func httpRouteDestinationToRouteDestination(destinations []*networking.HTTPRouteDestination) []*networking.RouteDestination {
+	out := make([]*networking.RouteDestination, 0, len(destinations))
+	for _, destination := range destinations {
+		out = append(out, &networking.RouteDestination{
+			Destination: destination.Destination,
+			Weight:      destination.Weight,
+		})
+	}
+	return out
 }
 
 func resolveNamedPort(service *ingress.IngressServiceBackend, namespace string, serviceLister listerv1.ServiceLister) (int32, error) {

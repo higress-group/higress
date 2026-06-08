@@ -46,6 +46,8 @@ import (
 	"istio.io/istio/pkg/log"
 	"istio.io/istio/pkg/util/sets"
 	v1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	networkingv1beta1 "k8s.io/api/networking/v1beta1"
 	listersv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 
@@ -504,6 +506,8 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 		}
 	}
 
+	m.prepareDuplicateTLSHosts(&convertOptions, configs)
+
 	// convert http route
 	for idx := range configs {
 		cfg := configs[idx]
@@ -570,13 +574,8 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 	m.ingressRouteCache = convertOptions.IngressRouteCache.Extract()
 	m.mutex.Unlock()
 
-	// Convert http route to virtual service
-	out := make([]config.Config, 0, len(convertOptions.HTTPRoutes))
-	for host, routes := range convertOptions.HTTPRoutes {
-		if len(routes) == 0 {
-			continue
-		}
-
+	out := make([]config.Config, 0, len(convertOptions.VirtualServices))
+	for host, wrapperVS := range convertOptions.VirtualServices {
 		cleanHost := common.CleanHost(host)
 		// namespace/name, name format: (istio cluster id)-host
 		gateways := []string{
@@ -585,13 +584,10 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 			common.CreateConvertedName(constants.IstioIngressGatewayName, cleanHost),
 		}
 
-		wrapperVS, exist := convertOptions.VirtualServices[host]
-		if !exist {
-			IngressLog.Warnf("virtual service for host %s does not exist.", host)
-		}
 		vs := wrapperVS.VirtualService
 		vs.Gateways = gateways
 
+		routes := convertOptions.HTTPRoutes[host]
 		// Sort, exact -> prefix -> regex
 		common.SortHTTPRoutes(routes)
 
@@ -599,14 +595,18 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 			vs.Http = append(vs.Http, route.HTTPRoute)
 		}
 
-		firstRoute := routes[0]
+		if len(vs.Http) == 0 && len(vs.Tls) == 0 {
+			continue
+		}
+
+		vsName, clusterId := virtualServiceNameAndClusterID(cleanHost, wrapperVS, routes)
 		out = append(out, config.Config{
 			Meta: config.Meta{
 				GroupVersionKind: gvk.VirtualService,
-				Name:             common.CreateConvertedName(constants.IstioIngressGatewayName, firstRoute.WrapperConfig.Config.Namespace, firstRoute.WrapperConfig.Config.Name, cleanHost),
+				Name:             vsName,
 				Namespace:        m.namespace,
 				Annotations: map[string]string{
-					common.ClusterIdAnnotation: firstRoute.ClusterId.String(),
+					common.ClusterIdAnnotation: clusterId.String(),
 				},
 			},
 			Spec: vs,
@@ -623,6 +623,153 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 	// We generate some specific envoy filter here to avoid duplicated computation.
 	m.convertEnvoyFilter(&convertOptions)
 	return out
+}
+
+func virtualServiceNameAndClusterID(cleanHost string, wrapperVS *common.WrapperVirtualService, routes []*common.WrapperHTTPRoute) (string, cluster.ID) {
+	if len(routes) > 0 {
+		firstRoute := routes[0]
+		return common.CreateConvertedName(constants.IstioIngressGatewayName, firstRoute.WrapperConfig.Config.Namespace, firstRoute.WrapperConfig.Config.Name, cleanHost), firstRoute.ClusterId
+	}
+
+	cfg := wrapperVS.WrapperConfig.Config
+	return common.CreateConvertedName(constants.IstioIngressGatewayName, cfg.Namespace, cfg.Name, cleanHost), common.GetClusterId(cfg.Annotations)
+}
+
+func (m *IngressConfig) prepareDuplicateTLSHosts(convertOptions *common.ConvertOptions, configs []common.WrapperConfig) {
+	httpsCredentialConfig, err := m.httpsConfigMgr.GetConfigFromConfigmap()
+	if err != nil {
+		IngressLog.Errorf("Get higress https configmap err %v", err)
+	}
+	tlsHostOwners := map[string]*config.Config{}
+	for idx := range configs {
+		cfg := configs[idx]
+		if cfg.AnnotationsConfig.IsCanary() {
+			continue
+		}
+		hosts := ingressTLSHosts(cfg, httpsCredentialConfig)
+		for _, host := range hosts {
+			owner, exist := tlsHostOwners[host]
+			if exist && !common.SameConfig(owner, cfg.Config) {
+				common.AddDuplicateTLSHost(convertOptions, cfg.Config, host)
+				continue
+			}
+			if !exist {
+				tlsHostOwners[host] = cfg.Config
+			}
+		}
+	}
+}
+
+func ingressTLSHosts(wrapper common.WrapperConfig, httpsCredentialConfig *cert.Config) []string {
+	if wrapper.AnnotationsConfig.IsSSLPassthrough() {
+		return ingressRuleHosts(wrapper.Config.Spec)
+	}
+
+	switch spec := wrapper.Config.Spec.(type) {
+	case networkingv1.IngressSpec:
+		return ingressV1HTTPSHosts(spec, httpsCredentialConfig)
+	case networkingv1beta1.IngressSpec:
+		return ingressV1Beta1HTTPSHosts(spec, httpsCredentialConfig)
+	default:
+		return nil
+	}
+}
+
+func ingressRuleHosts(spec config.Spec) []string {
+	switch ingressSpec := spec.(type) {
+	case networkingv1.IngressSpec:
+		return ingressV1SSLPassthroughHosts(ingressSpec.Rules)
+	case networkingv1beta1.IngressSpec:
+		return ingressV1Beta1SSLPassthroughHosts(ingressSpec.Rules)
+	default:
+		return nil
+	}
+}
+
+func ingressV1HTTPSHosts(spec networkingv1.IngressSpec, httpsCredentialConfig *cert.Config) []string {
+	var out []string
+	for _, rule := range spec.Rules {
+		if ingressV1TLSSecretName(rule.Host, spec.TLS) != "" || matchHTTPSConfigHost(rule.Host, httpsCredentialConfig) {
+			out = append(out, rule.Host)
+		}
+	}
+	return out
+}
+
+func ingressV1Beta1HTTPSHosts(spec networkingv1beta1.IngressSpec, httpsCredentialConfig *cert.Config) []string {
+	var out []string
+	for _, rule := range spec.Rules {
+		if ingressV1Beta1TLSSecretName(rule.Host, spec.TLS) != "" || matchHTTPSConfigHost(rule.Host, httpsCredentialConfig) {
+			out = append(out, rule.Host)
+		}
+	}
+	return out
+}
+
+func ingressV1SSLPassthroughHosts(rules []networkingv1.IngressRule) []string {
+	out := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		if rule.HTTP == nil || !hasV1RootHTTPIngressPath(rule.HTTP.Paths) {
+			continue
+		}
+		out = append(out, rule.Host)
+	}
+	return out
+}
+
+func ingressV1Beta1SSLPassthroughHosts(rules []networkingv1beta1.IngressRule) []string {
+	out := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		if rule.HTTP == nil || !hasV1Beta1RootHTTPIngressPath(rule.HTTP.Paths) {
+			continue
+		}
+		out = append(out, rule.Host)
+	}
+	return out
+}
+
+func hasV1RootHTTPIngressPath(paths []networkingv1.HTTPIngressPath) bool {
+	for _, path := range paths {
+		if path.Path == "" || path.Path == "/" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasV1Beta1RootHTTPIngressPath(paths []networkingv1beta1.HTTPIngressPath) bool {
+	for _, path := range paths {
+		if path.Path == "" || path.Path == "/" {
+			return true
+		}
+	}
+	return false
+}
+
+func ingressV1TLSSecretName(host string, tls []networkingv1.IngressTLS) string {
+	for _, item := range tls {
+		for _, tlsHost := range item.Hosts {
+			if tlsHost == host {
+				return item.SecretName
+			}
+		}
+	}
+	return ""
+}
+
+func ingressV1Beta1TLSSecretName(host string, tls []networkingv1beta1.IngressTLS) string {
+	for _, item := range tls {
+		for _, tlsHost := range item.Hosts {
+			if tlsHost == host {
+				return item.SecretName
+			}
+		}
+	}
+	return ""
+}
+
+func matchHTTPSConfigHost(host string, httpsCredentialConfig *cert.Config) bool {
+	return httpsCredentialConfig != nil && httpsCredentialConfig.MatchSecretNameByDomain(host) != ""
 }
 
 func (m *IngressConfig) convertEnvoyFilter(convertOptions *common.ConvertOptions) {
