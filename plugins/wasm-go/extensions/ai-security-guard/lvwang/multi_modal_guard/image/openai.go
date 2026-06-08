@@ -42,11 +42,17 @@ func parseOpenAIResponse(body []byte) []ImageItem {
 
 func HandleOpenAIImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
-	checkService := config.GetRequestCheckService(consumer)
-	checkImageService := config.GetRequestImageCheckService(consumer)
+	textDecision := config.ResolveRequestCheckService(consumer)
+	imageDecision := config.ResolveRequestImageCheckService(consumer)
 	startTime := time.Now().UnixMilli()
 	content, images := parseOpenAIRequest(body)
 	log.Debugf("Raw request content is: %s", content)
+	if !textDecision.Enabled {
+		content = ""
+	}
+	if !imageDecision.Enabled {
+		images = nil
+	}
 	if len(content) == 0 && len(images) == 0 {
 		log.Info("request content is empty. skip")
 		return types.ActionContinue
@@ -123,7 +129,7 @@ func HandleOpenAIImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
-		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, checkService, contentPiece, sessionID)
+		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, textDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
@@ -201,7 +207,7 @@ func HandleOpenAIImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.
 		} else {
 			imgUrl = img.Content
 		}
-		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, checkImageService, imgUrl, imgBase64)
+		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, imageDecision.Service, imgUrl, imgBase64)
 		err := config.Client.Post(path, headers, body, callbackForImage, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
@@ -219,8 +225,12 @@ func HandleOpenAIImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.
 
 func HandleOpenAIImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
+	responseImageDecision := config.ResolveResponseImageCheckService(consumer)
+	if !responseImageDecision.Enabled {
+		log.Debugf("response image check disabled for consumer %s, source=%s", consumer, responseImageDecision.Source)
+		return types.ActionContinue
+	}
 	log.Debugf("checking response body...")
-	checkImageService := config.GetResponseImageCheckService(consumer)
 	startTime := time.Now().UnixMilli()
 	imgResults := parseOpenAIResponse(body)
 	if len(imgResults) == 0 {
@@ -302,7 +312,7 @@ func HandleOpenAIImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg
 		} else {
 			imgUrl = img.Content
 		}
-		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, checkImageService, imgUrl, imgBase64)
+		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, responseImageDecision.Service, imgUrl, imgBase64)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)

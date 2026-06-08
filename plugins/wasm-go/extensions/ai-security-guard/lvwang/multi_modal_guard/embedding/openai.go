@@ -114,7 +114,11 @@ func extractStringLeaves(json gjson.Result, texts *[]string) {
 // HandleEmbeddingRequestBody handles request body for Embedding API
 func HandleEmbeddingRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
-	checkService := config.GetRequestCheckService(consumer)
+	decision := config.ResolveRequestCheckService(consumer)
+	if !decision.Enabled {
+		log.Debugf("request text check disabled for consumer %s, source=%s", consumer, decision.Source)
+		return types.ActionContinue
+	}
 	startTime := time.Now().UnixMilli()
 
 	// Extract text from input field
@@ -203,7 +207,7 @@ func HandleEmbeddingRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityCo
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
-		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, checkService, contentPiece, sessionID)
+		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, decision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
@@ -217,6 +221,13 @@ func HandleEmbeddingRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityCo
 
 // HandleEmbeddingResponseHeaders handles response headers for Embedding API
 func HandleEmbeddingResponseHeaders(ctx wrapper.HttpContext, config cfg.AISecurityConfig) types.Action {
+	consumer, _ := ctx.GetContext("consumer").(string)
+	decision := config.ResolveResponseCheckService(consumer)
+	if !decision.Enabled {
+		log.Debugf("response text check disabled for consumer %s, source=%s", consumer, decision.Source)
+		ctx.DontReadResponseBody()
+		return types.ActionContinue
+	}
 	ctx.BufferResponseBody()
 	return types.HeaderStopIteration
 }
@@ -224,6 +235,7 @@ func HandleEmbeddingResponseHeaders(ctx wrapper.HttpContext, config cfg.AISecuri
 // HandleEmbeddingResponseBody handles response body for Embedding API
 func HandleEmbeddingResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
+	responseDecision := config.ResolveResponseCheckService(consumer)
 	log.Debugf("checking embedding response body...")
 	startTime := time.Now().UnixMilli()
 
@@ -319,8 +331,7 @@ func HandleEmbeddingResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityC
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
-		checkService := config.GetResponseCheckService(consumer)
-		path, headers, body := common.GenerateRequestForText(config, config.Action, checkService, contentPiece, sessionID)
+		path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)

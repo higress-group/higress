@@ -28,7 +28,11 @@ data: {"jsonrpc":"2.0","id":0,"error":{"code":403,"message":"%s"}}
 
 func HandleMcpRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
-	checkService := config.GetRequestCheckService(consumer)
+	decision := config.ResolveRequestCheckService(consumer)
+	if !decision.Enabled {
+		log.Debugf("request text check disabled for consumer %s, source=%s", consumer, decision.Source)
+		return types.ActionContinue
+	}
 	mcpMethod := gjson.GetBytes(body, "method").String()
 	if mcpMethod != MethodToolCall {
 		log.Infof("method is %s, skip request check", mcpMethod)
@@ -108,7 +112,7 @@ func HandleMcpRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, 
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		// log.Debugf("current content piece: %s", contentPiece)
-		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, checkService, contentPiece, sessionID)
+		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, decision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
@@ -123,6 +127,7 @@ func HandleMcpRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, 
 
 func HandleMcpStreamingResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, data []byte, endOfStream bool) []byte {
 	consumer, _ := ctx.GetContext("consumer").(string)
+	responseDecision := config.ResolveResponseCheckService(consumer)
 	var frontBuffer []byte
 	currentSubmissionIndex := 0
 	var singleCall func()
@@ -180,10 +185,9 @@ func HandleMcpStreamingResponseBody(ctx wrapper.HttpContext, config cfg.AISecuri
 			msg := gjson.GetBytes(frontBuffer[index:], config.ResponseStreamContentJsonPath).String()
 			log.Debugf("current content piece: %s", msg)
 			ctx.SetContext("during_call", true)
-			checkService := config.GetResponseCheckService(consumer)
 			sessionID, _ := utils.GenerateHexID(20)
 			currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityMCP)
-			path, headers, body := common.GenerateRequestForText(config, config.Action, checkService, msg, sessionID)
+			path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, msg, sessionID)
 			err := config.Client.Post(path, headers, body, callback, config.Timeout)
 			if err != nil {
 				log.Errorf("failed call the safe check service: %v", err)
@@ -212,6 +216,7 @@ func HandleMcpStreamingResponseBody(ctx wrapper.HttpContext, config cfg.AISecuri
 
 func HandleMcpResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
+	responseDecision := config.ResolveResponseCheckService(consumer)
 	log.Debugf("checking response body...")
 	startTime := time.Now().UnixMilli()
 	content := gjson.GetBytes(body, config.ResponseContentJsonPath).String()
@@ -288,9 +293,8 @@ func HandleMcpResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig,
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
-		checkService := config.GetResponseCheckService(consumer)
 		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityMCP)
-		path, headers, body := common.GenerateRequestForText(config, config.Action, checkService, contentPiece, sessionID)
+		path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)

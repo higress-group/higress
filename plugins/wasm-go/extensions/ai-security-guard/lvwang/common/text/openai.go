@@ -44,6 +44,13 @@ type streamingBufferedChunk struct {
 }
 
 func HandleTextGenerationResponseHeader(ctx wrapper.HttpContext, config cfg.AISecurityConfig) types.Action {
+	consumer, _ := ctx.GetContext("consumer").(string)
+	decision := config.ResolveResponseCheckService(consumer)
+	if !decision.Enabled {
+		log.Debugf("response text check disabled for consumer %s, source=%s", consumer, decision.Source)
+		ctx.DontReadResponseBody()
+		return types.ActionContinue
+	}
 	contentType, _ := proxywasm.GetHttpResponseHeader("content-type")
 	ctx.SetContext("end_of_stream_received", false)
 	ctx.SetContext("during_call", false)
@@ -67,6 +74,7 @@ func HandleTextGenerationResponseHeader(ctx wrapper.HttpContext, config cfg.AISe
 
 func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, data []byte, endOfStream bool) []byte {
 	consumer, _ := ctx.GetContext("consumer").(string)
+	responseDecision := config.ResolveResponseCheckService(consumer)
 	streamFallbackPaths := getEffectiveFallbackPathsFromContext(ctx, responseStreamFallbackPathsCtxKey, config.ResponseStreamContentJsonPath, config.ResponseStreamContentFallbackJsonPaths)
 	var sessionID string
 	if ctx.GetContext("sessionID") == nil {
@@ -244,9 +252,8 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			}
 			ctx.SetContext("during_call", true)
 			log.Debugf("current content piece: %s", buffer)
-			checkService := config.GetResponseCheckService(consumer)
 			currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText)
-			path, headers, body := common.GenerateRequestForText(config, config.Action, checkService, buffer, sessionID)
+			path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, buffer, sessionID)
 			err := config.Client.Post(path, headers, body, callback, config.Timeout)
 			if err != nil {
 				log.Errorf("failed call the safe check service: %v", err)
@@ -295,6 +302,10 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 
 func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
+	responseDecision := config.ResolveResponseCheckService(consumer)
+	if !responseDecision.Enabled {
+		return types.ActionContinue
+	}
 	responseFallbackPaths := getEffectiveFallbackPathsFromContext(ctx, responseFallbackPathsCtxKey, config.ResponseContentJsonPath, config.ResponseContentFallbackJsonPaths)
 	streamFallbackPaths := getEffectiveFallbackPathsFromContext(ctx, responseStreamFallbackPathsCtxKey, config.ResponseStreamContentJsonPath, config.ResponseStreamContentFallbackJsonPaths)
 	log.Debugf("checking response body...")
@@ -497,9 +508,8 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 		contentPiece := maskedContent[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
-		checkService := config.GetResponseCheckService(consumer)
 		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText)
-		path, headers, body := common.GenerateRequestForText(config, config.Action, checkService, contentPiece, sessionID)
+		path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)

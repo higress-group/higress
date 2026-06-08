@@ -76,6 +76,11 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
 		cfg.WriteGuardrailLog(ctx)
 	}
+	decision := config.ResolveRequestCheckService(consumer)
+	if !decision.Enabled {
+		log.Debugf("request text check disabled for consumer %s, source=%s", consumer, decision.Source)
+		return types.ActionContinue
+	}
 	singleCall = func() {
 		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseRequest, cfg.GuardrailModalityText)
 		var nextContentIndex int
@@ -86,8 +91,7 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		}
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
-		checkService := config.GetRequestCheckService(consumer)
-		path, headers, body := common.GenerateRequestForText(config, cfg.TextModerationPlus, checkService, contentPiece, sessionID)
+		path, headers, body := common.GenerateRequestForText(config, cfg.TextModerationPlus, decision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)

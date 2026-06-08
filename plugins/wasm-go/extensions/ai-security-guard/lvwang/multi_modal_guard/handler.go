@@ -53,6 +53,13 @@ func OnHttpResponseHeaders(ctx wrapper.HttpContext, config cfg.AISecurityConfig)
 			return types.ActionContinue
 		}
 	case cfg.ApiMCP:
+		consumer, _ := ctx.GetContext("consumer").(string)
+		mcpDecision := config.ResolveResponseCheckService(consumer)
+		if !mcpDecision.Enabled {
+			log.Debugf("response text check disabled for consumer %s, source=%s", consumer, mcpDecision.Source)
+			ctx.DontReadResponseBody()
+			return types.ActionContinue
+		}
 		if wrapper.IsApplicationJson() {
 			ctx.BufferResponseBody()
 			return types.HeaderStopIteration

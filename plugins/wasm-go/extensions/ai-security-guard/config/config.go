@@ -228,7 +228,11 @@ type AISecurityConfig struct {
 	// text_generation, image_generation, embedding, etc.
 	ApiType string
 	// openai, qwen, comfyui, etc.
-	ProviderType string
+	ProviderType                     string
+	DefaultRequestCheckEnabled       bool
+	DefaultRequestImageCheckEnabled  bool
+	DefaultResponseCheckEnabled      bool
+	DefaultResponseImageCheckEnabled bool
 	// "block" or "mask", default "block"
 	RiskAction string
 	// Dimension-level action fields (optional, empty string means not configured)
@@ -323,6 +327,18 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 	config.CheckRequest = json.Get("checkRequest").Bool()
 	config.CheckRequestImage = json.Get("checkRequestImage").Bool()
 	config.CheckResponse = json.Get("checkResponse").Bool()
+	if obj := json.Get("defaultRequestCheckEnabled"); obj.Exists() {
+		config.DefaultRequestCheckEnabled = obj.Bool()
+	}
+	if obj := json.Get("defaultRequestImageCheckEnabled"); obj.Exists() {
+		config.DefaultRequestImageCheckEnabled = obj.Bool()
+	}
+	if obj := json.Get("defaultResponseCheckEnabled"); obj.Exists() {
+		config.DefaultResponseCheckEnabled = obj.Bool()
+	}
+	if obj := json.Get("defaultResponseImageCheckEnabled"); obj.Exists() {
+		config.DefaultResponseImageCheckEnabled = obj.Bool()
+	}
 	config.ProtocolOriginal = json.Get("protocol").String() == "original"
 	if obj := json.Get("openAIDenyResponseFormat"); obj.Exists() {
 		switch OpenAIDenyResponseFormat(obj.String()) {
@@ -502,6 +518,44 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 	if obj := json.Get("providerType"); obj.Exists() {
 		config.ProviderType = obj.String()
 	}
+	// Validate: if default check is enabled and the feature is active, global service must be non-empty
+	if config.DefaultRequestCheckEnabled && config.CheckRequest && config.RequestCheckService == "" {
+		return errors.New("requestCheckService must be non-empty when defaultRequestCheckEnabled is true")
+	}
+	if config.DefaultRequestImageCheckEnabled && config.CheckRequestImage && config.RequestImageCheckService == "" {
+		return errors.New("requestImageCheckService must be non-empty when defaultRequestImageCheckEnabled is true")
+	}
+	if config.DefaultResponseCheckEnabled && config.CheckResponse && config.ResponseCheckService == "" {
+		return errors.New("responseCheckService must be non-empty when defaultResponseCheckEnabled is true")
+	}
+	if config.DefaultResponseImageCheckEnabled && config.CheckResponse && config.ResponseImageCheckService == "" {
+		return errors.New("responseImageCheckService must be non-empty when defaultResponseImageCheckEnabled is true")
+	}
+	// Validate: consumer rules with explicit service fields must have non-empty values
+	for _, obj := range config.ConsumerRequestCheckService {
+		if v, exists := obj["requestCheckService"]; exists {
+			if s, _ := v.(string); s == "" {
+				return errors.New("requestCheckService in consumerRequestCheckService must be non-empty when explicitly provided")
+			}
+		}
+		if v, exists := obj["requestImageCheckService"]; exists {
+			if s, _ := v.(string); s == "" {
+				return errors.New("requestImageCheckService in consumerRequestCheckService must be non-empty when explicitly provided")
+			}
+		}
+	}
+	for _, obj := range config.ConsumerResponseCheckService {
+		if v, exists := obj["responseCheckService"]; exists {
+			if s, _ := v.(string); s == "" {
+				return errors.New("responseCheckService in consumerResponseCheckService must be non-empty when explicitly provided")
+			}
+		}
+		if v, exists := obj["responseImageCheckService"]; exists {
+			if s, _ := v.(string); s == "" {
+				return errors.New("responseImageCheckService in consumerResponseCheckService must be non-empty when explicitly provided")
+			}
+		}
+	}
 	config.Client = wrapper.NewClusterClient(wrapper.FQDNCluster{
 		FQDN: serviceName,
 		Port: servicePort,
@@ -557,6 +611,10 @@ func (config *AISecurityConfig) SetDefaultValues() {
 		config.RequestImageCheckService = DefaultMultiModalGuardImageInputCheckService
 		config.ResponseCheckService = DefaultMultiModalGuardTextOutputCheckService
 	}
+	config.DefaultRequestCheckEnabled = true
+	config.DefaultRequestImageCheckEnabled = true
+	config.DefaultResponseCheckEnabled = true
+	config.DefaultResponseImageCheckEnabled = false
 	config.RiskLevelBar = HighRisk
 	config.DenyCode = DefaultDenyCode
 	config.RequestContentJsonPath = DefaultRequestJsonPath
@@ -587,64 +645,90 @@ func (config *AISecurityConfig) IncrementCounter(metricName string, inc uint64) 
 	counter.Increment(inc)
 }
 
-func (config *AISecurityConfig) GetRequestCheckService(consumer string) string {
-	result := config.RequestCheckService
+type CheckServiceDecision struct {
+	Enabled bool
+	Service string
+	Source  string // "consumer", "default", "disabled"
+}
+
+func (config *AISecurityConfig) ResolveRequestCheckService(consumer string) CheckServiceDecision {
 	for _, obj := range config.ConsumerRequestCheckService {
 		if matcher, ok := obj["matcher"].(Matcher); ok {
 			if matcher.match(consumer) {
-				if requestCheckService, ok := obj["requestCheckService"]; ok {
-					result, _ = requestCheckService.(string)
+				if rawService, exists := obj["requestCheckService"]; exists {
+					service, _ := rawService.(string)
+					if service != "" {
+						return CheckServiceDecision{Enabled: true, Service: service, Source: "consumer"}
+					}
 				}
 				break
 			}
 		}
 	}
-	return result
+	if !config.DefaultRequestCheckEnabled {
+		return CheckServiceDecision{Enabled: false, Source: "disabled"}
+	}
+	return CheckServiceDecision{Enabled: true, Service: config.RequestCheckService, Source: "default"}
 }
 
-func (config *AISecurityConfig) GetRequestImageCheckService(consumer string) string {
-	result := config.RequestImageCheckService
+func (config *AISecurityConfig) ResolveRequestImageCheckService(consumer string) CheckServiceDecision {
 	for _, obj := range config.ConsumerRequestCheckService {
 		if matcher, ok := obj["matcher"].(Matcher); ok {
 			if matcher.match(consumer) {
-				if requestCheckService, ok := obj["requestImageCheckService"]; ok {
-					result, _ = requestCheckService.(string)
+				if rawService, exists := obj["requestImageCheckService"]; exists {
+					service, _ := rawService.(string)
+					if service != "" {
+						return CheckServiceDecision{Enabled: true, Service: service, Source: "consumer"}
+					}
 				}
 				break
 			}
 		}
 	}
-	return result
+	if !config.DefaultRequestImageCheckEnabled {
+		return CheckServiceDecision{Enabled: false, Source: "disabled"}
+	}
+	return CheckServiceDecision{Enabled: true, Service: config.RequestImageCheckService, Source: "default"}
 }
 
-func (config *AISecurityConfig) GetResponseCheckService(consumer string) string {
-	result := config.ResponseCheckService
+func (config *AISecurityConfig) ResolveResponseCheckService(consumer string) CheckServiceDecision {
 	for _, obj := range config.ConsumerResponseCheckService {
 		if matcher, ok := obj["matcher"].(Matcher); ok {
 			if matcher.match(consumer) {
-				if responseCheckService, ok := obj["responseCheckService"]; ok {
-					result, _ = responseCheckService.(string)
+				if rawService, exists := obj["responseCheckService"]; exists {
+					service, _ := rawService.(string)
+					if service != "" {
+						return CheckServiceDecision{Enabled: true, Service: service, Source: "consumer"}
+					}
 				}
 				break
 			}
 		}
 	}
-	return result
+	if !config.DefaultResponseCheckEnabled {
+		return CheckServiceDecision{Enabled: false, Source: "disabled"}
+	}
+	return CheckServiceDecision{Enabled: true, Service: config.ResponseCheckService, Source: "default"}
 }
 
-func (config *AISecurityConfig) GetResponseImageCheckService(consumer string) string {
-	result := config.ResponseImageCheckService
+func (config *AISecurityConfig) ResolveResponseImageCheckService(consumer string) CheckServiceDecision {
 	for _, obj := range config.ConsumerResponseCheckService {
 		if matcher, ok := obj["matcher"].(Matcher); ok {
 			if matcher.match(consumer) {
-				if responseCheckService, ok := obj["responseImageCheckService"]; ok {
-					result, _ = responseCheckService.(string)
+				if rawService, exists := obj["responseImageCheckService"]; exists {
+					service, _ := rawService.(string)
+					if service != "" {
+						return CheckServiceDecision{Enabled: true, Service: service, Source: "consumer"}
+					}
 				}
 				break
 			}
 		}
 	}
-	return result
+	if !config.DefaultResponseImageCheckEnabled {
+		return CheckServiceDecision{Enabled: false, Source: "disabled"}
+	}
+	return CheckServiceDecision{Enabled: true, Service: config.ResponseImageCheckService, Source: "default"}
 }
 
 // getMatchedConsumerRiskRule returns the first matched consumer rule using first-match semantics.
