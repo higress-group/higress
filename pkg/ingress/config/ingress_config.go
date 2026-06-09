@@ -674,62 +674,6 @@ func ingressRootPathHosts(spec config.Spec) []string {
 	}
 }
 
-func ingressTLSHosts(wrapper common.WrapperConfig, httpsCredentialConfig *cert.Config) []string {
-	if wrapper.AnnotationsConfig.IsSSLPassthrough() {
-		return ingressRuleHosts(wrapper.Config.Spec)
-	}
-
-	switch spec := wrapper.Config.Spec.(type) {
-	case networkingv1.IngressSpec:
-		if len(spec.TLS) == 0 {
-			return nil
-		}
-		return ingressV1HTTPSHosts(spec, httpsCredentialConfig)
-	case networkingv1beta1.IngressSpec:
-		if len(spec.TLS) == 0 {
-			return nil
-		}
-		return ingressV1Beta1HTTPSHosts(spec, httpsCredentialConfig)
-	default:
-		return nil
-	}
-}
-
-func ingressRuleHosts(spec config.Spec) []string {
-	switch ingressSpec := spec.(type) {
-	case networkingv1.IngressSpec:
-		return ingressV1SSLPassthroughHosts(ingressSpec.Rules)
-	case networkingv1beta1.IngressSpec:
-		return ingressV1Beta1SSLPassthroughHosts(ingressSpec.Rules)
-	default:
-		return nil
-	}
-}
-
-func ingressV1HTTPSHosts(spec networkingv1.IngressSpec, httpsCredentialConfig *cert.Config) []string {
-	var out []string
-	for _, rule := range spec.Rules {
-		if ingressV1TLSSecretName(rule.Host, spec.TLS) != "" || matchHTTPSConfigHost(rule.Host, httpsCredentialConfig) {
-			out = append(out, rule.Host)
-		}
-	}
-	return out
-}
-
-func ingressV1Beta1HTTPSHosts(spec networkingv1beta1.IngressSpec, httpsCredentialConfig *cert.Config) []string {
-	var out []string
-	for _, rule := range spec.Rules {
-		if ingressV1Beta1TLSSecretName(rule.Host, spec.TLS) != "" || matchHTTPSConfigHost(rule.Host, httpsCredentialConfig) {
-			out = append(out, rule.Host)
-		}
-	}
-	return out
-}
-
-func ingressV1SSLPassthroughHosts(rules []networkingv1.IngressRule) []string {
-	return ingressV1RootPathHosts(rules)
-}
-
 func ingressV1RootPathHosts(rules []networkingv1.IngressRule) []string {
 	out := make([]string, 0, len(rules))
 	for _, rule := range rules {
@@ -739,10 +683,6 @@ func ingressV1RootPathHosts(rules []networkingv1.IngressRule) []string {
 		out = append(out, rule.Host)
 	}
 	return out
-}
-
-func ingressV1Beta1SSLPassthroughHosts(rules []networkingv1beta1.IngressRule) []string {
-	return ingressV1Beta1RootPathHosts(rules)
 }
 
 func ingressV1Beta1RootPathHosts(rules []networkingv1beta1.IngressRule) []string {
@@ -772,32 +712,6 @@ func hasV1Beta1RootHTTPIngressPath(paths []networkingv1beta1.HTTPIngressPath) bo
 		}
 	}
 	return false
-}
-
-func ingressV1TLSSecretName(host string, tls []networkingv1.IngressTLS) string {
-	for _, item := range tls {
-		for _, tlsHost := range item.Hosts {
-			if tlsHost == host {
-				return item.SecretName
-			}
-		}
-	}
-	return ""
-}
-
-func ingressV1Beta1TLSSecretName(host string, tls []networkingv1beta1.IngressTLS) string {
-	for _, item := range tls {
-		for _, tlsHost := range item.Hosts {
-			if tlsHost == host {
-				return item.SecretName
-			}
-		}
-	}
-	return ""
-}
-
-func matchHTTPSConfigHost(host string, httpsCredentialConfig *cert.Config) bool {
-	return httpsCredentialConfig != nil && httpsCredentialConfig.MatchSecretNameByDomain(host) != ""
 }
 
 func (m *IngressConfig) convertEnvoyFilter(convertOptions *common.ConvertOptions) {

@@ -389,7 +389,7 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 					Protocol: string(protocol.HTTP),
 					Name:     common.CreateConvertedName("http-"+strconv.FormatUint(uint64(c.options.GatewayHttpPort), 10)+"-ingress", string(c.options.ClusterId)),
 				},
-				Hosts: []string{rule.Host},
+				Hosts: []string{common.WildcardHost(rule.Host)},
 			})
 
 			// Add new gateway, builder
@@ -518,7 +518,7 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 				Protocol: string(protocol.HTTPS),
 				Name:     common.CreateConvertedName("https-"+strconv.FormatUint(uint64(c.options.GatewayHttpsPort), 10)+"-ingress", string(c.options.ClusterId)),
 			},
-			Hosts: []string{rule.Host},
+			Hosts: []string{common.WildcardHost(rule.Host)},
 			Tls: &networking.ServerTLSSettings{
 				Mode:           networking.ServerTLSSettings_SIMPLE,
 				CredentialName: credentials.ToKubernetesIngressResource(c.options.RawClusterId, secretNamespace, secretName),

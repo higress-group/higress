@@ -156,48 +156,6 @@ func TestVirtualServiceNameAndClusterID(t *testing.T) {
 	}
 }
 
-func TestIngressTLSHostsForSSLPassthroughRequiresRootBackend(t *testing.T) {
-	wrapper := common.WrapperConfig{
-		Config: &config.Config{
-			Spec: ingress.IngressSpec{
-				Rules: []ingress.IngressRule{
-					{
-						Host: "non-root.example.com",
-						IngressRuleValue: ingress.IngressRuleValue{
-							HTTP: &ingress.HTTPIngressRuleValue{
-								Paths: []ingress.HTTPIngressPath{
-									{Path: "/api"},
-								},
-							},
-						},
-					},
-					{
-						Host: "root.example.com",
-						IngressRuleValue: ingress.IngressRuleValue{
-							HTTP: &ingress.HTTPIngressRuleValue{
-								Paths: []ingress.HTTPIngressPath{
-									{Path: "/"},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		AnnotationsConfig: &annotations.Ingress{
-			SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
-		},
-	}
-
-	hosts := ingressTLSHosts(wrapper, nil)
-	if len(hosts) != 1 {
-		t.Fatalf("ssl passthrough host count mismatch, want 1, got %d", len(hosts))
-	}
-	if hosts[0] != "root.example.com" {
-		t.Fatalf("ssl passthrough host mismatch, got %s", hosts[0])
-	}
-}
-
 func TestPreparePassthroughTLSHostOwnersUsesFirstRootPathOwner(t *testing.T) {
 	m := &IngressConfig{}
 	configs := []common.WrapperConfig{

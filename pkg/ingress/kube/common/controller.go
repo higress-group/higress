@@ -87,7 +87,7 @@ func CreateSSLPassthroughServer(host string, port uint32, clusterId cluster.ID) 
 			Protocol: string(protocol.TLS),
 			Name:     CreateConvertedName("tls-"+strconv.FormatUint(uint64(port), 10)+"-ingress", clusterId.String()),
 		},
-		Hosts: []string{wildcardHost(host)},
+		Hosts: []string{WildcardHost(host)},
 		Tls: &networking.ServerTLSSettings{
 			Mode: networking.ServerTLSSettings_PASSTHROUGH,
 		},
@@ -131,11 +131,11 @@ func (w *WrapperVirtualService) HasTLSRouteForHost(host string) bool {
 	if w == nil || w.VirtualService == nil {
 		return false
 	}
-	host = wildcardHost(host)
+	host = WildcardHost(host)
 	for _, route := range w.VirtualService.Tls {
 		for _, match := range route.Match {
 			for _, sniHost := range match.SniHosts {
-				if wildcardHost(sniHost) == host {
+				if WildcardHost(sniHost) == host {
 					return true
 				}
 			}
@@ -147,7 +147,7 @@ func (w *WrapperVirtualService) HasTLSRouteForHost(host string) bool {
 func NewWrapperVirtualService(host string, wrapper *WrapperConfig) *WrapperVirtualService {
 	return &WrapperVirtualService{
 		VirtualService: &networking.VirtualService{
-			Hosts: []string{wildcardHost(host)},
+			Hosts: []string{WildcardHost(host)},
 		},
 		WrapperConfig: wrapper,
 	}
@@ -157,14 +157,14 @@ func CreateTLSRoute(host string, routeDestination []*networking.RouteDestination
 	return &networking.TLSRoute{
 		Match: []*networking.TLSMatchAttributes{
 			{
-				SniHosts: []string{wildcardHost(host)},
+				SniHosts: []string{WildcardHost(host)},
 			},
 		},
 		Route: routeDestination,
 	}
 }
 
-func wildcardHost(host string) string {
+func WildcardHost(host string) string {
 	if host == "" {
 		return "*"
 	}
