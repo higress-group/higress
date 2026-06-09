@@ -352,8 +352,8 @@ func TestSSLPassthroughSkipsDuplicatedTLSHost(t *testing.T) {
 	if err := c.ConvertGateway(options, duplicate, nil); err != nil {
 		t.Fatalf("ConvertGateway(duplicate) error = %v", err)
 	}
-	if !common.IsDuplicateTLSHost(options, duplicate.Config, "example.com") {
-		t.Fatal("duplicate TLS host was not recorded")
+	if !common.IsSuppressedTLSHost(options, duplicate.Config, "example.com") {
+		t.Fatal("suppressed TLS host was not recorded")
 	}
 
 	options.VirtualServices = map[string]*common.WrapperVirtualService{}
@@ -447,7 +447,7 @@ func TestSSLPassthroughDuplicateTLSHostUsesExistingGatewayOwner(t *testing.T) {
 	options := &common.ConvertOptions{
 		Gateways:           map[string]*common.WrapperGateway{},
 		IngressDomainCache: common.NewIngressDomainCache(),
-		DuplicateTLSHosts:  map[common.TLSHostKey]struct{}{common.NewTLSHostKey(duplicate.Config, "example.com"): {}},
+		SuppressedTLSHosts: map[common.TLSHostKey]struct{}{common.NewTLSHostKey(duplicate.Config, "example.com"): {}},
 	}
 	if err := c.ConvertGateway(options, primary, httpsCredentialConfig); err != nil {
 		t.Fatalf("ConvertGateway(primary) error = %v", err)
@@ -532,8 +532,8 @@ func TestSSLPassthroughNonRootIngressDoesNotBlockLaterRootIngress(t *testing.T) 
 	if err := c.ConvertGateway(options, root, nil); err != nil {
 		t.Fatalf("ConvertGateway(root) error = %v", err)
 	}
-	if common.IsDuplicateTLSHost(options, root.Config, "example.com") {
-		t.Fatal("root ingress was recorded as duplicated")
+	if common.IsSuppressedTLSHost(options, root.Config, "example.com") {
+		t.Fatal("root ingress was recorded as suppressed")
 	}
 	if options.Gateways["example.com"].Gateway.Servers[1].Tls.GetMode() != v1alpha3.ServerTLSSettings_PASSTHROUGH {
 		t.Fatal("root ingress did not create a TLS passthrough server")
@@ -614,8 +614,8 @@ func TestSSLPassthroughPreservesRepeatedHostInSameIngress(t *testing.T) {
 	if err := c.ConvertGateway(options, wrapper, nil); err != nil {
 		t.Fatalf("ConvertGateway() error = %v", err)
 	}
-	if common.IsDuplicateTLSHost(options, wrapper.Config, "example.com") {
-		t.Fatal("same ingress host was recorded as duplicated")
+	if common.IsSuppressedTLSHost(options, wrapper.Config, "example.com") {
+		t.Fatal("same ingress host was recorded as suppressed")
 	}
 
 	options.VirtualServices = map[string]*common.WrapperVirtualService{}

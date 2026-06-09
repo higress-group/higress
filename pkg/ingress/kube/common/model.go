@@ -145,11 +145,11 @@ func (i *IngressDomainCache) Extract() model.IngressDomainCollection {
 	}
 }
 
-func AddDuplicateTLSHost(convertOptions *ConvertOptions, cfg *config.Config, host string) {
-	if convertOptions.DuplicateTLSHosts == nil {
-		convertOptions.DuplicateTLSHosts = map[TLSHostKey]struct{}{}
+func AddSuppressedTLSHost(convertOptions *ConvertOptions, cfg *config.Config, host string) {
+	if convertOptions.SuppressedTLSHosts == nil {
+		convertOptions.SuppressedTLSHosts = map[TLSHostKey]struct{}{}
 	}
-	convertOptions.DuplicateTLSHosts[NewTLSHostKey(cfg, host)] = struct{}{}
+	convertOptions.SuppressedTLSHosts[NewTLSHostKey(cfg, host)] = struct{}{}
 }
 
 func SameConfig(left *config.Config, right *config.Config) bool {
@@ -161,26 +161,26 @@ func SameConfig(left *config.Config, right *config.Config) bool {
 		left.Name == right.Name
 }
 
-func IsDuplicateTLSHost(convertOptions *ConvertOptions, cfg *config.Config, host string) bool {
-	if convertOptions == nil || len(convertOptions.DuplicateTLSHosts) == 0 {
+func IsSuppressedTLSHost(convertOptions *ConvertOptions, cfg *config.Config, host string) bool {
+	if convertOptions == nil || len(convertOptions.SuppressedTLSHosts) == 0 {
 		return false
 	}
-	_, exist := convertOptions.DuplicateTLSHosts[NewTLSHostKey(cfg, host)]
+	_, exist := convertOptions.SuppressedTLSHosts[NewTLSHostKey(cfg, host)]
 	return exist
 }
 
-func IsSSLPassthroughTLSHostOwner(convertOptions *ConvertOptions, cfg *config.Config, host string) bool {
-	if convertOptions == nil || convertOptions.SSLPassthroughTLSHosts == nil {
+func IsPassthroughTLSHostOwner(convertOptions *ConvertOptions, cfg *config.Config, host string) bool {
+	if convertOptions == nil || convertOptions.PassthroughTLSHostOwners == nil {
 		return true
 	}
-	return SameConfig(convertOptions.SSLPassthroughTLSHosts[host], cfg)
+	return SameConfig(convertOptions.PassthroughTLSHostOwners[host], cfg)
 }
 
-func SSLPassthroughTLSHostOwner(convertOptions *ConvertOptions, host string) *config.Config {
-	if convertOptions == nil || len(convertOptions.SSLPassthroughTLSHosts) == 0 {
+func PassthroughTLSHostOwner(convertOptions *ConvertOptions, host string) *config.Config {
+	if convertOptions == nil || len(convertOptions.PassthroughTLSHostOwners) == 0 {
 		return nil
 	}
-	return convertOptions.SSLPassthroughTLSHosts[host]
+	return convertOptions.PassthroughTLSHostOwners[host]
 }
 
 type TLSHostKey struct {
@@ -222,9 +222,11 @@ type ConvertOptions struct {
 
 	CanaryIngresses []*WrapperConfig
 
-	DuplicateTLSHosts map[TLSHostKey]struct{}
+	// Ingress+host pairs whose TLS server or TLS passthrough route should be skipped.
+	SuppressedTLSHosts map[TLSHostKey]struct{}
 
-	SSLPassthroughTLSHosts map[string]*config.Config
+	// Host to the ingress that owns TLS passthrough for that host.
+	PassthroughTLSHostOwners map[string]*config.Config
 
 	Service2TrafficPolicy map[ServiceKey]*WrapperTrafficPolicy
 

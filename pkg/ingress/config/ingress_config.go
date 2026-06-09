@@ -440,7 +440,7 @@ func (m *IngressConfig) convertGateways(configs []common.WrapperConfig) []config
 	if err != nil {
 		IngressLog.Errorf("Get higress https configmap err %v", err)
 	}
-	m.prepareDuplicateTLSHosts(&convertOptions, configs, httpsCredentialConfig)
+	m.prepareTLSHostOwnership(&convertOptions, configs, httpsCredentialConfig)
 	for idx := range configs {
 		cfg := configs[idx]
 		clusterId := common.GetClusterId(cfg.Config.Annotations)
@@ -511,7 +511,7 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 	if err != nil {
 		IngressLog.Errorf("Get higress https configmap err %v", err)
 	}
-	m.prepareDuplicateTLSHosts(&convertOptions, configs, httpsCredentialConfig)
+	m.prepareTLSHostOwnership(&convertOptions, configs, httpsCredentialConfig)
 
 	// convert http route
 	for idx := range configs {
@@ -640,12 +640,14 @@ func virtualServiceNameAndClusterID(cleanHost string, wrapperVS *common.WrapperV
 	return common.CreateConvertedName(constants.IstioIngressGatewayName, cfg.Namespace, cfg.Name, cleanHost), common.GetClusterId(cfg.Annotations)
 }
 
-func (m *IngressConfig) prepareDuplicateTLSHosts(convertOptions *common.ConvertOptions, configs []common.WrapperConfig, httpsCredentialConfig *cert.Config) {
-	if convertOptions.SSLPassthroughTLSHosts == nil {
-		convertOptions.SSLPassthroughTLSHosts = map[string]*config.Config{}
+func (m *IngressConfig) prepareTLSHostOwnership(convertOptions *common.ConvertOptions, configs []common.WrapperConfig, httpsCredentialConfig *cert.Config) {
+	if convertOptions.PassthroughTLSHostOwners == nil {
+		convertOptions.PassthroughTLSHostOwners = map[string]*config.Config{}
 	}
 
-	rootPathOwners := map[string]*config.Config{}
+	// A host can be taken over by SSL passthrough only when the first root path
+	// seen for that host belongs to an SSL passthrough ingress.
+	firstRootPathHosts := map[string]struct{}{}
 	for idx := range configs {
 		cfg := configs[idx]
 		if cfg.AnnotationsConfig.IsCanary() {
@@ -653,17 +655,19 @@ func (m *IngressConfig) prepareDuplicateTLSHosts(convertOptions *common.ConvertO
 		}
 
 		for _, host := range ingressRootPathHosts(cfg.Config.Spec) {
-			_, exist := rootPathOwners[host]
-			if !exist {
-				rootPathOwners[host] = cfg.Config
-				if cfg.AnnotationsConfig.IsSSLPassthrough() {
-					convertOptions.SSLPassthroughTLSHosts[host] = cfg.Config
-				}
+			if _, exist := firstRootPathHosts[host]; exist {
+				continue
+			}
+			firstRootPathHosts[host] = struct{}{}
+			if cfg.AnnotationsConfig.IsSSLPassthrough() {
+				convertOptions.PassthroughTLSHostOwners[host] = cfg.Config
 			}
 		}
 	}
 
-	tlsHostOwners := map[string]*config.Config{}
+	// Suppress only the TLS generation for conflicting ingresses. HTTP routes
+	// remain eligible for normal route merging.
+	tlsServerOwners := map[string]*config.Config{}
 	for idx := range configs {
 		cfg := configs[idx]
 		if cfg.AnnotationsConfig.IsCanary() {
@@ -673,17 +677,17 @@ func (m *IngressConfig) prepareDuplicateTLSHosts(convertOptions *common.ConvertO
 		if cfg.AnnotationsConfig.IsSSLPassthrough() {
 			hosts := ingressRuleHosts(cfg.Config.Spec)
 			for _, host := range hosts {
-				if !common.IsSSLPassthroughTLSHostOwner(convertOptions, cfg.Config, host) {
-					common.AddDuplicateTLSHost(convertOptions, cfg.Config, host)
+				if !common.IsPassthroughTLSHostOwner(convertOptions, cfg.Config, host) {
+					common.AddSuppressedTLSHost(convertOptions, cfg.Config, host)
 					continue
 				}
-				owner, exist := tlsHostOwners[host]
+				owner, exist := tlsServerOwners[host]
 				if exist && !common.SameConfig(owner, cfg.Config) {
-					common.AddDuplicateTLSHost(convertOptions, cfg.Config, host)
+					common.AddSuppressedTLSHost(convertOptions, cfg.Config, host)
 					continue
 				}
 				if !exist {
-					tlsHostOwners[host] = cfg.Config
+					tlsServerOwners[host] = cfg.Config
 				}
 			}
 			continue
@@ -691,18 +695,18 @@ func (m *IngressConfig) prepareDuplicateTLSHosts(convertOptions *common.ConvertO
 
 		hosts := ingressTLSHosts(cfg, httpsCredentialConfig)
 		for _, host := range hosts {
-			if _, exist := convertOptions.SSLPassthroughTLSHosts[host]; exist {
-				common.AddDuplicateTLSHost(convertOptions, cfg.Config, host)
+			if _, exist := convertOptions.PassthroughTLSHostOwners[host]; exist {
+				common.AddSuppressedTLSHost(convertOptions, cfg.Config, host)
 				continue
 			}
 
-			owner, exist := tlsHostOwners[host]
+			owner, exist := tlsServerOwners[host]
 			if exist && !common.SameConfig(owner, cfg.Config) {
-				common.AddDuplicateTLSHost(convertOptions, cfg.Config, host)
+				common.AddSuppressedTLSHost(convertOptions, cfg.Config, host)
 				continue
 			}
 			if !exist {
-				tlsHostOwners[host] = cfg.Config
+				tlsServerOwners[host] = cfg.Config
 			}
 		}
 	}

@@ -429,11 +429,11 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 			if _, ok := rootHTTPIngressPath(rule.HTTP.Paths); !ok {
 				continue
 			}
-			if !common.IsSSLPassthroughTLSHostOwner(convertOptions, cfg, rule.Host) {
-				if common.IsDuplicateTLSHost(convertOptions, cfg, rule.Host) {
+			if !common.IsPassthroughTLSHostOwner(convertOptions, cfg, rule.Host) {
+				if common.IsSuppressedTLSHost(convertOptions, cfg, rule.Host) {
 					domainBuilder.Protocol = common.HTTPS
 					domainBuilder.Event = common.DuplicatedTls
-					domainBuilder.PreIngress = common.SSLPassthroughTLSHostOwner(convertOptions, rule.Host)
+					domainBuilder.PreIngress = common.PassthroughTLSHostOwner(convertOptions, rule.Host)
 					if domainBuilder.PreIngress == nil && preDomainBuilder != nil {
 						domainBuilder.PreIngress = preDomainBuilder.Ingress
 					}
@@ -450,7 +450,7 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 				}
 				domainBuilder.Event = common.DuplicatedTls
 				domainBuilder.PreIngress = preDomainBuilder.Ingress
-				common.AddDuplicateTLSHost(convertOptions, cfg, rule.Host)
+				common.AddSuppressedTLSHost(convertOptions, cfg, rule.Host)
 				convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
 					domainBuilder.Build())
 				continue
@@ -509,9 +509,9 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 
 		domainBuilder.SecretName = path.Join(c.options.ClusterId.String(), cfg.Namespace, secretName)
 
-		if common.IsDuplicateTLSHost(convertOptions, cfg, rule.Host) {
+		if common.IsSuppressedTLSHost(convertOptions, cfg, rule.Host) {
 			domainBuilder.Event = common.DuplicatedTls
-			if sslPassthroughOwner := convertOptions.SSLPassthroughTLSHosts[rule.Host]; sslPassthroughOwner != nil {
+			if sslPassthroughOwner := convertOptions.PassthroughTLSHostOwners[rule.Host]; sslPassthroughOwner != nil {
 				domainBuilder.PreIngress = sslPassthroughOwner
 			} else if preDomainBuilder != nil {
 				domainBuilder.PreIngress = preDomainBuilder.Ingress
@@ -526,7 +526,7 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 		if wrapperGateway.IsHTTPS() {
 			domainBuilder.Event = common.DuplicatedTls
 			domainBuilder.PreIngress = preDomainBuilder.Ingress
-			common.AddDuplicateTLSHost(convertOptions, cfg, rule.Host)
+			common.AddSuppressedTLSHost(convertOptions, cfg, rule.Host)
 			convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
 				domainBuilder.Build())
 			continue
@@ -758,7 +758,7 @@ func (c *controller) ConvertTLSRoute(convertOptions *common.ConvertOptions, wrap
 	}
 
 	for _, rule := range ingressV1Beta.Rules {
-		if common.IsDuplicateTLSHost(convertOptions, cfg, rule.Host) {
+		if common.IsSuppressedTLSHost(convertOptions, cfg, rule.Host) {
 			IngressLog.Warnf("ignore duplicated ssl passthrough ingress rule %s:%s for host %q in cluster %s", cfg.Namespace, cfg.Name, rule.Host, c.options.ClusterId)
 			continue
 		}

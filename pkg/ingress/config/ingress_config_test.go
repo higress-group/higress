@@ -199,7 +199,7 @@ func TestIngressTLSHostsForSSLPassthroughRequiresRootBackend(t *testing.T) {
 	}
 }
 
-func TestPrepareDuplicateTLSHostsUsesFirstRootPathOwnerForSSLPassthrough(t *testing.T) {
+func TestPrepareTLSHostOwnershipUsesFirstRootPathOwnerForSSLPassthrough(t *testing.T) {
 	m := &IngressConfig{}
 	configs := []common.WrapperConfig{
 		{
@@ -253,17 +253,17 @@ func TestPrepareDuplicateTLSHostsUsesFirstRootPathOwnerForSSLPassthrough(t *test
 	}
 
 	options := &common.ConvertOptions{}
-	m.prepareDuplicateTLSHosts(options, configs, nil)
+	m.prepareTLSHostOwnership(options, configs, nil)
 
-	if len(options.SSLPassthroughTLSHosts) != 0 {
-		t.Fatalf("unexpected ssl passthrough owners: %+v", options.SSLPassthroughTLSHosts)
+	if len(options.PassthroughTLSHostOwners) != 0 {
+		t.Fatalf("unexpected ssl passthrough owners: %+v", options.PassthroughTLSHostOwners)
 	}
-	if !common.IsDuplicateTLSHost(options, configs[1].Config, "example.com") {
-		t.Fatal("later ssl passthrough root ingress was not marked as duplicated")
+	if !common.IsSuppressedTLSHost(options, configs[1].Config, "example.com") {
+		t.Fatal("later ssl passthrough root ingress was not marked as suppressed")
 	}
 }
 
-func TestPrepareDuplicateTLSHostsAllowsFirstRootPathSSLPassthroughOwner(t *testing.T) {
+func TestPrepareTLSHostOwnershipAllowsFirstRootPathSSLPassthroughOwner(t *testing.T) {
 	m := &IngressConfig{}
 	configs := []common.WrapperConfig{
 		{
@@ -317,17 +317,17 @@ func TestPrepareDuplicateTLSHostsAllowsFirstRootPathSSLPassthroughOwner(t *testi
 	}
 
 	options := &common.ConvertOptions{}
-	m.prepareDuplicateTLSHosts(options, configs, nil)
+	m.prepareTLSHostOwnership(options, configs, nil)
 
-	if !common.IsSSLPassthroughTLSHostOwner(options, configs[1].Config, "example.com") {
+	if !common.IsPassthroughTLSHostOwner(options, configs[1].Config, "example.com") {
 		t.Fatal("first root ssl passthrough ingress was not recorded as owner")
 	}
-	if common.IsDuplicateTLSHost(options, configs[1].Config, "example.com") {
-		t.Fatal("first root ssl passthrough ingress was marked as duplicated")
+	if common.IsSuppressedTLSHost(options, configs[1].Config, "example.com") {
+		t.Fatal("first root ssl passthrough ingress was marked as suppressed")
 	}
 }
 
-func TestPrepareDuplicateTLSHostsIgnoresHTTPOnlyIngressForHTTPSFallback(t *testing.T) {
+func TestPrepareTLSHostOwnershipIgnoresHTTPOnlyIngressForHTTPSFallback(t *testing.T) {
 	m := &IngressConfig{}
 	configs := []common.WrapperConfig{
 		{
@@ -385,7 +385,7 @@ func TestPrepareDuplicateTLSHostsIgnoresHTTPOnlyIngressForHTTPSFallback(t *testi
 	}
 
 	options := &common.ConvertOptions{}
-	m.prepareDuplicateTLSHosts(options, configs, &cert.Config{
+	m.prepareTLSHostOwnership(options, configs, &cert.Config{
 		CredentialConfig: []cert.CredentialEntry{
 			{
 				Domains:   []string{"example.com"},
@@ -394,8 +394,8 @@ func TestPrepareDuplicateTLSHostsIgnoresHTTPOnlyIngressForHTTPSFallback(t *testi
 		},
 	})
 
-	if common.IsDuplicateTLSHost(options, configs[1].Config, "example.com") {
-		t.Fatal("tls ingress was marked as duplicated by an earlier http-only ingress")
+	if common.IsSuppressedTLSHost(options, configs[1].Config, "example.com") {
+		t.Fatal("tls ingress was marked as suppressed by an earlier http-only ingress")
 	}
 }
 
