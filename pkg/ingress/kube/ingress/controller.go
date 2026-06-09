@@ -735,6 +735,13 @@ func (c *controller) ConvertHTTPRoute(convertOptions *common.ConvertOptions, wra
 }
 
 func (c *controller) ConvertTLSRoute(convertOptions *common.ConvertOptions, wrapper *common.WrapperConfig) error {
+	if convertOptions == nil {
+		return fmt.Errorf("convertOptions is nil")
+	}
+	if wrapper == nil {
+		return fmt.Errorf("wrapperConfig is nil")
+	}
+
 	if convertOptions.VirtualServices == nil {
 		convertOptions.VirtualServices = map[string]*common.WrapperVirtualService{}
 	}

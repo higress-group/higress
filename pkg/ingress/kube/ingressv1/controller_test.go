@@ -193,6 +193,36 @@ func TestSSLPassthroughConvertGatewayAndTLSRoute(t *testing.T) {
 	}
 }
 
+func TestSSLPassthroughConvertGatewayRejectsNilInputs(t *testing.T) {
+	c := controller{}
+	wrapper := &common.WrapperConfig{
+		Config:            &config.Config{},
+		AnnotationsConfig: &annotations.Ingress{},
+	}
+
+	if err := c.ConvertGateway(nil, wrapper, nil); err == nil {
+		t.Fatal("ConvertGateway() with nil convertOptions returned nil error")
+	}
+	if err := c.ConvertGateway(&common.ConvertOptions{}, nil, nil); err == nil {
+		t.Fatal("ConvertGateway() with nil wrapper returned nil error")
+	}
+}
+
+func TestSSLPassthroughConvertTLSRouteRejectsNilInputs(t *testing.T) {
+	c := controller{}
+	wrapper := &common.WrapperConfig{
+		Config:            &config.Config{},
+		AnnotationsConfig: &annotations.Ingress{},
+	}
+
+	if err := c.ConvertTLSRoute(nil, wrapper); err == nil {
+		t.Fatal("ConvertTLSRoute() with nil convertOptions returned nil error")
+	}
+	if err := c.ConvertTLSRoute(&common.ConvertOptions{}, nil); err == nil {
+		t.Fatal("ConvertTLSRoute() with nil wrapper returned nil error")
+	}
+}
+
 func TestSSLPassthroughUsesConfiguredHTTPSPort(t *testing.T) {
 	c := controller{
 		options: common.Options{
