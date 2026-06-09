@@ -440,7 +440,7 @@ func (m *IngressConfig) convertGateways(configs []common.WrapperConfig) []config
 	if err != nil {
 		IngressLog.Errorf("Get higress https configmap err %v", err)
 	}
-	m.prepareTLSHostOwnership(&convertOptions, configs, httpsCredentialConfig)
+	m.preparePassthroughTLSHostOwners(&convertOptions, configs)
 	for idx := range configs {
 		cfg := configs[idx]
 		clusterId := common.GetClusterId(cfg.Config.Annotations)
@@ -507,11 +507,7 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 		}
 	}
 
-	httpsCredentialConfig, err := m.httpsConfigMgr.GetConfigFromConfigmap()
-	if err != nil {
-		IngressLog.Errorf("Get higress https configmap err %v", err)
-	}
-	m.prepareTLSHostOwnership(&convertOptions, configs, httpsCredentialConfig)
+	m.preparePassthroughTLSHostOwners(&convertOptions, configs)
 
 	// convert http route
 	for idx := range configs {
@@ -640,13 +636,14 @@ func virtualServiceNameAndClusterID(cleanHost string, wrapperVS *common.WrapperV
 	return common.CreateConvertedName(constants.IstioIngressGatewayName, cfg.Namespace, cfg.Name, cleanHost), common.GetClusterId(cfg.Annotations)
 }
 
-func (m *IngressConfig) prepareTLSHostOwnership(convertOptions *common.ConvertOptions, configs []common.WrapperConfig, httpsCredentialConfig *cert.Config) {
+func (m *IngressConfig) preparePassthroughTLSHostOwners(convertOptions *common.ConvertOptions, configs []common.WrapperConfig) {
 	if convertOptions.PassthroughTLSHostOwners == nil {
 		convertOptions.PassthroughTLSHostOwners = map[string]*config.Config{}
 	}
 
-	// A host can be taken over by SSL passthrough only when the first root path
-	// seen for that host belongs to an SSL passthrough ingress.
+	// A host can be taken over by SSL passthrough only when the first root path seen for that host
+	// belongs to an SSL passthrough ingress. Later conversion stages derive all skip decisions from
+	// this single owner map.
 	firstRootPathHosts := map[string]struct{}{}
 	for idx := range configs {
 		cfg := configs[idx]
@@ -661,52 +658,6 @@ func (m *IngressConfig) prepareTLSHostOwnership(convertOptions *common.ConvertOp
 			firstRootPathHosts[host] = struct{}{}
 			if cfg.AnnotationsConfig.IsSSLPassthrough() {
 				convertOptions.PassthroughTLSHostOwners[host] = cfg.Config
-			}
-		}
-	}
-
-	// Suppress only the TLS generation for conflicting ingresses. HTTP routes
-	// remain eligible for normal route merging.
-	tlsServerOwners := map[string]*config.Config{}
-	for idx := range configs {
-		cfg := configs[idx]
-		if cfg.AnnotationsConfig.IsCanary() {
-			continue
-		}
-
-		if cfg.AnnotationsConfig.IsSSLPassthrough() {
-			hosts := ingressRuleHosts(cfg.Config.Spec)
-			for _, host := range hosts {
-				if !common.IsPassthroughTLSHostOwner(convertOptions, cfg.Config, host) {
-					common.AddSuppressedTLSHost(convertOptions, cfg.Config, host)
-					continue
-				}
-				owner, exist := tlsServerOwners[host]
-				if exist && !common.SameConfig(owner, cfg.Config) {
-					common.AddSuppressedTLSHost(convertOptions, cfg.Config, host)
-					continue
-				}
-				if !exist {
-					tlsServerOwners[host] = cfg.Config
-				}
-			}
-			continue
-		}
-
-		hosts := ingressTLSHosts(cfg, httpsCredentialConfig)
-		for _, host := range hosts {
-			if _, exist := convertOptions.PassthroughTLSHostOwners[host]; exist {
-				common.AddSuppressedTLSHost(convertOptions, cfg.Config, host)
-				continue
-			}
-
-			owner, exist := tlsServerOwners[host]
-			if exist && !common.SameConfig(owner, cfg.Config) {
-				common.AddSuppressedTLSHost(convertOptions, cfg.Config, host)
-				continue
-			}
-			if !exist {
-				tlsServerOwners[host] = cfg.Config
 			}
 		}
 	}

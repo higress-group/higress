@@ -145,13 +145,6 @@ func (i *IngressDomainCache) Extract() model.IngressDomainCollection {
 	}
 }
 
-func AddSuppressedTLSHost(convertOptions *ConvertOptions, cfg *config.Config, host string) {
-	if convertOptions.SuppressedTLSHosts == nil {
-		convertOptions.SuppressedTLSHosts = map[TLSHostKey]struct{}{}
-	}
-	convertOptions.SuppressedTLSHosts[NewTLSHostKey(cfg, host)] = struct{}{}
-}
-
 func SameConfig(left *config.Config, right *config.Config) bool {
 	if left == nil || right == nil {
 		return left == right
@@ -159,14 +152,6 @@ func SameConfig(left *config.Config, right *config.Config) bool {
 	return GetClusterId(left.Annotations) == GetClusterId(right.Annotations) &&
 		left.Namespace == right.Namespace &&
 		left.Name == right.Name
-}
-
-func IsSuppressedTLSHost(convertOptions *ConvertOptions, cfg *config.Config, host string) bool {
-	if convertOptions == nil || len(convertOptions.SuppressedTLSHosts) == 0 {
-		return false
-	}
-	_, exist := convertOptions.SuppressedTLSHosts[NewTLSHostKey(cfg, host)]
-	return exist
 }
 
 func IsPassthroughTLSHostOwner(convertOptions *ConvertOptions, cfg *config.Config, host string) bool {
@@ -181,23 +166,6 @@ func PassthroughTLSHostOwner(convertOptions *ConvertOptions, host string) *confi
 		return nil
 	}
 	return convertOptions.PassthroughTLSHostOwners[host]
-}
-
-type TLSHostKey struct {
-	ClusterId cluster.ID
-	Namespace string
-	Name      string
-	Host      string
-}
-
-func NewTLSHostKey(cfg *config.Config, host string) TLSHostKey {
-	key := TLSHostKey{Host: host}
-	if cfg != nil {
-		key.ClusterId = GetClusterId(cfg.Annotations)
-		key.Namespace = cfg.Namespace
-		key.Name = cfg.Name
-	}
-	return key
 }
 
 type ConvertOptions struct {
@@ -221,9 +189,6 @@ type ConvertOptions struct {
 	HTTPRoutes map[string][]*WrapperHTTPRoute
 
 	CanaryIngresses []*WrapperConfig
-
-	// Ingress+host pairs whose TLS server or TLS passthrough route should be skipped.
-	SuppressedTLSHosts map[TLSHostKey]struct{}
 
 	// Host to the ingress that owns TLS passthrough for that host.
 	PassthroughTLSHostOwners map[string]*config.Config

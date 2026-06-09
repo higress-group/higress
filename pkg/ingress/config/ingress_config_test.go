@@ -29,7 +29,6 @@ import (
 	ingress "k8s.io/api/networking/v1"
 	ingressv1beta1 "k8s.io/api/networking/v1beta1"
 
-	"github.com/alibaba/higress/v2/pkg/cert"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/annotations"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/common"
 	controllerv1beta1 "github.com/alibaba/higress/v2/pkg/ingress/kube/ingress"
@@ -199,7 +198,7 @@ func TestIngressTLSHostsForSSLPassthroughRequiresRootBackend(t *testing.T) {
 	}
 }
 
-func TestPrepareTLSHostOwnershipUsesFirstRootPathOwnerForSSLPassthrough(t *testing.T) {
+func TestPreparePassthroughTLSHostOwnersUsesFirstRootPathOwner(t *testing.T) {
 	m := &IngressConfig{}
 	configs := []common.WrapperConfig{
 		{
@@ -253,17 +252,14 @@ func TestPrepareTLSHostOwnershipUsesFirstRootPathOwnerForSSLPassthrough(t *testi
 	}
 
 	options := &common.ConvertOptions{}
-	m.prepareTLSHostOwnership(options, configs, nil)
+	m.preparePassthroughTLSHostOwners(options, configs)
 
 	if len(options.PassthroughTLSHostOwners) != 0 {
 		t.Fatalf("unexpected ssl passthrough owners: %+v", options.PassthroughTLSHostOwners)
 	}
-	if !common.IsSuppressedTLSHost(options, configs[1].Config, "example.com") {
-		t.Fatal("later ssl passthrough root ingress was not marked as suppressed")
-	}
 }
 
-func TestPrepareTLSHostOwnershipAllowsFirstRootPathSSLPassthroughOwner(t *testing.T) {
+func TestPreparePassthroughTLSHostOwnersAllowsFirstRootPathSSLPassthroughOwner(t *testing.T) {
 	m := &IngressConfig{}
 	configs := []common.WrapperConfig{
 		{
@@ -317,17 +313,14 @@ func TestPrepareTLSHostOwnershipAllowsFirstRootPathSSLPassthroughOwner(t *testin
 	}
 
 	options := &common.ConvertOptions{}
-	m.prepareTLSHostOwnership(options, configs, nil)
+	m.preparePassthroughTLSHostOwners(options, configs)
 
 	if !common.IsPassthroughTLSHostOwner(options, configs[1].Config, "example.com") {
 		t.Fatal("first root ssl passthrough ingress was not recorded as owner")
 	}
-	if common.IsSuppressedTLSHost(options, configs[1].Config, "example.com") {
-		t.Fatal("first root ssl passthrough ingress was marked as suppressed")
-	}
 }
 
-func TestPrepareTLSHostOwnershipIgnoresHTTPOnlyIngressForHTTPSFallback(t *testing.T) {
+func TestPreparePassthroughTLSHostOwnersIgnoresHTTPOnlyIngressForHTTPSFallback(t *testing.T) {
 	m := &IngressConfig{}
 	configs := []common.WrapperConfig{
 		{
@@ -385,17 +378,10 @@ func TestPrepareTLSHostOwnershipIgnoresHTTPOnlyIngressForHTTPSFallback(t *testin
 	}
 
 	options := &common.ConvertOptions{}
-	m.prepareTLSHostOwnership(options, configs, &cert.Config{
-		CredentialConfig: []cert.CredentialEntry{
-			{
-				Domains:   []string{"example.com"},
-				TLSSecret: "default/fallback-cert",
-			},
-		},
-	})
+	m.preparePassthroughTLSHostOwners(options, configs)
 
-	if common.IsSuppressedTLSHost(options, configs[1].Config, "example.com") {
-		t.Fatal("tls ingress was marked as suppressed by an earlier http-only ingress")
+	if len(options.PassthroughTLSHostOwners) != 0 {
+		t.Fatalf("unexpected ssl passthrough owners: %+v", options.PassthroughTLSHostOwners)
 	}
 }
 
