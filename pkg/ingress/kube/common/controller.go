@@ -131,10 +131,11 @@ func (w *WrapperVirtualService) HasTLSRouteForHost(host string) bool {
 	if w == nil || w.VirtualService == nil {
 		return false
 	}
+	host = wildcardHost(host)
 	for _, route := range w.VirtualService.Tls {
 		for _, match := range route.Match {
 			for _, sniHost := range match.SniHosts {
-				if sniHost == host {
+				if wildcardHost(sniHost) == host {
 					return true
 				}
 			}

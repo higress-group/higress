@@ -589,12 +589,7 @@ func (c *controller) ConvertHTTPRoute(convertOptions *common.ConvertOptions, wra
 
 		wrapperVS, exist := convertOptions.VirtualServices[rule.Host]
 		if !exist {
-			wrapperVS = &common.WrapperVirtualService{
-				VirtualService: &networking.VirtualService{
-					Hosts: []string{rule.Host},
-				},
-				WrapperConfig: wrapper,
-			}
+			wrapperVS = common.NewWrapperVirtualService(rule.Host, wrapper)
 			convertOptions.VirtualServices[rule.Host] = wrapperVS
 		}
 
@@ -834,12 +829,7 @@ func (c *controller) ApplyDefaultBackend(convertOptions *common.ConvertOptions, 
 		wirecardVS, exist := convertOptions.VirtualServices[host]
 		if !exist || !wirecardVS.ConfiguredDefaultBackend {
 			if !exist {
-				wirecardVS = &common.WrapperVirtualService{
-					VirtualService: &networking.VirtualService{
-						Hosts: []string{host},
-					},
-					WrapperConfig: wrapper,
-				}
+				wirecardVS = common.NewWrapperVirtualService(host, wrapper)
 				convertOptions.VirtualServices[host] = wirecardVS
 			}
 

@@ -747,6 +747,41 @@ func TestSSLPassthroughUsesRootPathBackend(t *testing.T) {
 	}
 }
 
+func TestSSLPassthroughWildcardHostKeepsVirtualServiceConsistent(t *testing.T) {
+	c := controller{}
+	wrapper := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "tls-passthrough-wildcard",
+			},
+			Spec: ingressSpecWithSSLPassthroughBackend("", "root", 443),
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+		},
+	}
+
+	routeOptions := &common.ConvertOptions{}
+	if err := c.ConvertHTTPRoute(routeOptions, wrapper); err != nil {
+		t.Fatalf("ConvertHTTPRoute() error = %v", err)
+	}
+	if err := c.ConvertTLSRoute(routeOptions, wrapper); err != nil {
+		t.Fatalf("ConvertTLSRoute() error = %v", err)
+	}
+
+	vs := routeOptions.VirtualServices[""].VirtualService
+	if got := vs.Hosts; len(got) != 1 || got[0] != "*" {
+		t.Fatalf("virtual service hosts mismatch, got %+v", got)
+	}
+	if len(vs.Tls) != 1 {
+		t.Fatalf("tls route count mismatch, want 1, got %d", len(vs.Tls))
+	}
+	if got := vs.Tls[0].Match[0].SniHosts; len(got) != 1 || got[0] != "*" {
+		t.Fatalf("sni hosts mismatch, got %+v", got)
+	}
+}
+
 func TestSSLPassthroughIgnoresNonRootPath(t *testing.T) {
 	c := controller{}
 	wrapper := &common.WrapperConfig{

@@ -32,6 +32,8 @@ func TestWildcardHostForSSLPassthrough(t *testing.T) {
 
 	route := CreateTLSRoute("", []*networking.RouteDestination{{Weight: 100}})
 	assert.Equal(t, []string{"*"}, route.Match[0].SniHosts)
+	vs.VirtualService.Tls = append(vs.VirtualService.Tls, route)
+	assert.True(t, vs.HasTLSRouteForHost(""))
 }
 
 func TestIngressDomainCache(t *testing.T) {
