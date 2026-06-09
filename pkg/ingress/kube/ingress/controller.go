@@ -1242,7 +1242,7 @@ func (c *controller) backendToTLSRouteDestination(backend *ingress.IngressBacken
 	}
 
 	if backend.ServiceName == "" {
-		if config != nil {
+		if config != nil && len(config.McpDestination) > 0 {
 			return httpRouteDestinationToRouteDestination(config.McpDestination), common.Normal
 		}
 		return nil, common.InvalidBackendService

@@ -18,9 +18,21 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/config"
 )
+
+func TestWildcardHostForSSLPassthrough(t *testing.T) {
+	server := CreateSSLPassthroughServer("", 443, "")
+	assert.Equal(t, []string{"*"}, server.Hosts)
+
+	vs := NewWrapperVirtualService("", &WrapperConfig{})
+	assert.Equal(t, []string{"*"}, vs.VirtualService.Hosts)
+
+	route := CreateTLSRoute("", []*networking.RouteDestination{{Weight: 100}})
+	assert.Equal(t, []string{"*"}, route.Match[0].SniHosts)
+}
 
 func TestIngressDomainCache(t *testing.T) {
 	cache := NewIngressDomainCache()

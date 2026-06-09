@@ -450,6 +450,20 @@ func TestSSLPassthroughDuplicateTLSHostUsesExistingGatewayOwner(t *testing.T) {
 	}
 }
 
+func TestBackendToTLSRouteDestinationRejectsEmptyMCPDestination(t *testing.T) {
+	c := controller{}
+	backend := &ingress.IngressBackend{}
+	config := &annotations.DestinationConfig{}
+
+	destinations, event := c.backendToTLSRouteDestination(backend, "default", config)
+	if event != common.InvalidBackendService {
+		t.Fatalf("event mismatch, want InvalidBackendService, got %s", event)
+	}
+	if len(destinations) != 0 {
+		t.Fatalf("destination count mismatch, want 0, got %d", len(destinations))
+	}
+}
+
 func TestSSLPassthroughNonRootIngressDoesNotBlockLaterRootIngress(t *testing.T) {
 	c := controller{
 		options: common.Options{

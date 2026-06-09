@@ -829,6 +829,27 @@ func TestSSLPassthroughKeepsMCPResourceBackend(t *testing.T) {
 	}
 }
 
+func TestBackendToTLSRouteDestinationRejectsEmptyMCPDestination(t *testing.T) {
+	c := controller{}
+	apiGroup := "networking.higress.io"
+	backend := &v1.IngressBackend{
+		Resource: &corev1.TypedLocalObjectReference{
+			APIGroup: &apiGroup,
+			Kind:     "McpBridge",
+			Name:     "default",
+		},
+	}
+	config := &annotations.DestinationConfig{}
+
+	destinations, event := c.backendToTLSRouteDestination(backend, "default", config)
+	if event != common.InvalidBackendService {
+		t.Fatalf("event mismatch, want InvalidBackendService, got %s", event)
+	}
+	if len(destinations) != 0 {
+		t.Fatalf("destination count mismatch, want 0, got %d", len(destinations))
+	}
+}
+
 func ingressSpecWithSSLPassthroughBackend(host, service string, port int32) v1.IngressSpec {
 	return ingressSpecWithSSLPassthroughPaths(host, []v1.HTTPIngressPath{
 		ingressPath("/", service, port),

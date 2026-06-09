@@ -87,7 +87,7 @@ func CreateSSLPassthroughServer(host string, port uint32, clusterId cluster.ID) 
 			Protocol: string(protocol.TLS),
 			Name:     CreateConvertedName("tls-"+strconv.FormatUint(uint64(port), 10)+"-ingress", clusterId.String()),
 		},
-		Hosts: []string{host},
+		Hosts: []string{wildcardHost(host)},
 		Tls: &networking.ServerTLSSettings{
 			Mode: networking.ServerTLSSettings_PASSTHROUGH,
 		},
@@ -146,7 +146,7 @@ func (w *WrapperVirtualService) HasTLSRouteForHost(host string) bool {
 func NewWrapperVirtualService(host string, wrapper *WrapperConfig) *WrapperVirtualService {
 	return &WrapperVirtualService{
 		VirtualService: &networking.VirtualService{
-			Hosts: []string{host},
+			Hosts: []string{wildcardHost(host)},
 		},
 		WrapperConfig: wrapper,
 	}
@@ -156,11 +156,18 @@ func CreateTLSRoute(host string, routeDestination []*networking.RouteDestination
 	return &networking.TLSRoute{
 		Match: []*networking.TLSMatchAttributes{
 			{
-				SniHosts: []string{host},
+				SniHosts: []string{wildcardHost(host)},
 			},
 		},
 		Route: routeDestination,
 	}
+}
+
+func wildcardHost(host string) string {
+	if host == "" {
+		return "*"
+	}
+	return host
 }
 
 type WrapperTrafficPolicy struct {
