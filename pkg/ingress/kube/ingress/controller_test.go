@@ -16,9 +16,11 @@ package ingress
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/alibaba/higress/v2/pkg/cert"
 	"github.com/google/go-cmp/cmp"
 	"istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/model"
@@ -345,6 +347,106 @@ func TestSSLPassthroughSkipsDuplicatedTLSHost(t *testing.T) {
 	}
 	if len(options.VirtualServices) != 0 {
 		t.Fatalf("unexpected virtual services: %+v", options.VirtualServices)
+	}
+}
+
+func TestSSLPassthroughDuplicateTLSHostUsesExistingGatewayOwner(t *testing.T) {
+	c := controller{
+		options: common.Options{
+			GatewayHttpPort:  80,
+			GatewayHttpsPort: 443,
+		},
+	}
+	primary := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "tls-primary",
+			},
+			Spec: ingress.IngressSpec{
+				TLS: []ingress.IngressTLS{
+					{Hosts: []string{"example.com"}},
+				},
+				Rules: []ingress.IngressRule{
+					{
+						Host: "example.com",
+						IngressRuleValue: ingress.IngressRuleValue{
+							HTTP: &ingress.HTTPIngressRuleValue{
+								Paths: []ingress.HTTPIngressPath{
+									{
+										Path: "/",
+										Backend: ingress.IngressBackend{
+											ServiceName: "primary",
+											ServicePort: intstr.FromInt(443),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{},
+	}
+	duplicate := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "tls-passthrough-duplicate",
+			},
+			Spec: ingress.IngressSpec{
+				Rules: []ingress.IngressRule{
+					{
+						Host: "example.com",
+						IngressRuleValue: ingress.IngressRuleValue{
+							HTTP: &ingress.HTTPIngressRuleValue{
+								Paths: []ingress.HTTPIngressPath{
+									{
+										Path: "/",
+										Backend: ingress.IngressBackend{
+											ServiceName: "duplicate",
+											ServicePort: intstr.FromInt(443),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+		},
+	}
+	httpsCredentialConfig := &cert.Config{
+		CredentialConfig: []cert.CredentialEntry{
+			{
+				Domains:   []string{"example.com"},
+				TLSSecret: "default/example-tls",
+			},
+		},
+	}
+
+	options := &common.ConvertOptions{
+		Gateways:           map[string]*common.WrapperGateway{},
+		IngressDomainCache: common.NewIngressDomainCache(),
+		DuplicateTLSHosts:  map[common.TLSHostKey]struct{}{common.NewTLSHostKey(duplicate.Config, "example.com"): {}},
+	}
+	if err := c.ConvertGateway(options, primary, httpsCredentialConfig); err != nil {
+		t.Fatalf("ConvertGateway(primary) error = %v", err)
+	}
+	if err := c.ConvertGateway(options, duplicate, httpsCredentialConfig); err != nil {
+		t.Fatalf("ConvertGateway(duplicate) error = %v", err)
+	}
+
+	if len(options.IngressDomainCache.Invalid) != 1 {
+		t.Fatalf("invalid domain count mismatch, want 1, got %d", len(options.IngressDomainCache.Invalid))
+	}
+	invalid := options.IngressDomainCache.Invalid[0]
+	if !strings.Contains(invalid.Error, "tls-primary") {
+		t.Fatalf("invalid domain error does not reference existing gateway owner: %s", invalid.Error)
 	}
 }
 

@@ -429,6 +429,19 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 			if _, ok := rootHTTPIngressPath(rule.HTTP.Paths); !ok {
 				continue
 			}
+			if !common.IsSSLPassthroughTLSHostOwner(convertOptions, cfg, rule.Host) {
+				if common.IsDuplicateTLSHost(convertOptions, cfg, rule.Host) {
+					domainBuilder.Protocol = common.HTTPS
+					domainBuilder.Event = common.DuplicatedTls
+					domainBuilder.PreIngress = common.SSLPassthroughTLSHostOwner(convertOptions, rule.Host)
+					if domainBuilder.PreIngress == nil && preDomainBuilder != nil {
+						domainBuilder.PreIngress = preDomainBuilder.Ingress
+					}
+					convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
+						domainBuilder.Build())
+				}
+				continue
+			}
 
 			domainBuilder.Protocol = common.HTTPS
 			if wrapperGateway.IsHTTPS() {
@@ -495,6 +508,18 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 		domainBuilder.Protocol = common.HTTPS
 
 		domainBuilder.SecretName = path.Join(c.options.ClusterId.String(), cfg.Namespace, secretName)
+
+		if common.IsDuplicateTLSHost(convertOptions, cfg, rule.Host) {
+			domainBuilder.Event = common.DuplicatedTls
+			if sslPassthroughOwner := convertOptions.SSLPassthroughTLSHosts[rule.Host]; sslPassthroughOwner != nil {
+				domainBuilder.PreIngress = sslPassthroughOwner
+			} else if preDomainBuilder != nil {
+				domainBuilder.PreIngress = preDomainBuilder.Ingress
+			}
+			convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
+				domainBuilder.Build())
+			continue
+		}
 
 		// There is a matching secret and the gateway has already a tls secret.
 		// We should report the duplicated tls secret event.

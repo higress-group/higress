@@ -440,6 +440,7 @@ func (m *IngressConfig) convertGateways(configs []common.WrapperConfig) []config
 	if err != nil {
 		IngressLog.Errorf("Get higress https configmap err %v", err)
 	}
+	m.prepareDuplicateTLSHosts(&convertOptions, configs, httpsCredentialConfig)
 	for idx := range configs {
 		cfg := configs[idx]
 		clusterId := common.GetClusterId(cfg.Config.Annotations)
@@ -506,7 +507,11 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 		}
 	}
 
-	m.prepareDuplicateTLSHosts(&convertOptions, configs)
+	httpsCredentialConfig, err := m.httpsConfigMgr.GetConfigFromConfigmap()
+	if err != nil {
+		IngressLog.Errorf("Get higress https configmap err %v", err)
+	}
+	m.prepareDuplicateTLSHosts(&convertOptions, configs, httpsCredentialConfig)
 
 	// convert http route
 	for idx := range configs {
@@ -635,19 +640,62 @@ func virtualServiceNameAndClusterID(cleanHost string, wrapperVS *common.WrapperV
 	return common.CreateConvertedName(constants.IstioIngressGatewayName, cfg.Namespace, cfg.Name, cleanHost), common.GetClusterId(cfg.Annotations)
 }
 
-func (m *IngressConfig) prepareDuplicateTLSHosts(convertOptions *common.ConvertOptions, configs []common.WrapperConfig) {
-	httpsCredentialConfig, err := m.httpsConfigMgr.GetConfigFromConfigmap()
-	if err != nil {
-		IngressLog.Errorf("Get higress https configmap err %v", err)
+func (m *IngressConfig) prepareDuplicateTLSHosts(convertOptions *common.ConvertOptions, configs []common.WrapperConfig, httpsCredentialConfig *cert.Config) {
+	if convertOptions.SSLPassthroughTLSHosts == nil {
+		convertOptions.SSLPassthroughTLSHosts = map[string]*config.Config{}
 	}
+
+	rootPathOwners := map[string]*config.Config{}
+	for idx := range configs {
+		cfg := configs[idx]
+		if cfg.AnnotationsConfig.IsCanary() {
+			continue
+		}
+
+		for _, host := range ingressRootPathHosts(cfg.Config.Spec) {
+			_, exist := rootPathOwners[host]
+			if !exist {
+				rootPathOwners[host] = cfg.Config
+				if cfg.AnnotationsConfig.IsSSLPassthrough() {
+					convertOptions.SSLPassthroughTLSHosts[host] = cfg.Config
+				}
+			}
+		}
+	}
+
 	tlsHostOwners := map[string]*config.Config{}
 	for idx := range configs {
 		cfg := configs[idx]
 		if cfg.AnnotationsConfig.IsCanary() {
 			continue
 		}
+
+		if cfg.AnnotationsConfig.IsSSLPassthrough() {
+			hosts := ingressRuleHosts(cfg.Config.Spec)
+			for _, host := range hosts {
+				if !common.IsSSLPassthroughTLSHostOwner(convertOptions, cfg.Config, host) {
+					common.AddDuplicateTLSHost(convertOptions, cfg.Config, host)
+					continue
+				}
+				owner, exist := tlsHostOwners[host]
+				if exist && !common.SameConfig(owner, cfg.Config) {
+					common.AddDuplicateTLSHost(convertOptions, cfg.Config, host)
+					continue
+				}
+				if !exist {
+					tlsHostOwners[host] = cfg.Config
+				}
+			}
+			continue
+		}
+
 		hosts := ingressTLSHosts(cfg, httpsCredentialConfig)
 		for _, host := range hosts {
+			if _, exist := convertOptions.SSLPassthroughTLSHosts[host]; exist {
+				common.AddDuplicateTLSHost(convertOptions, cfg.Config, host)
+				continue
+			}
+
 			owner, exist := tlsHostOwners[host]
 			if exist && !common.SameConfig(owner, cfg.Config) {
 				common.AddDuplicateTLSHost(convertOptions, cfg.Config, host)
@@ -660,6 +708,17 @@ func (m *IngressConfig) prepareDuplicateTLSHosts(convertOptions *common.ConvertO
 	}
 }
 
+func ingressRootPathHosts(spec config.Spec) []string {
+	switch ingressSpec := spec.(type) {
+	case networkingv1.IngressSpec:
+		return ingressV1RootPathHosts(ingressSpec.Rules)
+	case networkingv1beta1.IngressSpec:
+		return ingressV1Beta1RootPathHosts(ingressSpec.Rules)
+	default:
+		return nil
+	}
+}
+
 func ingressTLSHosts(wrapper common.WrapperConfig, httpsCredentialConfig *cert.Config) []string {
 	if wrapper.AnnotationsConfig.IsSSLPassthrough() {
 		return ingressRuleHosts(wrapper.Config.Spec)
@@ -667,8 +726,14 @@ func ingressTLSHosts(wrapper common.WrapperConfig, httpsCredentialConfig *cert.C
 
 	switch spec := wrapper.Config.Spec.(type) {
 	case networkingv1.IngressSpec:
+		if len(spec.TLS) == 0 {
+			return nil
+		}
 		return ingressV1HTTPSHosts(spec, httpsCredentialConfig)
 	case networkingv1beta1.IngressSpec:
+		if len(spec.TLS) == 0 {
+			return nil
+		}
 		return ingressV1Beta1HTTPSHosts(spec, httpsCredentialConfig)
 	default:
 		return nil
@@ -707,6 +772,10 @@ func ingressV1Beta1HTTPSHosts(spec networkingv1beta1.IngressSpec, httpsCredentia
 }
 
 func ingressV1SSLPassthroughHosts(rules []networkingv1.IngressRule) []string {
+	return ingressV1RootPathHosts(rules)
+}
+
+func ingressV1RootPathHosts(rules []networkingv1.IngressRule) []string {
 	out := make([]string, 0, len(rules))
 	for _, rule := range rules {
 		if rule.HTTP == nil || !hasV1RootHTTPIngressPath(rule.HTTP.Paths) {
@@ -718,6 +787,10 @@ func ingressV1SSLPassthroughHosts(rules []networkingv1.IngressRule) []string {
 }
 
 func ingressV1Beta1SSLPassthroughHosts(rules []networkingv1beta1.IngressRule) []string {
+	return ingressV1Beta1RootPathHosts(rules)
+}
+
+func ingressV1Beta1RootPathHosts(rules []networkingv1beta1.IngressRule) []string {
 	out := make([]string, 0, len(rules))
 	for _, rule := range rules {
 		if rule.HTTP == nil || !hasV1Beta1RootHTTPIngressPath(rule.HTTP.Paths) {

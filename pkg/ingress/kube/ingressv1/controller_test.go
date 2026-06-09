@@ -15,8 +15,10 @@
 package ingressv1
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/alibaba/higress/v2/pkg/cert"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/annotations"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/common"
 	"github.com/google/go-cmp/cmp"
@@ -309,6 +311,129 @@ func TestSSLPassthroughSkipsDuplicatedTLSHost(t *testing.T) {
 	}
 	if len(options.VirtualServices) != 0 {
 		t.Fatalf("unexpected virtual services: %+v", options.VirtualServices)
+	}
+}
+
+func TestSSLPassthroughDuplicateTLSHostRecordsInvalidDomain(t *testing.T) {
+	c := controller{
+		options: common.Options{
+			GatewayHttpPort:  80,
+			GatewayHttpsPort: 443,
+		},
+	}
+	primary := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "tls-passthrough-primary",
+			},
+			Spec: ingressSpecWithSSLPassthroughBackend("example.com", "primary", 443),
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+		},
+	}
+	duplicate := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "tls-passthrough-duplicate",
+			},
+			Spec: ingressSpecWithSSLPassthroughBackend("example.com", "duplicate", 443),
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+		},
+	}
+
+	options := &common.ConvertOptions{
+		Gateways:               map[string]*common.WrapperGateway{},
+		IngressDomainCache:     common.NewIngressDomainCache(),
+		SSLPassthroughTLSHosts: map[string]*config.Config{"example.com": primary.Config},
+		DuplicateTLSHosts:      map[common.TLSHostKey]struct{}{common.NewTLSHostKey(duplicate.Config, "example.com"): {}},
+	}
+	if err := c.ConvertGateway(options, primary, nil); err != nil {
+		t.Fatalf("ConvertGateway(primary) error = %v", err)
+	}
+	if err := c.ConvertGateway(options, duplicate, nil); err != nil {
+		t.Fatalf("ConvertGateway(duplicate) error = %v", err)
+	}
+
+	if len(options.IngressDomainCache.Invalid) != 1 {
+		t.Fatalf("invalid domain count mismatch, want 1, got %d", len(options.IngressDomainCache.Invalid))
+	}
+	invalid := options.IngressDomainCache.Invalid[0]
+	if invalid.Error == "" {
+		t.Fatal("duplicated tls invalid domain error is empty")
+	}
+	if !strings.Contains(invalid.Error, "tls-passthrough-primary") {
+		t.Fatalf("invalid domain error does not reference previous ingress: %s", invalid.Error)
+	}
+}
+
+func TestSSLPassthroughDuplicateTLSHostUsesExistingGatewayOwner(t *testing.T) {
+	c := controller{
+		options: common.Options{
+			GatewayHttpPort:  80,
+			GatewayHttpsPort: 443,
+		},
+	}
+	primary := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "tls-primary",
+			},
+			Spec: v1.IngressSpec{
+				TLS: []v1.IngressTLS{
+					{Hosts: []string{"example.com"}},
+				},
+				Rules: []v1.IngressRule{
+					ingressRule("example.com", ingressPath("/", "primary", 443)),
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{},
+	}
+	duplicate := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "tls-passthrough-duplicate",
+			},
+			Spec: ingressSpecWithSSLPassthroughBackend("example.com", "duplicate", 443),
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+		},
+	}
+	httpsCredentialConfig := &cert.Config{
+		CredentialConfig: []cert.CredentialEntry{
+			{
+				Domains:   []string{"example.com"},
+				TLSSecret: "default/example-tls",
+			},
+		},
+	}
+
+	options := &common.ConvertOptions{
+		Gateways:           map[string]*common.WrapperGateway{},
+		IngressDomainCache: common.NewIngressDomainCache(),
+		DuplicateTLSHosts:  map[common.TLSHostKey]struct{}{common.NewTLSHostKey(duplicate.Config, "example.com"): {}},
+	}
+	if err := c.ConvertGateway(options, primary, httpsCredentialConfig); err != nil {
+		t.Fatalf("ConvertGateway(primary) error = %v", err)
+	}
+	if err := c.ConvertGateway(options, duplicate, httpsCredentialConfig); err != nil {
+		t.Fatalf("ConvertGateway(duplicate) error = %v", err)
+	}
+
+	if len(options.IngressDomainCache.Invalid) != 1 {
+		t.Fatalf("invalid domain count mismatch, want 1, got %d", len(options.IngressDomainCache.Invalid))
+	}
+	invalid := options.IngressDomainCache.Invalid[0]
+	if !strings.Contains(invalid.Error, "tls-primary") {
+		t.Fatalf("invalid domain error does not reference existing gateway owner: %s", invalid.Error)
 	}
 }
 

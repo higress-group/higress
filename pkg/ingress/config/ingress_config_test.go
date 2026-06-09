@@ -29,6 +29,7 @@ import (
 	ingress "k8s.io/api/networking/v1"
 	ingressv1beta1 "k8s.io/api/networking/v1beta1"
 
+	"github.com/alibaba/higress/v2/pkg/cert"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/annotations"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/common"
 	controllerv1beta1 "github.com/alibaba/higress/v2/pkg/ingress/kube/ingress"
@@ -195,6 +196,301 @@ func TestIngressTLSHostsForSSLPassthroughRequiresRootBackend(t *testing.T) {
 	}
 	if hosts[0] != "root.example.com" {
 		t.Fatalf("ssl passthrough host mismatch, got %s", hosts[0])
+	}
+}
+
+func TestPrepareDuplicateTLSHostsUsesFirstRootPathOwnerForSSLPassthrough(t *testing.T) {
+	m := &IngressConfig{}
+	configs := []common.WrapperConfig{
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "plain-root",
+				},
+				Spec: ingress.IngressSpec{
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{},
+		},
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "passthrough-root",
+				},
+				Spec: ingress.IngressSpec{
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{
+				SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+			},
+		},
+	}
+
+	options := &common.ConvertOptions{}
+	m.prepareDuplicateTLSHosts(options, configs, nil)
+
+	if len(options.SSLPassthroughTLSHosts) != 0 {
+		t.Fatalf("unexpected ssl passthrough owners: %+v", options.SSLPassthroughTLSHosts)
+	}
+	if !common.IsDuplicateTLSHost(options, configs[1].Config, "example.com") {
+		t.Fatal("later ssl passthrough root ingress was not marked as duplicated")
+	}
+}
+
+func TestPrepareDuplicateTLSHostsAllowsFirstRootPathSSLPassthroughOwner(t *testing.T) {
+	m := &IngressConfig{}
+	configs := []common.WrapperConfig{
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "non-root",
+				},
+				Spec: ingress.IngressSpec{
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/api"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{},
+		},
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "passthrough-root",
+				},
+				Spec: ingress.IngressSpec{
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{
+				SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+			},
+		},
+	}
+
+	options := &common.ConvertOptions{}
+	m.prepareDuplicateTLSHosts(options, configs, nil)
+
+	if !common.IsSSLPassthroughTLSHostOwner(options, configs[1].Config, "example.com") {
+		t.Fatal("first root ssl passthrough ingress was not recorded as owner")
+	}
+	if common.IsDuplicateTLSHost(options, configs[1].Config, "example.com") {
+		t.Fatal("first root ssl passthrough ingress was marked as duplicated")
+	}
+}
+
+func TestPrepareDuplicateTLSHostsIgnoresHTTPOnlyIngressForHTTPSFallback(t *testing.T) {
+	m := &IngressConfig{}
+	configs := []common.WrapperConfig{
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "http-only",
+				},
+				Spec: ingress.IngressSpec{
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/api"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{},
+		},
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "tls-ingress",
+				},
+				Spec: ingress.IngressSpec{
+					TLS: []ingress.IngressTLS{
+						{
+							Hosts:      []string{"example.com"},
+							SecretName: "example-com",
+						},
+					},
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/app"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{},
+		},
+	}
+
+	options := &common.ConvertOptions{}
+	m.prepareDuplicateTLSHosts(options, configs, &cert.Config{
+		CredentialConfig: []cert.CredentialEntry{
+			{
+				Domains:   []string{"example.com"},
+				TLSSecret: "default/fallback-cert",
+			},
+		},
+	})
+
+	if common.IsDuplicateTLSHost(options, configs[1].Config, "example.com") {
+		t.Fatal("tls ingress was marked as duplicated by an earlier http-only ingress")
+	}
+}
+
+func TestConvertGatewaysHonorsFirstRootPathSSLPassthroughOwner(t *testing.T) {
+	fake := kube.NewFakeClient()
+	options := common.Options{
+		Enable:           true,
+		ClusterId:        "ingress-v1",
+		RawClusterId:     "ingress-v1__",
+		GatewayHttpPort:  80,
+		GatewayHttpsPort: 443,
+	}
+	ingressController := controllerv1.NewController(fake, fake, options, nil)
+	m := NewIngressConfig(fake, nil, "wakanda", options)
+	m.remoteIngressControllers = map[cluster.ID]common.IngressController{
+		"ingress-v1": ingressController,
+	}
+
+	configs := []common.WrapperConfig{
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "tls-non-root",
+					Annotations: map[string]string{
+						common.ClusterIdAnnotation: "ingress-v1",
+					},
+				},
+				Spec: ingress.IngressSpec{
+					TLS: []ingress.IngressTLS{
+						{
+							Hosts:      []string{"example.com"},
+							SecretName: "example-com",
+						},
+					},
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/api"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{},
+		},
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "passthrough-root",
+					Annotations: map[string]string{
+						common.ClusterIdAnnotation: "ingress-v1",
+					},
+				},
+				Spec: ingress.IngressSpec{
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{
+				SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+			},
+		},
+	}
+
+	result := m.convertGateways(configs)
+	if len(result) != 1 {
+		t.Fatalf("gateway count mismatch, want 1, got %d", len(result))
+	}
+	gateway := result[0].Spec.(*networking.Gateway)
+	if len(gateway.Servers) != 2 {
+		t.Fatalf("server count mismatch, want 2, got %d", len(gateway.Servers))
+	}
+	tlsServer := gateway.Servers[1]
+	if tlsServer.Port.Protocol != "TLS" {
+		t.Fatalf("tls server protocol mismatch, want TLS, got %s", tlsServer.Port.Protocol)
+	}
+	if tlsServer.Tls.GetMode() != networking.ServerTLSSettings_PASSTHROUGH {
+		t.Fatalf("tls mode mismatch, want PASSTHROUGH, got %s", tlsServer.Tls.GetMode())
 	}
 }
 

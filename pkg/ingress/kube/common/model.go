@@ -169,6 +169,20 @@ func IsDuplicateTLSHost(convertOptions *ConvertOptions, cfg *config.Config, host
 	return exist
 }
 
+func IsSSLPassthroughTLSHostOwner(convertOptions *ConvertOptions, cfg *config.Config, host string) bool {
+	if convertOptions == nil || convertOptions.SSLPassthroughTLSHosts == nil {
+		return true
+	}
+	return SameConfig(convertOptions.SSLPassthroughTLSHosts[host], cfg)
+}
+
+func SSLPassthroughTLSHostOwner(convertOptions *ConvertOptions, host string) *config.Config {
+	if convertOptions == nil || len(convertOptions.SSLPassthroughTLSHosts) == 0 {
+		return nil
+	}
+	return convertOptions.SSLPassthroughTLSHosts[host]
+}
+
 type TLSHostKey struct {
 	ClusterId cluster.ID
 	Namespace string
@@ -209,6 +223,8 @@ type ConvertOptions struct {
 	CanaryIngresses []*WrapperConfig
 
 	DuplicateTLSHosts map[TLSHostKey]struct{}
+
+	SSLPassthroughTLSHosts map[string]*config.Config
 
 	Service2TrafficPolicy map[ServiceKey]*WrapperTrafficPolicy
 
