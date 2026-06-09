@@ -156,6 +156,37 @@ var services = []*model.Service{
 			return name
 		}())),
 	},
+	// Shadow services for multi-HTTPRoute merge test (PR #58393)
+	{
+		Attributes: model.ServiceAttributes{
+			Namespace: "default",
+			Labels: map[string]string{
+				"higress.io/inferencepool-extension-service":      "model1-epp",
+				"higress.io/inferencepool-extension-port":         "9002",
+				"higress.io/inferencepool-extension-failure-mode": "FailClose",
+			},
+		},
+		Ports: ports,
+		Hostname: host.Name(fmt.Sprintf("%s.default.svc.domain.suffix", func() string {
+			name, _ := InferencePoolServiceName("infpool-model1")
+			return name
+		}())),
+	},
+	{
+		Attributes: model.ServiceAttributes{
+			Namespace: "default",
+			Labels: map[string]string{
+				"higress.io/inferencepool-extension-service":      "model2-epp",
+				"higress.io/inferencepool-extension-port":         "9002",
+				"higress.io/inferencepool-extension-failure-mode": "FailClose",
+			},
+		},
+		Ports: ports,
+		Hostname: host.Name(fmt.Sprintf("%s.default.svc.domain.suffix", func() string {
+			name, _ := InferencePoolServiceName("infpool-model2")
+			return name
+		}())),
+	},
 
 	{
 		Attributes: model.ServiceAttributes{

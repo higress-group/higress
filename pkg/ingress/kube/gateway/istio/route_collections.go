@@ -766,12 +766,46 @@ func mergeHTTPRoutes(baseVirtualServices krt.Collection[RouteWithKey], opts ...k
 		sortRoutesByCreationTime(configs)
 		base := configs[0].DeepCopy()
 		baseVS := base.Spec.(*istio.VirtualService)
-		for _, config := range configs[1:] {
+		// Deep copy the InferencePool configs map to avoid race conditions
+		// The default DeepCopy() only does shallow copy of Extra field
+		if base.Extra != nil {
+			if ipConfigs, ok := base.Extra[constants.ConfigExtraPerRouteRuleInferencePoolConfigs].(map[string]kube.InferencePoolRouteRuleConfig); ok {
+				newIPConfigs := make(map[string]kube.InferencePoolRouteRuleConfig, len(ipConfigs))
+				for k, v := range ipConfigs {
+					newIPConfigs[k] = v
+				}
+				base.Extra[constants.ConfigExtraPerRouteRuleInferencePoolConfigs] = newIPConfigs
+			}
+		}
+		for i, config := range configs[1:] {
 			thisVS := config.Spec.(*istio.VirtualService)
 			baseVS.Http = append(baseVS.Http, thisVS.Http...)
 			// append parents
 			base.Annotations[constants.InternalParentNames] = fmt.Sprintf("%s,%s",
 				base.Annotations[constants.InternalParentNames], config.Annotations[constants.InternalParentNames])
+			// Merge Extra field (especially for InferencePool configs)
+			if base.Extra == nil && config.Extra != nil {
+				base.Extra = make(map[string]any)
+			}
+			if config.Extra != nil {
+				for k, v := range config.Extra {
+					if k != constants.ConfigExtraPerRouteRuleInferencePoolConfigs {
+						if _, exists := base.Extra[k]; !exists {
+							base.Extra[k] = v
+						}
+						continue
+					}
+					baseMap, baseOk := base.Extra[k].(map[string]kube.InferencePoolRouteRuleConfig)
+					configMap, configOk := v.(map[string]kube.InferencePoolRouteRuleConfig)
+					if baseOk && configOk {
+						log.Debugf("Merging InferencePool configs: adding %d route configs from VirtualService %d to base (namespace=%s)",
+							len(configMap), i+1, config.Namespace)
+						for routeName, routeConfig := range configMap {
+							baseMap[routeName] = routeConfig
+						}
+					}
+				}
+			}
 		}
 		sortHTTPRoutes(baseVS.Http)
 		base.Name = strings.ReplaceAll(object.Key, "/", "~")
