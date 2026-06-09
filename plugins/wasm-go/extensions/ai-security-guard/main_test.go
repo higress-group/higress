@@ -600,6 +600,10 @@ func TestParseConfig(t *testing.T) {
 			require.NotNil(t, config)
 
 			securityConfig := config.(*cfg.AISecurityConfig)
+			// The parsed CR now exposes resolver decisions instead of direct
+			// GetXxxCheckService lookups. Assert both service and source so the
+			// test catches regressions between consumer override and global
+			// fallback semantics.
 			d1 := securityConfig.ResolveRequestCheckService("aaaa")
 			require.True(t, d1.Enabled)
 			require.Equal(t, "llm_query_moderation", d1.Service)

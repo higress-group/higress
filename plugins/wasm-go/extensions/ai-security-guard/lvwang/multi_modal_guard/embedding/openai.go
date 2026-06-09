@@ -111,7 +111,10 @@ func extractStringLeaves(json gjson.Result, texts *[]string) {
 	}
 }
 
-// HandleEmbeddingRequestBody handles request body for Embedding API
+// HandleEmbeddingRequestBody handles request body for Embedding API. Request
+// text detection is skipped before parsing/chunking when the resolver disables
+// the consumer/default service, which allows embedding calls to opt out of the
+// global request fallback.
 func HandleEmbeddingRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	decision := config.ResolveRequestCheckService(consumer)
@@ -207,6 +210,8 @@ func HandleEmbeddingRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityCo
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
+		// Keep service selection tied to the resolver decision so embedding
+		// request chunks use the intended consumer/default service consistently.
 		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, decision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
@@ -219,7 +224,9 @@ func HandleEmbeddingRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityCo
 	return types.ActionPause
 }
 
-// HandleEmbeddingResponseHeaders handles response headers for Embedding API
+// HandleEmbeddingResponseHeaders handles response headers for Embedding API.
+// The resolver runs here before BufferResponseBody so disabled response text
+// fallback avoids reading large embedding responses.
 func HandleEmbeddingResponseHeaders(ctx wrapper.HttpContext, config cfg.AISecurityConfig) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	decision := config.ResolveResponseCheckService(consumer)
@@ -232,7 +239,9 @@ func HandleEmbeddingResponseHeaders(ctx wrapper.HttpContext, config cfg.AISecuri
 	return types.HeaderStopIteration
 }
 
-// HandleEmbeddingResponseBody handles response body for Embedding API
+// HandleEmbeddingResponseBody handles response body for Embedding API. Header
+// processing already gates disabled consumers; the body handler keeps the
+// resolved response service for all extracted text chunks.
 func HandleEmbeddingResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	responseDecision := config.ResolveResponseCheckService(consumer)
@@ -331,6 +340,8 @@ func HandleEmbeddingResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityC
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
+		// Response body may contain multiple text leaves; each Lvwang call must
+		// use the same response resolver decision chosen for this consumer.
 		path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {

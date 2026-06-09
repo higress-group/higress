@@ -7,6 +7,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// resolverTestConfig builds the default MultiModalGuard config used by resolver
+// tests. It intentionally mirrors Parse defaults so each case only changes the
+// switch or consumer rule being verified.
 func resolverTestConfig() AISecurityConfig {
 	c := AISecurityConfig{}
 	c.Action = MultiModalGuard
@@ -14,6 +17,9 @@ func resolverTestConfig() AISecurityConfig {
 	return c
 }
 
+// TestResolveRequestCheckService_DefaultEnabled verifies that unmatched request
+// text traffic falls back to the global text service when the default switch is
+// enabled.
 func TestResolveRequestCheckService_DefaultEnabled(t *testing.T) {
 	c := resolverTestConfig()
 	d := c.ResolveRequestCheckService("unknown-consumer")
@@ -22,6 +28,9 @@ func TestResolveRequestCheckService_DefaultEnabled(t *testing.T) {
 	require.Equal(t, "default", d.Source)
 }
 
+// TestResolveRequestCheckService_DefaultDisabled verifies that disabling the
+// request text default switch skips unmatched consumers instead of using the
+// global service.
 func TestResolveRequestCheckService_DefaultDisabled(t *testing.T) {
 	c := resolverTestConfig()
 	c.DefaultRequestCheckEnabled = false
@@ -30,6 +39,8 @@ func TestResolveRequestCheckService_DefaultDisabled(t *testing.T) {
 	require.Equal(t, "disabled", d.Source)
 }
 
+// TestResolveRequestCheckService_ConsumerMatch verifies that a matching
+// consumer request text service overrides the global fallback.
 func TestResolveRequestCheckService_ConsumerMatch(t *testing.T) {
 	c := resolverTestConfig()
 	c.ConsumerRequestCheckService = []map[string]interface{}{
@@ -44,6 +55,10 @@ func TestResolveRequestCheckService_ConsumerMatch(t *testing.T) {
 	require.Equal(t, "consumer", d.Source)
 }
 
+// TestResolveRequestCheckService_ConsumerMatchNoServiceField captures the
+// chosen semantics for matched rules without a requestCheckService field: the
+// resolver continues to the default decision instead of treating the consumer as
+// explicitly disabled.
 func TestResolveRequestCheckService_ConsumerMatchNoServiceField(t *testing.T) {
 	c := resolverTestConfig()
 	c.ConsumerRequestCheckService = []map[string]interface{}{
@@ -66,6 +81,8 @@ func TestResolveRequestCheckService_ConsumerMatchNoServiceField(t *testing.T) {
 	require.Equal(t, "disabled", d.Source)
 }
 
+// TestResolveRequestCheckService_ConsumerNoMatch verifies first-match lookup
+// does not affect unrelated consumers and they still use the default decision.
 func TestResolveRequestCheckService_ConsumerNoMatch(t *testing.T) {
 	c := resolverTestConfig()
 	c.ConsumerRequestCheckService = []map[string]interface{}{
@@ -81,6 +98,8 @@ func TestResolveRequestCheckService_ConsumerNoMatch(t *testing.T) {
 	require.Equal(t, "default", d.Source)
 }
 
+// TestResolveRequestImageCheckService_DefaultEnabled verifies that request image
+// checks keep the legacy enabled fallback when no consumer image rule matches.
 func TestResolveRequestImageCheckService_DefaultEnabled(t *testing.T) {
 	c := resolverTestConfig()
 	d := c.ResolveRequestImageCheckService("unknown")
@@ -89,6 +108,8 @@ func TestResolveRequestImageCheckService_DefaultEnabled(t *testing.T) {
 	require.Equal(t, "default", d.Source)
 }
 
+// TestResolveRequestImageCheckService_DefaultDisabled verifies the request image
+// fallback switch can skip unmatched consumers.
 func TestResolveRequestImageCheckService_DefaultDisabled(t *testing.T) {
 	c := resolverTestConfig()
 	c.DefaultRequestImageCheckEnabled = false
@@ -97,6 +118,8 @@ func TestResolveRequestImageCheckService_DefaultDisabled(t *testing.T) {
 	require.Equal(t, "disabled", d.Source)
 }
 
+// TestResolveRequestImageCheckService_ConsumerMatch verifies image service
+// selection is independent from request text service selection.
 func TestResolveRequestImageCheckService_ConsumerMatch(t *testing.T) {
 	c := resolverTestConfig()
 	c.ConsumerRequestCheckService = []map[string]interface{}{
@@ -111,6 +134,8 @@ func TestResolveRequestImageCheckService_ConsumerMatch(t *testing.T) {
 	require.Equal(t, "consumer", d.Source)
 }
 
+// TestResolveResponseCheckService_DefaultEnabled verifies response text keeps
+// the legacy enabled global fallback for unmatched consumers.
 func TestResolveResponseCheckService_DefaultEnabled(t *testing.T) {
 	c := resolverTestConfig()
 	d := c.ResolveResponseCheckService("unknown")
@@ -119,6 +144,8 @@ func TestResolveResponseCheckService_DefaultEnabled(t *testing.T) {
 	require.Equal(t, "default", d.Source)
 }
 
+// TestResolveResponseCheckService_DefaultDisabled verifies that disabling the
+// response text fallback skips unmatched consumers before response buffering.
 func TestResolveResponseCheckService_DefaultDisabled(t *testing.T) {
 	c := resolverTestConfig()
 	c.DefaultResponseCheckEnabled = false
@@ -127,6 +154,8 @@ func TestResolveResponseCheckService_DefaultDisabled(t *testing.T) {
 	require.Equal(t, "disabled", d.Source)
 }
 
+// TestResolveResponseCheckService_ConsumerMatch verifies a matched consumer
+// response text service overrides the global fallback.
 func TestResolveResponseCheckService_ConsumerMatch(t *testing.T) {
 	c := resolverTestConfig()
 	c.ConsumerResponseCheckService = []map[string]interface{}{
@@ -141,6 +170,8 @@ func TestResolveResponseCheckService_ConsumerMatch(t *testing.T) {
 	require.Equal(t, "consumer", d.Source)
 }
 
+// TestResolveResponseImageCheckService_DefaultDisabled verifies generated-image
+// response checks remain opt-in by default.
 func TestResolveResponseImageCheckService_DefaultDisabled(t *testing.T) {
 	c := resolverTestConfig()
 	// Default is false for response image
@@ -149,6 +180,8 @@ func TestResolveResponseImageCheckService_DefaultDisabled(t *testing.T) {
 	require.Equal(t, "disabled", d.Source)
 }
 
+// TestResolveResponseImageCheckService_ExplicitlyEnabled verifies the explicit
+// default response-image fallback can enable checks for unmatched consumers.
 func TestResolveResponseImageCheckService_ExplicitlyEnabled(t *testing.T) {
 	c := resolverTestConfig()
 	c.DefaultResponseImageCheckEnabled = true
@@ -159,6 +192,9 @@ func TestResolveResponseImageCheckService_ExplicitlyEnabled(t *testing.T) {
 	require.Equal(t, "default", d.Source)
 }
 
+// TestResolveResponseImageCheckService_ConsumerMatch verifies a consumer image
+// response service enables generated-image checks even while the default
+// response-image switch remains disabled.
 func TestResolveResponseImageCheckService_ConsumerMatch(t *testing.T) {
 	c := resolverTestConfig()
 	c.ConsumerResponseCheckService = []map[string]interface{}{
@@ -174,6 +210,9 @@ func TestResolveResponseImageCheckService_ConsumerMatch(t *testing.T) {
 	require.Equal(t, "consumer", d.Source)
 }
 
+// TestParseValidation_EmptyConsumerRequestCheckService documents the parse-time
+// distinction between an omitted service field, which means fallback, and an
+// explicitly empty request service, which should be rejected.
 func TestParseValidation_EmptyConsumerRequestCheckService(t *testing.T) {
 	c := AISecurityConfig{}
 	c.Action = MultiModalGuard
@@ -193,6 +232,8 @@ func TestParseValidation_EmptyConsumerRequestCheckService(t *testing.T) {
 	}
 }
 
+// TestParseValidation_EmptyConsumerResponseCheckService documents the same
+// explicit-empty rejection for consumer response service fields.
 func TestParseValidation_EmptyConsumerResponseCheckService(t *testing.T) {
 	c := AISecurityConfig{}
 	c.Action = MultiModalGuard

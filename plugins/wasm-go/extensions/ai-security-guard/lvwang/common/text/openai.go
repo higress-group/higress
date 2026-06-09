@@ -43,6 +43,10 @@ type streamingBufferedChunk struct {
 	Match responseContentMatch
 }
 
+// HandleTextGenerationResponseHeader decides whether response text guardrail
+// should own the response body. The resolver check must happen before buffering
+// or streaming pause so consumers with disabled response text fallback pass
+// through without extra body reads.
 func HandleTextGenerationResponseHeader(ctx wrapper.HttpContext, config cfg.AISecurityConfig) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	decision := config.ResolveResponseCheckService(consumer)
@@ -72,6 +76,10 @@ func HandleTextGenerationResponseHeader(ctx wrapper.HttpContext, config cfg.AISe
 	}
 }
 
+// HandleTextGenerationStreamingResponseBody submits buffered SSE text chunks to
+// the response text service chosen by the resolver. The header handler already
+// filters disabled consumers, and this function keeps the resolved service in
+// one decision so every async submission uses the same consumer/default source.
 func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, data []byte, endOfStream bool) []byte {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	responseDecision := config.ResolveResponseCheckService(consumer)
@@ -253,6 +261,8 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			ctx.SetContext("during_call", true)
 			log.Debugf("current content piece: %s", buffer)
 			currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText)
+			// responseDecision.Service may be consumer-specific or the global
+			// fallback service; handlers should not reimplement that selection.
 			path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, buffer, sessionID)
 			err := config.Client.Post(path, headers, body, callback, config.Timeout)
 			if err != nil {
@@ -300,6 +310,10 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 	return []byte{}
 }
 
+// HandleTextGenerationResponseBody applies non-streaming response text checks
+// using the resolved consumer/default service. The explicit disabled guard is a
+// defensive mirror of the header path, so direct body invocations do not call
+// Lvwang with an empty fallback service.
 func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	responseDecision := config.ResolveResponseCheckService(consumer)
@@ -509,6 +523,8 @@ func HandleTextGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecu
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
 		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText)
+		// Use the service chosen once at function entry so every chunk follows
+		// the same resolver decision even when content is split into many calls.
 		path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {

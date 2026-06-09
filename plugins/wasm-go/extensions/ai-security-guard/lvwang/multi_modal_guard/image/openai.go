@@ -40,6 +40,9 @@ func parseOpenAIResponse(body []byte) []ImageItem {
 	return result
 }
 
+// HandleOpenAIImageGenerationRequestBody checks OpenAI image generation
+// requests. Prompt text and request images are resolved separately so disabling
+// the default for one modality does not suppress checks for the other.
 func HandleOpenAIImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	textDecision := config.ResolveRequestCheckService(consumer)
@@ -47,6 +50,8 @@ func HandleOpenAIImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.
 	startTime := time.Now().UnixMilli()
 	content, images := parseOpenAIRequest(body)
 	log.Debugf("Raw request content is: %s", content)
+	// Drop only the disabled modality from local processing; the request still
+	// pauses if text or images remain after resolver decisions are applied.
 	if !textDecision.Enabled {
 		content = ""
 	}
@@ -129,6 +134,8 @@ func HandleOpenAIImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
+		// The selected service can come from the consumer rule or the global
+		// request text fallback; keep that decision centralized in config.
 		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, textDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
@@ -207,6 +214,8 @@ func HandleOpenAIImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.
 		} else {
 			imgUrl = img.Content
 		}
+		// Request image checks use their own resolver decision so an
+		// image-only consumer rule does not require a text service override.
 		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, imageDecision.Service, imgUrl, imgBase64)
 		err := config.Client.Post(path, headers, body, callbackForImage, config.Timeout)
 		if err != nil {
@@ -223,6 +232,10 @@ func HandleOpenAIImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.
 	return types.ActionPause
 }
 
+// HandleOpenAIImageGenerationResponseBody checks generated OpenAI images only
+// when the response-image resolver enables that modality. This preserves the
+// historical default pass-through behavior while still allowing targeted
+// consumer response-image checks.
 func HandleOpenAIImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	responseImageDecision := config.ResolveResponseImageCheckService(consumer)
@@ -312,6 +325,8 @@ func HandleOpenAIImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg
 		} else {
 			imgUrl = img.Content
 		}
+		// Use the response image decision rather than the request image
+		// service; generated-image output can be configured independently.
 		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, responseImageDecision.Service, imgUrl, imgBase64)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {

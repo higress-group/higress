@@ -55,6 +55,9 @@ func OnHttpResponseHeaders(ctx wrapper.HttpContext, config cfg.AISecurityConfig)
 	case cfg.ApiMCP:
 		consumer, _ := ctx.GetContext("consumer").(string)
 		mcpDecision := config.ResolveResponseCheckService(consumer)
+		// MCP response text checks can be JSON or SSE. Resolve before
+		// choosing buffer/pause mode so disabled fallback avoids both body
+		// buffering and streaming interception.
 		if !mcpDecision.Enabled {
 			log.Debugf("response text check disabled for consumer %s, source=%s", consumer, mcpDecision.Source)
 			ctx.DontReadResponseBody()

@@ -228,7 +228,11 @@ type AISecurityConfig struct {
 	// text_generation, image_generation, embedding, etc.
 	ApiType string
 	// openai, qwen, comfyui, etc.
-	ProviderType                     string
+	ProviderType string
+	// Default*CheckEnabled controls the fallback service for requests that do
+	// not provide a consumer-specific service for the same direction/modality.
+	// A matched consumer rule without that service field still falls back here;
+	// it is not treated as a consumer-level disable switch.
 	DefaultRequestCheckEnabled       bool
 	DefaultRequestImageCheckEnabled  bool
 	DefaultResponseCheckEnabled      bool
@@ -244,6 +248,9 @@ type AISecurityConfig struct {
 	CustomLabelAction        string
 }
 
+// Parse loads the plugin CR into AISecurityConfig and validates the resolver
+// inputs. The resolver relies on this parse step to distinguish omitted
+// consumer service fields from invalid explicitly-empty service fields.
 func (config *AISecurityConfig) Parse(json gjson.Result) error {
 	serviceName := json.Get("serviceName").String()
 	servicePort := json.Get("servicePort").Int()
@@ -327,6 +334,8 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 	config.CheckRequest = json.Get("checkRequest").Bool()
 	config.CheckRequestImage = json.Get("checkRequestImage").Bool()
 	config.CheckResponse = json.Get("checkResponse").Bool()
+	// These fallback switches are read after SetDefaultValues so omitted CR
+	// fields keep the backward-compatible defaults for each direction/modality.
 	if obj := json.Get("defaultRequestCheckEnabled"); obj.Exists() {
 		config.DefaultRequestCheckEnabled = obj.Bool()
 	}
@@ -518,7 +527,9 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 	if obj := json.Get("providerType"); obj.Exists() {
 		config.ProviderType = obj.String()
 	}
-	// Validate: if default check is enabled and the feature is active, global service must be non-empty
+	// If a default fallback is enabled, the corresponding global service must be
+	// usable. Otherwise an unmatched consumer would be routed to an empty service
+	// name and fail only at request time.
 	if config.DefaultRequestCheckEnabled && config.CheckRequest && config.RequestCheckService == "" {
 		return errors.New("requestCheckService must be non-empty when defaultRequestCheckEnabled is true")
 	}
@@ -531,7 +542,9 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 	if config.DefaultResponseImageCheckEnabled && config.CheckResponse && config.ResponseImageCheckService == "" {
 		return errors.New("responseImageCheckService must be non-empty when defaultResponseImageCheckEnabled is true")
 	}
-	// Validate: consumer rules with explicit service fields must have non-empty values
+	// Consumer rules may omit a modality service field to fall back to the
+	// default decision. If the field is present but empty, reject it here so an
+	// accidental empty string is not silently interpreted as fallback behavior.
 	for _, obj := range config.ConsumerRequestCheckService {
 		if v, exists := obj["requestCheckService"]; exists {
 			if s, _ := v.(string); s == "" {
@@ -601,6 +614,10 @@ func parseOptionalStringArrayConfig(json gjson.Result, fieldName string) ([]stri
 	return paths, true, nil
 }
 
+// SetDefaultValues initializes the legacy default services and fallback
+// switches. Request text/image and response text keep the previous default
+// checked behavior; response image remains opt-in because existing image
+// response flows did not buffer/check generated images by default.
 func (config *AISecurityConfig) SetDefaultValues() {
 	switch config.Action {
 	case TextModerationPlus:
@@ -645,16 +662,26 @@ func (config *AISecurityConfig) IncrementCounter(metricName string, inc uint64) 
 	counter.Increment(inc)
 }
 
+// CheckServiceDecision is the normalized output used by handlers before they
+// call Lvwang. Source is kept for logs/tests so the caller can tell whether the
+// service came from a consumer rule, the global fallback, or an explicit skip.
 type CheckServiceDecision struct {
 	Enabled bool
 	Service string
 	Source  string // "consumer", "default", "disabled"
 }
 
+// ResolveRequestCheckService resolves request text moderation service for a
+// consumer. First matching consumer rule with requestCheckService wins; a
+// matching rule without that field falls through to the default switch instead
+// of disabling this consumer.
 func (config *AISecurityConfig) ResolveRequestCheckService(consumer string) CheckServiceDecision {
 	for _, obj := range config.ConsumerRequestCheckService {
 		if matcher, ok := obj["matcher"].(Matcher); ok {
 			if matcher.match(consumer) {
+				// Only a non-empty service is a consumer override. Empty explicit
+				// values are rejected during Parse, so missing fields intentionally
+				// break out and use the default fallback below.
 				if rawService, exists := obj["requestCheckService"]; exists {
 					service, _ := rawService.(string)
 					if service != "" {
@@ -671,10 +698,17 @@ func (config *AISecurityConfig) ResolveRequestCheckService(consumer string) Chec
 	return CheckServiceDecision{Enabled: true, Service: config.RequestCheckService, Source: "default"}
 }
 
+// ResolveRequestImageCheckService resolves request image moderation service for
+// a consumer. Image and text decisions are independent so a consumer can check
+// only request images or only request text by combining consumer services with
+// the default fallback switches.
 func (config *AISecurityConfig) ResolveRequestImageCheckService(consumer string) CheckServiceDecision {
 	for _, obj := range config.ConsumerRequestCheckService {
 		if matcher, ok := obj["matcher"].(Matcher); ok {
 			if matcher.match(consumer) {
+				// Missing requestImageCheckService means "no image override in
+				// this matched rule"; the default image fallback decides whether
+				// to use the global image service or skip image checks.
 				if rawService, exists := obj["requestImageCheckService"]; exists {
 					service, _ := rawService.(string)
 					if service != "" {
@@ -691,10 +725,16 @@ func (config *AISecurityConfig) ResolveRequestImageCheckService(consumer string)
 	return CheckServiceDecision{Enabled: true, Service: config.RequestImageCheckService, Source: "default"}
 }
 
+// ResolveResponseCheckService resolves response text moderation service for a
+// consumer. This is used before response body buffering, so a disabled decision
+// lets the upstream response pass through without pausing or reading the body.
 func (config *AISecurityConfig) ResolveResponseCheckService(consumer string) CheckServiceDecision {
 	for _, obj := range config.ConsumerResponseCheckService {
 		if matcher, ok := obj["matcher"].(Matcher); ok {
 			if matcher.match(consumer) {
+				// A consumer response rule can target only image response checks by
+				// omitting responseCheckService; response text then follows the
+				// default response text switch.
 				if rawService, exists := obj["responseCheckService"]; exists {
 					service, _ := rawService.(string)
 					if service != "" {
@@ -711,10 +751,16 @@ func (config *AISecurityConfig) ResolveResponseCheckService(consumer string) Che
 	return CheckServiceDecision{Enabled: true, Service: config.ResponseCheckService, Source: "default"}
 }
 
+// ResolveResponseImageCheckService resolves generated-image response moderation
+// service for a consumer. The default switch is false, so only a consumer image
+// service or an explicit defaultResponseImageCheckEnabled=true turns this on.
 func (config *AISecurityConfig) ResolveResponseImageCheckService(consumer string) CheckServiceDecision {
 	for _, obj := range config.ConsumerResponseCheckService {
 		if matcher, ok := obj["matcher"].(Matcher); ok {
 			if matcher.match(consumer) {
+				// Missing responseImageCheckService is not a consumer-level skip;
+				// the request falls through to the default response image switch,
+				// which is disabled unless configured otherwise.
 				if rawService, exists := obj["responseImageCheckService"]; exists {
 					service, _ := rawService.(string)
 					if service != "" {

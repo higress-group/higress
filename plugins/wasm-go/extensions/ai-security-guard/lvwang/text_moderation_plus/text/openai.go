@@ -15,6 +15,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// HandleTextGenerationRequestBody checks TextModerationPlus request text using
+// the service selected by the resolver. If the request text fallback is
+// disabled for this consumer, the request passes through without calling the
+// global moderation service.
 func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	startTime := time.Now().UnixMilli()
@@ -91,6 +95,9 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		}
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
+		// decision.Service carries either the matching consumer service or the
+		// enabled default service; direct global lookup would break skip-only
+		// consumer scenarios.
 		path, headers, body := common.GenerateRequestForText(config, cfg.TextModerationPlus, decision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {

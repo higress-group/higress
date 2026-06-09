@@ -26,6 +26,9 @@ data: {"jsonrpc":"2.0","id":0,"error":{"code":403,"message":"%s"}}
 `
 )
 
+// HandleMcpRequestBody checks MCP tool-call request text. The resolver check is
+// done before method/content parsing so disabled request text fallback means the
+// whole MCP request path passes through unchanged.
 func HandleMcpRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	decision := config.ResolveRequestCheckService(consumer)
@@ -112,6 +115,8 @@ func HandleMcpRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, 
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		// log.Debugf("current content piece: %s", contentPiece)
+		// Use the resolved text service for all MCP chunks; do not fall back
+		// to the global service after a consumer-specific decision.
 		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, decision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
@@ -125,6 +130,9 @@ func HandleMcpRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, 
 	return types.ActionPause
 }
 
+// HandleMcpStreamingResponseBody checks SSE MCP response messages with the
+// response text service selected by the resolver. Header processing already
+// skips this function for disabled consumers by not pausing/reading the body.
 func HandleMcpStreamingResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, data []byte, endOfStream bool) []byte {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	responseDecision := config.ResolveResponseCheckService(consumer)
@@ -187,6 +195,9 @@ func HandleMcpStreamingResponseBody(ctx wrapper.HttpContext, config cfg.AISecuri
 			ctx.SetContext("during_call", true)
 			sessionID, _ := utils.GenerateHexID(20)
 			currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityMCP)
+			// Keep MCP SSE chunks on the resolved response service. This is
+			// what lets defaultResponseCheckEnabled=false skip unmatched
+			// consumers while consumer-specific rules still run.
 			path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, msg, sessionID)
 			err := config.Client.Post(path, headers, body, callback, config.Timeout)
 			if err != nil {
@@ -214,6 +225,9 @@ func HandleMcpStreamingResponseBody(ctx wrapper.HttpContext, config cfg.AISecuri
 	return []byte{}
 }
 
+// HandleMcpResponseBody checks buffered JSON MCP responses. It relies on the
+// response header resolver gate for disabled consumers and reuses the resolved
+// response service for each body chunk.
 func HandleMcpResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	responseDecision := config.ResolveResponseCheckService(consumer)
@@ -294,6 +308,8 @@ func HandleMcpResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig,
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
 		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityMCP)
+		// The body path should use the same response text resolver semantics as
+		// the streaming MCP path.
 		path, headers, body := common.GenerateRequestForText(config, config.Action, responseDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {

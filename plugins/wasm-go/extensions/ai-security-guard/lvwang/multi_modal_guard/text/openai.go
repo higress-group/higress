@@ -49,6 +49,10 @@ func parseContent(json gjson.Result) (text string, images []ImageItem) {
 	return text, images
 }
 
+// HandleTextGenerationRequestBody checks OpenAI-style multimodal chat requests.
+// Text and image services are resolved independently so a consumer can be
+// configured for only one request modality while the other modality follows its
+// own default fallback switch.
 func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	textDecision := config.ResolveRequestCheckService(consumer)
@@ -57,6 +61,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 	// content := gjson.GetBytes(body, config.RequestContentJsonPath).String()
 	content, images := parseContent(gjson.GetBytes(body, config.RequestContentJsonPath))
 	log.Debugf("Raw request content is: %s", content)
+	// A disabled decision removes only that modality from this request. If the
+	// other modality is still enabled and present, it continues to be checked.
 	if !textDecision.Enabled {
 		content = ""
 	}
@@ -248,6 +254,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		contentPiece := string(maskedContent[contentIndex:nextContentIndex])
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
+		// Use the resolver-selected text service for every chunk instead of
+		// consulting global config directly.
 		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, textDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
@@ -324,6 +332,8 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		} else {
 			imgUrl = img.Content
 		}
+		// The image decision is independent from textDecision; this supports
+		// request-image-only consumer rules without enabling default text.
 		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, imageDecision.Service, imgUrl, imgBase64)
 		err := config.Client.Post(path, headers, body, callbackForImage, config.Timeout)
 		if err != nil {

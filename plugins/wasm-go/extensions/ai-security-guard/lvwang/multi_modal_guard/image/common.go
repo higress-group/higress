@@ -15,6 +15,10 @@ type ImageItem struct {
 	Type    string // URL or BASE64
 }
 
+// HandleImageGenerationResponseHeader decides whether generated images should
+// be buffered for response-image checks. Response image fallback is disabled by
+// default, so most image responses pass through unless a consumer rule or
+// explicit defaultResponseImageCheckEnabled turns the modality on.
 func HandleImageGenerationResponseHeader(ctx wrapper.HttpContext, config cfg.AISecurityConfig) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	decision := config.ResolveResponseImageCheckService(consumer)

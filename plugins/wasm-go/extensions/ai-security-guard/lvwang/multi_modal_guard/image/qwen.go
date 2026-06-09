@@ -197,6 +197,10 @@ func parseQwenResponse(body []byte) []string {
 	return result
 }
 
+// HandleQwenImageGenerationRequestBody checks Qwen image-generation requests.
+// Text prompts and input images are resolved independently, allowing consumer
+// rules to target one modality while the other modality follows its fallback
+// switch.
 func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	textDecision := config.ResolveRequestCheckService(consumer)
@@ -205,6 +209,8 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 	// content := gjson.GetBytes(body, config.RequestContentJsonPath).String()
 	content, images := parseQwenRequest(body)
 	log.Debugf("Raw request content is: %s", content)
+	// Apply resolver decisions per modality. Disabled text should not remove
+	// eligible images, and disabled images should not remove eligible text.
 	if !textDecision.Enabled {
 		content = ""
 	}
@@ -287,6 +293,7 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 		contentPiece := content[contentIndex:nextContentIndex]
 		contentIndex = nextContentIndex
 		log.Debugf("current content piece: %s", contentPiece)
+		// Use the resolver-selected text service for all prompt chunks.
 		path, headers, body := common.GenerateRequestForText(config, cfg.MultiModalGuard, textDecision.Service, contentPiece, sessionID)
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
@@ -365,6 +372,7 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 		} else {
 			imgUrl = img.Content
 		}
+		// Use the request image decision independently from prompt text.
 		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, imageDecision.Service, imgUrl, imgBase64)
 		err := config.Client.Post(path, headers, body, callbackForImage, config.Timeout)
 		if err != nil {
@@ -381,6 +389,9 @@ func HandleQwenImageGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AI
 	return types.ActionPause
 }
 
+// HandleQwenImageGenerationResponseBody checks generated Qwen image URLs only
+// when response image detection is enabled by a consumer service or by the
+// explicit default response-image fallback switch.
 func HandleQwenImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	consumer, _ := ctx.GetContext("consumer").(string)
 	responseImageDecision := config.ResolveResponseImageCheckService(consumer)
@@ -463,6 +474,8 @@ func HandleQwenImageGenerationResponseBody(ctx wrapper.HttpContext, config cfg.A
 	singleCall = func() {
 		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityImage)
 		imgUrl := imgUrls[imageIndex]
+		// Generated images use the response-image service, which is separate
+		// from request-image checks and disabled by default.
 		path, headers, body := common.GenerateRequestForImage(config, cfg.MultiModalGuardForBase64, responseImageDecision.Service, imgUrl, "")
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
