@@ -36,6 +36,30 @@ func TestWildcardHostForSSLPassthrough(t *testing.T) {
 	assert.True(t, vs.HasTLSRouteForHost(""))
 }
 
+func TestPassthroughTLSHostOwnerNilMapAllowsStandaloneConversion(t *testing.T) {
+	cfg := &config.Config{
+		Meta: config.Meta{
+			Namespace: "default",
+			Name:      "tls-passthrough",
+		},
+	}
+
+	// A nil owner map means the caller did not prepare ownership from the full ingress snapshot.
+	assert.True(t, IsPassthroughTLSHostOwner(&ConvertOptions{}, cfg, "example.com"))
+	assert.Nil(t, PassthroughTLSHostOwner(&ConvertOptions{}, "example.com"))
+
+	// A non-nil owner map means ownership has been prepared and missing hosts have no owner.
+	options := &ConvertOptions{
+		PassthroughTLSHostOwners: map[string]*config.Config{},
+	}
+	assert.False(t, IsPassthroughTLSHostOwner(options, cfg, "example.com"))
+	assert.Nil(t, PassthroughTLSHostOwner(options, "example.com"))
+
+	options.PassthroughTLSHostOwners["example.com"] = cfg
+	assert.True(t, IsPassthroughTLSHostOwner(options, cfg, "example.com"))
+	assert.Equal(t, cfg, PassthroughTLSHostOwner(options, "example.com"))
+}
+
 func TestIngressDomainCache(t *testing.T) {
 	cache := NewIngressDomainCache()
 	assert.NotNil(t, cache)
