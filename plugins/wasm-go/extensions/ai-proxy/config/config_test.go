@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/tidwall/gjson"
 )
@@ -240,6 +241,25 @@ func TestPluginConfig_SessionAffinity(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects_duplicate_provider_ids", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]},
+				{"id":"p2","type":"generic","genericHost":"http://127.0.0.1:8081","apiTokens":["u"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"providerIds": ["p1","p1"],
+				"key": {"source":"header","name":"x-session"}
+			}
+		}`))
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "duplicate provider") {
+			t.Fatalf("Validate() err = %v, want duplicate provider", err)
+		}
+	})
+
 	t.Run("rejects_body_without_json_path", func(t *testing.T) {
 		var c PluginConfig
 		c.FromJson(gjson.Parse(`{
@@ -414,6 +434,40 @@ func TestPluginConfig_SessionAffinity(t *testing.T) {
 		}
 		if _, ok := records["live"]; !ok {
 			t.Fatal("live record should remain")
+		}
+	})
+
+	t.Run("persistent_store_failure_keeps_hash_selected_provider", func(t *testing.T) {
+		c := sessionAffinityConfig{
+			Enabled:       true,
+			Type:          sessionAffinityModePersistent,
+			TTLSeconds:    60,
+			providerOrder: []string{"p1", "p2"},
+			sharedDataKey: "test-persistent-store-failure",
+		}
+		originalGetSharedData := getSharedData
+		originalSetSharedData := setSharedData
+		getSharedData = func(string) ([]byte, uint32, error) {
+			return nil, 1, nil
+		}
+		setSharedData = func(string, []byte, uint32) error {
+			return types.ErrorStatusCasMismatch
+		}
+		defer func() {
+			getSharedData = originalGetSharedData
+			setSharedData = originalSetSharedData
+		}()
+
+		wantID, err := c.selectHashProviderID("session-store-failure")
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotID, err := c.selectPersistentProviderID("session-store-failure")
+		if err != nil {
+			t.Fatalf("selectPersistentProviderID() err = %v, want nil", err)
+		}
+		if gotID != wantID {
+			t.Fatalf("selected provider = %q, want %q", gotID, wantID)
 		}
 	})
 }

@@ -17,6 +17,11 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+var (
+	getSharedData = proxywasm.GetSharedData
+	setSharedData = proxywasm.SetSharedData
+)
+
 // @Name ai-proxy
 // @Category custom
 // @Phase UNSPECIFIED_PHASE
@@ -447,10 +452,15 @@ func (c *sessionAffinityConfig) Validate(providerConfigs []provider.ProviderConf
 			c.providerOrder = append(c.providerOrder, providerConfig.GetId())
 		}
 	} else {
+		selectedProviderIDs := map[string]struct{}{}
 		for _, id := range c.ProviderIDs {
 			if _, ok := providerIDs[id]; !ok {
 				return fmt.Errorf("sessionAffinity.providerIds contains unknown provider %q", id)
 			}
+			if _, exists := selectedProviderIDs[id]; exists {
+				return fmt.Errorf("sessionAffinity.providerIds contains duplicate provider %q", id)
+			}
+			selectedProviderIDs[id] = struct{}{}
 			c.providerOrder = append(c.providerOrder, id)
 		}
 	}
@@ -625,7 +635,7 @@ func (c sessionAffinityConfig) selectPersistentProviderID(key string) (string, e
 		ExpiresAt:  now + c.TTLSeconds,
 	}
 	if err := c.storePersistentRecords(records, cas); err != nil {
-		return "", err
+		return providerID, nil
 	}
 	return providerID, nil
 }
@@ -656,7 +666,7 @@ func pruneExpiredPersistentRecords(records map[string]sessionAffinityRecord, now
 }
 
 func (c sessionAffinityConfig) loadPersistentRecords() (map[string]sessionAffinityRecord, uint32, error) {
-	data, cas, err := proxywasm.GetSharedData(c.sharedDataKey)
+	data, cas, err := getSharedData(c.sharedDataKey)
 	if errors.Is(err, types.ErrorStatusNotFound) || len(data) == 0 {
 		return map[string]sessionAffinityRecord{}, cas, nil
 	}
@@ -676,7 +686,7 @@ func (c sessionAffinityConfig) storePersistentRecords(records map[string]session
 		return err
 	}
 	for attempt := 0; attempt < 3; attempt++ {
-		err = proxywasm.SetSharedData(c.sharedDataKey, data, cas)
+		err = setSharedData(c.sharedDataKey, data, cas)
 		if err == nil {
 			return nil
 		}

@@ -85,6 +85,31 @@ func TestClusterHashRuntime(t *testing.T) {
 			requireTargetCluster(t, host)
 		})
 
+		t.Run("rejects body key when post request has no body indicators", func(t *testing.T) {
+			host, status := wasmtest.NewTestHost(clusterHashConfig(map[string]interface{}{
+				"source":   "body",
+				"jsonPath": "$.callOptions.stickySessionId",
+			}))
+			defer host.Reset()
+			requireEqual(t, types.OnPluginStartStatusOK, status)
+
+			contextID := host.InitializeHttpContext()
+			action := host.CallOnRequestHeaders(contextID, [][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			}, true)
+			requireEqual(t, types.ActionPause, action)
+			localResponse := host.GetSentLocalResponse(contextID)
+			if localResponse == nil {
+				t.Fatal("expected local response")
+			}
+			requireEqual(t, uint32(403), localResponse.StatusCode)
+			if string(localResponse.Data) != "hash key required" {
+				t.Fatalf("local response body = %q, want hash key required", string(localResponse.Data))
+			}
+		})
+
 		t.Run("routes by metadata key", func(t *testing.T) {
 			host, status := wasmtest.NewTestHost(clusterHashConfig(map[string]interface{}{
 				"source":       "metadata",
