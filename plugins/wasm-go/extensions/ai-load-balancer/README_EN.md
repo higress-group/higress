@@ -24,6 +24,7 @@ When `lb_type = endpoint`, current supported load balance policies are:
 - `global_least_request`: global least request based on redis
 - `prefix_cache`: Select the backend node based on the prompt prefix match. If the node cannot be matched by prefix matching, the service node is selected based on the global minimum number of requests.
 - `endpoint_metrics`: Load balancing based on metrics exposed by the llm service
+- `endpoint_hash`: Redis-backed stateful session affinity. Reads a specified request header as the key and sticks requests with the same key to the same backend host (endpoint). The first time a key is seen, the host is chosen by the service's own default LB and recorded; subsequent requests reuse it. When the key is absent, it degrades to the service's own default load balancing policy.
 
 When `lb_type = cluster`, current supported load balance policies are:
 - `cluster_metrics`: Load balancing based on metrics of clusters
@@ -282,3 +283,76 @@ lb_config:
 ```
 
 If the request is missing the hash header, the plugin returns **403** directly.
+
+# Endpoint Hash (Redis-backed Stateful Session Affinity)
+
+## Introduction
+
+Reads a specified request header value as the key and **sticks** requests with the same key to the same backend host (endpoint) to achieve session affinity. The mapping is stored in Redis, so it is shared across gateway instances and survives restarts.
+
+Selection order:
+
+1. The request is **missing** the header named by `hash_header` → no override, use the service's own default LB, record nothing.
+2. The key exists → FNV-1a hash it and look it up in Redis under `route:cluster:hash`:
+   - **Hit** and the recorded host is still healthy → `SetUpstreamOverrideHost` pins the request to that host and refreshes the TTL.
+   - **Miss** (first time) or the recorded host is no longer healthy → do not override, let the service's **own default LB** pick a host; in the response-header phase read the actually selected host (`upstream.address`) and write it back to Redis for reuse.
+
+Differences from `cluster_hash`:
+- `endpoint_hash` works at the **endpoint level** via `SetUpstreamOverrideHost`, pinning a host inside the already-selected cluster (same mechanism as `global_least_request`); no EnvoyFilter required.
+- **Stateful**: the first selection is made by the default LB (e.g. least-request) for load balancing, then it sticks; once written to Redis the mapping **does not migrate on scaling** (unless the host becomes unhealthy and is re-picked).
+- When Redis is unavailable / the header is missing / there is no healthy host, it **gracefully degrades** to the service's own default LB rather than rejecting the request.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant H as Higress
+    participant R as Redis
+    participant LB as Default LB
+    participant Ht as Host(target)
+
+    C ->> H: Send request (with hash_header)
+    H ->> R: GET route:cluster:hash(key)
+    alt Hit and host healthy
+        R ->> H: Return bound host
+        H ->> R: EXPIRE to refresh TTL
+        H ->> Ht: SetUpstreamOverrideHost, forward to bound host
+    else Miss / host stale
+        R ->> H: Empty / stale
+        H ->> LB: No override, let the default LB pick
+        LB ->> Ht: Forward to the host chosen by default LB
+        H ->> R: In response-header phase read upstream.address, SETEX the mapping
+    end
+    Ht ->> H: Response
+    H ->> C: Response
+```
+
+## Configuration
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `hash_header` | string | optional | `x-mse-consumer` | Request header name to read the hash key from |
+| `stickyTimeout` | int | optional | `60` | TTL of a sticky mapping (minutes); auto-refreshed on hit |
+| `serviceFQDN` | string | required | - | Redis service FQDN |
+| `servicePort` | int | required | - | Redis service port |
+| `username` | string | optional | - | Redis username (usually `default` for Redis 6+ ACL) |
+| `password` | string | optional | - | Redis password. **Required if Redis auth is enabled**, otherwise every read/write fails with `NOAUTH` and stickiness never works |
+| `timeout` | int | optional | `3000` | Redis operation timeout (ms) |
+| `database` | int | optional | `0` | Redis database number |
+
+## Configuration Example
+
+```yaml
+lb_type: endpoint
+lb_policy: endpoint_hash
+lb_config:
+  hash_header: x-mse-consumer
+  stickyTimeout: 60
+  serviceFQDN: redis.dns
+  servicePort: 6379
+  username: default
+  password: "123456"
+  timeout: 3000
+  database: 0
+```
+
+> When the request does not carry the header named by `hash_header`, this policy does not intervene and the request is forwarded by the service's original load balancing policy.

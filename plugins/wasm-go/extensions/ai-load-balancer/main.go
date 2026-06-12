@@ -9,6 +9,7 @@ import (
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/cluster_metrics"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/cluster_hash"
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/endpoint_hash"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/endpoint_metrics"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/global_least_request"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/prefix_cache"
@@ -55,6 +56,7 @@ const (
 	MetricsBasedEndpointDeprecated = "metrics_based" // Compatible with old configurations, equal to `endpoint_metrics`
 	GlobalLeastRequestEndpoint     = "global_least_request"
 	PrefixCacheEndpoint            = "prefix_cache"
+	EndpointHashEndpoint           = "endpoint_hash"
 )
 
 func parseConfig(json gjson.Result, config *Config) error {
@@ -83,6 +85,8 @@ func parseConfig(json gjson.Result, config *Config) error {
 			config.lb, err = global_least_request.NewGlobalLeastRequestLoadBalancer(json.Get("lb_config"))
 		case PrefixCacheEndpoint:
 			config.lb, err = prefix_cache.NewPrefixCacheLoadBalancer(json.Get("lb_config"))
+		case EndpointHashEndpoint:
+			config.lb, err = endpoint_hash.NewEndpointHashLoadBalancer(json.Get("lb_config"))
 		default:
 			err = fmt.Errorf("lb_psolicy %s is not supported", config.lbPolicy)
 		}
