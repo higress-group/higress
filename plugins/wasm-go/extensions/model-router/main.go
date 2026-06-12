@@ -43,10 +43,11 @@ type AutoRoutingRule struct {
 }
 
 type ModelRouterConfig struct {
-	modelKey           string
-	addProviderHeader  string
-	modelToHeader      string
-	enableOnPathSuffix []string
+	modelKey              string
+	addProviderHeader     string
+	modelToHeader         string
+	enableOnPathSuffix    []string
+	keepOriginalModelName bool
 	// Auto routing configuration
 	enableAutoRouting bool
 	autoRoutingRules  []AutoRoutingRule
@@ -60,6 +61,7 @@ func parseConfig(json gjson.Result, config *ModelRouterConfig) error {
 	}
 	config.addProviderHeader = json.Get("addProviderHeader").String()
 	config.modelToHeader = json.Get("modelToHeader").String()
+	config.keepOriginalModelName = json.Get("keepOriginalModelName").Bool()
 
 	enableOnPathSuffix := json.Get("enableOnPathSuffix")
 	if enableOnPathSuffix.Exists() && enableOnPathSuffix.IsArray() {
@@ -253,12 +255,14 @@ func handleJsonBody(ctx wrapper.HttpContext, config ModelRouterConfig, body []by
 			model := parts[1]
 			_ = proxywasm.ReplaceHttpRequestHeader(config.addProviderHeader, provider)
 
-			newBody, err := sjson.SetBytes(body, config.modelKey, model)
-			if err != nil {
-				log.Errorf("failed to update model in json body: %v", err)
-				return types.ActionContinue
+			if !config.keepOriginalModelName {
+				newBody, err := sjson.SetBytes(body, config.modelKey, model)
+				if err != nil {
+					log.Errorf("failed to update model in json body: %v", err)
+					return types.ActionContinue
+				}
+				_ = proxywasm.ReplaceHttpRequestBody(newBody)
 			}
-			_ = proxywasm.ReplaceHttpRequestBody(newBody)
 			log.Debugf("model route to provider: %s, model: %s", provider, model)
 		} else {
 			log.Debugf("model route to provider not work, model: %s", modelValue)
@@ -319,25 +323,28 @@ func handleMultipartBody(ctx wrapper.HttpContext, config ModelRouterConfig, body
 					model := parts[1]
 					_ = proxywasm.ReplaceHttpRequestHeader(config.addProviderHeader, provider)
 
-					// Write modified part
-					h := make(http.Header)
-					for k, v := range part.Header {
-						h[k] = v
-					}
+					if !config.keepOriginalModelName {
+						// Write modified part
+						h := make(http.Header)
+						for k, v := range part.Header {
+							h[k] = v
+						}
 
-					pw, err := writer.CreatePart(textproto.MIMEHeader(h))
-					if err != nil {
-						log.Errorf("failed to create part: %v", err)
-						return types.ActionContinue
+						pw, err := writer.CreatePart(textproto.MIMEHeader(h))
+						if err != nil {
+							log.Errorf("failed to create part: %v", err)
+							return types.ActionContinue
+						}
+						_, err = pw.Write([]byte(model))
+						if err != nil {
+							log.Errorf("failed to write part content: %v", err)
+							return types.ActionContinue
+						}
+						modified = true
+						log.Debugf("model route to provider: %s, model: %s", provider, model)
+						continue
 					}
-					_, err = pw.Write([]byte(model))
-					if err != nil {
-						log.Errorf("failed to write part content: %v", err)
-						return types.ActionContinue
-					}
-					modified = true
-					log.Debugf("model route to provider: %s, model: %s", provider, model)
-					continue
+					log.Debugf("model route to provider: %s, model kept: %s", provider, modelValue)
 				} else {
 					log.Debugf("model route to provider not work, model: %s", modelValue)
 				}

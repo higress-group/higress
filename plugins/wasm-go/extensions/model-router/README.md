@@ -9,6 +9,7 @@
 | `addProviderHeader`  | string          | 选填                    | -                        | 从model参数中解析出的provider名字放到哪个请求header中 |
 | `modelToHeader`      | string          | 选填                    | -                        | 直接将model参数放到哪个请求header中                   |
 | `enableOnPathSuffix` | array of string | 选填                    | ["/completions","/embeddings","/images/generations","/audio/speech","/fine_tuning/jobs","/moderations","/image-synthesis","/video-synthesis","/rerank","/messages"] | 只对这些特定路径后缀的请求生效，可以配置为 "*" 以匹配所有路径 |
+| `keepOriginalModelName` | bool         | 选填                    | false                    | 配合 `addProviderHeader` 使用，设为 true 时仍提取 provider 写入 header，但不改写请求体中的 model 字段 |
 | `autoRouting`        | object          | 选填                    | -                        | 自动路由配置，详见下方说明                            |
 
 ### autoRouting 配置
@@ -112,6 +113,21 @@ x-higress-llm-provider: dashscope
     "top_p": 0.95
 }
 ```
+
+### 保留原始模型名（keepOriginalModelName）
+
+当使用 AI 模型聚合平台（如百炼/DashScope）接入第三方厂商模型时，部分模型名称本身包含 `/`（如 `MiniMax/MiniMax-M2.7`），并非 `provider/model` 格式。此时配合 `addProviderHeader` 使用会导致请求体中的 model 字段被错误改写。
+
+通过设置 `keepOriginalModelName: true`，可以在保留 provider header 提取能力的同时，不改写请求体中的 model 字段：
+
+```yaml
+addProviderHeader: x-higress-llm-provider
+keepOriginalModelName: true
+```
+
+以 model 为 `MiniMax/MiniMax-M2.7` 为例，经过插件后：
+- 请求头 `x-higress-llm-provider` 设置为 `MiniMax`
+- 请求体中的 model 字段保持为 `MiniMax/MiniMax-M2.7`（不改写）
 
 ### 自动路由模式（基于用户消息内容）
 
