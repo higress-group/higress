@@ -130,16 +130,16 @@ func processSSEMessage(ctx wrapper.HttpContext, c config.PluginConfig, sseMessag
 		}
 
 		// Check if the ResponseBody field exists
-		if !responseBody.Exists() {
-			if ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY) != nil {
-				log.Debugf("[processSSEMessage] unable to extract content from message; cache content is not nil: %s", message)
-				return content, nil
-			}
-			return content, fmt.Errorf("[processSSEMessage] unable to extract content from message; cache content is nil: %s", message)
-		} else {
+		if responseBody.Exists() {
 			content += responseBody.String()
 		}
 	}
+
+	if content == "" {
+		log.Debugf("[processSSEMessage] no content extracted; skipping cache update: %s", sseMessage)
+		return content, nil
+	}
+
 	tempContentI := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY)
 	// If there is no content in the cache, initialize and set the content
 	if tempContentI == nil {

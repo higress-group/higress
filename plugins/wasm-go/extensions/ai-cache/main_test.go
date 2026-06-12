@@ -890,6 +890,72 @@ data: [DONE]`
 			require.Equal(t, expectedStreamResponseBody, actualStreamResponseBody)
 		})
 
+		// 测试流式响应体处理：首 chunk 只带 role 无 content（混元大模型场景，#3953）
+		// 验证 processSSEMessage 不会因为首 chunk 没有 content 而报错，
+		// 进而导致 ERROR_PARTIAL_MESSAGE_KEY 被设置、后续 chunk 被短路、缓存无法写入。
+		t.Run("stream response body with role-only first chunk", func(t *testing.T) {
+			host, status := test.NewTestHost(basicRedisConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 设置请求头
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+			})
+
+			// 设置流式请求体
+			requestBody := `{
+				"model": "hy-mt2-pro",
+				"messages": [
+					{
+						"role": "user",
+						"content": "介绍天津"
+					}
+				],
+				"stream": true
+			}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			// 设置流式响应头
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+
+			// 首 chunk：只有 delta.role，没有 delta.content（混元/hy-mt2-pro 行为）
+			roleOnlyChunk := `data: {"id":"0b8ed3c9-3710-920b-abd9-581a0a77fd28","object":"chat.completion.chunk","created":1781169426,"model":"hy-mt2-pro","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+`
+
+			// 中间 chunk：包含实际 content
+			contentChunk := `data: {"id":"0b8ed3c9-3710-920b-abd9-581a0a77fd28","object":"chat.completion.chunk","created":1781169426,"model":"hy-mt2-pro","choices":[{"index":0,"delta":{"content":"天津"}}]}
+
+data: {"id":"0b8ed3c9-3710-920b-abd9-581a0a77fd28","object":"chat.completion.chunk","created":1781169426,"model":"hy-mt2-pro","choices":[{"index":0,"delta":{"content":"是历史文化名城"}}]}
+
+`
+
+			// 末 chunk：流结束标记
+			doneChunk := `data: [DONE]
+
+`
+
+			// 三次调用模拟上游分片推送：首 chunk 不带 content，后续 chunk 带 content
+			// 修复前：第一次调用会因首 chunk 无 content 报错，ERROR_PARTIAL_MESSAGE_KEY 被设置，
+			// 后续所有 chunk 在 onHttpResponseBody 入口被短路，缓存永远写不进去。
+			// 修复后：首 chunk 静默跳过，content chunk 正常累积并写入缓存。
+			action := host.CallOnHttpStreamingResponseBody([]byte(roleOnlyChunk), false)
+			require.Equal(t, types.ActionContinue, action)
+
+			action = host.CallOnHttpStreamingResponseBody([]byte(contentChunk), false)
+			require.Equal(t, types.ActionContinue, action)
+
+			action = host.CallOnHttpStreamingResponseBody([]byte(doneChunk), true)
+			require.Equal(t, types.ActionContinue, action)
+		})
+
 		// 测试无缓存键的响应体处理
 		t.Run("response body without cache key", func(t *testing.T) {
 			host, status := test.NewTestHost(basicRedisConfig)
