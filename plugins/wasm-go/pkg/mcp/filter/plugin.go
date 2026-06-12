@@ -20,8 +20,8 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 
-	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
+	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
@@ -209,6 +209,7 @@ func Initialize() {
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
 		wrapper.ProcessResponseBody(onHttpResponseBody),
+		wrapper.WithRebuildMaxMemBytes[mcpFilterConfig](200*1024*1024),
 	)
 
 }

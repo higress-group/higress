@@ -27,6 +27,7 @@ When `lb_type = endpoint`, current supported load balance policies are:
 
 When `lb_type = cluster`, current supported load balance policies are:
 - `cluster_metrics`: Load balancing based on metrics of clusters
+- `cluster_hash`: Consistent hash routing based on a request header value, always routing the same hash key to the same cluster, with weighted traffic distribution
 
 
 # Global Least Request
@@ -218,7 +219,7 @@ lb_config:
 | `mode`      | string | required | | how to use cluster metrics, value of `[LeastBusy, LeastTotalLatency, LeastFirstTokenLatency ]` |
 | `service_list`      | []string | required | | service list of current route |
 | `rate_limit`      | string | optional | 1 | The maximum percentage of requests a single node can receive, value of 0~1 |
-| `cluster_header` | string | optional | `x-envoy-target-cluster` | By retrieving the value of this header, we can determine which backend service to route to |
+| `cluster_header` | string | optional | `x-higress-target-cluster` | By retrieving the value of this header, we can determine which backend service to route to |
 | `queue_size`      | int | optional | 100 | The metrics is calculated based on the number of most recent requests. |
 
 The meanings of the values ​​for `mode` are as follows:
@@ -239,3 +240,45 @@ lb_config:
   - outbound|80||test-1.dns
   - outbound|80||test-2.static
 ```
+
+# Cluster Hash
+
+## Introduction
+
+Reads a specified request header value and uses FNV-1a consistent hashing to route requests to a fixed upstream cluster. The same hash key always maps to the same cluster, while weighted distribution controls traffic allocation across clusters.
+
+Requires EnvoyFilter `cluster_header` mechanism to be enabled.
+
+## Configuration
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `clusters` | []ClusterEntry | required | - | Cluster list. Sum of all `weight` values must be 100 |
+| `hash_header` | string | optional | `x-mse-consumer` | Request header name to read the hash key from |
+| `cluster_header` | string | optional | `x-higress-target-cluster` | Request header name to write the selected cluster into |
+
+### ClusterEntry Fields
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `cluster` | string | yes | Upstream cluster name, e.g. `outbound\|443\|\|llm-xxx.internal.static` |
+| `weight` | int | yes | Percentage weight. Sum of all cluster weights must be 100 |
+
+## Configuration Example
+
+```yaml
+lb_type: cluster
+lb_policy: cluster_hash
+lb_config:
+  clusters:
+    - cluster: "outbound|80||llm-test1.internal.static"
+      weight: 69
+    - cluster: "outbound|443||llm-test2.internal.dns"
+      weight: 30
+    - cluster: "outbound|443||llm-test3.internal.dns"
+      weight: 1
+  hash_header: x-mse-consumer
+  cluster_header: x-higress-target-cluster
+```
+
+If the request is missing the hash header, the plugin returns **403** directly.
