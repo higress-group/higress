@@ -34,6 +34,7 @@ description: 阿里云内容安全检测
 | `denyCode` | int | optional | 200 | 指定内容非法时的响应状态码 |
 | `denyMessage` | string | optional | openai格式的流式/非流式响应 | 指定内容非法时的响应内容 |
 | `protocol` | string | optional | openai | 协议格式，非openai协议填`original` |
+| `openAIDenyResponseFormat` | string | optional | legacy | OpenAI 包装拒答的响应形态，取值为 `legacy` 或 `structured`。默认 `legacy` 保持历史兼容；配置为 `structured` 时在 `choices[0].x_higress_guardrail` 输出结构化拦截详情 |
 | `contentModerationLevelBar` | string | optional | max | 内容合规检测拦截风险等级，取值为 `max`, `high`, `medium` or `low` |
 | `promptAttackLevelBar` | string | optional | max | 提示词攻击检测拦截风险等级，取值为 `max`, `high`, `medium` or `low` |
 | `sensitiveDataLevelBar` | string | optional | S4 | 敏感内容检测拦截风险等级，取值为  `S4`, `S3`, `S2` or `S1` |
@@ -47,19 +48,18 @@ description: 阿里云内容安全检测
 
 ### 拒绝响应结构
 
-内容被拦截时，插件（`MultiModalGuard` action）统一返回以下结构化 JSON 对象，各协议的承载位置如下：
+内容被拦截时，插件（`MultiModalGuard` action）会构造以下结构化 JSON 对象。`protocol: original`、MCP 与图像生成路径直接或间接返回该对象；OpenAI 文本生成包装路径默认保持历史兼容形态，只有配置 `openAIDenyResponseFormat: structured` 时才会把该对象嵌入到 OpenAI 响应中。
 
 ```json
 {
+  "code": 200,
+  "denyMessage": "很抱歉，我无法回答您的问题",
   "blockedDetails": [
     {
-      "Type": "contentModeration",
-      "Level": "high",
-      "Suggestion": "block"
+      "type": "contentModeration",
+      "level": "high"
     }
-  ],
-  "requestId": "AAAAAA-BBBB-CCCC-DDDD-EEEEEEE****",
-  "guardCode": 200
+  ]
 }
 ```
 
@@ -67,21 +67,25 @@ description: 阿里云内容安全检测
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `blockedDetails` | array | 命中拦截的维度明细；若安全服务未返回明细，则根据顶层风险信号自动合成 |
-| `blockedDetails[].Type` | string | 风险类型：`contentModeration` / `promptAttack` / `sensitiveData` / `maliciousUrl` / `modelHallucination` |
-| `blockedDetails[].Level` | string | 风险等级：`high` / `medium` / `low` 等 |
-| `blockedDetails[].Suggestion` | string | 安全服务建议操作，通常为 `block` |
-| `requestId` | string | 安全服务的请求 ID，用于追踪 |
-| `guardCode` | int | 安全服务返回的业务码（非 HTTP 状态码，成功检测时为 `200`） |
+| `code` | int | 在 `text_generation`(OpenAI 包装) 与 `image_generation` 路径下为网关返回的 HTTP 状态码，取自 `denyCode`(默认 `200`)；在 `protocol=original` 与 `mcp` 路径下为安全服务返回的业务码（`Response.Code`，成功检测时为 `200`） |
+| `denyMessage` | string | 人类可读拦截文案。OpenAI 包装路径下始终存在，取 `denyMessage`(默认 `很抱歉，我无法回答您的问题`)；`protocol=original` / `image_generation` / `mcp` 路径下取 `denyMessage`，未配置时省略该字段（`omitempty`） |
+| `blockedDetails` | array | 命中拦截的维度明细；若安全服务未返回 `Detail`，则根据顶层 `RiskLevel`/`AttackLevel` 自动合成。命中维度为空时返回 `[]` |
+| `blockedDetails[].type` | string | 风险类型：`contentModeration` / `promptAttack` / `sensitiveData` / `maliciousUrl` / `modelHallucination` / `customLabel` |
+| `blockedDetails[].level` | string | 风险等级：`high` / `medium` / `low`；敏感数据为 `S1`–`S4` |
+
+> 说明：当前实现的拒答 body 仅包含上述字段。不输出安全服务的 `RequestId`、单条 `Suggestion` 与原始业务码（`guardCode`）；安全服务的 `RequestId` 通过 AI 日志 `safecheck_request_ids` 字段暴露（见下文 AI Log 章节）。
 
 各协议承载位置：
 
-- **`text_generation`（OpenAI 非流式）**：上述结构体序列化为 JSON 字符串后放入 `choices[0].message.content`
-- **`text_generation`（OpenAI 流式 SSE）**：同上，放入首个 chunk 的 `delta.content`
-- **`text_generation`（`protocol=original`）**：上述结构体直接作为 JSON 响应 body 返回
+- **`text_generation`（OpenAI，默认 `legacy`）**：不输出 `x_higress_guardrail` 或历史 `x_higress` 字段；`choices[0].message.content` / 首帧 `delta.content` 保持历史内容形态（RiskBlock 为 JSON 字符串，mask fallback 为拒答文案），`finish_reason` 为 `"stop"`，流式响应仍以 `data: [DONE]` 结束
+- **`text_generation`（OpenAI，`structured` 非流式）**：`choices[0].message.content` 承载可读拦截文案（即 `denyMessage`，未配置时默认为 `很抱歉，我无法回答您的问题`）；上述结构体作为嵌入对象放入 `choices[0].x_higress_guardrail`（不是 JSON 字符串）
+- **`text_generation`（OpenAI，`structured` 流式 SSE）**：首帧 `delta.content` 承载可读拦截文案；上述结构体仅在最后一个 chunk 中作为嵌入对象放入 `choices[0].x_higress_guardrail`，随后以 `data: [DONE]` 结束流
+- **`text_generation`（`protocol=original`）**：上述结构体直接作为 JSON 响应 body 返回（不包 OpenAI 外壳，不新增 `x_higress_guardrail`)
 - **`image_generation`**：上述结构体直接作为 JSON 响应 body 返回（HTTP 403）
 - **`mcp`（JSON-RPC）**：上述结构体序列化为 JSON 字符串后放入 `error.message`
 - **`mcp`（SSE）**：同上，通过 SSE 事件返回
+
+`openAIDenyResponseFormat` 只影响 OpenAI 包装拒答的 body 形态；拦截判断、fail-open 行为、metric 与 AI Log 字段不随该配置变化。该字段只能配置在插件全局，不能放入 `consumerRiskLevel`。
 
 补充说明一下内容合规检测、提示词攻击检测、敏感内容检测三种风险的四个等级：
 
@@ -148,6 +152,14 @@ accessKey: "XXXXXXXXX"
 secretKey: "XXXXXXXXXXXXXXX"
 checkRequest: true
 checkResponse: true
+```
+
+### 配置 OpenAI 结构化拒答
+
+默认 `openAIDenyResponseFormat: legacy` 保持历史响应形态。若需要在 OpenAI 响应中输出结构化拦截详情，可配置：
+
+```yaml
+openAIDenyResponseFormat: structured
 ```
 
 ### 使用临时安全凭证
@@ -247,10 +259,60 @@ ai-security-guard 插件提供了以下监控指标：
 - `ai_sec_request_deny`: 请求内容安全检测失败请求数
 - `ai_sec_response_deny`: 模型回答安全检测失败请求数
 
+#### 图像响应阶段 metric/ai_log 字段重命名（过渡期）
+
+历史上图像生成插件（`lvwang/multi_modal_guard/image/openai.go`、`lvwang/multi_modal_guard/image/qwen.go`）在**响应阶段**命中风险时错误地写入了请求阶段字段。本次版本修正了语义，并在 1~2 个发版周期内保留**双写过渡**：
+
+| 行为 | 旧值（错误，将在后续版本移除） | 新值（推荐） |
+| --- | --- | --- |
+| 计数器(deny) | `ai_sec_request_deny` | `ai_sec_response_deny` |
+| ai_log 耗时(pass + deny) | `safecheck_request_rt` | `safecheck_response_rt` |
+| ai_log 状态(deny) | `safecheck_status="reqeust deny"`（典型拼写错误，**本次直接废弃，不再写入**） | `safecheck_status="response deny"` |
+
+过渡期内图像响应阶段会同时写入新旧两组 `*_deny` 计数器和 `safecheck_*_rt` 字段；`safecheck_status` 只写新值。看板与告警请尽快切换到 `response_*` 字段名；当前依赖 `reqeust deny`（拼写错误版本）状态串的图像响应告警需要立即改为 `response deny`。
+
 ### Trace
 如果开启了链路追踪，ai-security-guard 插件会在请求 span 中添加以下 attributes:
 - `ai_sec_risklabel`: 表示请求命中的风险类型
 - `ai_sec_deny_phase`: 表示请求被检测到风险的阶段（取值为request或者response）
+
+### AI Log
+ai-security-guard 插件会将每次提交给内容安全服务的检测结果写入 AI 访问日志，用于将网关日志和阿里云内容安全请求关联起来：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `safecheck_requests` | array | 检测提交事件数组，每个元素为 `{"requestId"?: string, "phase": string, "modality": string, "result": string}` |
+| `safecheck_request_ids` | array | 当前网关请求内所有有效内容安全 `RequestId`，按提交完成顺序保留，不去重、不截断 |
+| `safecheck_request_id` | string | 最新一个有效内容安全 `RequestId`，用于兼容只读取单值的日志消费方 |
+| `safecheck_status` | string | 历史兼容字段，反映本次网关请求最后一次状态变更的语义（详见下方枚举） |
+| `safecheck_request_rt` / `safecheck_response_rt` | int | 请求/响应阶段安全检测的耗时（毫秒） |
+| `safecheck_riskLabel` / `safecheck_riskWords` | string | 命中风险时的风险标签与风险词（取自安全服务返回的第一个命中结果） |
+
+`safecheck_requests[].phase` 取值为 `request` 或 `response`；`modality` 取值为 `text`、`image` 或 `mcp`；`result` 表示**该次提交事件本身的处理结果**（而非网关最终对外动作），取值与含义如下：
+
+| `result` 取值 | 含义 |
+| --- | --- |
+| `pass` | 该次提交检测通过 |
+| `deny` | 该次提交命中风险，网关已对外返回拒答 |
+| `mask` | 该次提交命中风险且 `Action=Mask`，安全服务返回了脱敏文本并用于改写请求体 |
+| `error` | 该次提交本身处理失败（HTTP 非 200、业务 Code 非 200、反序列化失败、构造拒答响应失败、调用内容安全服务失败等）。错误发生在**响应阶段流式回调**且原因是构造拒答响应失败时，网关会 fail-open（直接放行上游缓冲内容），此时 `safecheck_status=build_fallback_pass`，对应事件 `result=error` 表示这次安全提交未完成 |
+
+只有安全服务响应中的 `RequestId` 是 JSON 字符串且 `strings.TrimSpace(RequestId) != ""` 时，才会写入 `requestId`、`safecheck_request_ids` 和 `safecheck_request_id`；缺失、空字符串、空白字符串或非字符串值不会写入空占位。
+
+每一次提交尝试都会生成一个 `safecheck_requests` 事件，包括 HTTP 非 200、业务失败码以及调用内容安全服务失败等错误场景，错误结果会记录为 `result=error`。需要精确审计多次提交、流式分段或图片多次检测时，应优先使用 `safecheck_requests`。
+
+`safecheck_status` 枚举(历史字段，按"最后一次状态变更"覆盖，存在多次提交时仅保留最后一次的语义)：
+
+| `safecheck_status` 取值 | 含义 |
+| --- | --- |
+| `request pass` | 请求阶段所有提交均通过 |
+| `request mask` | 请求阶段命中 mask，请求体已被脱敏文本改写 |
+| `reqeust deny` | 请求阶段命中风险，网关返回拒答（注：拼写为 `reqeust`，沿用历史，保持向后兼容） |
+| `request error` | 请求阶段安全提交本身失败（HTTP/反序列化/调用安全服务等），网关 fail-open 放行 |
+| `response pass` | 响应阶段所有提交均通过 |
+| `response deny` | 响应阶段命中风险，网关返回拒答 |
+| `response error` | 响应阶段安全提交本身失败，网关 fail-open 放行 |
+| `build_fallback_pass` | 响应阶段流式回调里构造拒答响应失败，网关 fail-open 直接放行上游缓冲内容 |
 
 ## 请求示例
 ```bash
@@ -267,25 +329,39 @@ curl http://localhost/v1/chat/completions \
 }'
 ```
 
-请求内容会被发送到阿里云内容安全服务进行检测，如果请求内容检测结果为非法，网关将返回形如以下的回答：
+当配置 `openAIDenyResponseFormat: structured` 时，请求内容会被发送到阿里云内容安全服务进行检测。如果请求内容检测结果为非法，网关将返回形如以下的回答：
 
 ```json
 {
   "id": "chatcmpl-AAy3hK1dE4ODaegbGOMoC9VY4Sizv",
   "object": "chat.completion",
-  "created": 1677652288,
-  "model": "gpt-4o-mini",
-  "system_fingerprint": "fp_44709d6fcb",
+  "created": 1727078400,
+  "model": "from-security-guard",
   "choices": [
     {
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "作为一名人工智能助手，我不能提供涉及色情、暴力、政治等敏感话题的内容。如果您有其他相关问题，欢迎您提问。",
+        "content": "作为一名人工智能助手，我不能提供涉及色情、暴力、政治等敏感话题的内容。如果您有其他相关问题，欢迎您提问。"
       },
       "logprobs": null,
-      "finish_reason": "stop"
+      "finish_reason": "stop",
+      "x_higress_guardrail": {
+        "code": 200,
+        "denyMessage": "作为一名人工智能助手，我不能提供涉及色情、暴力、政治等敏感话题的内容。如果您有其他相关问题，欢迎您提问。",
+        "blockedDetails": [
+          {
+            "type": "contentModeration",
+            "level": "high"
+          }
+        ]
+      }
     }
-  ]
+  ],
+  "usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
+  }
 }
 ```

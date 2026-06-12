@@ -2,7 +2,6 @@ package text
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -27,10 +26,12 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 	}
 	contentIndex := 0
 	sessionID, _ := utils.GenerateHexID(20)
+	currentSubmissionIndex := 0
 	var singleCall func()
 	callback := func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		log.Info(string(responseBody))
 		if statusCode != 200 || gjson.GetBytes(responseBody, "Code").Int() != 200 {
+			cfg.MarkGuardrailRequestError(ctx, currentSubmissionIndex, responseBody, startTime)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
@@ -38,6 +39,7 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		err := json.Unmarshal(responseBody, &response)
 		if err != nil {
 			log.Error("failed to unmarshal aliyun content security response at request phase")
+			cfg.MarkGuardrailRequestError(ctx, currentSubmissionIndex, responseBody, startTime)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
@@ -46,44 +48,36 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 				endTime := time.Now().UnixMilli()
 				ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 				ctx.SetUserAttribute("safecheck_status", "request pass")
-				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+			}
+			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultPass)
+			if contentIndex >= len(content) {
+				cfg.WriteGuardrailLog(ctx)
 				proxywasm.ResumeHttpRequest()
 			} else {
 				singleCall()
 			}
 			return
 		}
-		denyBody, err := cfg.BuildDenyResponseBody(response, config, consumer)
-		if err != nil {
+		if err := cfg.SendDenyResponse(config, response, consumer, gjson.GetBytes(body, "stream").Bool()); err != nil {
 			log.Errorf("failed to build deny response body: %v", err)
+			cfg.MarkGuardrailRequestError(ctx, currentSubmissionIndex, responseBody, startTime)
 			proxywasm.ResumeHttpRequest()
 			return
-		}
-		if config.ProtocolOriginal {
-			proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, denyBody, -1)
-		} else if gjson.GetBytes(body, "stream").Bool() {
-			randomID := utils.GenerateRandomChatID()
-			marshalledDenyMessage := wrapper.MarshalStr(string(denyBody))
-			jsonData := []byte(fmt.Sprintf(cfg.OpenAIStreamResponseFormat, randomID, marshalledDenyMessage, randomID))
-			proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "text/event-stream;charset=UTF-8"}}, jsonData, -1)
-		} else {
-			randomID := utils.GenerateRandomChatID()
-			marshalledDenyMessage := wrapper.MarshalStr(string(denyBody))
-			jsonData := []byte(fmt.Sprintf(cfg.OpenAIResponseFormat, randomID, marshalledDenyMessage))
-			proxywasm.SendHttpResponse(uint32(config.DenyCode), [][2]string{{"content-type", "application/json"}}, jsonData, -1)
 		}
 		ctx.DontReadResponseBody()
 		config.IncrementCounter("ai_sec_request_deny", 1)
 		endTime := time.Now().UnixMilli()
 		ctx.SetUserAttribute("safecheck_request_rt", endTime-startTime)
 		ctx.SetUserAttribute("safecheck_status", "reqeust deny")
-		if response.Data.Advice != nil {
+		if len(response.Data.Result) > 0 {
 			ctx.SetUserAttribute("safecheck_riskLabel", response.Data.Result[0].Label)
 			ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 		}
-		ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+		cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
+		cfg.WriteGuardrailLog(ctx)
 	}
 	singleCall = func() {
+		currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseRequest, cfg.GuardrailModalityText)
 		var nextContentIndex int
 		if contentIndex+cfg.LengthLimit >= len(content) {
 			nextContentIndex = len(content)
@@ -97,6 +91,7 @@ func HandleTextGenerationRequestBody(ctx wrapper.HttpContext, config cfg.AISecur
 		err := config.Client.Post(path, headers, body, callback, config.Timeout)
 		if err != nil {
 			log.Errorf("failed call the safe check service: %v", err)
+			cfg.MarkGuardrailRequestError(ctx, currentSubmissionIndex, nil, startTime)
 			proxywasm.ResumeHttpRequest()
 		}
 	}

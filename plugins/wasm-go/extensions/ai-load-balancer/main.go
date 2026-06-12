@@ -8,6 +8,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/cluster_metrics"
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/cluster_hash"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/endpoint_metrics"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/global_least_request"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/prefix_cache"
@@ -48,6 +49,7 @@ const (
 	EndpointLoadBalancerType = "endpoint"
 	// Cluster load balancer policies
 	MetricsBasedCluster = "cluster_metrics"
+	ClusterHashCluster  = "cluster_hash"
 	// Endpoint load balancer policies
 	MetricsBasedEndpoint           = "endpoint_metrics"
 	MetricsBasedEndpointDeprecated = "metrics_based" // Compatible with old configurations, equal to `endpoint_metrics`
@@ -68,6 +70,8 @@ func parseConfig(json gjson.Result, config *Config) error {
 		switch config.lbPolicy {
 		case MetricsBasedCluster:
 			config.lb, err = cluster_metrics.NewClusterEndpointLoadBalancer(json.Get("lb_config"))
+		case ClusterHashCluster:
+			config.lb, err = cluster_hash.NewClusterHashLoadBalancer(json.Get("lb_config"))
 		default:
 			err = fmt.Errorf("lb_policy %s is not supported", config.lbPolicy)
 		}
