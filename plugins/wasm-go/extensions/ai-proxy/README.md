@@ -2435,7 +2435,7 @@ sessionAffinity:
     jsonPath: "$.callOptions.stickySessionId"
 ```
 
-`mode` 支持 `hash` 和 `persistent`，为了兼容也可以使用旧字段名 `type`。`persistent` 会在共享数据中保存 session key 到 provider 的映射，并通过 `ttlSeconds` 控制有效期。`key.source` 支持 `header`、`cookie`、`body`、`metadata`。`source: header` 默认读取 `x-mse-consumer`；`source: cookie` 需要配置 `name`；`source: body` 需要配置 `jsonPath`；`source: metadata` 可以配置 `name`（映射到 `metadata.<name>`）或 `propertyPath`。如果不配置 `providerIds`，默认在所有 `providers` 中做选择。`scope` 可选值包括 `consumer`、`route`、`model` 和 `metadata.<name>`，用于把会话 key 与更多上下文组合后再选择 provider。`onProviderUnavailable` 支持 `failFast`、`fallbackAndUpdate`、`fallbackWithoutUpdate`；`unavailableStatus` 用于配置触发不可用策略的上游状态码匹配规则，默认匹配 `5.*`。
+`mode` 支持 `hash` 和 `persistent`，为了兼容也可以使用旧字段名 `type`。`persistent` 会在当前 Envoy/Wasm 实例的共享数据中保存 session key 到 provider 的映射，并通过 `ttlSeconds` 控制有效期。`key.source` 支持 `header`、`cookie`、`body`、`metadata`。`source: header` 默认读取 `x-mse-consumer`；`source: cookie` 需要配置 `name`；`source: body` 需要配置 `jsonPath`；`source: metadata` 可以配置 `name`（映射到 `metadata.<name>`）或 `propertyPath`。如果不配置 `providerIds`，默认在所有 `providers` 中做选择。`scope` 可选值包括 `consumer`、`route`、`model` 和 `metadata.<name>`，用于把会话 key 与更多上下文组合后再选择 provider。`onProviderUnavailable` 支持 `failFast`、`fallbackAndUpdate`、`fallbackWithoutUpdate`；`unavailableStatus` 用于配置触发不可用策略的上游状态码匹配规则，默认匹配 `5.*`。
 
 使用约束：
 
@@ -2443,6 +2443,7 @@ sessionAffinity:
 - `key.source: body` 或 `scope: model` 需要读取请求体，插件会缓冲请求体后再选择 provider。大请求体场景应按需配置 `max_body_bytes`，避免超过代理可接受的缓冲大小。
 - `fallbackAndUpdate` 和 `fallbackWithoutUpdate` 只会在同一个 `providerIds` 选择集合内选择下一个 provider。`fallbackAndUpdate` 仅在 fallback 响应为 2xx 时更新 persistent 映射；fallback 失败时会恢复原上游响应处理。
 - `failFast` 会在命中 `unavailableStatus` 时直接返回 503，不会尝试其他 provider。
+- `persistent` 模式是本地、尽力而为的持久化：映射仅保存在处理该请求的 Envoy/Wasm 实例内，不会跨 Higress/Envoy Pod 共享；Pod 重启、Wasm VM 重建或配置重新加载后映射可能丢失。在多副本部署中，如果需要跨副本的无状态确定性路由，建议使用 `hash` 模式并确保所有副本的 provider 顺序和配置一致。只有在可以接受本地尽力而为重映射时才建议使用 `persistent`；如果需要全局持久会话亲和，需要引入外部分布式存储设计。
 
 ### 使用 OpenAI 协议代理 NVIDIA Triton Interference Server 服务
 
