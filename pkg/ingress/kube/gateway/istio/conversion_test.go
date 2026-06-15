@@ -130,9 +130,9 @@ var services = []*model.Service{
 		Attributes: model.ServiceAttributes{
 			Namespace: "default",
 			Labels: map[string]string{
-				"higress.io/inferencepool-extension-service":      "ext-proc-svc",
-				"higress.io/inferencepool-extension-port":         "9002",
-				"higress.io/inferencepool-extension-failure-mode": "FailClose",
+				InferencePoolExtensionRefSvc:         "ext-proc-svc",
+				InferencePoolExtensionRefPort:        "9002",
+				InferencePoolExtensionRefFailureMode: "FailClose",
 			},
 		},
 		Ports: ports,
@@ -145,14 +145,44 @@ var services = []*model.Service{
 		Attributes: model.ServiceAttributes{
 			Namespace: "default",
 			Labels: map[string]string{
-				"higress.io/inferencepool-extension-service":      "ext-proc-svc-2",
-				"higress.io/inferencepool-extension-port":         "9002",
-				"higress.io/inferencepool-extension-failure-mode": "FailClose",
+				InferencePoolExtensionRefSvc:         "ext-proc-svc-2",
+				InferencePoolExtensionRefPort:        "9002",
+				InferencePoolExtensionRefFailureMode: "FailClose",
 			},
 		},
 		Ports: ports,
 		Hostname: host.Name(fmt.Sprintf("%s.default.svc.domain.suffix", func() string {
 			name, _ := InferencePoolServiceName("infpool-gen2")
+			return name
+		}())),
+	},
+	{
+		Attributes: model.ServiceAttributes{
+			Namespace: "default",
+			Labels: map[string]string{
+				InferencePoolExtensionRefSvc:         "model1-epp",
+				InferencePoolExtensionRefPort:        "9002",
+				InferencePoolExtensionRefFailureMode: "FailClose",
+			},
+		},
+		Ports: ports,
+		Hostname: host.Name(fmt.Sprintf("%s.default.svc.domain.suffix", func() string {
+			name, _ := InferencePoolServiceName("infpool-model1")
+			return name
+		}())),
+	},
+	{
+		Attributes: model.ServiceAttributes{
+			Namespace: "default",
+			Labels: map[string]string{
+				InferencePoolExtensionRefSvc:         "model2-epp",
+				InferencePoolExtensionRefPort:        "9002",
+				InferencePoolExtensionRefFailureMode: "FailClose",
+			},
+		},
+		Ports: ports,
+		Hostname: host.Name(fmt.Sprintf("%s.default.svc.domain.suffix", func() string {
+			name, _ := InferencePoolServiceName("infpool-model2")
 			return name
 		}())),
 	},
