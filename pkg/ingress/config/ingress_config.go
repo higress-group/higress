@@ -641,25 +641,44 @@ func (m *IngressConfig) preparePassthroughTLSHostOwners(convertOptions *common.C
 		convertOptions.PassthroughTLSHostOwners = map[string]*config.Config{}
 	}
 
-	// A host can be taken over by SSL passthrough only when the first root path seen for that host
-	// belongs to an SSL passthrough ingress. Later conversion stages derive all skip decisions from
-	// this single owner map.
-	firstRootPathHosts := map[string]struct{}{}
+	// ingress-nginx enables SSL passthrough at host level when any ingress for the host has the
+	// annotation, then uses the first root path as the passthrough backend.
+	passthroughHosts := map[string]struct{}{}
+	firstRootPathHostOwners := map[string]*config.Config{}
 	for idx := range configs {
 		cfg := configs[idx]
 		if cfg.AnnotationsConfig.IsCanary() {
 			continue
 		}
 
-		for _, host := range ingressRootPathHosts(cfg.Config.Spec) {
-			if _, exist := firstRootPathHosts[host]; exist {
-				continue
-			}
-			firstRootPathHosts[host] = struct{}{}
-			if cfg.AnnotationsConfig.IsSSLPassthrough() {
-				convertOptions.PassthroughTLSHostOwners[host] = cfg.Config
+		if cfg.AnnotationsConfig.IsSSLPassthrough() {
+			for _, host := range ingressRuleHosts(cfg.Config.Spec) {
+				passthroughHosts[host] = struct{}{}
 			}
 		}
+		for _, host := range ingressRootPathHosts(cfg.Config.Spec) {
+			if _, exist := firstRootPathHostOwners[host]; exist {
+				continue
+			}
+			firstRootPathHostOwners[host] = cfg.Config
+		}
+	}
+
+	for host := range passthroughHosts {
+		if owner := firstRootPathHostOwners[host]; owner != nil {
+			convertOptions.PassthroughTLSHostOwners[host] = owner
+		}
+	}
+}
+
+func ingressRuleHosts(spec config.Spec) []string {
+	switch ingressSpec := spec.(type) {
+	case networkingv1.IngressSpec:
+		return ingressV1RuleHosts(ingressSpec.Rules)
+	case networkingv1beta1.IngressSpec:
+		return ingressV1Beta1RuleHosts(ingressSpec.Rules)
+	default:
+		return nil
 	}
 }
 
@@ -672,6 +691,22 @@ func ingressRootPathHosts(spec config.Spec) []string {
 	default:
 		return nil
 	}
+}
+
+func ingressV1RuleHosts(rules []networkingv1.IngressRule) []string {
+	out := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, rule.Host)
+	}
+	return out
+}
+
+func ingressV1Beta1RuleHosts(rules []networkingv1beta1.IngressRule) []string {
+	out := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, rule.Host)
+	}
+	return out
 }
 
 func ingressV1RootPathHosts(rules []networkingv1.IngressRule) []string {

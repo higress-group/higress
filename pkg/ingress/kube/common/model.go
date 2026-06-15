@@ -168,6 +168,18 @@ func PassthroughTLSHostOwner(convertOptions *ConvertOptions, host string) *confi
 	return convertOptions.PassthroughTLSHostOwners[host]
 }
 
+func HasPassthroughTLSHostOwner(convertOptions *ConvertOptions, cfg *config.Config) bool {
+	if convertOptions == nil || len(convertOptions.PassthroughTLSHostOwners) == 0 {
+		return false
+	}
+	for _, owner := range convertOptions.PassthroughTLSHostOwners {
+		if SameConfig(owner, cfg) {
+			return true
+		}
+	}
+	return false
+}
+
 type ConvertOptions struct {
 	HostWithRule2Ingress map[string]*config.Config
 
@@ -190,7 +202,7 @@ type ConvertOptions struct {
 
 	CanaryIngresses []*WrapperConfig
 
-	// Host to the ingress that owns TLS passthrough for that host.
+	// Host to the first root-path ingress owner for hosts that have TLS passthrough enabled.
 	PassthroughTLSHostOwners map[string]*config.Config
 
 	Service2TrafficPolicy map[ServiceKey]*WrapperTrafficPolicy

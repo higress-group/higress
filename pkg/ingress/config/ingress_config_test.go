@@ -156,6 +156,65 @@ func TestVirtualServiceNameAndClusterID(t *testing.T) {
 	}
 }
 
+func TestPreparePassthroughTLSHostOwnersRequiresPassthroughHost(t *testing.T) {
+	m := &IngressConfig{}
+	configs := []common.WrapperConfig{
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "plain-root",
+				},
+				Spec: ingress.IngressSpec{
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{},
+		},
+		{
+			Config: &config.Config{
+				Meta: config.Meta{
+					Namespace: "default",
+					Name:      "plain-root-duplicate",
+				},
+				Spec: ingress.IngressSpec{
+					Rules: []ingress.IngressRule{
+						{
+							Host: "example.com",
+							IngressRuleValue: ingress.IngressRuleValue{
+								HTTP: &ingress.HTTPIngressRuleValue{
+									Paths: []ingress.HTTPIngressPath{
+										{Path: "/"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			AnnotationsConfig: &annotations.Ingress{},
+		},
+	}
+
+	options := &common.ConvertOptions{}
+	m.preparePassthroughTLSHostOwners(options, configs)
+
+	if len(options.PassthroughTLSHostOwners) != 0 {
+		t.Fatalf("unexpected ssl passthrough owners: %+v", options.PassthroughTLSHostOwners)
+	}
+}
+
 func TestPreparePassthroughTLSHostOwnersUsesFirstRootPathOwner(t *testing.T) {
 	m := &IngressConfig{}
 	configs := []common.WrapperConfig{
@@ -186,45 +245,7 @@ func TestPreparePassthroughTLSHostOwnersUsesFirstRootPathOwner(t *testing.T) {
 			Config: &config.Config{
 				Meta: config.Meta{
 					Namespace: "default",
-					Name:      "passthrough-root",
-				},
-				Spec: ingress.IngressSpec{
-					Rules: []ingress.IngressRule{
-						{
-							Host: "example.com",
-							IngressRuleValue: ingress.IngressRuleValue{
-								HTTP: &ingress.HTTPIngressRuleValue{
-									Paths: []ingress.HTTPIngressPath{
-										{Path: "/"},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			AnnotationsConfig: &annotations.Ingress{
-				SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
-			},
-		},
-	}
-
-	options := &common.ConvertOptions{}
-	m.preparePassthroughTLSHostOwners(options, configs)
-
-	if len(options.PassthroughTLSHostOwners) != 0 {
-		t.Fatalf("unexpected ssl passthrough owners: %+v", options.PassthroughTLSHostOwners)
-	}
-}
-
-func TestPreparePassthroughTLSHostOwnersAllowsFirstRootPathSSLPassthroughOwner(t *testing.T) {
-	m := &IngressConfig{}
-	configs := []common.WrapperConfig{
-		{
-			Config: &config.Config{
-				Meta: config.Meta{
-					Namespace: "default",
-					Name:      "non-root",
+					Name:      "passthrough-non-root",
 				},
 				Spec: ingress.IngressSpec{
 					Rules: []ingress.IngressRule{
@@ -241,29 +262,6 @@ func TestPreparePassthroughTLSHostOwnersAllowsFirstRootPathSSLPassthroughOwner(t
 					},
 				},
 			},
-			AnnotationsConfig: &annotations.Ingress{},
-		},
-		{
-			Config: &config.Config{
-				Meta: config.Meta{
-					Namespace: "default",
-					Name:      "passthrough-root",
-				},
-				Spec: ingress.IngressSpec{
-					Rules: []ingress.IngressRule{
-						{
-							Host: "example.com",
-							IngressRuleValue: ingress.IngressRuleValue{
-								HTTP: &ingress.HTTPIngressRuleValue{
-									Paths: []ingress.HTTPIngressPath{
-										{Path: "/"},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
 			AnnotationsConfig: &annotations.Ingress{
 				SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
 			},
@@ -273,8 +271,11 @@ func TestPreparePassthroughTLSHostOwnersAllowsFirstRootPathSSLPassthroughOwner(t
 	options := &common.ConvertOptions{}
 	m.preparePassthroughTLSHostOwners(options, configs)
 
-	if !common.IsPassthroughTLSHostOwner(options, configs[1].Config, "example.com") {
-		t.Fatal("first root ssl passthrough ingress was not recorded as owner")
+	if !common.IsPassthroughTLSHostOwner(options, configs[0].Config, "example.com") {
+		t.Fatal("first root ingress was not recorded as passthrough owner")
+	}
+	if !common.HasPassthroughTLSHostOwner(options, configs[0].Config) {
+		t.Fatal("first root ingress was not found as passthrough owner")
 	}
 }
 
@@ -435,6 +436,76 @@ func TestConvertGatewaysHonorsFirstRootPathSSLPassthroughOwner(t *testing.T) {
 	}
 	if tlsServer.Tls.GetMode() != networking.ServerTLSSettings_PASSTHROUGH {
 		t.Fatalf("tls mode mismatch, want PASSTHROUGH, got %s", tlsServer.Tls.GetMode())
+	}
+}
+
+func TestConvertGatewaysUsesFirstRootOwnerWhenLaterIngressEnablesSSLPassthrough(t *testing.T) {
+	fake := kube.NewFakeClient()
+	options := common.Options{
+		Enable:           true,
+		ClusterId:        "ingress-v1",
+		RawClusterId:     "ingress-v1__",
+		GatewayHttpPort:  80,
+		GatewayHttpsPort: 443,
+	}
+	ingressController := controllerv1.NewController(fake, fake, options, nil)
+	m := NewIngressConfig(fake, nil, "wakanda", options)
+	m.remoteIngressControllers = map[cluster.ID]common.IngressController{
+		"ingress-v1": ingressController,
+	}
+
+	configs := []common.WrapperConfig{
+		ingressV1Wrapper("root", "example.com", "/", false),
+		ingressV1Wrapper("passthrough", "example.com", "/passthrough", true),
+	}
+
+	result := m.convertGateways(configs)
+	if len(result) != 1 {
+		t.Fatalf("gateway count mismatch, want 1, got %d", len(result))
+	}
+	gateway := result[0].Spec.(*networking.Gateway)
+	if len(gateway.Servers) != 2 {
+		t.Fatalf("server count mismatch, want 2, got %d", len(gateway.Servers))
+	}
+	tlsServer := gateway.Servers[1]
+	if tlsServer.Port.Protocol != "TLS" {
+		t.Fatalf("tls server protocol mismatch, want TLS, got %s", tlsServer.Port.Protocol)
+	}
+	if tlsServer.Tls.GetMode() != networking.ServerTLSSettings_PASSTHROUGH {
+		t.Fatalf("tls mode mismatch, want PASSTHROUGH, got %s", tlsServer.Tls.GetMode())
+	}
+}
+
+func TestConvertVirtualServiceUsesFirstRootOwnerWhenLaterIngressEnablesSSLPassthrough(t *testing.T) {
+	fake := kube.NewFakeClient()
+	options := common.Options{
+		Enable:           true,
+		ClusterId:        "ingress-v1",
+		RawClusterId:     "ingress-v1__",
+		GatewayHttpPort:  80,
+		GatewayHttpsPort: 443,
+	}
+	ingressController := controllerv1.NewController(fake, fake, options, nil)
+	m := NewIngressConfig(fake, nil, "wakanda", options)
+	m.remoteIngressControllers = map[cluster.ID]common.IngressController{
+		"ingress-v1": ingressController,
+	}
+
+	configs := []common.WrapperConfig{
+		ingressV1Wrapper("root", "example.com", "/", false),
+		ingressV1Wrapper("passthrough", "example.com", "/passthrough", true),
+	}
+
+	result := m.convertVirtualService(configs)
+	if len(result) != 1 {
+		t.Fatalf("virtual service count mismatch, want 1, got %d", len(result))
+	}
+	vs := result[0].Spec.(*networking.VirtualService)
+	if len(vs.Tls) != 1 {
+		t.Fatalf("tls route count mismatch, want 1, got %d", len(vs.Tls))
+	}
+	if got := vs.Tls[0].Route[0].Destination.Host; got != "root.default.svc.cluster.local" {
+		t.Fatalf("destination host mismatch, want root.default.svc.cluster.local, got %s", got)
 	}
 }
 
@@ -944,4 +1015,47 @@ func TestConstructBasicAuthEnvoyFilter(t *testing.T) {
 	}
 	target := proto.Clone(pb).(*httppb.HttpFilter)
 	t.Log(target)
+}
+
+func ingressV1Wrapper(name, host, path string, sslPassthrough bool) common.WrapperConfig {
+	wrapper := common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      name,
+				Annotations: map[string]string{
+					common.ClusterIdAnnotation: "ingress-v1",
+				},
+			},
+			Spec: ingress.IngressSpec{
+				Rules: []ingress.IngressRule{
+					{
+						Host: host,
+						IngressRuleValue: ingress.IngressRuleValue{
+							HTTP: &ingress.HTTPIngressRuleValue{
+								Paths: []ingress.HTTPIngressPath{
+									{
+										Path: path,
+										Backend: ingress.IngressBackend{
+											Service: &ingress.IngressServiceBackend{
+												Name: name,
+												Port: ingress.ServiceBackendPort{Number: 443},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			Match: &annotations.MatchConfig{},
+		},
+	}
+	if sslPassthrough {
+		wrapper.AnnotationsConfig.SSLPassthrough = &annotations.SSLPassthroughConfig{Enabled: true}
+	}
+	return wrapper
 }

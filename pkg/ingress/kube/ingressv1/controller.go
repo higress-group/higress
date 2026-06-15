@@ -402,29 +402,13 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 			}
 		}
 
-		if wrapper.AnnotationsConfig.IsSSLPassthrough() {
+		passthroughOwner := common.PassthroughTLSHostOwner(convertOptions, rule.Host)
+		standaloneSSLPassthrough := convertOptions.PassthroughTLSHostOwners == nil && wrapper.AnnotationsConfig.IsSSLPassthrough()
+		if common.SameConfig(passthroughOwner, cfg) || standaloneSSLPassthrough {
 			if rule.HTTP == nil || len(rule.HTTP.Paths) == 0 {
 				continue
 			}
 			if _, ok := rootHTTPIngressPath(rule.HTTP.Paths); !ok {
-				continue
-			}
-			if passthroughOwner := common.PassthroughTLSHostOwner(convertOptions, rule.Host); passthroughOwner != nil && !common.SameConfig(passthroughOwner, cfg) {
-				domainBuilder.Protocol = common.HTTPS
-				domainBuilder.Event = common.DuplicatedTls
-				domainBuilder.PreIngress = passthroughOwner
-				convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
-					domainBuilder.Build())
-				continue
-			}
-			if !common.IsPassthroughTLSHostOwner(convertOptions, cfg, rule.Host) {
-				if preDomainBuilder != nil {
-					domainBuilder.Protocol = common.HTTPS
-					domainBuilder.Event = common.DuplicatedTls
-					domainBuilder.PreIngress = preDomainBuilder.Ingress
-					convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
-						domainBuilder.Build())
-				}
 				continue
 			}
 
@@ -442,6 +426,18 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 			wrapperGateway.Gateway.Servers = append(wrapperGateway.Gateway.Servers,
 				common.CreateSSLPassthroughServer(rule.Host, c.options.GatewayHttpsPort, c.options.ClusterId))
 			convertOptions.IngressDomainCache.Valid[rule.Host] = domainBuilder
+			continue
+		}
+		if wrapper.AnnotationsConfig.IsSSLPassthrough() {
+			if rule.HTTP != nil {
+				if _, ok := rootHTTPIngressPath(rule.HTTP.Paths); ok && passthroughOwner != nil {
+					domainBuilder.Protocol = common.HTTPS
+					domainBuilder.Event = common.DuplicatedTls
+					domainBuilder.PreIngress = passthroughOwner
+					convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
+						domainBuilder.Build())
+				}
+			}
 			continue
 		}
 
@@ -493,7 +489,7 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 		domainBuilder.Protocol = common.HTTPS
 		domainBuilder.SecretName = path.Join(c.options.ClusterId.String(), cfg.Namespace, secretName)
 
-		if passthroughOwner := common.PassthroughTLSHostOwner(convertOptions, rule.Host); passthroughOwner != nil && !common.SameConfig(passthroughOwner, cfg) {
+		if passthroughOwner != nil {
 			domainBuilder.Event = common.DuplicatedTls
 			domainBuilder.PreIngress = passthroughOwner
 			convertOptions.IngressDomainCache.Invalid = append(convertOptions.IngressDomainCache.Invalid,
@@ -558,8 +554,6 @@ func (c *controller) ConvertHTTPRoute(convertOptions *common.ConvertOptions, wra
 	if convertOptions.HTTPRoutes == nil {
 		convertOptions.HTTPRoutes = map[string][]*common.WrapperHTTPRoute{}
 	}
-
-	sslPassthrough := wrapper.AnnotationsConfig.IsSSLPassthrough()
 
 	cfg := wrapper.Config
 	ingressV1, ok := cfg.Spec.(ingress.IngressSpec)
@@ -705,7 +699,8 @@ func (c *controller) ConvertHTTPRoute(convertOptions *common.ConvertOptions, wra
 		}
 	}
 
-	if sslPassthrough {
+	if common.HasPassthroughTLSHostOwner(convertOptions, cfg) ||
+		(convertOptions.PassthroughTLSHostOwners == nil && wrapper.AnnotationsConfig.IsSSLPassthrough()) {
 		return c.ConvertTLSRoute(convertOptions, wrapper)
 	}
 

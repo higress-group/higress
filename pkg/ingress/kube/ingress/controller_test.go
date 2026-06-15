@@ -475,6 +475,81 @@ func TestBackendToTLSRouteDestinationRejectsEmptyMCPDestination(t *testing.T) {
 	}
 }
 
+func TestSSLPassthroughUsesFirstRootOwnerWhenLaterIngressEnablesPassthrough(t *testing.T) {
+	c := controller{
+		options: common.Options{
+			GatewayHttpPort:  80,
+			GatewayHttpsPort: 443,
+		},
+	}
+	root := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "root",
+			},
+			Spec: ingress.IngressSpec{
+				Rules: []ingress.IngressRule{
+					ingressV1Beta1Rule("example.com", ingressV1Beta1Path("/", "root", 443)),
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{},
+	}
+	passthrough := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "passthrough",
+			},
+			Spec: ingress.IngressSpec{
+				Rules: []ingress.IngressRule{
+					ingressV1Beta1Rule("example.com", ingressV1Beta1Path("/passthrough", "passthrough", 443)),
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			SSLPassthrough: &annotations.SSLPassthroughConfig{Enabled: true},
+		},
+	}
+
+	options := &common.ConvertOptions{
+		Gateways:                 map[string]*common.WrapperGateway{},
+		IngressDomainCache:       common.NewIngressDomainCache(),
+		PassthroughTLSHostOwners: map[string]*config.Config{"example.com": root.Config},
+	}
+	if err := c.ConvertGateway(options, root, nil); err != nil {
+		t.Fatalf("ConvertGateway(root) error = %v", err)
+	}
+	if err := c.ConvertGateway(options, passthrough, nil); err != nil {
+		t.Fatalf("ConvertGateway(passthrough) error = %v", err)
+	}
+	gateway := options.Gateways["example.com"].Gateway
+	if len(gateway.Servers) != 2 {
+		t.Fatalf("server count mismatch, want 2, got %d", len(gateway.Servers))
+	}
+	if gateway.Servers[1].Tls.GetMode() != v1alpha3.ServerTLSSettings_PASSTHROUGH {
+		t.Fatalf("tls mode mismatch, want PASSTHROUGH, got %s", gateway.Servers[1].Tls.GetMode())
+	}
+
+	routeOptions := &common.ConvertOptions{
+		PassthroughTLSHostOwners: map[string]*config.Config{"example.com": root.Config},
+	}
+	if err := c.ConvertHTTPRoute(routeOptions, root); err != nil {
+		t.Fatalf("ConvertHTTPRoute(root) error = %v", err)
+	}
+	if err := c.ConvertHTTPRoute(routeOptions, passthrough); err != nil {
+		t.Fatalf("ConvertHTTPRoute(passthrough) error = %v", err)
+	}
+	routes := routeOptions.VirtualServices["example.com"].VirtualService.Tls
+	if len(routes) != 1 {
+		t.Fatalf("tls route count mismatch, want 1, got %d", len(routes))
+	}
+	if got := routes[0].Route[0].Destination.Host; got != "root.default.svc.cluster.local" {
+		t.Fatalf("destination host mismatch, want root.default.svc.cluster.local, got %s", got)
+	}
+}
+
 func TestSSLPassthroughNonRootIngressDoesNotBlockLaterRootIngress(t *testing.T) {
 	c := controller{
 		options: common.Options{
