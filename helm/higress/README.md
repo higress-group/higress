@@ -166,6 +166,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.defaultUpstreamConcurrencyThreshold | int | `10000` |  |
 | global.disableAlpnH2 | bool | `false` | Whether to disable HTTP/2 in ALPN |
 | global.enableDeltaXDS | bool | `true` | Whether to enable Istio delta xDS, default is false. |
+| global.enableAlphaGatewayAPI | bool | `false` | If true, Higress Controller will monitor Gateway API resources that have not reached v1 yet |
 | global.enableGatewayAPI | bool | `true` | If true, Higress Controller will monitor Gateway API resources as well |
 | global.enableH3 | bool | `false` |  |
 | global.enableIPv6 | bool | `false` |  |
