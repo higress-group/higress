@@ -58,7 +58,7 @@ func ReplaceJsonFieldTextContent(body []byte, jsonPath string, newContent string
 	fieldValue := gjson.GetBytes(body, resolved)
 	if !fieldValue.IsArray() {
 		// Simple string content — replace directly
-		return sjson.SetBytes(body, resolved, newContent)
+		return setJsonTextContent(body, resolved, newContent)
 	}
 	// Array content (multimodal): replace text items, preserve others
 	result := body
@@ -86,7 +86,7 @@ func ReplaceJsonFieldTextContent(body []byte, jsonPath string, newContent string
 	// If there's only one text item, put all desensitized content there
 	if len(textEntries) == 1 {
 		itemPath := fmt.Sprintf("%s.%d.text", resolved, textEntries[0].index)
-		return sjson.SetBytes(result, itemPath, newContent)
+		return setJsonTextContent(result, itemPath, newContent)
 	}
 	// Multiple text items: split desensitized content proportionally by original lengths
 	for j, entry := range textEntries {
@@ -117,10 +117,22 @@ func ReplaceJsonFieldTextContent(body []byte, jsonPath string, newContent string
 			remaining = remaining[byteOffset:]
 		}
 		itemPath := fmt.Sprintf("%s.%d.text", resolved, entry.index)
-		result, err = sjson.SetBytes(result, itemPath, replacement)
+		result, err = setJsonTextContent(result, itemPath, replacement)
 		if err != nil {
 			return nil, err
 		}
+	}
+	return result, nil
+}
+
+func setJsonTextContent(body []byte, jsonPath string, newContent string) ([]byte, error) {
+	current := gjson.GetBytes(body, jsonPath)
+	result, err := sjson.SetBytes(body, jsonPath, newContent)
+	if err != nil {
+		return nil, err
+	}
+	if current.Exists() && current.String() != newContent && bytes.Equal(result, body) {
+		return nil, fmt.Errorf("failed to replace json path %q", jsonPath)
 	}
 	return result, nil
 }

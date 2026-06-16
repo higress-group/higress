@@ -84,7 +84,11 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.Log) types.Action {
 	value := ctx.GetContext(oidc.SetCookieHeader)
 	if value != nil {
-		proxywasm.AddHttpResponseHeader(oidc.SetCookieHeader, value.(string))
+		if cookies, ok := value.([]string); ok {
+			for _, c := range cookies {
+				proxywasm.AddHttpResponseHeader(oidc.SetCookieHeader, c)
+			}
+		}
 	}
 	config.oidcHandler.SetContext(nil)
 	return types.ActionContinue
