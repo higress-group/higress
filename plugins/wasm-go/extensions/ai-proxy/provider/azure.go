@@ -359,6 +359,7 @@ func (m *azureProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiName
 	}
 	util.OverwriteRequestHostHeader(headers, m.serviceUrl.Host)
 	headers.Set("api-key", m.config.GetApiTokenInUse(ctx))
+	headers.Del(util.HeaderAuthorization)
 	headers.Del("Content-Length")
 
 	supportedAPI := m.config.isSupportedAPI(apiName)
