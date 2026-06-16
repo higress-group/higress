@@ -28,7 +28,10 @@ The configuration fields for each item in `consumers` are as follows:
 | Name                    | Data Type         | Requirements | Default Value                                      | Description                     |
 | ----------------------- | ------------------ | ------------ | -------------------------------------------------- | ------------------------------- |
 | `name`                  | string             | Required     | -                                                  | The name of the consumer        |
-| `jwks`                  | string             | Required     | -                                                  | JSON format string specified by https://www.rfc-editor.org/rfc/rfc7517, consisting of the public key (or symmetric key) used to verify the JWT signature. |
+| `jwks`                  | string             | Required for wasm-cpp; required for wasm-go unless `remote_jwks` is set | - | JSON format string specified by https://www.rfc-editor.org/rfc/rfc7517, consisting of the public key (or symmetric key) used to verify the JWT signature. |
+| `remote_jwks`           | object             | Optional in the wasm-go implementation | -                         | Remote JWKS service reference. The referenced service must already be configured or discovered by Higress, for example via McpBridge. |
+| `jwks_cache_duration`   | number             | Optional in the wasm-go implementation | 600                       | Remote JWKS cache duration, in seconds. Maximum: 604800. |
+| `jwks_fetch_timeout`    | number             | Optional in the wasm-go implementation | 1500                      | Remote JWKS fetch timeout, in milliseconds. Maximum: 10000. |
 | `issuer`                | string             | Required     | -                                                  | The issuer of the JWT, must match the `iss` field in the payload. |
 | `claims_to_headers`     | array of object    | Optional     | -                                                  | Extract the specified fields from the JWT payload and set them in the specified request headers to forward to the backend. |
 | `from_headers`          | array of object    | Optional     | {"name":"Authorization","value_prefix":"Bearer "} | Extract JWT from the specified request headers. |
@@ -39,6 +42,22 @@ The configuration fields for each item in `consumers` are as follows:
 
 **Note:**
 - The default values will only be used when `from_headers`, `from_params`, and `from_cookies` are not all configured.
+- `remote_jwks`, `jwks_cache_duration`, and `jwks_fetch_timeout` apply only to the wasm-go implementation. The wasm-cpp implementation still requires `jwks`.
+- In the wasm-go implementation, only one of `jwks` and `remote_jwks` can be configured.
+- When `remote_jwks` is used, requests fail closed if the remote JWKS fetch fails, the response is invalid, refresh is throttled, or no matching `kid` can be found in a multi-key set. Tokens without `kid` are accepted only when the fetched JWKS contains exactly one key.
+- Failed remote JWKS fetches are throttled per remote service reference for 30 seconds. Concurrent requests during the initial cold fetch, and requests during the post-failure throttle window, are denied locally. Expired cached JWKS are served only while a refresh is already in flight.
+- Remote JWKS responses larger than 64 KiB are rejected.
+- `jwks_cache_duration` must be at least 30 seconds so cache expiry does not undercut the remote JWKS failure backoff window.
+- In the wasm-go implementation, empty inline `jwks` key sets are rejected during configuration parsing. When `keep_token` is `false`, tokens extracted from `from_params` are removed from the forwarded request path.
+
+The configuration fields for `remote_jwks` are as follows:
+| Name           | Data Type | Requirements | Default Value | Description |
+| -------------- | --------- | ------------ | ------------- | ----------- |
+| `service_name` | string    | Required     | -             | The Higress service name used to build the outbound cluster. |
+| `service_host` | string    | Required     | -             | Host or `:authority` header for the JWKS request, without a port. Use `service_port` for the port. |
+| `service_port` | number    | Optional     | 443           | Service port for the JWKS request. |
+| `path`         | string    | Required     | -             | JWKS request path, for example `/.well-known/jwks.json`. |
+
 The configuration fields for each item in `from_headers` are as follows:
 | Name            | Data Type        | Requirements | Default Value | Description                                     |
 | --------------- | ---------------- | ------------ | ------------- | ----------------------------------------------- |
@@ -138,6 +157,26 @@ curl  http://xxx.hello.com/test
 # consumer1 is not in the allow list for *.example.com
 curl  'http://xxx.example.com/test' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjEyMyJ9.eyJpc3MiOiJhYmNkIiwic3ViIjoidGVzdCIsImlhdCI6MTY2NTY2MDUyNywiZXhwIjoxODY1NjczODE5fQ.-vBSV0bKeDwQcuS6eeSZN9dLTUnSnZVk8eVCXdooCQ4'
 ```
+
+### Using Remote JWKS (wasm-go implementation only)
+
+If the signing keys are maintained by an identity provider, the wasm-go implementation can fetch and cache the remote JWKS from a configured service reference. The service must already be configured or discovered by Higress.
+
+```yaml
+global_auth: false
+consumers:
+- name: remote-consumer
+  issuer: https://issuer.example.com
+  remote_jwks:
+    service_name: issuer.example.com.dns
+    service_host: issuer.example.com
+    service_port: 443
+    path: /.well-known/jwks.json
+  jwks_cache_duration: 600
+  jwks_fetch_timeout: 1500
+```
+
+When remote JWKS is configured, make sure the referenced service is reachable from the gateway data plane. Remote JWKS responses larger than 64 KiB are treated as invalid responses.
 
 #### Enable at Gateway Instance Level
 The following configuration will enable JWT Auth authentication at the instance level, requiring all requests to be authenticated before accessing.
