@@ -685,6 +685,36 @@ func TestVertexProviderRestoresFunctionCallThoughtSignatureFromGoogleExtraConten
 	assert.Equal(t, "thought-signature-from-extra-content", vertexReq.Contents[1].Parts[0].ThoughtSignature)
 }
 
+func TestVertexProviderRestoresFunctionCallThoughtSignatureInvalidArguments(t *testing.T) {
+	v := &vertexProvider{}
+	req := &chatCompletionRequest{
+		Model: "gemini-3.1-pro-preview",
+		Messages: []chatMessage{
+			{
+				Role: roleAssistant,
+				ToolCalls: []toolCall{
+					{
+						Type:             "function",
+						ThoughtSignature: "thought-signature-from-client",
+						Function: functionCall{
+							Name:      "Skill",
+							Arguments: `invalid-json`,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	vertexReq, err := v.buildVertexChatRequest(req)
+	require.NoError(t, err)
+	require.NotNil(t, vertexReq)
+	require.Len(t, vertexReq.Contents, 1)
+	require.Len(t, vertexReq.Contents[0].Parts, 1)
+	require.NotNil(t, vertexReq.Contents[0].Parts[0].FunctionCall)
+	assert.Equal(t, "thought-signature-from-client", vertexReq.Contents[0].Parts[0].ThoughtSignature)
+}
+
 func TestVertexProviderStreamPreservesFunctionCallThoughtSignature(t *testing.T) {
 	v := &vertexProvider{}
 	ctx := newMockMultipartHttpContext()
@@ -874,4 +904,39 @@ func TestVertexProviderStreamThoughtAndText(t *testing.T) {
 		require.NotNil(t, resp2)
 		assert.Equal(t, " suffix", resp2.Choices[0].Delta.Content)
 	})
+}
+
+func TestGetNestedString(t *testing.T) {
+	// 1. empty path
+	assert.Equal(t, "", getNestedString(map[string]any{"a": 1}))
+
+	// 2. nested string exists
+	data := map[string]any{
+		"google": map[string]any{
+			"thought_signature": "sig",
+		},
+	}
+	assert.Equal(t, "sig", getNestedString(data, "google", "thought_signature"))
+
+	// 3. nested key not a map
+	data2 := map[string]any{
+		"google": "not-a-map",
+	}
+	assert.Equal(t, "", getNestedString(data2, "google", "thought_signature"))
+
+	// 4. nested key is missing
+	data3 := map[string]any{
+		"google": map[string]any{
+			"other": "val",
+		},
+	}
+	assert.Equal(t, "", getNestedString(data3, "google", "thought_signature"))
+
+	// 5. nested value is not a string
+	data4 := map[string]any{
+		"google": map[string]any{
+			"thought_signature": 1234,
+		},
+	}
+	assert.Equal(t, "", getNestedString(data4, "google", "thought_signature"))
 }
