@@ -372,6 +372,7 @@ func (c *claudeProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiNam
 	} else {
 		// Standard mode: use x-api-key
 		headers.Set("x-api-key", c.config.GetApiTokenInUse(ctx))
+		headers.Del(util.HeaderAuthorization)
 	}
 }
 
