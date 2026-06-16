@@ -25,6 +25,9 @@ global:
   # 2. When the ingress class is set empty, the higress controller will watch all ingress
   # resources in the k8s cluster.
   ingressClass: "higress"
+  # -- Whether to create the IngressClass resource for global.ingressClass.
+  # Set this to false when reusing an existing IngressClass, for example during Nginx Ingress migration.
+  createIngressClass: true
   # -- If not empty, Higress Controller will only watch resources in the specified namespace.
   # When isolating different business systems using K8s namespace,
   # if each namespace requires a standalone gateway instance,
