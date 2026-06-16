@@ -15,7 +15,11 @@
 package server
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestParseSSEMessage tests SSE message parsing
@@ -294,4 +298,177 @@ data: {"id":2}
 	if msg4 != nil {
 		t.Errorf("Expected no more messages, got: %+v", msg4)
 	}
+}
+
+// -----------------------------------------------------------------------------
+// ParseSSEMessage — additional edge cases (multi-line data, retry, empty)
+// -----------------------------------------------------------------------------
+
+func TestParseSSEMessage_EmptyInput(t *testing.T) {
+	msg, remaining, err := ParseSSEMessage([]byte(""))
+	require.NoError(t, err)
+	assert.Nil(t, msg)
+	assert.Len(t, remaining, 0)
+}
+
+func TestParseSSEMessage_RetryFieldIgnored(t *testing.T) {
+	// `retry:` is part of the SSE spec but not implemented — must not break parsing.
+	input := []byte("retry: 5000\nevent: message\ndata: hi\n\n")
+	msg, _, err := ParseSSEMessage(input)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	assert.Equal(t, "message", msg.Event)
+	assert.Equal(t, "hi", msg.Data)
+}
+
+func TestParseSSEMessage_MultiLineDataConcatenated(t *testing.T) {
+	// Per SSE spec, multiple `data:` lines in one message join with `\n`.
+	input := []byte("data: line-one\ndata: line-two\ndata: line-three\n\n")
+	msg, _, err := ParseSSEMessage(input)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	assert.Equal(t, "line-one\nline-two\nline-three", msg.Data)
+}
+
+func TestParseSSEMessage_NoFinalBlankLine_NoMessageReturned(t *testing.T) {
+	// Message without the terminating blank line is treated as incomplete.
+	input := []byte("event: message\ndata: payload\n")
+	msg, remaining, err := ParseSSEMessage(input)
+	require.NoError(t, err)
+	assert.Nil(t, msg, "incomplete message must not be returned")
+	assert.Equal(t, input, remaining, "remaining is the entire input")
+}
+
+func TestParseSSEMessage_LineWithoutColonSkipped(t *testing.T) {
+	// SplitN with len<2 → field/value pair can't be formed → skipped, not an error.
+	input := []byte("a-line-without-colon\nevent: msg\ndata: x\n\n")
+	msg, _, err := ParseSSEMessage(input)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	assert.Equal(t, "msg", msg.Event)
+	assert.Equal(t, "x", msg.Data)
+}
+
+func TestParseSSEMessage_UnknownFieldIgnored(t *testing.T) {
+	// `random-field:` is parsed but the switch case ignores it.
+	input := []byte("random-field: stuff\nevent: msg\ndata: x\n\n")
+	msg, _, err := ParseSSEMessage(input)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	assert.Equal(t, "msg", msg.Event)
+}
+
+// -----------------------------------------------------------------------------
+// ExtractEndpointURL — edge cases not in the table
+// -----------------------------------------------------------------------------
+
+func TestExtractEndpointURL_HttpsPassthrough(t *testing.T) {
+	got, err := ExtractEndpointURL("https://other.example/x", "http://b.example")
+	require.NoError(t, err)
+	assert.Equal(t, "https://other.example/x", got, "full https URL must pass through unchanged")
+}
+
+func TestExtractEndpointURL_EmptyEndpointData_PathOnlyBase(t *testing.T) {
+	got, err := ExtractEndpointURL("", "/some/path")
+	require.NoError(t, err)
+	assert.Equal(t, "", got, "empty endpointData with path-only base → empty result")
+}
+
+func TestExtractEndpointURL_RelativeEndpointWithSchemeBase(t *testing.T) {
+	got, err := ExtractEndpointURL("messages", "http://b.example/mcp")
+	require.NoError(t, err)
+	assert.Equal(t, "http://b.example/messages", got, "leading slash auto-inserted")
+}
+
+// -----------------------------------------------------------------------------
+// applyProxyAuthenticationForSSE — pure URL+header munging (no proxywasm)
+// -----------------------------------------------------------------------------
+
+func TestApplyProxyAuthenticationForSSE_ApiKeyHeader(t *testing.T) {
+	server := NewMcpProxyServer("p")
+	server.AddSecurityScheme(SecurityScheme{
+		ID: "K", Type: "apiKey", In: "header", Name: "X-Api-Key",
+		DefaultCredential: "abc",
+	})
+
+	headers := [][2]string{{"X-Other", "v"}}
+	got, err := applyProxyAuthenticationForSSE(server, "K", "", &headers, "http://backend/x")
+	require.NoError(t, err)
+	assert.Equal(t, "http://backend/x", got, "no query → URL preserved")
+
+	found := false
+	for _, kv := range headers {
+		if strings.EqualFold(kv[0], "X-Api-Key") {
+			assert.Equal(t, "abc", kv[1])
+			found = true
+		}
+	}
+	assert.True(t, found, "API key header must be injected")
+}
+
+func TestApplyProxyAuthenticationForSSE_ApiKeyQuery_PreservesExisting(t *testing.T) {
+	server := NewMcpProxyServer("p")
+	server.AddSecurityScheme(SecurityScheme{
+		ID: "K", Type: "apiKey", In: "query", Name: "api_key",
+		DefaultCredential: "secret",
+	})
+
+	headers := [][2]string{}
+	got, err := applyProxyAuthenticationForSSE(server, "K", "", &headers, "http://backend/x?existing=1")
+	require.NoError(t, err)
+	// Query is rebuilt via url.Values.Encode — both pairs must be present.
+	assert.Contains(t, got, "api_key=secret")
+	assert.Contains(t, got, "existing=1")
+}
+
+func TestApplyProxyAuthenticationForSSE_PathOnlyURL_PreservesShape(t *testing.T) {
+	server := NewMcpProxyServer("p")
+	server.AddSecurityScheme(SecurityScheme{
+		ID: "K", Type: "apiKey", In: "header", Name: "X-Api-Key",
+		DefaultCredential: "abc",
+	})
+
+	headers := [][2]string{}
+	got, err := applyProxyAuthenticationForSSE(server, "K", "", &headers, "/relative/path")
+	require.NoError(t, err)
+	assert.Equal(t, "/relative/path", got, "path-only URL must come back as path-only")
+}
+
+func TestApplyProxyAuthenticationForSSE_HttpBearerPassthrough(t *testing.T) {
+	server := NewMcpProxyServer("p")
+	server.AddSecurityScheme(SecurityScheme{ID: "B", Type: "http", Scheme: "bearer"})
+
+	headers := [][2]string{}
+	got, err := applyProxyAuthenticationForSSE(server, "B", "passthrough-token", &headers, "http://backend/x")
+	require.NoError(t, err)
+	assert.Equal(t, "http://backend/x", got)
+
+	var authValue string
+	for _, kv := range headers {
+		if strings.EqualFold(kv[0], "Authorization") {
+			authValue = kv[1]
+		}
+	}
+	assert.Equal(t, "Bearer passthrough-token", authValue)
+}
+
+func TestApplyProxyAuthenticationForSSE_MissingScheme_ReturnsError(t *testing.T) {
+	server := NewMcpProxyServer("p")
+	headers := [][2]string{}
+	_, err := applyProxyAuthenticationForSSE(server, "missing", "", &headers, "http://backend/x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestApplyProxyAuthenticationForSSE_PreservesFragment(t *testing.T) {
+	server := NewMcpProxyServer("p")
+	server.AddSecurityScheme(SecurityScheme{
+		ID: "K", Type: "apiKey", In: "header", Name: "X-Api-Key",
+		DefaultCredential: "abc",
+	})
+
+	headers := [][2]string{}
+	got, err := applyProxyAuthenticationForSSE(server, "K", "", &headers, "http://backend/path#section-2")
+	require.NoError(t, err)
+	assert.Contains(t, got, "#section-2", "fragment must round-trip")
 }

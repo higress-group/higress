@@ -22,7 +22,6 @@ func init() {
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingResponseBody),
 		wrapper.ProcessResponseBody(onHttpResponseBody),
-		wrapper.WithRebuildAfterRequests[cfg.AISecurityConfig](1000),
 	)
 }
 
@@ -61,7 +60,9 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config cfg.AISecurityConfig)
 		return types.ActionContinue
 	}
 	statusCode, _ := proxywasm.GetHttpResponseHeader(":status")
-	if statusCode != "200" {
+	// For embedding API, we need to check error.message in non-200 responses
+	// so we don't skip response body check for embedding apiType
+	if statusCode != "200" && config.ApiType != cfg.ApiEmbedding {
 		log.Debugf("response is not 200, skip response body check")
 		ctx.DontReadResponseBody()
 		return types.ActionContinue

@@ -55,6 +55,13 @@ type Consumer struct {
 	// @Description en-US The credential of the consumer.
 	// @Scope GLOBAL
 	Credential string `yaml:"credential"`
+
+	// @Title 访问凭证列表
+	// @Title en-US Credentials
+	// @Description 该调用方的访问凭证列表，不能与 credential 同时配置。
+	// @Description en-US The credentials of the consumer. Cannot be configured together with credential.
+	// @Scope GLOBAL
+	Credentials []string `yaml:"credentials"`
 }
 
 // @Name key-auth
@@ -186,19 +193,51 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 			return errors.New("consumer name is required")
 		}
 		credential := item.Get("credential")
-		if !credential.Exists() || credential.String() == "" {
+		credentials := item.Get("credentials")
+		if credential.Exists() && credentials.Exists() {
+			return errors.New("'credential' and 'credentials' can't appear at the same time")
+		}
+		if !credential.Exists() && !credentials.Exists() {
 			return errors.New("consumer credential is required")
 		}
-		if _, ok := global.credential2Name[credential.String()]; ok {
-			return errors.New("duplicate consumer credential: " + credential.String())
+
+		consumerCredentials := make([]string, 0, 1)
+		if credential.Exists() {
+			if credential.String() == "" {
+				return errors.New("consumer credential is required")
+			}
+			consumerCredentials = append(consumerCredentials, credential.String())
+		} else {
+			if !credentials.IsArray() || len(credentials.Array()) == 0 {
+				return errors.New("consumer credentials cannot be empty")
+			}
+			for _, credential := range credentials.Array() {
+				if credential.String() == "" {
+					return errors.New("consumer credential is required")
+				}
+				consumerCredentials = append(consumerCredentials, credential.String())
+			}
+		}
+
+		for _, credential := range consumerCredentials {
+			if _, ok := global.credential2Name[credential]; ok {
+				return errors.New("duplicate consumer credential: " + credential)
+			}
 		}
 
 		consumer := Consumer{
-			Name:       name.String(),
-			Credential: credential.String(),
+			Name: name.String(),
 		}
+		if credential.Exists() {
+			consumer.Credential = credential.String()
+		} else {
+			consumer.Credentials = consumerCredentials
+		}
+
 		global.consumers = append(global.consumers, consumer)
-		global.credential2Name[credential.String()] = name.String()
+		for _, credential := range consumerCredentials {
+			global.credential2Name[credential] = name.String()
+		}
 	}
 	return nil
 }
