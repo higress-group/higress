@@ -684,3 +684,194 @@ func TestVertexProviderRestoresFunctionCallThoughtSignatureFromGoogleExtraConten
 	require.NotNil(t, vertexReq.Contents[1].Parts[0].FunctionCall)
 	assert.Equal(t, "thought-signature-from-extra-content", vertexReq.Contents[1].Parts[0].ThoughtSignature)
 }
+
+func TestVertexProviderStreamPreservesFunctionCallThoughtSignature(t *testing.T) {
+	v := &vertexProvider{}
+	ctx := newMockMultipartHttpContext()
+	ctx.SetContext(ctxKeyFinalRequestModel, "gemini-3.1-pro-preview")
+
+	response := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+		ResponseId: "vertex-response-id",
+		Candidates: []vertexChatCandidate{
+			{
+				Index: 0,
+				Content: vertexChatContent{
+					Role: "model",
+					Parts: []vertexPart{
+						{
+							FunctionCall: &vertexFunctionCall{
+								Name: "Skill",
+								Args: map[string]interface{}{"query": "intelligentization"},
+							},
+							ThoughtSignature: "thought-signature-from-vertex-stream",
+						},
+					},
+				},
+				FinishReason: "STOP",
+			},
+		},
+	})
+
+	require.NotNil(t, response)
+	require.NotNil(t, response.Choices)
+	require.Len(t, response.Choices, 1)
+	require.NotNil(t, response.Choices[0].Delta)
+	require.Len(t, response.Choices[0].Delta.ToolCalls, 1)
+	assert.Equal(t, "thought-signature-from-vertex-stream", response.Choices[0].Delta.ToolCalls[0].ThoughtSignature)
+	assert.Equal(
+		t,
+		"thought-signature-from-vertex-stream",
+		getNestedString(response.Choices[0].Delta.ToolCalls[0].ExtraContent, "google", "thought_signature"),
+	)
+}
+
+func TestToolCallGetThoughtSignatureAllPaths(t *testing.T) {
+	// 1. nil toolCall pointer
+	var nilTc *toolCall
+	assert.Equal(t, "", nilTc.getThoughtSignature())
+
+	// 2. ThoughtSignature is directly set
+	tc1 := &toolCall{
+		ThoughtSignature: "direct-sig",
+	}
+	assert.Equal(t, "direct-sig", tc1.getThoughtSignature())
+
+	// 3. ExtraContent is nil
+	tc2 := &toolCall{}
+	assert.Equal(t, "", tc2.getThoughtSignature())
+
+	// 4. ExtraContent does not contain "google"
+	tc3 := &toolCall{
+		ExtraContent: map[string]any{
+			"other": "val",
+		},
+	}
+	assert.Equal(t, "", tc3.getThoughtSignature())
+
+	// 5. ExtraContent contains "google" but not as map[string]any
+	tc4 := &toolCall{
+		ExtraContent: map[string]any{
+			"google": "not-a-map",
+		},
+	}
+	assert.Equal(t, "", tc4.getThoughtSignature())
+
+	// 6. ExtraContent contains "google" map but not "thought_signature"
+	tc5 := &toolCall{
+		ExtraContent: map[string]any{
+			"google": map[string]any{
+				"other": "val",
+			},
+		},
+	}
+	assert.Equal(t, "", tc5.getThoughtSignature())
+
+	// 7. ExtraContent contains "google" map with "thought_signature" but not string
+	tc6 := &toolCall{
+		ExtraContent: map[string]any{
+			"google": map[string]any{
+				"thought_signature": 12345,
+			},
+		},
+	}
+	assert.Equal(t, "", tc6.getThoughtSignature())
+
+	// 8. ExtraContent contains "google" map with "thought_signature" as string
+	tc7 := &toolCall{
+		ExtraContent: map[string]any{
+			"google": map[string]any{
+				"thought_signature": "google-extra-sig",
+			},
+		},
+	}
+	assert.Equal(t, "google-extra-sig", tc7.getThoughtSignature())
+}
+
+func TestBuildGoogleThoughtSignatureExtraContentEmpty(t *testing.T) {
+	assert.Nil(t, buildGoogleThoughtSignatureExtraContent(""))
+}
+
+func TestVertexProviderStreamThoughtAndText(t *testing.T) {
+	v := &vertexProvider{}
+
+	t.Run("thinking start and continue", func(t *testing.T) {
+		ctx := newMockMultipartHttpContext()
+
+		// 1. Thinking start
+		resp1 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+			Candidates: []vertexChatCandidate{
+				{
+					Content: vertexChatContent{
+						Parts: []vertexPart{
+							{
+								Text:     "thinking process",
+								Thounght: util.Ptr(true),
+							},
+						},
+					},
+				},
+			},
+		})
+		require.NotNil(t, resp1)
+		assert.Equal(t, reasoningStartTag+"thinking process", resp1.Choices[0].Delta.Content)
+		assert.Equal(t, true, ctx.GetContext("thinking_start"))
+
+		// 2. Thinking continue
+		resp2 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+			Candidates: []vertexChatCandidate{
+				{
+					Content: vertexChatContent{
+						Parts: []vertexPart{
+							{
+								Text:     " more thinking",
+								Thounght: util.Ptr(true),
+							},
+						},
+					},
+				},
+			},
+		})
+		require.NotNil(t, resp2)
+		assert.Equal(t, " more thinking", resp2.Choices[0].Delta.Content)
+	})
+
+	t.Run("thinking end and text continue", func(t *testing.T) {
+		ctx := newMockMultipartHttpContext()
+		ctx.SetContext("thinking_start", true)
+
+		// 1. Thinking end
+		resp1 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+			Candidates: []vertexChatCandidate{
+				{
+					Content: vertexChatContent{
+						Parts: []vertexPart{
+							{
+								Text: "final answer",
+							},
+						},
+					},
+				},
+			},
+		})
+		require.NotNil(t, resp1)
+		assert.Equal(t, reasoningEndTag+"final answer", resp1.Choices[0].Delta.Content)
+		assert.Equal(t, true, ctx.GetContext("thinking_end"))
+
+		// 2. Text continue
+		resp2 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+			Candidates: []vertexChatCandidate{
+				{
+					Content: vertexChatContent{
+						Parts: []vertexPart{
+							{
+								Text: " suffix",
+							},
+						},
+					},
+				},
+			},
+		})
+		require.NotNil(t, resp2)
+		assert.Equal(t, " suffix", resp2.Choices[0].Delta.Content)
+	})
+}
