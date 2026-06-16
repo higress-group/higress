@@ -1060,16 +1060,16 @@ func (c *claudeProvider) insertHttpContextMessage(body []byte, content string, o
 }
 
 func (c *claudeProvider) GetApiName(path string) ApiName {
-	if strings.Contains(path, PathAnthropicMessages) {
+	if strings.HasSuffix(path, PathAnthropicMessages) {
 		return ApiNameChatCompletion
 	}
-	if strings.Contains(path, PathAnthropicComplete) {
+	if strings.HasSuffix(path, PathAnthropicComplete) {
 		return ApiNameCompletion
 	}
-	if strings.Contains(path, PathOpenAIModels) {
+	if strings.HasSuffix(path, PathOpenAIModels) {
 		return ApiNameModels
 	}
-	if strings.Contains(path, PathOpenAIEmbeddings) {
+	if strings.HasSuffix(path, PathOpenAIEmbeddings) {
 		return ApiNameEmbeddings
 	}
 	return ""

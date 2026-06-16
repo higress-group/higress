@@ -9,6 +9,7 @@ The `model-router` plugin implements routing functionality based on the model pa
 | `addProviderHeader`  | string          | Optional                | -                        | Which request header to add the provider name parsed from the model parameter |
 | `modelToHeader`      | string          | Optional                | -                        | Which request header to directly add the model parameter to  |
 | `enableOnPathSuffix` | array of string | Optional                | ["/completions","/embeddings","/images/generations","/audio/speech","/fine_tuning/jobs","/moderations","/image-synthesis","/video-synthesis","/rerank","/messages"] | Only effective for requests with these specific path suffixes, can be configured as "*" to match all paths |
+| `keepOriginalModelName` | bool         | Optional                | false                    | Used with `addProviderHeader`. When set to true, the provider is still extracted into the header, but the model field in the request body is not rewritten |
 
 ## Runtime Properties
 
@@ -95,3 +96,19 @@ The original LLM request body will be changed to:
     "temperature": 0.7,
     "top_p": 0.95
 }
+```
+
+### Preserving Original Model Name (keepOriginalModelName)
+
+When using AI model aggregation platforms (e.g. Bailian/DashScope) with third-party models, some model names inherently contain `/` (e.g. `MiniMax/MiniMax-M2.7`) and are not in `provider/model` format. In this case, using `addProviderHeader` would incorrectly rewrite the model field in the request body.
+
+By setting `keepOriginalModelName: true`, you can keep the provider header extraction while preserving the original model field in the request body:
+
+```yaml
+addProviderHeader: x-higress-llm-provider
+keepOriginalModelName: true
+```
+
+For example, with model `MiniMax/MiniMax-M2.7`, after processing by the plugin:
+- Request header `x-higress-llm-provider` is set to `MiniMax`
+- The model field in the request body remains `MiniMax/MiniMax-M2.7` (not rewritten)
