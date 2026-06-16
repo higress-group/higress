@@ -2764,3 +2764,849 @@ data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Secure
 		})
 	})
 }
+
+// -----------------------------------------------------------------------------
+// Phase 2.1 — REST Server Call() branch matrix
+//
+// Each sub-test stands up a minimal REST MCP config whose single tool exercises
+// a specific branch of rest_server.go:Call (~lines 523-946). The plugin runs the
+// real tool, makes one ctx.RouteCall, and we mock the backend reply via
+// CallOnHttpResponseHeaders/Body. We inspect the upstream request via
+// GetRequestHeaders/Body and the MCP-shaped response via GetResponseBody.
+// -----------------------------------------------------------------------------
+
+func TestRestMCPServer_CallBranches(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		// -------------------------------------------------------------------
+		// argsToFormBody → upstream body is form-urlencoded; Content-Type set
+		// -------------------------------------------------------------------
+		t.Run("argsToFormBody encodes body as form-urlencoded", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-form", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":        "submit",
+					"description": "form submit",
+					"args": []map[string]interface{}{
+						{"name": "user", "description": "u", "type": "string", "required": true},
+						{"name": "msg", "description": "m", "type": "string"},
+					},
+					"requestTemplate": map[string]interface{}{
+						"url":            "http://backend.example/form",
+						"method":         "POST",
+						"argsToFormBody": true,
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"},
+				{"content-type", "application/json"},
+			})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"submit","arguments":{"user":"alice 1","msg":"hi&there"}}}`))
+
+			upstreamHeaders := host.GetRequestHeaders()
+			upstreamBody := host.GetRequestBody()
+
+			ctHeader, has := test.GetHeaderValue(upstreamHeaders, "Content-Type")
+			require.True(t, has)
+			require.Contains(t, ctHeader, "application/x-www-form-urlencoded")
+			// `&` must be percent-encoded, space encoded as `+`.
+			require.Contains(t, string(upstreamBody), "user=alice+1")
+			require.Contains(t, string(upstreamBody), "msg=hi%26there")
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// argsToUrlParam → default args merged into URL query
+		// -------------------------------------------------------------------
+		t.Run("argsToUrlParam merges args into query", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-qp", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":        "search",
+					"description": "search",
+					"args": []map[string]interface{}{
+						{"name": "q", "description": "q", "type": "string", "required": true},
+						{"name": "limit", "description": "lim", "type": "integer"},
+					},
+					"requestTemplate": map[string]interface{}{
+						"url":            "http://backend.example/search?pre=set",
+						"method":         "GET",
+						"argsToUrlParam": true,
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"},
+				{"content-type", "application/json"},
+			})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"q":"hello","limit":10}}}`))
+
+			upstreamHeaders := host.GetRequestHeaders()
+			pathVal, has := test.GetHeaderValue(upstreamHeaders, ":path")
+			require.True(t, has)
+			require.Contains(t, pathVal, "pre=set")
+			require.Contains(t, pathVal, "q=hello")
+			require.Contains(t, pathVal, "limit=10")
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// Direct-response tool → no backend call, response template fires
+		// -------------------------------------------------------------------
+		t.Run("direct response tool emits template result", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-dr", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":        "ping",
+					"description": "static ping",
+					"args": []map[string]interface{}{
+						{"name": "name", "description": "n", "type": "string", "required": true},
+					},
+					// No requestTemplate.url → direct-response mode.
+					"responseTemplate": map[string]interface{}{
+						"body": "hello {{.args.name}}",
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"},
+				{"content-type", "application/json"},
+			})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{"name":"world"}}}`))
+
+			// Direct-response writes via SendLocalResponse, not the streaming response body.
+			localResp := host.GetLocalResponse()
+			require.NotNil(t, localResp, "direct-response must emit a local response with no backend call")
+			require.Contains(t, string(localResp.Data), "hello world")
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// Image content-type → SendMCPToolImageResult path (base64 in response)
+		// -------------------------------------------------------------------
+		t.Run("image content-type produces image MCP result", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-img", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":        "get_image",
+					"description": "image fetch",
+					"args":        []map[string]interface{}{{"name": "id", "description": "id", "type": "string"}},
+					"requestTemplate": map[string]interface{}{
+						"url": "http://backend.example/img/{{.args.id}}", "method": "GET",
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_image","arguments":{"id":"42"}}}`))
+
+			pngBytes := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+			host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}, {"Content-Type", "image/png"}})
+			host.CallOnHttpResponseBody(pngBytes)
+
+			respBody := host.GetResponseBody()
+			require.NotEmpty(t, respBody)
+			require.Contains(t, string(respBody), `"type":"image"`)
+			require.Contains(t, string(respBody), `"mimeType":"image/png"`)
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// outputSchema + JSON backend → structuredContent populated
+		// -------------------------------------------------------------------
+		t.Run("outputSchema with JSON body emits structuredContent", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-os", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":         "info",
+					"description":  "info",
+					"args":         []map[string]interface{}{},
+					"outputSchema": map[string]interface{}{"type": "object"},
+					"requestTemplate": map[string]interface{}{
+						"url": "http://backend.example/info", "method": "GET",
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"info","arguments":{}}}`))
+
+			host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}, {"Content-Type", "application/json"}})
+			host.CallOnHttpResponseBody([]byte(`{"a":1,"b":"two"}`))
+
+			respBody := host.GetResponseBody()
+			require.NotEmpty(t, respBody)
+			require.Contains(t, string(respBody), "structuredContent", "outputSchema must produce structuredContent field")
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// errorResponseTemplate fires on 4xx/5xx, _headers is accessible
+		// -------------------------------------------------------------------
+		t.Run("errorResponseTemplate renders on backend error", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-err", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":                  "fail",
+					"description":           "fail",
+					"args":                  []map[string]interface{}{},
+					"errorResponseTemplate": `upstream said: {{gjson "_headers.:status"}} - {{gjson "message"}}`,
+					"requestTemplate": map[string]interface{}{
+						"url": "http://backend.example/fail", "method": "GET",
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fail","arguments":{}}}`))
+
+			host.CallOnHttpResponseHeaders([][2]string{{":status", "500"}, {"Content-Type", "application/json"}})
+			host.CallOnHttpResponseBody([]byte(`{"message":"boom"}`))
+
+			respBody := host.GetResponseBody()
+			require.NotEmpty(t, respBody)
+			require.Contains(t, string(respBody), "upstream said: 500 - boom")
+			require.Contains(t, string(respBody), `"isError":true`)
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// prependBody + appendBody wrap raw response
+		// -------------------------------------------------------------------
+		t.Run("prependBody/appendBody wrap raw response", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-wrap", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":        "say",
+					"description": "say",
+					"args":        []map[string]interface{}{},
+					"requestTemplate": map[string]interface{}{
+						"url": "http://backend.example/say", "method": "GET",
+					},
+					"responseTemplate": map[string]interface{}{
+						"prependBody": "<<",
+						"appendBody":  ">>",
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"say","arguments":{}}}`))
+
+			host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}, {"Content-Type", "text/plain"}})
+			host.CallOnHttpResponseBody([]byte("hi"))
+
+			respBody := host.GetResponseBody()
+			require.NotEmpty(t, respBody)
+			// Unmarshal to dodge JSON unicode-escape encoding of < and >.
+			var parsed map[string]interface{}
+			require.NoError(t, json.Unmarshal(respBody, &parsed))
+			result := parsed["result"].(map[string]interface{})
+			content := result["content"].([]interface{})
+			text := content[0].(map[string]interface{})["text"].(string)
+			require.Equal(t, "<<hi>>", text)
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// path arg with reserved chars → substituted into URL template
+		// -------------------------------------------------------------------
+		t.Run("path arg substitutes into URL placeholder", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-path", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":        "get_user",
+					"description": "by id",
+					"args": []map[string]interface{}{
+						{"name": "id", "description": "uid", "type": "string", "required": true, "position": "path"},
+					},
+					"requestTemplate": map[string]interface{}{
+						"url":    "http://backend.example/users/{id}",
+						"method": "GET",
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_user","arguments":{"id":"alice%20smith"}}}`))
+
+			upstreamHeaders := host.GetRequestHeaders()
+			pathVal, has := test.GetHeaderValue(upstreamHeaders, ":path")
+			require.True(t, has)
+			// Path arg is substituted as-is into the URL template before being parsed.
+			require.Contains(t, pathVal, "/users/alice")
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// header arg from args list lands as upstream header
+		// -------------------------------------------------------------------
+		t.Run("header-position arg becomes upstream header", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-hdr", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":        "auth_call",
+					"description": "with header",
+					"args": []map[string]interface{}{
+						{"name": "X-Trace", "description": "trace", "type": "string", "required": true, "position": "header"},
+					},
+					"requestTemplate": map[string]interface{}{
+						"url":    "http://backend.example/protected",
+						"method": "GET",
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"auth_call","arguments":{"X-Trace":"abc-123"}}}`))
+
+			upstreamHeaders := host.GetRequestHeaders()
+			require.True(t, test.HasHeaderWithValue(upstreamHeaders, "X-Trace", "abc-123"))
+			host.CompleteHttp()
+		})
+	})
+}
+
+// -----------------------------------------------------------------------------
+// Phase 2.2 — SSE state machine error / edge paths
+//
+// Drive sse_proxy.go's handleSSEStreamingResponse + handleWaitingEndpoint /
+// handleWaitingInitResp / handleWaitingToolResp through error branches that
+// the happy-path TestMcpProxyServerSSE* tests don't cover.
+// -----------------------------------------------------------------------------
+
+func TestMcpProxyServerSSE_NonSSEContentTypeRejected(t *testing.T) {
+	// Backend returns text/plain instead of text/event-stream → first-chunk
+	// content-type validation must inject a JSON-RPC error.
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyServerSSEConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"},
+			{"content-type", "application/json"},
+		})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		// First-chunk: backend returned a non-SSE content-type.
+		host.CallOnHttpResponseHeaders([][2]string{
+			{":status", "200"},
+			{"content-type", "application/json"},
+		})
+		host.CallOnHttpStreamingResponseBody([]byte(`{"not":"sse"}`), true)
+
+		respBody := host.GetResponseBody()
+		require.NotEmpty(t, respBody)
+		require.Contains(t, string(respBody), "error", "rejected non-SSE response must surface a JSON-RPC error")
+		host.CompleteHttp()
+	})
+}
+
+func TestMcpProxyServerSSE_CharsetSuffixAccepted(t *testing.T) {
+	// content-type: text/event-stream;charset=utf-8 must still be accepted
+	// (substring match on text/event-stream).
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyServerSSEConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"},
+			{"content-type", "application/json"},
+		})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		host.CallOnHttpResponseHeaders([][2]string{
+			{":status", "200"},
+			{"content-type", "text/event-stream; charset=utf-8"},
+		})
+		// Endpoint event triggers initialize — we don't drive past this,
+		// just confirm content-type-suffix wasn't rejected (no error in body).
+		host.CallOnHttpStreamingResponseBody([]byte("event: endpoint\ndata: /sse/abc\n\n"), false)
+
+		// No injected error yet — buffer is just being consumed.
+		// Local response should NOT have been set with an error.
+		localResp := host.GetLocalResponse()
+		if localResp != nil {
+			require.NotContains(t, string(localResp.Data), "invalid content-type",
+				"text/event-stream with charset suffix must NOT be rejected")
+		}
+		host.CompleteHttp()
+	})
+}
+
+func TestMcpProxyServerSSE_EndpointSkipsUnrelatedEvents(t *testing.T) {
+	// Send a `ping` event before `endpoint` — the state machine must skip
+	// non-endpoint messages while in WaitingEndpoint and not error out.
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyServerSSEConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}, {"content-type", "text/event-stream"}})
+
+		// ping first — must be ignored.
+		host.CallOnHttpStreamingResponseBody([]byte("event: ping\ndata: keep-alive\n\n"), false)
+
+		// Then the real endpoint event.
+		host.CallOnHttpStreamingResponseBody([]byte("event: endpoint\ndata: /sse/session-xyz\n\n"), false)
+
+		// Verify the initialize request was sent upstream (proxy moved past WaitingEndpoint).
+		callouts := host.GetHttpCalloutAttributes()
+		require.NotEmpty(t, callouts, "endpoint event should trigger an initialize HTTP callout")
+		var sawInit bool
+		for _, c := range callouts {
+			if strings.Contains(string(c.Body), `"method":"initialize"`) {
+				sawInit = true
+				break
+			}
+		}
+		require.True(t, sawInit, "an initialize JSON-RPC call must have been sent after endpoint event")
+		host.CompleteHttp()
+	})
+}
+
+// -----------------------------------------------------------------------------
+// Phase 2.3 — mcp-proxy Initialize callback error paths (proxy_tool.go:107-204)
+// -----------------------------------------------------------------------------
+
+func TestMcpProxyServer_InitializeBackend500(t *testing.T) {
+	// Initialize HTTP callback receives non-2xx status → must inject error response.
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyServerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		// Backend returns 500 on the initialize call.
+		host.CallOnHttpCall([][2]string{{":status", "500"}, {"content-type", "application/json"}}, []byte(`{"error":"down"}`))
+
+		// Errors go through SendLocalResponse, not the streaming body.
+		localResp := host.GetLocalResponse()
+		require.NotNil(t, localResp, "non-200 initialize response must inject a local error response")
+		require.Contains(t, string(localResp.Data), "error")
+		host.CompleteHttp()
+	})
+}
+
+func TestMcpProxyServer_InitializeMalformedJSON(t *testing.T) {
+	// Initialize response body is not valid JSON → parse error path.
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyServerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(`{not valid json`))
+
+		localResp := host.GetLocalResponse()
+		require.NotNil(t, localResp, "unparseable initialize response must inject a local error response")
+		require.Contains(t, string(localResp.Data), "error")
+		host.CompleteHttp()
+	})
+}
+
+func TestMcpProxyServer_InitializeSSEContentType(t *testing.T) {
+	// Initialize response carries text/event-stream → parseSSEResponse path.
+	// We send a valid SSE-wrapped JSON-RPC success body so the proxy unwraps and
+	// progresses past initialize. End-to-end completion is not the point — we
+	// just need to drive the SSE-unwrap branch.
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyServerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		// SSE-wrapped initialize success response — proxy must extract the data line.
+		sseInit := "event: message\ndata: " + `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"X","version":"1"}}}` + "\n\n"
+		host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "text/event-stream"}, {"mcp-session-id", "sse-session"}}, []byte(sseInit))
+
+		// If SSE-unwrap worked, the proxy will have moved to sending the initialized notification.
+		// Look for a 2nd outbound callout — its presence confirms initialize succeeded.
+		callouts := host.GetHttpCalloutAttributes()
+		var sawNotification bool
+		for _, c := range callouts {
+			if strings.Contains(string(c.Body), "notifications/initialized") {
+				sawNotification = true
+				break
+			}
+		}
+		require.True(t, sawNotification, "SSE-wrapped initialize response must be unwrapped so notification fires")
+		host.CompleteHttp()
+	})
+}
+
+func TestMcpProxyServer_InitializeUnknownErrorCode(t *testing.T) {
+	// Initialize returns a JSON-RPC error with a code OTHER than -32602
+	// → generic "backend initialization failed" path.
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyServerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		// JSON-RPC error with code != -32602.
+		host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}},
+			[]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"internal"}}`))
+
+		localResp := host.GetLocalResponse()
+		require.NotNil(t, localResp, "unknown error code must inject a local error response")
+		require.Contains(t, string(localResp.Data), "error")
+		host.CompleteHttp()
+	})
+}
+
+// -----------------------------------------------------------------------------
+// Phase 2.4 — plugin.go HOST entry edge cases (onHttpRequestHeaders)
+// -----------------------------------------------------------------------------
+
+func TestPlugin_GetMethodRejected(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(restMCPServerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "x"}, {":method", "GET"}, {":path", "/mcp"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		localResp := host.GetLocalResponse()
+		require.NotNil(t, localResp, "GET must produce a local 405 response")
+		require.Equal(t, uint32(405), localResp.StatusCode)
+		host.CompleteHttp()
+	})
+}
+
+func TestPlugin_DeleteMethodRejected(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(restMCPServerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "x"}, {":method", "DELETE"}, {":path", "/mcp"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		localResp := host.GetLocalResponse()
+		require.NotNil(t, localResp, "DELETE must produce a local 405 response")
+		require.Equal(t, uint32(405), localResp.StatusCode)
+		host.CompleteHttp()
+	})
+}
+
+// Note: the wasm-go test harness always reports a request body as present, so
+// the "POST with no body → 400" branch is not exercisable here. The dedicated
+// pure-test for ctx.HasRequestBody() handling lives in pkg/mcp/server tests.
+
+func TestPlugin_McpProtocolVersionHeaderStripped(t *testing.T) {
+	// MCP-Protocol-Version is parsed and removed; request continues normally.
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(restMCPServerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"},
+			{"content-type", "application/json"},
+			{"MCP-Protocol-Version", "2025-03-26"},
+		})
+		// Valid version: header is consumed, request continues.
+		require.Equal(t, types.HeaderStopIteration, action)
+		// The header should have been removed before forwarding.
+		_, stillPresent := test.GetHeaderValue(host.GetRequestHeaders(), "MCP-Protocol-Version")
+		require.False(t, stillPresent, "MCP-Protocol-Version header must be stripped from forwarded request")
+		host.CompleteHttp()
+	})
+}
+
+func TestPlugin_McpProtocolVersionUnsupportedStillStripped(t *testing.T) {
+	// Unsupported version logs a warning but still strips the header and continues.
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(restMCPServerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"},
+			{"content-type", "application/json"},
+			{"MCP-Protocol-Version", "9999-99-99"},
+		})
+		require.Equal(t, types.HeaderStopIteration, action)
+		_, stillPresent := test.GetHeaderValue(host.GetRequestHeaders(), "MCP-Protocol-Version")
+		require.False(t, stillPresent, "even unsupported MCP-Protocol-Version must be stripped")
+		host.CompleteHttp()
+	})
+}
+
+func TestMcpProxyServerSSE_PartialChunkBuffered(t *testing.T) {
+	// SSE event arrives split across two chunks — first chunk has no terminator,
+	// second chunk completes the message. Proxy must wait, not error.
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyServerSSEConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}, {"content-type", "text/event-stream"}})
+
+		// First chunk: prefix only, no blank line terminator.
+		host.CallOnHttpStreamingResponseBody([]byte("event: endpoint\ndata: /sse/sess"), false)
+
+		// No callouts yet — message not yet complete.
+		require.Empty(t, host.GetHttpCalloutAttributes(),
+			"incomplete chunk must not trigger any upstream calls")
+
+		// Second chunk: completes data + blank line.
+		host.CallOnHttpStreamingResponseBody([]byte("ion-split\n\n"), false)
+
+		// Now initialize should have been sent.
+		callouts := host.GetHttpCalloutAttributes()
+		require.NotEmpty(t, callouts, "complete endpoint event must trigger initialize")
+		host.CompleteHttp()
+	})
+}
+
+// -----------------------------------------------------------------------------
+// Phase 2.5 — ExtractAndRemoveIncomingCredential (HOST end-to-end)
+//
+// The pure function lives in pkg/mcp/server/auth_utils.go and is HOST-coupled
+// because it calls proxywasm.GetHttpRequestHeader / RemoveHttpRequestHeader.
+// We exercise it via the mcp-proxy tools/list path, which is the cleanest entry
+// that hits ExtractAndRemoveIncomingCredential before any upstream call.
+//
+// Server shape: downstreamSecurity with Passthrough=true → the credential
+// extracted from the *incoming* request is reused on the *upstream* request.
+// Verifying the upstream callout headers proves both the extraction and the
+// removal worked.
+// -----------------------------------------------------------------------------
+
+// mcpProxyPassthroughApiKeyConfig — downstream apiKey/header passthrough to
+// upstream apiKey/header. The two schemes have different header names so we
+// can independently assert (a) downstream header was removed and (b) upstream
+// header carries the passthrough value.
+var mcpProxyPassthroughApiKeyConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"server": map[string]interface{}{
+			"name":         "proxy-passthrough-apikey",
+			"type":         "mcp-proxy",
+			"transport":    "http",
+			"mcpServerURL": "http://backend-mcp.example.com/mcp",
+			"timeout":      5000,
+			"defaultDownstreamSecurity": map[string]interface{}{
+				"id":          "ClientKey",
+				"passthrough": true,
+			},
+			"defaultUpstreamSecurity": map[string]interface{}{
+				"id": "BackendKey",
+			},
+			"securitySchemes": []map[string]interface{}{
+				{
+					"id":   "ClientKey",
+					"type": "apiKey",
+					"in":   "header",
+					"name": "X-Client-Key",
+				},
+				{
+					"id":                "BackendKey",
+					"type":              "apiKey",
+					"in":                "header",
+					"name":              "X-Backend-Key",
+					"defaultCredential": "fallback-default",
+				},
+			},
+		},
+		"tools": []map[string]interface{}{
+			{"name": "noop", "type": "mcp-proxy", "description": "noop"},
+		},
+	})
+	return data
+}()
+
+func TestExtractAndRemoveIncomingCredential_ApiKeyHeaderPassthrough(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyPassthroughApiKeyConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "mcp.example.com"},
+			{":method", "POST"},
+			{":path", "/mcp"},
+			{"content-type", "application/json"},
+			{"X-Client-Key", "secret-from-client"},
+		})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		callouts := host.GetHttpCalloutAttributes()
+		require.NotEmpty(t, callouts, "tools/list must trigger an initialize callout")
+
+		init := callouts[0]
+		// Passthrough credential rides on the upstream scheme's header name.
+		require.True(t, test.HasHeaderWithValue(init.Headers, "X-Backend-Key", "secret-from-client"),
+			"upstream initialize must carry the extracted client credential under the upstream header name")
+
+		// The downstream header itself must NOT leak through to the upstream call.
+		if v, present := test.GetHeaderValue(init.Headers, "X-Client-Key"); present {
+			t.Errorf("downstream credential header X-Client-Key must be removed; got %q", v)
+		}
+		host.CompleteHttp()
+	})
+}
+
+// mcpProxyPassthroughBearerConfig — downstream http/bearer passthrough to
+// upstream http/bearer. Stripping `Bearer ` from the incoming Authorization
+// is part of ExtractAndRemoveIncomingCredential's contract.
+var mcpProxyPassthroughBearerConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"server": map[string]interface{}{
+			"name":         "proxy-passthrough-bearer",
+			"type":         "mcp-proxy",
+			"transport":    "http",
+			"mcpServerURL": "http://backend-mcp.example.com/mcp",
+			"timeout":      5000,
+			"defaultDownstreamSecurity": map[string]interface{}{
+				"id":          "ClientBearer",
+				"passthrough": true,
+			},
+			"defaultUpstreamSecurity": map[string]interface{}{
+				"id": "BackendBearer",
+			},
+			"securitySchemes": []map[string]interface{}{
+				{"id": "ClientBearer", "type": "http", "scheme": "bearer"},
+				{"id": "BackendBearer", "type": "http", "scheme": "bearer", "defaultCredential": "default-token"},
+			},
+		},
+		"tools": []map[string]interface{}{
+			{"name": "noop", "type": "mcp-proxy", "description": "noop"},
+		},
+	})
+	return data
+}()
+
+func TestExtractAndRemoveIncomingCredential_HttpBearerPassthrough(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyPassthroughBearerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "mcp.example.com"},
+			{":method", "POST"},
+			{":path", "/mcp"},
+			{"content-type", "application/json"},
+			{"Authorization", "Bearer client-token-xyz"},
+		})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		callouts := host.GetHttpCalloutAttributes()
+		require.NotEmpty(t, callouts, "tools/list must trigger an initialize callout")
+		init := callouts[0]
+
+		// Upstream Authorization must use the EXTRACTED token (Bearer prefix
+		// stripped on the way in, re-applied on the way out by ApplySecurity).
+		authValue, present := test.GetHeaderValue(init.Headers, "Authorization")
+		require.True(t, present, "upstream must carry Authorization for upstream bearer scheme")
+		require.Equal(t, "Bearer client-token-xyz", authValue,
+			"passthrough token must round-trip as `Bearer <token>` to upstream")
+		host.CompleteHttp()
+	})
+}
+
+// Missing downstream header — ExtractAndRemoveIncomingCredential returns ""
+// (no error). With Passthrough=true but no incoming credential, passthrough
+// is skipped and the upstream scheme falls back to its DefaultCredential.
+func TestExtractAndRemoveIncomingCredential_MissingHeaderFallsBackToDefault(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(mcpProxyPassthroughApiKeyConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.InitHttp()
+		// Note: no X-Client-Key header on the way in.
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "mcp.example.com"},
+			{":method", "POST"},
+			{":path", "/mcp"},
+			{"content-type", "application/json"},
+		})
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+
+		callouts := host.GetHttpCalloutAttributes()
+		require.NotEmpty(t, callouts, "tools/list must trigger an initialize callout")
+		init := callouts[0]
+
+		// Missing client credential → not an error, just fall through to default.
+		require.True(t, test.HasHeaderWithValue(init.Headers, "X-Backend-Key", "fallback-default"),
+			"missing client credential must NOT cause an error; upstream falls back to DefaultCredential")
+		host.CompleteHttp()
+	})
+}
