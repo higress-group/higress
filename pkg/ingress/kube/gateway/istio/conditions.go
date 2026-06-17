@@ -21,7 +21,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8s "sigs.k8s.io/gateway-api/apis/v1"
 
-	higressconstants "github.com/alibaba/higress/v2/pkg/config/constants"
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model/kstatus"
 	"istio.io/istio/pkg/config/schema/gvk"
@@ -49,11 +48,12 @@ func createRouteStatus(
 	generation int64,
 	currentParents []k8s.RouteParentStatus,
 ) []k8s.RouteParentStatus {
+	controllerName := k8s.GatewayController(managedGatewayController)
 	parents := slices.Clone(currentParents)
 	parentIndexes := map[string]int{}
 	for idx, p := range parents {
 		// Only consider our own
-		if p.ControllerName != k8s.GatewayController(higressconstants.ManagedGatewayController) {
+		if p.ControllerName != controllerName {
 			continue
 		}
 		rs := parentRefString(p.ParentRef, objectNamespace)
@@ -186,14 +186,14 @@ func createRouteStatus(
 		var currentConditions []metav1.Condition
 		currentStatus := slices.FindFunc(currentParents, func(s k8s.RouteParentStatus) bool {
 			return parentRefString(s.ParentRef, objectNamespace) == myRef &&
-				s.ControllerName == k8s.GatewayController(higressconstants.ManagedGatewayController)
+				s.ControllerName == controllerName
 		})
 		if currentStatus != nil {
 			currentConditions = currentStatus.Conditions
 		}
 		ns := k8s.RouteParentStatus{
 			ParentRef:      gw.OriginalReference,
-			ControllerName: k8s.GatewayController(higressconstants.ManagedGatewayController),
+			ControllerName: controllerName,
 			Conditions:     setConditions(generation, currentConditions, conds),
 		}
 		// Parent ref already exists, insert in the same place

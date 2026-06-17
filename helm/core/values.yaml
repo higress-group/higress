@@ -28,6 +28,10 @@ global:
   # -- Whether to create the IngressClass resource for global.ingressClass.
   # Set this to false when reusing an existing IngressClass, for example during Nginx Ingress migration.
   createIngressClass: true
+  # -- GatewayClassName used by Higress to select Gateway API resources.
+  # The default value higress uses controllerName higress.io/gateway-controller.
+  # A custom value, for example higress-internal, uses controllerName higress.io/gateway-controller-higress-internal.
+  gatewayClass: "higress"
   # -- If not empty, Higress Controller will only watch resources in the specified namespace.
   # When isolating different business systems using K8s namespace,
   # if each namespace requires a standalone gateway instance,

@@ -52,8 +52,6 @@ const (
 // ControllerName is the name of this controller for labeling resources it manages
 const ControllerName = "inference-controller"
 
-var supportedControllers = getSupportedControllers()
-
 func getSupportedControllers() sets.Set[gatewayv1.GatewayController] {
 	ret := sets.New[gatewayv1.GatewayController]()
 	for _, controller := range builtinClasses {
@@ -241,7 +239,7 @@ func findGatewayParents(
 		for _, parentStatus := range route.Status.Parents {
 			// Only consider parents managed by our supported controllers (from supportedControllers variable)
 			// This filters out parents from other controllers we don't manage
-			if !supportedControllers.Contains(parentStatus.ControllerName) {
+			if !getSupportedControllers().Contains(parentStatus.ControllerName) {
 				continue
 			}
 
@@ -354,7 +352,7 @@ func calculateAcceptedStatus(
 		// Check if this route has our gateway as a parent and if it's accepted
 		for _, parentStatus := range route.Status.Parents {
 			// Only consider parents managed by supported controllers
-			if !supportedControllers.Contains(parentStatus.ControllerName) {
+			if !getSupportedControllers().Contains(parentStatus.ControllerName) {
 				continue
 			}
 
