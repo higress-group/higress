@@ -490,6 +490,7 @@ func RunAzureOnHttpRequestHeadersTests(t *testing.T) {
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 				{"Content-Type", "application/json"},
+				{"Authorization", "Bearer gateway-token"},
 			})
 
 			// 应该返回HeaderStopIteration，因为需要处理请求体
@@ -508,6 +509,12 @@ func RunAzureOnHttpRequestHeadersTests(t *testing.T) {
 			apiKeyValue, hasApiKey := test.GetHeaderValue(requestHeaders, "api-key")
 			require.True(t, hasApiKey, "api-key header should exist")
 			require.Equal(t, "sk-azure-test123456789", apiKeyValue, "api-key should contain Azure API token")
+
+			// 验证Authorization是否被删除
+			_, hasAuthLower := test.GetHeaderValue(requestHeaders, "authorization")
+			require.False(t, hasAuthLower, "Authorization header should be deleted")
+			_, hasAuthUpper := test.GetHeaderValue(requestHeaders, "Authorization")
+			require.False(t, hasAuthUpper, "Authorization header should be deleted")
 
 			// 验证Path是否被正确处理
 			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")

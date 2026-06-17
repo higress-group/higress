@@ -97,6 +97,7 @@ func RunClaudeOnHttpRequestHeadersTests(t *testing.T) {
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 				{"Content-Type", "application/json"},
+				{"Authorization", "Bearer gateway-token"},
 			})
 			require.Equal(t, types.HeaderStopIteration, action)
 
@@ -104,9 +105,11 @@ func RunClaudeOnHttpRequestHeadersTests(t *testing.T) {
 			require.True(t, test.HasHeaderWithValue(requestHeaders, "x-api-key", "sk-ant-api-key-123"))
 			require.True(t, test.HasHeaderWithValue(requestHeaders, "anthropic-version", "2023-06-01"))
 
-			// Should NOT have Claude Code specific headers
-			_, hasAuth := test.GetHeaderValue(requestHeaders, "authorization")
-			require.False(t, hasAuth, "standard mode should not have authorization header")
+			// Should NOT have Claude Code specific headers or leaked Authorization header
+			_, hasAuthLower := test.GetHeaderValue(requestHeaders, "authorization")
+			require.False(t, hasAuthLower, "standard mode should not have authorization header")
+			_, hasAuthUpper := test.GetHeaderValue(requestHeaders, "Authorization")
+			require.False(t, hasAuthUpper, "standard mode should not have Authorization header")
 
 			_, hasXApp := test.GetHeaderValue(requestHeaders, "x-app")
 			require.False(t, hasXApp, "standard mode should not have x-app header")
