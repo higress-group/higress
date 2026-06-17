@@ -36,6 +36,13 @@ func (m *vllmProviderInitializer) DefaultCapabilities() map[string]string {
 		string(ApiNameModels):         PathOpenAIModels,
 		string(ApiNameEmbeddings):     PathOpenAIEmbeddings,
 		string(ApiNameCohereV1Rerank): PathCohereV1Rerank,
+		// vLLM also natively serves the Anthropic Messages API and newer OpenAI
+		// endpoints; expose them as passthrough (no protocol translation).
+		string(ApiNameAnthropicMessages):    PathAnthropicMessages,
+		string(ApiNameAnthropicCountTokens): PathAnthropicMessagesCountTokens,
+		string(ApiNameResponses):            PathOpenAIResponses,
+		string(ApiNameAudioTranscription):   PathOpenAIAudioTranscriptions,
+		string(ApiNameAudioTranslation):     PathOpenAIAudioTranslations,
 	}
 }
 
@@ -153,6 +160,22 @@ func (m *vllmProvider) GetApiName(path string) ApiName {
 	}
 	if strings.Contains(path, PathCohereV1Rerank) {
 		return ApiNameCohereV1Rerank
+	}
+	// count_tokens must be matched before /v1/messages: the former contains the latter.
+	if strings.Contains(path, PathAnthropicMessagesCountTokens) {
+		return ApiNameAnthropicCountTokens
+	}
+	if strings.Contains(path, PathAnthropicMessages) {
+		return ApiNameAnthropicMessages
+	}
+	if strings.Contains(path, PathOpenAIResponses) {
+		return ApiNameResponses
+	}
+	if strings.Contains(path, PathOpenAIAudioTranscriptions) {
+		return ApiNameAudioTranscription
+	}
+	if strings.Contains(path, PathOpenAIAudioTranslations) {
+		return ApiNameAudioTranslation
 	}
 	return ""
 }

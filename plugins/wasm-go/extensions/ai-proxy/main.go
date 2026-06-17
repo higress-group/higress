@@ -69,6 +69,7 @@ var (
 		{provider.PathOpenAIResponses, provider.ApiNameResponses},
 		{provider.PathOpenAIVideos, provider.ApiNameVideos},
 		// Anthropic style
+		{provider.PathAnthropicMessagesCountTokens, provider.ApiNameAnthropicCountTokens},
 		{provider.PathAnthropicMessages, provider.ApiNameAnthropicMessages},
 		{provider.PathAnthropicComplete, provider.ApiNameAnthropicComplete},
 		// Cohere style
