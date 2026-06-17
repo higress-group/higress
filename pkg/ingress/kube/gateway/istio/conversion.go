@@ -23,6 +23,7 @@ import (
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/util"
 	"istio.io/istio/pilot/pkg/credentials"
 	"net"
+	"net/netip"
 	"path"
 	inferencev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	"sort"
@@ -1735,9 +1736,7 @@ func reportGatewayStatus(
 	setProgrammedCondition(gatewayConditions, internal, gatewayServices, warnings, allUsable)
 
 	addressesToReport := external
-	addrType := k8s.IPAddressType
 	if len(addressesToReport) == 0 {
-		addrType = k8s.HostnameAddressType
 		for _, hostport := range internal {
 			svchost, _, _ := net.SplitHostPort(hostport)
 			if !slices.Contains(pending, svchost) && !slices.Contains(addressesToReport, svchost) {
@@ -1745,12 +1744,21 @@ func reportGatewayStatus(
 			}
 		}
 	}
-	gs.Addresses = make([]k8s.GatewayStatusAddress, 0, len(addressesToReport))
-	for _, addr := range addressesToReport {
-		gs.Addresses = append(gs.Addresses, k8s.GatewayStatusAddress{
-			Value: addr,
-			Type:  &addrType,
-		})
+	// Do not report an address until we are ready. But once we are ready, never remove the address.
+	if len(addressesToReport) > 0 {
+		gs.Addresses = make([]k8s.GatewayStatusAddress, 0, len(addressesToReport))
+		for _, addr := range addressesToReport {
+			var addrType k8s.AddressType
+			if _, err := netip.ParseAddr(addr); err == nil {
+				addrType = k8s.IPAddressType
+			} else {
+				addrType = k8s.HostnameAddressType
+			}
+			gs.Addresses = append(gs.Addresses, k8s.GatewayStatusAddress{
+				Value: addr,
+				Type:  &addrType,
+			})
+		}
 	}
 	// Prune listeners that have been removed
 	haveListeners := getListenerNames(&obj.Spec)

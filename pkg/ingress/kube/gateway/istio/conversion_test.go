@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8s "sigs.k8s.io/gateway-api/apis/v1"
+	k8sbeta "sigs.k8s.io/gateway-api/apis/v1beta1"
 	"sigs.k8s.io/gateway-api/pkg/consts"
 	"sigs.k8s.io/yaml"
 
@@ -820,6 +821,128 @@ func TestConvertResources(t *testing.T) {
 			outputStatus := sq.Dump()
 			goldenStatusFile := fmt.Sprintf("testdata/%s.status.yaml.golden", tt.name)
 			util.CompareContent(t, []byte(outputStatus), goldenStatusFile)
+		})
+	}
+}
+
+func TestReportGatewayStatusAddressType(t *testing.T) {
+	cases := []struct {
+		name      string
+		ingresses []corev1.LoadBalancerIngress
+		want      map[string]k8s.AddressType
+	}{
+		{
+			name: "load balancer IPv4",
+			ingresses: []corev1.LoadBalancerIngress{
+				{IP: "47.98.1.2"},
+			},
+			want: map[string]k8s.AddressType{
+				"47.98.1.2": k8s.IPAddressType,
+			},
+		},
+		{
+			name: "load balancer IPv6",
+			ingresses: []corev1.LoadBalancerIngress{
+				{IP: "2001:db8::1"},
+			},
+			want: map[string]k8s.AddressType{
+				"2001:db8::1": k8s.IPAddressType,
+			},
+		},
+		{
+			name: "load balancer hostname",
+			ingresses: []corev1.LoadBalancerIngress{
+				{Hostname: "k8s-higress-higressg-1234567890.us-west-2.elb.amazonaws.com"},
+			},
+			want: map[string]k8s.AddressType{
+				"k8s-higress-higressg-1234567890.us-west-2.elb.amazonaws.com": k8s.HostnameAddressType,
+			},
+		},
+		{
+			name: "mixed load balancer addresses",
+			ingresses: []corev1.LoadBalancerIngress{
+				{IP: "47.98.1.2"},
+				{Hostname: "higress.cn-hangzhou.alb.aliyuncs.com"},
+			},
+			want: map[string]k8s.AddressType{
+				"47.98.1.2":                            k8s.IPAddressType,
+				"higress.cn-hangzhou.alb.aliyuncs.com": k8s.HostnameAddressType,
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "higress-gateway",
+					Namespace: "higress-system",
+				},
+				Spec: corev1.ServiceSpec{
+					Type: corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{
+						{
+							Name:     "http",
+							Port:     80,
+							Protocol: corev1.ProtocolTCP,
+						},
+					},
+				},
+				Status: corev1.ServiceStatus{
+					LoadBalancer: corev1.LoadBalancerStatus{
+						Ingress: tt.ingresses,
+					},
+				},
+			}
+			stop := test.NewStop(t)
+			kc := kube.NewFakeClient(svc)
+			kc.RunAndWait(stop)
+			ctx := NewGatewayContext(nil, constants.DefaultClusterName, kc, "cluster.local")
+			gw := &k8sbeta.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "higress-gateway",
+					Namespace:  "higress-system",
+					Generation: 1,
+				},
+				Spec: k8sbeta.GatewaySpec{
+					GatewayClassName: "higress",
+					Listeners: []k8sbeta.Listener{
+						{
+							Name:     "http",
+							Port:     80,
+							Protocol: k8s.HTTPProtocolType,
+						},
+					},
+				},
+			}
+			gs := &k8sbeta.GatewayStatus{}
+			servers := []*istio.Server{
+				{
+					Port: &istio.Port{
+						Name:     "http",
+						Number:   80,
+						Protocol: "HTTP",
+					},
+				},
+			}
+
+			reportGatewayStatus(&ctx, gw, gs, []string{"higress-gateway.higress-system.svc.cluster.local"}, servers, 0, nil)
+
+			if len(gs.Addresses) != len(tt.want) {
+				t.Fatalf("expected %d addresses, got %d: %#v", len(tt.want), len(gs.Addresses), gs.Addresses)
+			}
+			for _, got := range gs.Addresses {
+				wantType, ok := tt.want[got.Value]
+				if !ok {
+					t.Fatalf("unexpected address value %q in %#v", got.Value, gs.Addresses)
+				}
+				if got.Type == nil {
+					t.Fatalf("expected address %q type %q, got nil", got.Value, wantType)
+				}
+				if *got.Type != wantType {
+					t.Fatalf("expected address %q type %q, got %q", got.Value, wantType, *got.Type)
+				}
+			}
 		})
 	}
 }

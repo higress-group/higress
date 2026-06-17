@@ -871,7 +871,9 @@ func (v *vertexProvider) buildChatCompletionResponse(ctx wrapper.HttpContext, re
 				args, _ := json.Marshal(part.FunctionCall.Args)
 				choice.Message.ToolCalls = []toolCall{
 					{
-						Type: "function",
+						Type:             "function",
+						ThoughtSignature: part.ThoughtSignature,
+						ExtraContent:     buildGoogleThoughtSignatureExtraContent(part.ThoughtSignature),
 						Function: functionCall{
 							Name:      part.FunctionCall.Name,
 							Arguments: string(args),
@@ -979,7 +981,9 @@ func (v *vertexProvider) buildChatCompletionStreamResponse(ctx wrapper.HttpConte
 			choice.Delta = &chatMessage{
 				ToolCalls: []toolCall{
 					{
-						Type: "function",
+						Type:             "function",
+						ThoughtSignature: part.ThoughtSignature,
+						ExtraContent:     buildGoogleThoughtSignatureExtraContent(part.ThoughtSignature),
 						Function: functionCall{
 							Name:      part.FunctionCall.Name,
 							Arguments: string(args),
@@ -1143,6 +1147,7 @@ func (v *vertexProvider) buildVertexChatRequest(request *chatCompletionRequest) 
 					Name: lastFunctionName,
 					Args: args,
 				},
+				ThoughtSignature: message.ToolCalls[0].getThoughtSignature(),
 			})
 		} else {
 			for _, part := range message.ParseContent() {
@@ -1359,6 +1364,7 @@ type vertexPart struct {
 	FunctionCall     *vertexFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *vertexFunctionResponse `json:"functionResponse,omitempty"`
 	Thounght         *bool                   `json:"thought,omitempty"`
+	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
 }
 
 type blob struct {
