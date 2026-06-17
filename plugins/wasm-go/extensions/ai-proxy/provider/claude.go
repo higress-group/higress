@@ -925,6 +925,7 @@ func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, or
 					ToolCalls: []toolCall{
 						{
 							Index: index,
+							Type:  "function",
 							Function: functionCall{
 								Arguments: origResponse.Delta.PartialJson,
 							},
