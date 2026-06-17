@@ -492,10 +492,49 @@ func (m *chatMessage) ParseContent() []chatMessageContent {
 }
 
 type toolCall struct {
-	Index    int          `json:"index"`
-	Id       string       `json:"id,omitempty"`
-	Type     string       `json:"type"`
-	Function functionCall `json:"function"`
+	Index            int            `json:"index"`
+	Id               string         `json:"id,omitempty"`
+	Type             string         `json:"type"`
+	Function         functionCall   `json:"function"`
+	ThoughtSignature string         `json:"thought_signature,omitempty"`
+	ExtraContent     map[string]any `json:"extra_content,omitempty"`
+}
+
+func (t *toolCall) getThoughtSignature() string {
+	if t == nil {
+		return ""
+	}
+	if t.ThoughtSignature != "" {
+		return t.ThoughtSignature
+	}
+	return getNestedString(t.ExtraContent, "google", "thought_signature")
+}
+
+func buildGoogleThoughtSignatureExtraContent(signature string) map[string]any {
+	if signature == "" {
+		return nil
+	}
+	return map[string]any{
+		"google": map[string]any{
+			"thought_signature": signature,
+		},
+	}
+}
+
+func getNestedString(data map[string]any, path ...string) string {
+	var current any = data
+	for _, key := range path {
+		currentMap, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current, ok = currentMap[key]
+		if !ok {
+			return ""
+		}
+	}
+	value, _ := current.(string)
+	return value
 }
 
 type functionCall struct {
