@@ -27,6 +27,7 @@ import (
 )
 
 func TestCreateRouteStatus(t *testing.T) {
+	setGatewayClassNameForTest(t, "")
 	lastTransitionTime := metav1.Now()
 	parentRef := httpRouteSpec.ParentRefs[0]
 	parentStatus := []k8s.RouteParentStatus{
@@ -120,5 +121,31 @@ func TestCreateRouteStatus(t *testing.T) {
 				t.Errorf("route status: old: %+v, new: %+v", tt.args.current, got)
 			}
 		})
+	}
+}
+
+func TestCreateRouteStatusWithCustomController(t *testing.T) {
+	if runInGatewayClassSubprocess(t) {
+		return
+	}
+	setGatewayClassNameForTest(t, "higress-internal")
+	parentRef := httpRouteSpec.ParentRefs[0]
+	customController := k8s.GatewayController(managedGatewayController)
+	current := []k8s.RouteParentStatus{
+		{
+			ParentRef:      parentRef,
+			ControllerName: k8s.GatewayController(higressconstants.ManagedGatewayController),
+		},
+	}
+
+	got := createRouteStatus([]RouteParentResult{{OriginalReference: parentRef}}, "default", 1, current)
+	if len(got) != 2 {
+		t.Fatalf("expected default and custom controller status entries, got %+v", got)
+	}
+	if got[0].ControllerName != k8s.GatewayController(higressconstants.ManagedGatewayController) {
+		t.Fatalf("expected existing default controller status to be preserved, got %+v", got)
+	}
+	if got[1].ControllerName != customController {
+		t.Fatalf("expected custom controller status %q, got %+v", customController, got)
 	}
 }

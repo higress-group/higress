@@ -15,6 +15,10 @@
 package istio
 
 import (
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -77,6 +81,7 @@ var AlwaysReady = func(class schema.GroupVersionResource, stop <-chan struct{}) 
 }
 
 func setupController(t *testing.T, objs ...runtime.Object) *Controller {
+	setGatewayClassNameForTest(t, "")
 	kc := kube.NewFakeClient(objs...)
 	setupClientCRDs(t, kc)
 	stop := test.NewStop(t)
@@ -92,6 +97,57 @@ func setupController(t *testing.T, objs ...runtime.Object) *Controller {
 	kube.WaitForCacheSync("test", stop, controller.HasSynced)
 
 	return controller
+}
+
+func setupControllerWithGatewayClass(t *testing.T, gatewayClass string, objs ...runtime.Object) *Controller {
+	setGatewayClassNameForTest(t, gatewayClass)
+	kc := kube.NewFakeClient(objs...)
+	setupClientCRDs(t, kc)
+	stop := test.NewStop(t)
+	controller := NewController(
+		kc,
+		AlwaysReady,
+		controller.Options{KrtDebugger: krt.GlobalDebugHandler},
+		nil)
+	kc.RunAndWait(stop)
+	go controller.Run(stop)
+	cg := core.NewConfigGenTest(t, core.TestOptions{})
+	controller.Reconcile(cg.PushContext())
+	kube.WaitForCacheSync("test", stop, controller.HasSynced)
+
+	return controller
+}
+
+func setGatewayClassNameForTest(t *testing.T, gatewayClass string) {
+	t.Helper()
+	if gatewayClass != "" {
+		SetGatewayClassName(gatewayClass)
+	}
+}
+
+func runInGatewayClassSubprocess(t *testing.T) bool {
+	t.Helper()
+	const env = "HIGRESS_TEST_GATEWAY_CLASS_SUBPROCESS"
+	if os.Getenv(env) == t.Name() {
+		return false
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1")
+	cmd.Env = append(testEnvWithoutCoverage(), env+"="+t.Name())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("gateway class subprocess failed: %v\n%s", err, out)
+	}
+	return true
+}
+
+func testEnvWithoutCoverage() []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "GOCOVERDIR=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 func TestListInvalidGroupVersionKind(t *testing.T) {
@@ -134,4 +190,53 @@ func TestListGatewayResourceType(t *testing.T) {
 		assert.Equal(t, c.Namespace, "ns1")
 		assert.Equal(t, c.Spec, any(expectedgw))
 	}
+}
+
+func TestListGatewayResourceTypeWithCustomGatewayClass(t *testing.T) {
+	if runInGatewayClassSubprocess(t) {
+		return
+	}
+	customGatewayClass := "higress-internal"
+	customControllerName := higressconstant.ManagedGatewayController + "-" + customGatewayClass
+	defaultGateway := gatewaySpec.DeepCopy()
+	defaultGateway.GatewayClassName = k8s.ObjectName(higressconstant.DefaultGatewayClass)
+	customGateway := gatewaySpec.DeepCopy()
+	customGateway.GatewayClassName = k8s.ObjectName(customGatewayClass)
+
+	controller := setupControllerWithGatewayClass(t, customGatewayClass,
+		&k8sbeta.GatewayClass{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: higressconstant.DefaultGatewayClass,
+			},
+			Spec: *gatewayClassSpec,
+		},
+		&k8sbeta.GatewayClass{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: customGatewayClass,
+			},
+			Spec: k8s.GatewayClassSpec{
+				ControllerName: k8s.GatewayController(customControllerName),
+			},
+		},
+		&k8sbeta.Gateway{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "default-gw",
+				Namespace: "ns1",
+			},
+			Spec: *defaultGateway,
+		},
+		&k8sbeta.Gateway{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "custom-gw",
+				Namespace: "ns1",
+			},
+			Spec: *customGateway,
+		})
+
+	dumpOnFailure(t, krt.GlobalDebugHandler)
+	cfg := controller.List(gvk.Gateway, "ns1")
+	assert.Equal(t, len(cfg), 1)
+	assert.Equal(t, cfg[0].Name, "custom-gw"+"-"+constants.KubernetesGatewayName+"-default")
+	assert.Equal(t, cfg[0].Namespace, "ns1")
+	assert.Equal(t, cfg[0].Spec, any(expectedgw))
 }
