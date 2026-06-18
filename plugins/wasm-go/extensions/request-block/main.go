@@ -121,7 +121,8 @@ func parseConfig(json gjson.Result, config *RequestBlockConfig, log log.Log) err
 			config.blockBodies = append(config.blockBodies, strings.ToLower(body))
 		}
 	}
-	if len(config.blockUrls) == 0 && len(config.blockHeaders) == 0 &&
+	if len(config.blockUrls) == 0 && len(config.blockExactUrls) == 0 &&
+		len(config.blockRegExpArray) == 0 && len(config.blockHeaders) == 0 &&
 		len(config.blockBodies) == 0 {
 		return errors.New("there is no block rules")
 	}
@@ -129,7 +130,7 @@ func parseConfig(json gjson.Result, config *RequestBlockConfig, log log.Log) err
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config RequestBlockConfig, log log.Log) types.Action {
-	if len(config.blockUrls) > 0 {
+	if len(config.blockUrls) > 0 || len(config.blockExactUrls) > 0 || len(config.blockRegExpArray) > 0 {
 		requestUrl, err := proxywasm.GetHttpRequestHeader(":path")
 		if err != nil {
 			log.Warnf("get path failed: %v", err)
