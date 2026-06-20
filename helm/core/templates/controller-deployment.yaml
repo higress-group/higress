@@ -49,6 +49,7 @@ spec:
           - --enableStatus={{ .Values.global.enableStatus }}
           {{- end }}
           - --ingressClass={{ .Values.global.ingressClass }}
+          - --gatewayClass={{ .Values.global.gatewayClass }}
           {{- if .Values.global.watchNamespace }}
           - --watchNamespace={{ .Values.global.watchNamespace }}
           {{- end }}
