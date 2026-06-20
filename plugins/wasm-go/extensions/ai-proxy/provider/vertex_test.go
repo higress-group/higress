@@ -578,3 +578,365 @@ func TestVertexAnthropicPassthrough_MaxTokensDefault(t *testing.T) {
 			"client-supplied max_tokens must not be overwritten by the default")
 	})
 }
+
+func TestVertexProviderPreservesFunctionCallThoughtSignature(t *testing.T) {
+	v := &vertexProvider{}
+	ctx := newMockMultipartHttpContext()
+	ctx.SetContext(ctxKeyFinalRequestModel, "gemini-3.1-pro-preview")
+
+	response := v.buildChatCompletionResponse(ctx, &vertexChatResponse{
+		ResponseId: "vertex-response-id",
+		Candidates: []vertexChatCandidate{
+			{
+				Index: 0,
+				Content: vertexChatContent{
+					Role: "model",
+					Parts: []vertexPart{
+						{
+							FunctionCall: &vertexFunctionCall{
+								Name: "Skill",
+								Args: map[string]interface{}{"query": "intelligentization"},
+							},
+							ThoughtSignature: "thought-signature-from-vertex",
+						},
+					},
+				},
+				FinishReason: "STOP",
+			},
+		},
+	})
+
+	require.Len(t, response.Choices, 1)
+	require.NotNil(t, response.Choices[0].Message)
+	require.Len(t, response.Choices[0].Message.ToolCalls, 1)
+	assert.Equal(t, "thought-signature-from-vertex", response.Choices[0].Message.ToolCalls[0].ThoughtSignature)
+	assert.Equal(
+		t,
+		"thought-signature-from-vertex",
+		getNestedString(response.Choices[0].Message.ToolCalls[0].ExtraContent, "google", "thought_signature"),
+	)
+}
+
+func TestVertexProviderRestoresFunctionCallThoughtSignature(t *testing.T) {
+	v := &vertexProvider{}
+	req := &chatCompletionRequest{
+		Model: "gemini-3.1-pro-preview",
+		Messages: []chatMessage{
+			{Role: roleUser, Content: "search docs"},
+			{
+				Role: roleAssistant,
+				ToolCalls: []toolCall{
+					{
+						Type:             "function",
+						ThoughtSignature: "thought-signature-from-client",
+						Function: functionCall{
+							Name:      "Skill",
+							Arguments: `{"query":"intelligentization"}`,
+						},
+					},
+				},
+			},
+			{Role: roleTool, Content: "tool result"},
+		},
+	}
+
+	vertexReq, err := v.buildVertexChatRequest(req)
+	require.NoError(t, err)
+	require.NotNil(t, vertexReq)
+	require.Len(t, vertexReq.Contents, 3)
+	require.Len(t, vertexReq.Contents[1].Parts, 1)
+	require.NotNil(t, vertexReq.Contents[1].Parts[0].FunctionCall)
+	assert.Equal(t, "thought-signature-from-client", vertexReq.Contents[1].Parts[0].ThoughtSignature)
+}
+
+func TestVertexProviderRestoresFunctionCallThoughtSignatureFromGoogleExtraContent(t *testing.T) {
+	v := &vertexProvider{}
+	req := &chatCompletionRequest{
+		Model: "gemini-3.1-pro-preview",
+		Messages: []chatMessage{
+			{Role: roleUser, Content: "search docs"},
+			{
+				Role: roleAssistant,
+				ToolCalls: []toolCall{
+					{
+						Type: "function",
+						ExtraContent: map[string]any{
+							"google": map[string]any{
+								"thought_signature": "thought-signature-from-extra-content",
+							},
+						},
+						Function: functionCall{
+							Name:      "Skill",
+							Arguments: `{"query":"intelligentization"}`,
+						},
+					},
+				},
+			},
+			{Role: roleTool, Content: "tool result"},
+		},
+	}
+
+	vertexReq, err := v.buildVertexChatRequest(req)
+	require.NoError(t, err)
+	require.NotNil(t, vertexReq)
+	require.Len(t, vertexReq.Contents, 3)
+	require.Len(t, vertexReq.Contents[1].Parts, 1)
+	require.NotNil(t, vertexReq.Contents[1].Parts[0].FunctionCall)
+	assert.Equal(t, "thought-signature-from-extra-content", vertexReq.Contents[1].Parts[0].ThoughtSignature)
+}
+
+func TestVertexProviderRestoresFunctionCallThoughtSignatureInvalidArguments(t *testing.T) {
+	v := &vertexProvider{}
+	req := &chatCompletionRequest{
+		Model: "gemini-3.1-pro-preview",
+		Messages: []chatMessage{
+			{
+				Role: roleAssistant,
+				ToolCalls: []toolCall{
+					{
+						Type:             "function",
+						ThoughtSignature: "thought-signature-from-client",
+						Function: functionCall{
+							Name:      "Skill",
+							Arguments: `invalid-json`,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	vertexReq, err := v.buildVertexChatRequest(req)
+	require.NoError(t, err)
+	require.NotNil(t, vertexReq)
+	require.Len(t, vertexReq.Contents, 1)
+	require.Len(t, vertexReq.Contents[0].Parts, 1)
+	require.NotNil(t, vertexReq.Contents[0].Parts[0].FunctionCall)
+	assert.Equal(t, "thought-signature-from-client", vertexReq.Contents[0].Parts[0].ThoughtSignature)
+}
+
+func TestVertexProviderStreamPreservesFunctionCallThoughtSignature(t *testing.T) {
+	v := &vertexProvider{}
+	ctx := newMockMultipartHttpContext()
+	ctx.SetContext(ctxKeyFinalRequestModel, "gemini-3.1-pro-preview")
+
+	response := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+		ResponseId: "vertex-response-id",
+		Candidates: []vertexChatCandidate{
+			{
+				Index: 0,
+				Content: vertexChatContent{
+					Role: "model",
+					Parts: []vertexPart{
+						{
+							FunctionCall: &vertexFunctionCall{
+								Name: "Skill",
+								Args: map[string]interface{}{"query": "intelligentization"},
+							},
+							ThoughtSignature: "thought-signature-from-vertex-stream",
+						},
+					},
+				},
+				FinishReason: "STOP",
+			},
+		},
+	})
+
+	require.NotNil(t, response)
+	require.NotNil(t, response.Choices)
+	require.Len(t, response.Choices, 1)
+	require.NotNil(t, response.Choices[0].Delta)
+	require.Len(t, response.Choices[0].Delta.ToolCalls, 1)
+	assert.Equal(t, "thought-signature-from-vertex-stream", response.Choices[0].Delta.ToolCalls[0].ThoughtSignature)
+	assert.Equal(
+		t,
+		"thought-signature-from-vertex-stream",
+		getNestedString(response.Choices[0].Delta.ToolCalls[0].ExtraContent, "google", "thought_signature"),
+	)
+}
+
+func TestToolCallGetThoughtSignatureAllPaths(t *testing.T) {
+	// 1. nil toolCall pointer
+	var nilTc *toolCall
+	assert.Equal(t, "", nilTc.getThoughtSignature())
+
+	// 2. ThoughtSignature is directly set
+	tc1 := &toolCall{
+		ThoughtSignature: "direct-sig",
+	}
+	assert.Equal(t, "direct-sig", tc1.getThoughtSignature())
+
+	// 3. ExtraContent is nil
+	tc2 := &toolCall{}
+	assert.Equal(t, "", tc2.getThoughtSignature())
+
+	// 4. ExtraContent does not contain "google"
+	tc3 := &toolCall{
+		ExtraContent: map[string]any{
+			"other": "val",
+		},
+	}
+	assert.Equal(t, "", tc3.getThoughtSignature())
+
+	// 5. ExtraContent contains "google" but not as map[string]any
+	tc4 := &toolCall{
+		ExtraContent: map[string]any{
+			"google": "not-a-map",
+		},
+	}
+	assert.Equal(t, "", tc4.getThoughtSignature())
+
+	// 6. ExtraContent contains "google" map but not "thought_signature"
+	tc5 := &toolCall{
+		ExtraContent: map[string]any{
+			"google": map[string]any{
+				"other": "val",
+			},
+		},
+	}
+	assert.Equal(t, "", tc5.getThoughtSignature())
+
+	// 7. ExtraContent contains "google" map with "thought_signature" but not string
+	tc6 := &toolCall{
+		ExtraContent: map[string]any{
+			"google": map[string]any{
+				"thought_signature": 12345,
+			},
+		},
+	}
+	assert.Equal(t, "", tc6.getThoughtSignature())
+
+	// 8. ExtraContent contains "google" map with "thought_signature" as string
+	tc7 := &toolCall{
+		ExtraContent: map[string]any{
+			"google": map[string]any{
+				"thought_signature": "google-extra-sig",
+			},
+		},
+	}
+	assert.Equal(t, "google-extra-sig", tc7.getThoughtSignature())
+}
+
+func TestBuildGoogleThoughtSignatureExtraContentEmpty(t *testing.T) {
+	assert.Nil(t, buildGoogleThoughtSignatureExtraContent(""))
+}
+
+func TestVertexProviderStreamThoughtAndText(t *testing.T) {
+	v := &vertexProvider{}
+
+	t.Run("thinking start and continue", func(t *testing.T) {
+		ctx := newMockMultipartHttpContext()
+
+		// 1. Thinking start
+		resp1 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+			Candidates: []vertexChatCandidate{
+				{
+					Content: vertexChatContent{
+						Parts: []vertexPart{
+							{
+								Text:     "thinking process",
+								Thounght: util.Ptr(true),
+							},
+						},
+					},
+				},
+			},
+		})
+		require.NotNil(t, resp1)
+		assert.Equal(t, reasoningStartTag+"thinking process", resp1.Choices[0].Delta.Content)
+		assert.Equal(t, true, ctx.GetContext("thinking_start"))
+
+		// 2. Thinking continue
+		resp2 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+			Candidates: []vertexChatCandidate{
+				{
+					Content: vertexChatContent{
+						Parts: []vertexPart{
+							{
+								Text:     " more thinking",
+								Thounght: util.Ptr(true),
+							},
+						},
+					},
+				},
+			},
+		})
+		require.NotNil(t, resp2)
+		assert.Equal(t, " more thinking", resp2.Choices[0].Delta.Content)
+	})
+
+	t.Run("thinking end and text continue", func(t *testing.T) {
+		ctx := newMockMultipartHttpContext()
+		ctx.SetContext("thinking_start", true)
+
+		// 1. Thinking end
+		resp1 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+			Candidates: []vertexChatCandidate{
+				{
+					Content: vertexChatContent{
+						Parts: []vertexPart{
+							{
+								Text: "final answer",
+							},
+						},
+					},
+				},
+			},
+		})
+		require.NotNil(t, resp1)
+		assert.Equal(t, reasoningEndTag+"final answer", resp1.Choices[0].Delta.Content)
+		assert.Equal(t, true, ctx.GetContext("thinking_end"))
+
+		// 2. Text continue
+		resp2 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+			Candidates: []vertexChatCandidate{
+				{
+					Content: vertexChatContent{
+						Parts: []vertexPart{
+							{
+								Text: " suffix",
+							},
+						},
+					},
+				},
+			},
+		})
+		require.NotNil(t, resp2)
+		assert.Equal(t, " suffix", resp2.Choices[0].Delta.Content)
+	})
+}
+
+func TestGetNestedString(t *testing.T) {
+	// 1. empty path
+	assert.Equal(t, "", getNestedString(map[string]any{"a": 1}))
+
+	// 2. nested string exists
+	data := map[string]any{
+		"google": map[string]any{
+			"thought_signature": "sig",
+		},
+	}
+	assert.Equal(t, "sig", getNestedString(data, "google", "thought_signature"))
+
+	// 3. nested key not a map
+	data2 := map[string]any{
+		"google": "not-a-map",
+	}
+	assert.Equal(t, "", getNestedString(data2, "google", "thought_signature"))
+
+	// 4. nested key is missing
+	data3 := map[string]any{
+		"google": map[string]any{
+			"other": "val",
+		},
+	}
+	assert.Equal(t, "", getNestedString(data3, "google", "thought_signature"))
+
+	// 5. nested value is not a string
+	data4 := map[string]any{
+		"google": map[string]any{
+			"thought_signature": 1234,
+		},
+	}
+	assert.Equal(t, "", getNestedString(data4, "google", "thought_signature"))
+}
