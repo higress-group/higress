@@ -88,6 +88,13 @@ func processStreamLastChunk(ctx wrapper.HttpContext, c config.PluginConfig, chun
 		if err != nil {
 			return "", fmt.Errorf("[processStreamLastChunk] processSSEMessage failed, error: %v", err)
 		}
+		// 兜底：[DONE] 或其它尾部 chunk 无 content 时，processSSEMessage 返回空，
+		// 此时从 ctx 取已累积的缓存内容，避免缓存写空。
+		if value == "" {
+			if tempContentI := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY); tempContentI != nil {
+				value = tempContentI.(string)
+			}
+		}
 		return value, nil
 	}
 	tempContentI := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY)
@@ -117,6 +124,11 @@ func processSSEMessage(ctx wrapper.HttpContext, c config.PluginConfig, sseMessag
 		bodyJson := message[5:]
 
 		if strings.TrimSpace(bodyJson) == "[DONE]" {
+			// [DONE] 标记 SSE 流结束；本函数局部 content 始终为空，
+			// 需要把先前 chunk 在 ctx 里累积好的值返回给调用方写入缓存。
+			if tempContentI := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY); tempContentI != nil {
+				return tempContentI.(string), nil
+			}
 			return content, nil
 		}
 

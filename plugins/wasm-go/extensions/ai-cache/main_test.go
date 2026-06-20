@@ -891,8 +891,12 @@ data: [DONE]`
 		})
 
 		// 测试流式响应体处理：首 chunk 只带 role 无 content（混元大模型场景，#3953）
-		// 验证 processSSEMessage 不会因为首 chunk 没有 content 而报错，
-		// 进而导致 ERROR_PARTIAL_MESSAGE_KEY 被设置、后续 chunk 被短路、缓存无法写入。
+		// 验证：
+		//   1) processSSEMessage 不会因为首 chunk 没有 content 而报错，
+		//      避免后续 chunk 被 ERROR_PARTIAL_MESSAGE_KEY 短路。
+		//   2) 全部 content chunk 累积完成后，data: [DONE] 触发的 processStreamLastChunk
+		//      必须把累积内容写入 Redis —— 而不是像修复前那样返回空字符串导致 cacheResponse
+		//      直接吞掉。
 		t.Run("stream response body with role-only first chunk", func(t *testing.T) {
 			host, status := test.NewTestHost(basicRedisConfig)
 			defer host.Reset()
@@ -918,6 +922,11 @@ data: [DONE]`
 				"stream": true
 			}`
 			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			// 模拟 Redis 缓存未命中（CallOnRedisCall 会消费 callout 列表中的第 0 项，
+			// 即上一步 CheckCacheForKey 产生的 GET）。响应后该条目被移除，
+			// 流式响应便会走完整的 cacheResponse 写缓存路径。
+			host.CallOnRedisCall(0, test.CreateRedisRespNull())
 
 			// 设置流式响应头
 			host.CallOnHttpResponseHeaders([][2]string{
@@ -954,6 +963,24 @@ data: {"id":"0b8ed3c9-3710-920b-abd9-581a0a77fd28","object":"chat.completion.chu
 
 			action = host.CallOnHttpStreamingResponseBody([]byte(doneChunk), true)
 			require.Equal(t, types.ActionContinue, action)
+
+			// 在响应 SET 之前先快照 callout 属性 —— 框架在 CallOnRedisCallResponse
+			// 时会同步把条目从 map 里清掉，所以必须在消费前抓取。
+			redisCalls := host.GetRedisCalloutAttributes()
+			require.GreaterOrEqual(t, len(redisCalls), 1,
+				"expected a SET redis callout after [DONE], got %d", len(redisCalls))
+
+			// 模拟 Redis SET 响应。
+			host.CallOnRedisCall(0, test.CreateRedisRespString("OK"))
+
+			// 断言：上游流式响应走到末尾后，ai-cache 必须真的发出一次 SET，
+			// 且写入的值是前面 content chunk 累积出的完整文本。
+			setCall := redisCalls[len(redisCalls)-1]
+			setQuery := string(setCall.Query)
+			require.Contains(t, setQuery, "higress-ai-cache:介绍天津",
+				"SET command should target the cache key derived from the request, got query: %q", setQuery)
+			require.Contains(t, setQuery, "天津是历史文化名城",
+				"SET command should contain the accumulated value, got query: %q", setQuery)
 		})
 
 		// 测试无缓存键的响应体处理
