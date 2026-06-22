@@ -443,6 +443,28 @@ func TestClaudeProvider_StreamPreservesNativeSignatureAndStopsForClaudeConversio
 	assert.Equal(t, "content_block_stop", events[0].Name)
 }
 
+func TestClaudeProvider_StreamToolCallArgumentDeltaIncludesFunctionType(t *testing.T) {
+	provider := &claudeProvider{}
+	ctx := newMockMultipartHttpContext()
+	index := 0
+
+	response := provider.streamResponseClaude2OpenAI(ctx, &claudeTextGenStreamResponse{
+		Type:  "content_block_delta",
+		Index: &index,
+		Delta: &claudeTextGenDelta{
+			Type:        "input_json_delta",
+			PartialJson: `{"path":"/tmp/example"}`,
+		},
+	})
+
+	require.NotNil(t, response)
+	require.Len(t, response.Choices, 1)
+	require.NotNil(t, response.Choices[0].Delta)
+	require.Len(t, response.Choices[0].Delta.ToolCalls, 1)
+	assert.Equal(t, "function", response.Choices[0].Delta.ToolCalls[0].Type)
+	assert.Equal(t, `{"path":"/tmp/example"}`, response.Choices[0].Delta.ToolCalls[0].Function.Arguments)
+}
+
 func TestClaudeProvider_BuildClaudeTextGenRequest_ClaudeCodeMode(t *testing.T) {
 	provider := &claudeProvider{
 		config: ProviderConfig{
