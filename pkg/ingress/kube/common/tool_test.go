@@ -21,6 +21,8 @@ import (
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/config"
 	v1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	networkingv1beta1 "k8s.io/api/networking/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/annotations"
@@ -206,6 +208,9 @@ func TestGenerateUniqueRouteName(t *testing.T) {
 func TestGetLbStatusList(t *testing.T) {
 	clusterPrefix = "gw-123-"
 	svcName := clusterPrefix
+	aliyunHostname := "higress.cn-hangzhou.alb.aliyuncs.com"
+	awsHostname := "k8s-kubeingr-higressg-1234567890.eu-north-1.elb.amazonaws.com"
+	tencentHostname := "lb-12345678.clb.ap-guangzhou.tencentclb.com"
 	svcList := []*v1.Service{
 		{
 			ObjectMeta: metav1.ObjectMeta{
@@ -219,6 +224,57 @@ func TestGetLbStatusList(t *testing.T) {
 					Ingress: []v1.LoadBalancerIngress{
 						{
 							IP: "2.2.2.2",
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: svcName,
+			},
+			Spec: v1.ServiceSpec{
+				Type: v1.ServiceTypeLoadBalancer,
+			},
+			Status: v1.ServiceStatus{
+				LoadBalancer: v1.LoadBalancerStatus{
+					Ingress: []v1.LoadBalancerIngress{
+						{
+							Hostname: awsHostname,
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: svcName,
+			},
+			Spec: v1.ServiceSpec{
+				Type: v1.ServiceTypeLoadBalancer,
+			},
+			Status: v1.ServiceStatus{
+				LoadBalancer: v1.LoadBalancerStatus{
+					Ingress: []v1.LoadBalancerIngress{
+						{
+							Hostname: aliyunHostname,
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: svcName,
+			},
+			Spec: v1.ServiceSpec{
+				Type: v1.ServiceTypeLoadBalancer,
+			},
+			Status: v1.ServiceStatus{
+				LoadBalancer: v1.LoadBalancerStatus{
+					Ingress: []v1.LoadBalancerIngress{
+						{
+							Hostname: tencentHostname,
 						},
 					},
 				},
@@ -295,17 +351,15 @@ func TestGetLbStatusList(t *testing.T) {
 	}
 
 	lbiList := GetLbStatusList(svcList)
-	if len(lbiList) != 4 {
-		t.Fatal("len should be 4")
-	}
-
-	if lbiList[0].IP != "1.1.1.1" {
-		t.Fatal("should be 1.1.1.1")
-	}
-
-	if lbiList[3].IP != "4.4.4.4" {
-		t.Fatal("should be 4.4.4.4")
-	}
+	assert.Equal(t, []v1.LoadBalancerIngress{
+		{IP: "1.1.1.1"},
+		{IP: "2.2.2.2"},
+		{IP: "3.3.3.3"},
+		{IP: "4.4.4.4"},
+		{Hostname: aliyunHostname},
+		{Hostname: awsHostname},
+		{Hostname: tencentHostname},
+	}, lbiList)
 }
 
 func TestSortRoutes(t *testing.T) {
@@ -1012,6 +1066,9 @@ func TestPartMd5(t *testing.T) {
 func TestGetLbStatusListV1AndV1Beta1(t *testing.T) {
 	clusterPrefix = "gw-123-"
 	svcName := clusterPrefix
+	aliyunHostname := "higress.cn-hangzhou.alb.aliyuncs.com"
+	awsHostname := "k8s-kubeingr-higressg-1234567890.eu-north-1.elb.amazonaws.com"
+	tencentHostname := "lb-12345678.clb.ap-guangzhou.tencentclb.com"
 	svcList := []*v1.Service{
 		{
 			ObjectMeta: metav1.ObjectMeta{
@@ -1047,23 +1104,82 @@ func TestGetLbStatusListV1AndV1Beta1(t *testing.T) {
 				},
 			},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: svcName,
+			},
+			Spec: v1.ServiceSpec{
+				Type: v1.ServiceTypeLoadBalancer,
+			},
+			Status: v1.ServiceStatus{
+				LoadBalancer: v1.LoadBalancerStatus{
+					Ingress: []v1.LoadBalancerIngress{
+						{
+							Hostname: awsHostname,
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: svcName,
+			},
+			Spec: v1.ServiceSpec{
+				Type: v1.ServiceTypeLoadBalancer,
+			},
+			Status: v1.ServiceStatus{
+				LoadBalancer: v1.LoadBalancerStatus{
+					Ingress: []v1.LoadBalancerIngress{
+						{
+							Hostname: aliyunHostname,
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: svcName,
+			},
+			Spec: v1.ServiceSpec{
+				Type: v1.ServiceTypeLoadBalancer,
+			},
+			Status: v1.ServiceStatus{
+				LoadBalancer: v1.LoadBalancerStatus{
+					Ingress: []v1.LoadBalancerIngress{
+						{
+							Hostname: tencentHostname,
+						},
+					},
+				},
+			},
+		},
 	}
 
 	// Test the V1 version
 	t.Run("GetLbStatusListV1", func(t *testing.T) {
 		lbiList := GetLbStatusListV1(svcList)
 
-		assert.Equal(t, 2, len(lbiList), "There should be 2 entry points")
-		assert.Equal(t, "1.1.1.1", lbiList[0].IP, "The first IP should be 1.1.1.1")
-		assert.Equal(t, "2.2.2.2", lbiList[1].IP, "The second IP should be 2.2.2.2")
+		assert.Equal(t, []networkingv1.IngressLoadBalancerIngress{
+			{IP: "1.1.1.1"},
+			{IP: "2.2.2.2"},
+			{Hostname: aliyunHostname},
+			{Hostname: awsHostname},
+			{Hostname: tencentHostname},
+		}, lbiList)
 	})
 
 	// Test the V1Beta1 version
 	t.Run("GetLbStatusListV1Beta1", func(t *testing.T) {
 		lbiList := GetLbStatusListV1Beta1(svcList)
 
-		assert.Equal(t, 2, len(lbiList), "There should be 2 entry points")
-		assert.Equal(t, "1.1.1.1", lbiList[0].IP, "The first IP should be 1.1.1.1")
-		assert.Equal(t, "2.2.2.2", lbiList[1].IP, "The second IP should be 2.2.2.2")
+		assert.Equal(t, []networkingv1beta1.IngressLoadBalancerIngress{
+			{IP: "1.1.1.1"},
+			{IP: "2.2.2.2"},
+			{Hostname: aliyunHostname},
+			{Hostname: awsHostname},
+			{Hostname: tencentHostname},
+		}, lbiList)
 	})
 }
