@@ -115,6 +115,28 @@ func TestBedrockStreamPreservesClaudeNativeIndexesAndStops(t *testing.T) {
 	assert.Equal(t, 2, *events[0].Payload.Index)
 }
 
+func TestBedrockStreamToolCallArgumentDeltaIncludesFunctionType(t *testing.T) {
+	provider := &bedrockProvider{}
+	ctx := newMockMultipartHttpContext()
+
+	chunk, err := provider.convertEventFromBedrockToOpenAI(ctx, ConverseStreamEvent{
+		ContentBlockIndex: 0,
+		Delta: &converseStreamEventContentBlockDelta{
+			ToolUse: &toolUseBlockDelta{Input: `{"path":"/tmp/example"}`},
+		},
+	})
+	require.NoError(t, err)
+
+	body := strings.TrimPrefix(strings.TrimSpace(string(chunk)), ssePrefix)
+	var event chatCompletionResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &event))
+	require.Len(t, event.Choices, 1)
+	require.NotNil(t, event.Choices[0].Delta)
+	require.Len(t, event.Choices[0].Delta.ToolCalls, 1)
+	assert.Equal(t, "function", event.Choices[0].Delta.ToolCalls[0].Type)
+	assert.Equal(t, `{"path":"/tmp/example"}`, event.Choices[0].Delta.ToolCalls[0].Function.Arguments)
+}
+
 func TestBedrockResponsePreservesClaudeNativeRedactedThinking(t *testing.T) {
 	provider := &bedrockProvider{}
 	ctx := newMockMultipartHttpContext()

@@ -77,6 +77,7 @@ func NewController(client kube.Client, options common.Options, xdsUpdater model.
 		ClusterID:    clusterId,
 		Revision:     higressconfig.Revision,
 	}
+	istiogateway.SetGatewayClassName(options.GatewayClass)
 	istioController := istiogateway.NewController(client, client.CrdWatcher().WaitForCRD, opt, xdsUpdater)
 	if options.GatewaySelectorKey != "" {
 		istioController.DefaultGatewaySelector = map[string]string{options.GatewaySelectorKey: options.GatewaySelectorValue}
