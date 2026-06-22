@@ -211,7 +211,9 @@ template:
         {{- $config := $o11y.promtail }}
       - name: promtail
         image: {{ $config.image.repository | default (printf "%s/higress/promtail" .Values.global.hub) }}:{{ $config.image.tag }}
-        imagePullPolicy: IfNotPresent
+        {{- if .Values.global.imagePullPolicy }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        {{- end }}
         args:
           - -config.file=/etc/promtail/promtail.yaml
         env:
