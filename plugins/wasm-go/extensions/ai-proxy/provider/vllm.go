@@ -14,10 +14,20 @@ const (
 	defaultVllmDomain = "vllm-service.cluster.local"
 )
 
-// isVllmDirectPath checks if the path is a known standard vLLM interface path.
+// isVllmDirectPath checks if the path is a known standard vLLM interface path,
+// i.e. the configured vllmCustomUrl already points at a concrete endpoint rather
+// than a base path. Such paths are forwarded as-is; base paths get the per-API
+// suffix appended. Must cover every endpoint in DefaultCapabilities that a user
+// might configure directly, otherwise the path is mistakenly treated as a base
+// and double-appended (e.g. /v1/responses -> /v1/responses/responses).
 func isVllmDirectPath(path string) bool {
 	return strings.HasSuffix(path, "/completions") ||
-		strings.HasSuffix(path, "/rerank")
+		strings.HasSuffix(path, "/rerank") ||
+		strings.HasSuffix(path, "/responses") ||
+		strings.HasSuffix(path, "/messages") ||
+		strings.HasSuffix(path, "/count_tokens") ||
+		strings.HasSuffix(path, "/transcriptions") ||
+		strings.HasSuffix(path, "/translations")
 }
 
 type vllmProviderInitializer struct{}
