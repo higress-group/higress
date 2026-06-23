@@ -133,7 +133,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 		arr := response.Array()
 		if len(arr) != n {
 			log.Errorf("redis response length mismatch: got %d, want %d", len(arr), n)
-			proxywasm.ResumeHttpRequest()
+			_ = proxywasm.ResumeHttpRequest()
 			return
 		}
 
@@ -145,7 +145,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 			a := sub.Array()
 			if len(a) != 3 {
 				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(a))
-				proxywasm.ResumeHttpRequest()
+				_ = proxywasm.ResumeHttpRequest()
 				return
 			}
 			threshold, current, ttl := a[0].Integer(), a[1].Integer(), a[2].Integer()
@@ -174,7 +174,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 			reset:     tightTtl,
 		})
 
-		proxywasm.ResumeHttpRequest()
+		_ = proxywasm.ResumeHttpRequest()
 	})
 
 	if err != nil {

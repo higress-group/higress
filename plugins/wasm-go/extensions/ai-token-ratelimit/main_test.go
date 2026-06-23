@@ -777,18 +777,28 @@ func TestOnHttpStreamingBody(t *testing.T) {
 			host.CompleteHttp()
 		})
 
-		// 多规则下响应阶段应触发 2-key INCRBY
+		// 多规则下响应阶段应触发 2-key INCRBY。
+		// Strengthened: 用 GetRedisCalloutAttributes() 断言响应阶段确实发起了一次 Eval。
+		// Callout 计数模式：0 → 1 (请求阶段) → 0 (CallOnRedisCall 消费) → 1 (响应阶段)
+		// 如果 response 阶段被改回 1-key 或不调用 Redis，最终计数会停在 0 而非 1。
 		t.Run("streaming body multi-rule incrby", func(t *testing.T) {
 			host, status := test.NewTestHost(hybridLimitConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
-			host.CallOnHttpRequestHeaders([][2]string{
+			require.Equal(t, 0, len(host.GetRedisCalloutAttributes()),
+				"请求前应无 Redis 调用")
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/api/test"},
 				{":method", "POST"},
 				{"x-api-key", "vip-key"},
 			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+			require.Equal(t, 1, len(host.GetRedisCalloutAttributes()),
+				"请求阶段应发起 1 次多键 Eval")
+
 			resp := multiRuleResp(
 				[3]int{10000, 1, 60},
 				[3]int{100, 1, 60},
@@ -796,8 +806,15 @@ func TestOnHttpStreamingBody(t *testing.T) {
 			host.CallOnRedisCall(0, resp)
 
 			body := []byte(`{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":10,"completion_tokens":15,"total_tokens":25}}`)
-			action := host.CallOnHttpStreamingRequestBody(body, true)
-			require.Equal(t, types.ActionContinue, action)
+			// 注意：ai-token 的 onHttpStreamingBody 注册为 ProcessStreamingResponseBody，
+			// 对应测试方法 CallOnHttpStreamingResponseBody（不是 CallOnHttpStreamingRequestBody）。
+			// 这是因为 ai-token 处理的是 LLM 的流式响应体（usage 字段在响应里）。
+			streamAction := host.CallOnHttpStreamingResponseBody(body, true)
+			require.Equal(t, types.ActionContinue, streamAction)
+			// 响应阶段应再发起 1 次多键 INCRBY（callout 数 0 → 1）。
+			// 如果 response 阶段被改回 1-key 或不调用 Redis，此断言会失败。
+			require.Equal(t, 1, len(host.GetRedisCalloutAttributes()),
+				"响应阶段应再发起 1 次多键 INCRBY（callout 数 0 → 1）")
 
 			host.CompleteHttp()
 		})

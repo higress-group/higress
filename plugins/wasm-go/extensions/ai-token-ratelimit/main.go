@@ -155,7 +155,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 		arr := response.Array()
 		if len(arr) != n {
 			log.Errorf("redis response length mismatch: got %d, want %d", len(arr), n)
-			proxywasm.ResumeHttpRequest()
+			_ = proxywasm.ResumeHttpRequest()
 			return
 		}
 
@@ -169,7 +169,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 			a := sub.Array()
 			if len(a) != 3 {
 				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(a))
-				proxywasm.ResumeHttpRequest()
+				_ = proxywasm.ResumeHttpRequest()
 				return
 			}
 			threshold, current, ttl := a[0].Integer(), a[1].Integer(), a[2].Integer()
@@ -177,7 +177,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 			if current > threshold {
 				// 命中触发的第一条规则（按 collectMatchedRules 顺序，global 优先）
 				ctx.SetUserAttribute("token_ratelimit_status", "limited")
-				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+				_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 				rejected(cfg, LimitContext{
 					count:     threshold,
 					remaining: 0,
@@ -191,7 +191,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 			}
 		}
 
-		proxywasm.ResumeHttpRequest()
+		_ = proxywasm.ResumeHttpRequest()
 	})
 
 	if err != nil {
