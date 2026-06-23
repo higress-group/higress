@@ -16,13 +16,13 @@ package istio
 
 import (
 	"fmt"
-	"github.com/alibaba/higress/v2/pkg/config/constants"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gateway "sigs.k8s.io/gateway-api/apis/v1beta1"
 
+	"github.com/alibaba/higress/v2/pkg/config/constants"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/kclient/clienttest"
 	"istio.io/istio/pkg/test"
@@ -30,6 +30,7 @@ import (
 )
 
 func TestClassController(t *testing.T) {
+	setGatewayClassNameForTest(t, "")
 	client := kube.NewFakeClient()
 	cc := NewClassController(client)
 	classes := clienttest.Wrap(t, cc.classes)
@@ -90,4 +91,71 @@ func TestClassController(t *testing.T) {
 	expectClass("something-else", "different-controller")
 	deleteClass("something-else")
 	expectClass("something-else", "")
+}
+
+func TestClassControllerWithCustomGatewayClass(t *testing.T) {
+	if runInGatewayClassSubprocess(t) {
+		return
+	}
+	gatewayClass := "higress-internal"
+	setGatewayClassNameForTest(t, gatewayClass)
+	client := kube.NewFakeClient()
+	controllerName := string(gateway.GatewayController(constants.ManagedGatewayController + "-" + gatewayClass))
+	cc := NewClassController(client)
+	classes := clienttest.Wrap(t, cc.classes)
+	stop := test.NewStop(t)
+	client.RunAndWait(stop)
+	go cc.Run(stop)
+
+	expectClass := func(name, controller string) {
+		t.Helper()
+		retry.UntilSuccessOrFail(t, func() error {
+			gc := classes.Get(name, "")
+			if controller == "" {
+				if gc == nil {
+					return nil
+				}
+				return fmt.Errorf("expected no class, got %v", gc.Spec.ControllerName)
+			}
+			if gc == nil {
+				return fmt.Errorf("expected class %v, got none", controller)
+			}
+			if gateway.GatewayController(controller) != gc.Spec.ControllerName {
+				return fmt.Errorf("expected class %v, got %v", controller, gc.Spec.ControllerName)
+			}
+			return nil
+		}, retry.Timeout(time.Second*3))
+	}
+
+	expectClass(gatewayClass, controllerName)
+	expectClass(constants.DefaultGatewayClass, "")
+}
+
+func TestSetGatewayClassName(t *testing.T) {
+	if runInGatewayClassSubprocess(t) {
+		return
+	}
+	SetGatewayClassName("")
+	if gatewayClassName != gateway.ObjectName(constants.DefaultGatewayClass) {
+		t.Fatalf("expected default gateway class %q, got %q", constants.DefaultGatewayClass, gatewayClassName)
+	}
+	if managedGatewayController != gateway.GatewayController(constants.ManagedGatewayController) {
+		t.Fatalf("expected default controller %q, got %q", constants.ManagedGatewayController, managedGatewayController)
+	}
+
+	customClass := "higress-internal"
+	SetGatewayClassName(customClass)
+	customController := gateway.GatewayController(constants.ManagedGatewayController + "-" + customClass)
+	if gatewayClassName != gateway.ObjectName(customClass) {
+		t.Fatalf("expected custom gateway class %q, got %q", customClass, gatewayClassName)
+	}
+	if managedGatewayController != customController {
+		t.Fatalf("expected custom controller %q, got %q", customController, managedGatewayController)
+	}
+	if got := builtinClasses[gateway.ObjectName(customClass)]; got != customController {
+		t.Fatalf("expected builtin class controller %q, got %q", customController, got)
+	}
+	if _, exists := builtinClasses[gateway.ObjectName(constants.DefaultGatewayClass)]; exists {
+		t.Fatalf("custom config should not include default gateway class %q", constants.DefaultGatewayClass)
+	}
 }

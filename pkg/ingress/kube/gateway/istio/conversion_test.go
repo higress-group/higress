@@ -601,9 +601,8 @@ func init() {
 	features.EnableAlphaGatewayAPI = true
 	features.EnableAmbientWaypoints = true
 	features.EnableAmbientMultiNetwork = true
-	// Recompute with ambient enabled
-	classInfos = getClassInfos()
-	builtinClasses = getBuiltinClasses()
+	// Recompute with the desired feature flags.
+	SetGatewayClassName("")
 }
 
 type TestStatusQueue struct {
