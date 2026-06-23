@@ -677,8 +677,9 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			host.CompleteHttp()
 		})
 
-		// 多规则未触发，剩余比例不同 → LimitContext 取 tightest（剩余比例最小）
-		t.Run("multi-rule no trigger takes tightest", func(t *testing.T) {
+		// 多规则未触发：ai-token-ratelimit 不对外暴露 tightest 选择（无 X-RateLimit-* 头），
+		// 此处仅验证不触发拒绝；tightest 行为由 cluster-key-ratelimit 的测试覆盖。
+		t.Run("multi-rule no trigger does not reject", func(t *testing.T) {
 			host, status := test.NewTestHost(hybridLimitConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)

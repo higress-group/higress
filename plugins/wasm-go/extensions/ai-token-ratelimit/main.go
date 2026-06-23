@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -90,7 +91,6 @@ const (
 	`
 
 	LimitRedisContextKey = "LimitRedisContext"
-	LimitContextKey     = "LimitContext"
 
 	CookieHeader = "cookie"
 
@@ -159,11 +159,13 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 			return
 		}
 
-		// 单次遍历：触发即 return；未触发则持续找 tightest
-		tightestIdx := 0
-		tightestRatio := float64(arr[0].Array()[0].Integer()-arr[0].Array()[1].Integer()) / float64(arr[0].Array()[0].Integer())
+		// 单次遍历：触发即 return；未触发则放行。
+		// ai-token-ratelimit 不对外暴露 LimitContext（与 cluster-key-ratelimit 不同，
+		// 后者通过 X-RateLimit-* 头可观测 tightest 选择），因此此处不再写入 Context。
+		// tightestRatio 用 math.MaxFloat64 初始化，避免依赖 arr[0] 形状（防 0/0 NaN）。
+		tightestRatio := math.MaxFloat64
 
-		for i, sub := range arr {
+		for _, sub := range arr {
 			a := sub.Array()
 			if len(a) != 3 {
 				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(a))
@@ -185,19 +187,9 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 			}
 
 			if ratio := float64(threshold-current) / float64(threshold); ratio < tightestRatio {
-				tightestIdx = i
 				tightestRatio = ratio
 			}
 		}
-
-		// 未触发：写入 tightest 规则到 LimitContext（仅用于潜在的诊断/未来扩展）
-		tightSub := arr[tightestIdx].Array()
-		tightThreshold, tightCurrent, tightTtl := tightSub[0].Integer(), tightSub[1].Integer(), tightSub[2].Integer()
-		ctx.SetContext(LimitContextKey, LimitContext{
-			count:     tightThreshold,
-			remaining: tightThreshold - tightCurrent,
-			reset:     tightTtl,
-		})
 
 		proxywasm.ResumeHttpRequest()
 	})
