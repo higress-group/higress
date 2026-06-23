@@ -5,15 +5,26 @@ description: Configuration reference for the Key-based cluster rate limiting plu
 
 ---
 
+> ⚠️ **Behavior Change Notice (no version bump)**
+>
+> As of this update, `rule_items` matching semantics changed from **first-match-wins** (returns on first hit) to **all-match OR overlay** (all matched rules are evaluated, any trigger rejects). The mutual exclusion between `global_threshold` and `rule_items` is also removed to support hybrid configuration.
+>
+> - Existing config (single `rule_items` or only `global_threshold`): behavior unchanged
+> - Existing config (multiple `rule_items` expecting short-circuit match): **behavior will change** — all matched rules are evaluated
+> - Redis key format adds `{rule_name}` hash tag for Redis Cluster compatibility; old counter data is incompatible
+>
+> See "Function Description" and "Configuration Examples" below for details.
+
 ## Function Description
 
 The `cluster-key-rate-limit` plugin implements **cluster-level rate limiting** based on Redis, suitable for scenarios
 requiring **globally consistent rate limiting across multiple Higress Gateway instances**.
 
-It supports two rate limiting modes:
+It supports three rate limiting modes:
 
 - **Rule-Level Global Rate Limiting**: Applies a unified rate limit threshold to custom rule groups based on identical `rule_name` and `global_threshold` configurations.
 - **Key-Level Dynamic Rate Limiting**: Groups and limits requests by dynamic keys extracted from requests, such as URL parameters, request headers, client IPs, consumer names, or cookie fields.
+- **Hybrid rate limiting**: Configure `global_threshold` (global fallback) and `rule_items` (per-dimension) simultaneously. All matched rules take effect together; any trigger rejects the request.
 
 ## Operational Attributes
 
@@ -25,8 +36,8 @@ It supports two rate limiting modes:
 | Configuration Item       | Type          | Required                                  | Default Value       | Description                                                                |  
 |--------------------------|---------------|-------------------------------------------|---------------------|----------------------------------------------------------------------------|  
 | rule_name                | string        | Yes                                       | -                   | Name of the rate limiting rule. Used to construct the Redis key in the format: `rule_name:rate_limit_type:key_name:key_value`. |  
-| global_threshold         | Object        | No (choose either `global_threshold` or `rule_items`) | -                 | Apply rate limiting to the entire custom rule group.|  
-| rule_items               | array of object | No (choose either `global_threshold` or `rule_items`) | -               | Rate limiting rule items. Rules are matched in the order of the array; once the first matching rule is hit, subsequent rules are ignored. |  
+| global_threshold         | Object        | No, at least one of them is required; can be configured simultaneously | -                 | Apply rate limiting to the entire custom rule group.|  
+| rule_items               | array of object | No, at least one of them is required; can be configured simultaneously | -               | Rate limiting rule items. Supports up to **10** rules. All matched `rule_item`s are evaluated and combined with an OR relationship; any trigger rejects the request. The execution order of rules does not affect the final result. See the expanded `rule_items` notes below for details. |  
 | show_limit_quota_header  | bool          | No                                        | false             | Whether to display `X-RateLimit-Limit` (total allowed requests) and `X-RateLimit-Remaining` (remaining allowed requests) in the response header. |  
 | rejected_code            | int           | No                                        | 429               | HTTP status code returned when a request is rate-limited.                  |  
 | rejected_msg             | string        | No                                        | Too many requests | Response body returned when a request is rate-limited.                      |  
@@ -55,6 +66,56 @@ It supports two rate limiting modes:
 | limit_by_per_cookie           | string        | No (choose one of `limit_by_*` fields) | -           | Matches specific Cookies by rule and calculates rate limits for each Cookie value. Supports regular expressions (starting with `regexp:`) or `*` for the `limit_keys` configuration. |  
 | limit_by_per_ip               | string        | No (choose one of `limit_by_*` fields) | -           | Matches specific IPs by rule and calculates rate limits for each IP. The IP can be extracted from a request header (formatted as `from-header-<header_name>`, e.g., `from-header-x-forwarded-for`) or directly from the peer socket IP (configured as `from-remote-addr`). |  
 | limit_keys                    | array of object | Yes                               | -           | Configures the rate limits for matched key values.                          |  
+
+#### `rule_items` Multi-Rule Matching Semantics
+
+`rule_items` is an array. **All** `rule_item`s whose match conditions are satisfied are evaluated, and the rules are combined with an OR relationship: **any trigger rejects the request**. The execution order of rules does not affect the final result.
+
+> The `rule_items` array supports up to **10** rules. Each `rule_item` produces independent Redis counters for each matched `limit_keys`.
+
+##### Multi-Value Matching on the Same Dimension (merge into a single rule_item)
+
+Multiple matched values under the same `limit_by_*` + key (e.g., multiple apikeys) should be placed into the `limit_keys` array of a **single** `rule_item`, not split into multiple `rule_item`s:
+
+❌ Wrong (3 rule_items, wastes quota):
+```yaml
+rule_items:
+  - { limit_by_param: apikey, limit_keys: [{key: k1, query_per_minute: 100}] }
+  - { limit_by_param: apikey, limit_keys: [{key: k2, query_per_minute: 200}] }
+  - { limit_by_param: apikey, limit_keys: [{key: k3, query_per_minute: 300}] }
+```
+
+✅ Correct (1 rule_item):
+```yaml
+rule_items:
+  - limit_by_param: apikey
+    limit_keys:
+      - { key: k1, query_per_minute: 100 }
+      - { key: k2, query_per_minute: 200 }
+      - { key: k3, query_per_minute: 300 }
+```
+
+##### Multi-Window Rate Limiting (legal "duplicates")
+
+Two `rule_items` with the same `limit_by_*` + key but **different time windows** are a legal configuration. They produce two independent Redis counters to enforce layered "per-minute + per-hour" rate limiting (an informational warn is emitted during parsing and can be ignored):
+
+```yaml
+rule_items:
+  - limit_by_param: apikey
+    limit_keys: [{key: k1, query_per_minute: 100}]
+  - limit_by_param: apikey
+    limit_keys: [{key: k1, query_per_hour: 1000}]   # same type+key, different window
+```
+
+##### Completely Identical Duplicates (should be avoided)
+
+A complete duplicate with the same type + key + time window causes multiple evaluations against the same Redis key. This is redundant configuration and should be merged into a single rule.
+
+##### X-RateLimit-* headers in multi-rule scenarios
+
+When multiple rules are matched and none trigger (with `show_limit_quota_header: true`):
+- `X-RateLimit-Limit` / `X-RateLimit-Remaining`: from the matched rule with the smallest remaining ratio (tightest constraint)
+- `X-RateLimit-Reset` (returned when triggered): from the first triggered rule (in `rule_items` array order, global first)  
 
 ### Configuration Fields for `limit_keys`
 
