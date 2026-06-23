@@ -747,3 +747,71 @@ func TestParseGlobalConfig_ConsumerGroup_OK(t *testing.T) {
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 	})
 }
+
+// group 与 consumer name 冲突
+var conflictingGroupConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{"name": "alice", "credential": "token1", "group": "team-a"},
+			{"name": "team-a", "credential": "token2"}, // name 与上面的 group 冲突
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"global_auth": true,
+	})
+	return data
+}()
+
+func TestParseGlobalConfig_GroupNameConflict(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(conflictingGroupConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusFailed, status)
+	})
+}
+
+// 同一 group 多个 consumer 是合法的（仅校验与 name 集合的交集）
+var sharedGroupConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{"name": "alice", "credential": "token1", "group": "team-a"},
+			{"name": "bob", "credential": "token2", "group": "team-a"},
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"global_auth": true,
+	})
+	return data
+}()
+
+func TestParseGlobalConfig_SharedGroupAllowed(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(sharedGroupConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+	})
+}
+
+// 多对 group/name 同时冲突：启动失败（spec §10.1 "不允许部分通过"）
+var multipleGroupConflictsConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{"name": "alice", "credential": "token1", "group": "team-a"},
+			{"name": "bob", "credential": "token2", "group": "team-b"},
+			{"name": "team-a", "credential": "token3"}, // 与 alice.group 冲突
+			{"name": "team-b", "credential": "token4"}, // 与 bob.group 冲突
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"global_auth": true,
+	})
+	return data
+}()
+
+func TestParseGlobalConfig_MultipleGroupConflicts(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(multipleGroupConflictsConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusFailed, status)
+	})
+}
