@@ -132,6 +132,35 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			host.CompleteHttp()
 		})
 
+		// 测试聊天完成模式配额耗尽（legacy Phase 1 路径，group == ""）
+		// 锁定 403→429 / noquota→consumer_exhausted 破坏性变更（spec §8.1）
+		t.Run("chat completion mode denied", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 不带 x-mse-consumer-group header，走 legacy 路径
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"x-mse-consumer", "consumer1"},
+			})
+
+			// legacy 路径同样 HeaderStopAllIterationAndWatermark
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			// 模拟 Redis 返回 0，触发 response.Integer() <= 0 拒绝分支
+			resp := test.CreateRedisResp(0)
+			host.CallOnRedisCall(0, resp)
+
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			require.Equal(t, uint32(http.StatusTooManyRequests), response.StatusCode)
+			require.Contains(t, string(response.Data), "ai-quota.consumer_exhausted")
+			host.CompleteHttp()
+		})
+
 		// 测试管理员查询模式的请求头处理
 		t.Run("admin query mode", func(t *testing.T) {
 			host, status := test.NewTestHost(basicConfig)
