@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -166,13 +168,40 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "Conflict_GlobalThresholdAndRuleItems",
+			name: "Both_ShouldSucceed",
 			json: `{
-				"rule_name": "test-conflict",
+				"rule_name": "test-both",
 				"global_threshold": {"token_per_second": 100},
-				"rule_items": [{"limit_by_header": "x-test"}]
+				"rule_items": [
+					{
+						"limit_by_header": "x-test",
+						"limit_keys": [{"key": "k1", "token_per_minute": 10}]
+					}
+				]
 			}`,
-			expectedErr: errors.New("'global_threshold' and 'rule_items' cannot be set at the same time"),
+			expected: AiTokenRateLimitConfig{
+				RuleName: "test-both",
+				GlobalThreshold: &GlobalThreshold{
+					Count:      100,
+					TimeWindow: Second,
+				},
+				RuleItems: []LimitRuleItem{
+					{
+						LimitType: LimitByHeaderType,
+						Key:       "x-test",
+						ConfigItems: []LimitConfigItem{
+							{
+								ConfigType: ExactType,
+								Key:        "k1",
+								Count:      10,
+								TimeWindow: SecondsPerMinute,
+							},
+						},
+					},
+				},
+				RejectedCode: DefaultRejectedCode,
+				RejectedMsg:  DefaultRejectedMsg,
+			},
 		},
 		{
 			name: "Missing_GlobalThresholdAndRuleItems",
@@ -199,6 +228,90 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 				RejectedMsg:  "Forbidden",
 			},
 		},
+		{
+			name: "DuplicateRules_DiffWindow",
+			json: `{
+				"rule_name": "dup-diff-window",
+				"rule_items": [
+					{
+						"limit_by_header": "x-api-key",
+						"limit_keys": [{"key": "k1", "token_per_minute": 100}]
+					},
+					{
+						"limit_by_header": "x-api-key",
+						"limit_keys": [{"key": "k1", "token_per_hour": 1000}]
+					}
+				]
+			}`,
+			expected: AiTokenRateLimitConfig{
+				RuleName: "dup-diff-window",
+				RuleItems: []LimitRuleItem{
+					{
+						LimitType: LimitByHeaderType,
+						Key:       "x-api-key",
+						ConfigItems: []LimitConfigItem{
+							{ConfigType: ExactType, Key: "k1", Count: 100, TimeWindow: SecondsPerMinute},
+						},
+					},
+					{
+						LimitType: LimitByHeaderType,
+						Key:       "x-api-key",
+						ConfigItems: []LimitConfigItem{
+							{ConfigType: ExactType, Key: "k1", Count: 1000, TimeWindow: SecondsPerHour},
+						},
+					},
+				},
+				RejectedCode: DefaultRejectedCode,
+				RejectedMsg:  DefaultRejectedMsg,
+			},
+		},
+		{
+			name: "DuplicateRules_SameWindow",
+			json: `{
+				"rule_name": "dup-same-window",
+				"rule_items": [
+					{
+						"limit_by_header": "x-api-key",
+						"limit_keys": [{"key": "k1", "token_per_minute": 100}]
+					},
+					{
+						"limit_by_header": "x-api-key",
+						"limit_keys": [{"key": "k1", "token_per_minute": 100}]
+					}
+				]
+			}`,
+			expected: AiTokenRateLimitConfig{
+				RuleName: "dup-same-window",
+				RuleItems: []LimitRuleItem{
+					{
+						LimitType: LimitByHeaderType,
+						Key:       "x-api-key",
+						ConfigItems: []LimitConfigItem{
+							{ConfigType: ExactType, Key: "k1", Count: 100, TimeWindow: SecondsPerMinute},
+						},
+					},
+					{
+						LimitType: LimitByHeaderType,
+						Key:       "x-api-key",
+						ConfigItems: []LimitConfigItem{
+							{ConfigType: ExactType, Key: "k1", Count: 100, TimeWindow: SecondsPerMinute},
+						},
+					},
+				},
+				RejectedCode: DefaultRejectedCode,
+				RejectedMsg:  DefaultRejectedMsg,
+			},
+		},
+		{
+			name: "LimitByType_AtLeastOne_Error",
+			json: `{
+				"rule_name": "no-limit-by",
+				"rule_items": [
+					{"limit_keys": [{"key": "k", "token_per_second": 1}]}
+				]
+			}`,
+			expectedErr: errors.New("failed to parse rule_item in rule_items: at least one of 'limit_by_header', 'limit_by_param', 'limit_by_consumer', 'limit_by_cookie', 'limit_by_per_header', 'limit_by_per_param', 'limit_by_per_consumer', 'limit_by_per_cookie', 'limit_by_per_ip' must be set"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -212,6 +325,35 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expected, config)
+			}
+		})
+	}
+}
+
+func TestParseAiTokenRateLimitConfig_RuleItemsLimit(t *testing.T) {
+	tests := []struct {
+		name      string
+		itemCnt   int
+		expectErr string
+	}{
+		{"Exactly10", 10, ""},
+		{"Over10", 11, "rule_items length 11 exceeds maximum 10"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			items := make([]string, 0, tt.itemCnt)
+			for i := 0; i < tt.itemCnt; i++ {
+				items = append(items,
+					fmt.Sprintf(`{"limit_by_header":"h%d","limit_keys":[{"key":"k","token_per_second":1}]}`, i+1))
+			}
+			jsonStr := fmt.Sprintf(`{"rule_name":"t","rule_items":[%s]}`, strings.Join(items, ","))
+			var config AiTokenRateLimitConfig
+			err := ParseAiTokenRateLimitConfig(gjson.Parse(jsonStr), &config)
+			if tt.expectErr == "" {
+				assert.NoError(t, err)
+				assert.Len(t, config.RuleItems, tt.itemCnt)
+			} else {
+				assert.EqualError(t, err, tt.expectErr)
 			}
 		})
 	}
