@@ -726,3 +726,24 @@ func TestOnHTTPRequestHeaders(t *testing.T) {
 		})
 	})
 }
+
+// group 字段解析成功
+var consumerWithGroupConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{"name": "consumer1", "credential": "token1", "group": "team-a"},
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"global_auth": true,
+	})
+	return data
+}()
+
+func TestParseGlobalConfig_ConsumerGroup_OK(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(consumerWithGroupConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+	})
+}

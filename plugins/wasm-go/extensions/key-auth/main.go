@@ -62,6 +62,13 @@ type Consumer struct {
 	// @Description en-US The credentials of the consumer. Cannot be configured together with credential.
 	// @Scope GLOBAL
 	Credentials []string `yaml:"credentials"`
+
+	// @Title 所属分组
+	// @Title en-US Consumer Group
+	// @Description 该调用方所属的分组，可用于 ai-quota 等下游插件按组聚合。
+	// @Description en-US The group this consumer belongs to. Downstream plugins such as ai-quota can aggregate by group.
+	// @Scope GLOBAL
+	Group string `yaml:"group,omitempty"`
 }
 
 // @Name key-auth
@@ -232,6 +239,10 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 			consumer.Credential = credential.String()
 		} else {
 			consumer.Credentials = consumerCredentials
+		}
+		// 解析 group 字段（不校验格式——与 name 一致；G∩N 校验在 Task 2）
+		if groupResult := item.Get("group"); groupResult.Exists() {
+			consumer.Group = groupResult.String()
 		}
 
 		global.consumers = append(global.consumers, consumer)
