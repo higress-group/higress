@@ -400,3 +400,106 @@ func TestLuaScripts_Defined(t *testing.T) {
 	require.Contains(t, RequestPhaseQuotaReadScript, "GET")
 	require.Contains(t, ResponsePhaseQuotaDecrbyScript, "DECRBY")
 }
+
+// chat completion 模式 + group 非空 + 两池都 > 0 → ActionContinue
+func TestOnHttpRequestHeaders_WithGroup_BothPositive(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+			{"x-mse-consumer", "alice"},
+			{"x-mse-consumer-group", "team-a"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		// Lua Eval 返回 {group_remaining, consumer_remaining}
+		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{1000, 500}))
+
+		action = host.GetHttpStreamAction()
+		require.Equal(t, types.ActionContinue, action)
+		host.CompleteHttp()
+	})
+}
+
+// group 非空 + group ≤ 0 → 拒绝（ai-quota.group_exhausted）
+func TestOnHttpRequestHeaders_WithGroup_GroupExhausted(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+			{"x-mse-consumer", "alice"},
+			{"x-mse-consumer-group", "team-a"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{0, 500}))
+
+		resp := host.GetLocalResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, uint32(http.StatusTooManyRequests), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.group_exhausted")
+		host.CompleteHttp()
+	})
+}
+
+// group 非空 + consumer ≤ 0 → 拒绝（ai-quota.consumer_exhausted）
+func TestOnHttpRequestHeaders_WithGroup_ConsumerExhausted(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+			{"x-mse-consumer", "alice"},
+			{"x-mse-consumer-group", "team-a"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{1000, 0}))
+
+		resp := host.GetLocalResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, uint32(http.StatusTooManyRequests), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.consumer_exhausted")
+		host.CompleteHttp()
+	})
+}
+
+// group 非空 + 两池都 ≤ 0 → 拒绝（ai-quota.both_exhausted）
+func TestOnHttpRequestHeaders_WithGroup_BothExhausted(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+			{"x-mse-consumer", "alice"},
+			{"x-mse-consumer-group", "team-a"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{0, 0}))
+
+		resp := host.GetLocalResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, uint32(http.StatusTooManyRequests), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.both_exhausted")
+		host.CompleteHttp()
+	})
+}
