@@ -336,9 +336,25 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 	inputToken := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
 	outputToken := ctx.GetContext(tokenusage.CtxKeyOutputToken).(int64)
 	consumer := ctx.GetContext("consumer").(string)
+	group, _ := ctx.GetContext("group").(string)
 	totalToken := int(inputToken + outputToken)
-	log.Debugf("update consumer:%s, totalToken:%d", consumer, totalToken)
-	config.redisClient.DecrBy(config.RedisKeyPrefix+consumer, totalToken, nil)
+
+	// 按 group 是否非空走两条路径：
+	// - group == ""：走老 ai-quota 路径（单 DECRBY），字节级一致
+	// - group != ""：走 Lua Eval，原子双 key DECRBY
+	consumerKey := config.RedisKeyPrefix + consumer
+	if group == "" {
+		log.Debugf("update consumer:%s, totalToken:%d", consumer, totalToken)
+		config.redisClient.DecrBy(consumerKey, totalToken, nil)
+		return data
+	}
+
+	// 新路径——Lua Eval，原子双池 DECRBY（§5.3.2）
+	groupKey := config.RedisKeyPrefix + group
+	keys := []interface{}{groupKey, consumerKey}
+	args := []interface{}{totalToken}
+	log.Debugf("phase2 decrby consumer:%s group:%s cost:%d", consumer, group, totalToken)
+	_ = config.redisClient.Eval(ResponsePhaseQuotaDecrbyScript, 2, keys, args, nil)
 	return data
 }
 

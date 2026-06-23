@@ -503,3 +503,32 @@ func TestOnHttpRequestHeaders_WithGroup_BothExhausted(t *testing.T) {
 		host.CompleteHttp()
 	})
 }
+
+// 阶段 2 group 非空 → Eval 调用 group + consumer 双池 DECRBY
+func TestOnHttpStreamingResponseBody_WithGroup_DecrbyBothPools(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+			{"x-mse-consumer", "alice"},
+			{"x-mse-consumer-group", "team-a"},
+		})
+		// 阶段 1 跑通
+		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{1000, 500}))
+
+		// 流式 chunk 携带 usage，触发 tokenusage 提取（必需，否则 onHttpStreamingResponseBody 早返回）
+		data := []byte(`{"choices": [{"delta": {"content": "Hello"}}], "usage": {"prompt_tokens": 15, "completion_tokens": 15, "total_tokens": 30}}`)
+		host.CallOnHttpStreamingResponseBody(data, false)
+		host.CallOnHttpStreamingResponseBody(data, true)
+
+		// 阶段 2 跑 Eval，模拟成功（status=0 与现有测试一致）
+		resp := test.CreateRedisRespArray([]interface{}{970, 470})
+		host.CallOnRedisCall(0, resp)
+		host.CompleteHttp()
+	})
+}
