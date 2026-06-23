@@ -400,13 +400,26 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 		values[k] = v[0]
 	}
 	queryConsumer := values["consumer"]
+	queryGroup := values["group"]
 	quota, err := strconv.Atoi(values["quota"])
-	if queryConsumer == "" || err != nil {
-		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check. consumer can't be empty and quota must be integer.")
+
+	// 互斥校验（GC6）
+	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
+		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: exactly one of 'consumer' or 'group' must be set")
 		return types.ActionContinue
 	}
-	err2 := config.redisClient.Set(config.RedisKeyPrefix+queryConsumer, quota, func(response resp.Value) {
-		log.Debugf("Redis set key = %s quota = %d", config.RedisKeyPrefix+queryConsumer, quota)
+	if err != nil {
+		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: quota must be an integer")
+		return types.ActionContinue
+	}
+
+	subject := queryConsumer
+	if queryGroup != "" {
+		subject = queryGroup
+	}
+
+	err2 := config.redisClient.Set(config.RedisKeyPrefix+subject, quota, func(response resp.Value) {
+		log.Debugf("Redis set key = %s quota = %d", config.RedisKeyPrefix+subject, quota)
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 			return
@@ -415,7 +428,7 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 	})
 
 	if err2 != nil {
-		util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
+		util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err2))
 		return types.ActionContinue
 	}
 
@@ -434,12 +447,17 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	for k, v := range queryValues {
 		values[k] = v[0]
 	}
-	if values["consumer"] == "" {
-		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check. consumer can't be empty.")
+	queryConsumer := values["consumer"]
+	queryGroup := values["group"]
+	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
+		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: exactly one of 'consumer' or 'group' must be set")
 		return types.ActionContinue
 	}
-	queryConsumer := values["consumer"]
-	err := config.redisClient.Get(config.RedisKeyPrefix+queryConsumer, func(response resp.Value) {
+	subject := queryConsumer
+	if queryGroup != "" {
+		subject = queryGroup
+	}
+	err := config.redisClient.Get(config.RedisKeyPrefix+subject, func(response resp.Value) {
 		quota := 0
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
@@ -450,11 +468,11 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 			quota = response.Integer()
 		}
 		result := struct {
-			Consumer string `json:"consumer"`
-			Quota    int    `json:"quota"`
+			Name  string `json:"name"`
+			Quota int    `json:"quota"`
 		}{
-			Consumer: queryConsumer,
-			Quota:    quota,
+			Name:  subject,
+			Quota: quota,
 		}
 		body, _ := json.Marshal(result)
 		util.SendResponse(http.StatusOK, "ai-quota.queryquota", "application/json", string(body))
@@ -479,15 +497,25 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 		values[k] = v[0]
 	}
 	queryConsumer := values["consumer"]
+	queryGroup := values["group"]
 	value, err := strconv.Atoi(values["value"])
-	if queryConsumer == "" || err != nil {
-		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check. consumer can't be empty and value must be integer.")
+	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
+		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: exactly one of 'consumer' or 'group' must be set")
+		return types.ActionContinue
+	}
+	if err != nil {
+		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: value must be an integer")
 		return types.ActionContinue
 	}
 
+	subject := queryConsumer
+	if queryGroup != "" {
+		subject = queryGroup
+	}
+
 	if value >= 0 {
-		err := config.redisClient.IncrBy(config.RedisKeyPrefix+queryConsumer, value, func(response resp.Value) {
-			log.Debugf("Redis Incr key = %s value = %d", config.RedisKeyPrefix+queryConsumer, value)
+		err := config.redisClient.IncrBy(config.RedisKeyPrefix+subject, value, func(response resp.Value) {
+			log.Debugf("Redis Incr key = %s value = %d", config.RedisKeyPrefix+subject, value)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
@@ -499,8 +527,8 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 			return types.ActionContinue
 		}
 	} else {
-		err := config.redisClient.DecrBy(config.RedisKeyPrefix+queryConsumer, 0-value, func(response resp.Value) {
-			log.Debugf("Redis Decr key = %s value = %d", config.RedisKeyPrefix+queryConsumer, 0-value)
+		err := config.redisClient.DecrBy(config.RedisKeyPrefix+subject, 0-value, func(response resp.Value) {
+			log.Debugf("Redis Decr key = %s value = %d", config.RedisKeyPrefix+subject, 0-value)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
