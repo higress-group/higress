@@ -392,3 +392,11 @@ func TestGetOperationMode(t *testing.T) {
 		})
 	}
 }
+
+// 验证两个 Lua 脚本常量存在且内容非空（编译期通过即可，运行时验证在后续 Task 中做）
+func TestLuaScripts_Defined(t *testing.T) {
+	require.NotEmpty(t, RequestPhaseQuotaReadScript)
+	require.NotEmpty(t, ResponsePhaseQuotaDecrbyScript)
+	require.Contains(t, RequestPhaseQuotaReadScript, "GET")
+	require.Contains(t, ResponsePhaseQuotaDecrbyScript, "DECRBY")
+}

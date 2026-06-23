@@ -22,6 +22,33 @@ import (
 
 const (
 	pluginName = "ai-quota"
+
+	// RequestPhaseQuotaReadScript 阶段 1 严格模式读（§5.3.1）
+	// **仅 group != "" 时调用**——group == "" 走 plugin 端 Get，与老 ai-quota 字节级一致。
+	// plugin Go 端用 `if group != ""` 决定走 Lua 还是非 Lua 路径，不引入显式 hasGroup 变量。
+	// 用 2 次 GET 而非 1 次 MGET：Lua 脚本在 Redis 单线程上原子执行，
+	// 脚本内两次 GET 与 MGET 等价但更可读。
+	// KEYS[1]=group_quota_key      KEYS[2]=consumer_quota_key
+	// ARGV=（无；脚本不读任何 ARGV）
+	// 返回: {group_remaining, consumer_remaining}
+	RequestPhaseQuotaReadScript = `
+local ng = tonumber(redis.call("GET", KEYS[1]) or "0")
+local nc = tonumber(redis.call("GET", KEYS[2]) or "0")
+return {ng, nc}
+`
+
+	// ResponsePhaseQuotaDecrbyScript 阶段 2 原子 DECRBY（§5.3.2）
+	// **仅 group != "" 时调用**——group == "" 走 plugin 端 DecrBy。
+	// 两把 key 都 DECRBY，原子执行避免双池扣减顺序竞争。
+	// KEYS[1]=group_quota_key      KEYS[2]=consumer_quota_key
+	// ARGV[1]=cost
+	// 返回: {group_remaining, consumer_remaining}（扣减后，可为负）
+	ResponsePhaseQuotaDecrbyScript = `
+local cost = tonumber(ARGV[1])
+local ng = redis.call("DECRBY", KEYS[1], cost)
+local nc = redis.call("DECRBY", KEYS[2], cost)
+return {ng, nc}
+`
 )
 
 type ChatMode string
