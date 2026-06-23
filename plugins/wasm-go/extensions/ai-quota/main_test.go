@@ -155,7 +155,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 
 			response := host.GetLocalResponse()
 			require.Equal(t, uint32(http.StatusOK), response.StatusCode)
-			require.Equal(t, "{\"consumer\":\"consumer1\",\"quota\":500}", string(response.Data))
+			require.Equal(t, "{\"name\":\"consumer1\",\"quota\":500}", string(response.Data))
 			host.CompleteHttp()
 		})
 
@@ -529,6 +529,112 @@ func TestOnHttpStreamingResponseBody_WithGroup_DecrbyBothPools(t *testing.T) {
 		// 阶段 2 跑 Eval，模拟成功（status=0 与现有测试一致）
 		resp := test.CreateRedisRespArray([]interface{}{970, 470})
 		host.CallOnRedisCall(0, resp)
+		host.CompleteHttp()
+	})
+}
+
+// admin refresh with group=<name> → 写入 chat_quota:<group>
+func TestAdminRefresh_Group(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions/quota/refresh"},
+			{":method", "POST"},
+			{"x-mse-consumer", "admin"},
+		})
+		body := "group=team-a&quota=10000"
+		action := host.CallOnHttpRequestBody([]byte(body))
+		require.Equal(t, types.ActionPause, action)
+
+		resp := test.CreateRedisRespArray([]interface{}{"OK"})
+		host.CallOnRedisCall(0, resp)
+
+		response := host.GetLocalResponse()
+		require.Equal(t, uint32(http.StatusOK), response.StatusCode)
+		require.Equal(t, "refresh quota successful", string(response.Data))
+		host.CompleteHttp()
+	})
+}
+
+// admin refresh 同时设置 consumer + group → 400 invalid_param（GC6）
+func TestAdminRefresh_BothConsumerAndGroup_Rejected(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions/quota/refresh"},
+			{":method", "POST"},
+			{"x-mse-consumer", "admin"},
+		})
+		body := "consumer=alice&group=team-a&quota=100"
+		host.CallOnHttpRequestBody([]byte(body))
+
+		resp := host.GetLocalResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, uint32(http.StatusBadRequest), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.invalid_param")
+		host.CompleteHttp()
+	})
+}
+
+// admin query with group → GET chat_quota:<group>，响应 JSON 中 name=group 名
+func TestAdminQuery_Group(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions/quota?group=team-a"},
+			{":method", "GET"},
+			{"x-mse-consumer", "admin"},
+		})
+		require.Equal(t, types.ActionPause, action)
+
+		// queryQuota 走 redisClient.Get，回调里调用 response.Integer() 解析单值。
+		// 必须用 CreateRedisResp(int) 产生 RESP integer reply；
+		// 若用 CreateRedisRespArray 会得到 RESP array，Integer() 返回 0 → 断言失败。
+		host.CallOnRedisCall(0, test.CreateRedisResp(2000))
+
+		response := host.GetLocalResponse()
+		require.Equal(t, uint32(http.StatusOK), response.StatusCode)
+		require.JSONEq(t, `{"name":"team-a","quota":2000}`, string(response.Data))
+		host.CompleteHttp()
+	})
+}
+
+// admin delta with group → INCRBY/DECRBY chat_quota:<group>
+func TestAdminDelta_Group(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions/quota/delta"},
+			{":method", "POST"},
+			{"x-mse-consumer", "admin"},
+		})
+		body := "group=team-a&value=500"
+		host.CallOnHttpRequestBody([]byte(body))
+
+		// deltaQuota 走 IncrBy/DecrBy，回调只检查 .Error() 不解析值，
+		// 用 CreateRedisResp(int) 产生标准 RESP integer reply 即可（与 Get 一致）。
+		resp := test.CreateRedisResp(2500)
+		host.CallOnRedisCall(0, resp)
+
+		response := host.GetLocalResponse()
+		require.Equal(t, uint32(http.StatusOK), response.StatusCode)
+		require.Equal(t, "delta quota successful", string(response.Data))
 		host.CompleteHttp()
 	})
 }
