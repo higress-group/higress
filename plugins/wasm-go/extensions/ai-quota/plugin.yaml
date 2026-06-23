@@ -47,8 +47,10 @@ spec:
     consumers:
       - credential: "Bearer credential1"
         name: consumer1
+        group: team-a
       - credential: "Bearer credential2"
         name: consumer2
+        group: team-a
       - credential: "Bearer credential3"
         name: consumer3
     global_auth: true
