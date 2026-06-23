@@ -142,7 +142,10 @@ type KeyAuthConfig struct {
 	// @Description en-US Consumers to be allowed for matched requests.
 	allow []string `yaml:"allow"`
 
-	credential2Name map[string]string `yaml:"-"`
+	// 字段类型: 之前是 map[string]string（credential → name），
+	// 改为 map[string]Consumer（credential → 完整 consumer）以便在 token 命中后
+	// 一次性拿到 Group 字段做 header 注入。
+	credential2Consumer map[string]Consumer `yaml:"-"`
 }
 
 func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) error {
@@ -150,7 +153,7 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 
 	// init
 	ruleSet = false
-	global.credential2Name = make(map[string]string)
+	global.credential2Consumer = make(map[string]Consumer)
 
 	// global_auth
 	globalAuth := json.Get("global_auth")
@@ -228,7 +231,7 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 		}
 
 		for _, credential := range consumerCredentials {
-			if _, ok := global.credential2Name[credential]; ok {
+			if _, ok := global.credential2Consumer[credential]; ok {
 				return errors.New("duplicate consumer credential: " + credential)
 			}
 		}
@@ -248,7 +251,7 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 
 		global.consumers = append(global.consumers, consumer)
 		for _, credential := range consumerCredentials {
-			global.credential2Name[credential] = name.String()
+			global.credential2Consumer[credential] = consumer
 		}
 	}
 
@@ -362,41 +365,44 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config KeyAuthConfig, log log
 	}
 
 	// 验证token
-	name, ok := config.credential2Name[tokens[0]]
+	consumer, ok := config.credential2Consumer[tokens[0]]
 	if !ok {
 		log.Warnf("credential %q is not configured", tokens[0])
 		return deniedUnauthorizedConsumer()
 	}
 
-	proxywasm.AddHttpRequestHeader("X-Mse-Consumer", name)
+	proxywasm.AddHttpRequestHeader("X-Mse-Consumer", consumer.Name)
+	if consumer.Group != "" {
+		proxywasm.AddHttpRequestHeader("X-Mse-Consumer-Group", consumer.Group)
+	}
 
 	// 全局生效：
 	// - global_auth == true 且 当前 domain/route 未配置该插件
 	// - global_auth 未设置 且 没有任何一个 domain/route 配置该插件
 	if (globalAuthSetTrue && noAllow) || (globalAuthNoSet && !ruleSet) {
-		log.Infof("consumer %q authenticated", name)
-		return authenticated(name)
+		log.Infof("consumer %q authenticated", consumer.Name)
+		return authenticated(consumer.Name)
 	}
 
 	// 全局生效，但当前 domain/route 配置了 allow 列表
 	if globalAuthSetTrue && !noAllow {
-		if !contains(config.allow, name) {
-			log.Warnf("consumer %q is not allowed", name)
+		if !contains(config.allow, consumer.Name) {
+			log.Warnf("consumer %q is not allowed", consumer.Name)
 			return deniedUnauthorizedConsumer()
 		}
-		log.Infof("consumer %q authenticated", name)
-		return authenticated(name)
+		log.Infof("consumer %q authenticated", consumer.Name)
+		return authenticated(consumer.Name)
 	}
 
 	// 非全局生效
 	if globalAuthSetFalse || (globalAuthNoSet && ruleSet) {
 		if !noAllow { // 配置了 allow 列表
-			if !contains(config.allow, name) {
-				log.Warnf("consumer %q is not allowed", name)
+			if !contains(config.allow, consumer.Name) {
+				log.Warnf("consumer %q is not allowed", consumer.Name)
 				return deniedUnauthorizedConsumer()
 			}
-			log.Infof("consumer %q authenticated", name)
-			return authenticated(name)
+			log.Infof("consumer %q authenticated", consumer.Name)
+			return authenticated(consumer.Name)
 		}
 	}
 
