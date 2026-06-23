@@ -16,11 +16,14 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/resp"
 )
 
 // 测试配置：全局限流配置
@@ -191,6 +194,58 @@ var regexpLimitConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：混合限流（global_threshold + rule_items 同时配置）
+var hybridLimitConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"rule_name": "ai-token-hybrid",
+		"global_threshold": map[string]interface{}{
+			"token_per_minute": 10000,
+		},
+		"rule_items": []map[string]interface{}{
+			{
+				"limit_by_header": "x-api-key",
+				"limit_keys": []map[string]interface{}{
+					{
+						"key":              "vip-key",
+						"token_per_minute": 100,
+					},
+				},
+			},
+		},
+		"redis": map[string]interface{}{
+			"service_name": "redis.static",
+			"service_port": 6379,
+		},
+	})
+	return data
+}()
+
+// 测试配置：多条 rule_items 同时命中
+var multiRuleItemsConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"rule_name": "ai-token-multi-items",
+		"rule_items": []map[string]interface{}{
+			{
+				"limit_by_header": "x-api-key",
+				"limit_keys": []map[string]interface{}{
+					{"key": "k1", "token_per_minute": 100},
+				},
+			},
+			{
+				"limit_by_param": "apikey",
+				"limit_keys": []map[string]interface{}{
+					{"key": "k2", "token_per_minute": 50},
+				},
+			},
+		},
+		"redis": map[string]interface{}{
+			"service_name": "redis.static",
+			"service_port": 6379,
+		},
+	})
+	return data
+}()
+
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		// 测试全局限流配置解析
@@ -291,8 +346,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
 			// 模拟 Redis 调用响应（允许请求）
-			// 返回 [threshold, current, ttl] 格式
-			resp := test.CreateRedisRespArray([]interface{}{1000, 1, 60})
+			// 返回 [[threshold, current, ttl]] 嵌套格式
+			resp := multiRuleResp([3]int{1000, 1, 60})
 			host.CallOnRedisCall(0, resp)
 
 			host.CompleteHttp()
@@ -316,7 +371,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
 			// 模拟 Redis 调用响应（允许请求）
-			resp := test.CreateRedisRespArray([]interface{}{100, 1, 60})
+			resp := multiRuleResp([3]int{100, 1, 60})
 			host.CallOnRedisCall(0, resp)
 
 			host.CompleteHttp()
@@ -339,7 +394,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
 			// 模拟 Redis 调用响应（允许请求）
-			resp := test.CreateRedisRespArray([]interface{}{50, 1, 60})
+			resp := multiRuleResp([3]int{50, 1, 60})
 			host.CallOnRedisCall(0, resp)
 
 			host.CompleteHttp()
@@ -363,7 +418,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
 			// 模拟 Redis 调用响应（允许请求）
-			resp := test.CreateRedisRespArray([]interface{}{200, 1, 60})
+			resp := multiRuleResp([3]int{200, 1, 60})
 			host.CallOnRedisCall(0, resp)
 
 			host.CompleteHttp()
@@ -387,7 +442,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
 			// 模拟 Redis 调用响应（允许请求）
-			resp := test.CreateRedisRespArray([]interface{}{75, 1, 60})
+			resp := multiRuleResp([3]int{75, 1, 60})
 			host.CallOnRedisCall(0, resp)
 
 			host.CompleteHttp()
@@ -410,8 +465,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
 			// 模拟 Redis 调用响应（触发限流）
-			// 返回 [threshold, current, ttl] 格式，current > threshold 表示触发限流
-			resp := test.CreateRedisRespArray([]interface{}{1000, 1001, 60})
+			// 返回 [[threshold, current, ttl]] 嵌套格式，current > threshold 表示触发限流
+			resp := multiRuleResp([3]int{1000, 1001, 60})
 			host.CallOnRedisCall(0, resp)
 
 			// 检查是否发送了限流响应
@@ -440,6 +495,212 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			// 应该返回 ActionContinue，因为没有匹配到限流规则
 			require.Equal(t, types.ActionContinue, action)
 		})
+
+		// 混合限流：global + rule_item 同时命中，返回 2-key Eval 响应
+		t.Run("hybrid limit both match", func(t *testing.T) {
+			host, status := test.NewTestHost(hybridLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+				{"x-api-key", "vip-key"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			resp := multiRuleResp(
+				[3]int{10000, 1, 60},
+				[3]int{100, 1, 60},
+			)
+			host.CallOnRedisCall(0, resp)
+
+			host.CompleteHttp()
+		})
+
+		// 多条 rule_items 同时命中
+		t.Run("multi rule_items all match", func(t *testing.T) {
+			host, status := test.NewTestHost(multiRuleItemsConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test?apikey=k2"},
+				{":method", "POST"},
+				{"x-api-key", "k1"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			resp := multiRuleResp(
+				[3]int{100, 1, 60},
+				[3]int{50, 1, 60},
+			)
+			host.CallOnRedisCall(0, resp)
+
+			host.CompleteHttp()
+		})
+
+		// 混合限流：global 触发（current > threshold），rule_item 未触发
+		t.Run("hybrid limit global triggered", func(t *testing.T) {
+			host, status := test.NewTestHost(hybridLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+				{"x-api-key", "vip-key"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			resp := multiRuleResp(
+				[3]int{10000, 10001, 60},
+				[3]int{100, 1, 60},
+			)
+			host.CallOnRedisCall(0, resp)
+
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.Equal(t, uint32(429), localResponse.StatusCode)
+
+			host.CompleteHttp()
+		})
+
+		// Redis 响应数组长度与规则数不匹配
+		t.Run("redis response length mismatch", func(t *testing.T) {
+			host, status := test.NewTestHost(hybridLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+				{"x-api-key", "vip-key"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			resp := multiRuleResp([3]int{10000, 1, 60})
+			host.CallOnRedisCall(0, resp)
+
+			require.Nil(t, host.GetLocalResponse())
+
+			host.CompleteHttp()
+		})
+
+		// Redis 子数组长度异常（少于 3）
+		t.Run("redis sub-array length mismatch", func(t *testing.T) {
+			host, status := test.NewTestHost(hybridLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+				{"x-api-key", "vip-key"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			badResp, err := resp.ArrayValue([]resp.Value{
+				resp.ArrayValue([]resp.Value{
+					resp.IntegerValue(10000),
+					resp.IntegerValue(1),
+				}),
+			}).MarshalRESP()
+			require.NoError(t, err)
+			host.CallOnRedisCall(0, badResp)
+
+			require.Nil(t, host.GetLocalResponse())
+
+			host.CompleteHttp()
+		})
+
+		// 混合配置：global 命中，rule_items 不命中（请求头不含 x-api-key）
+		t.Run("hybrid limit rule_items no match", func(t *testing.T) {
+			host, status := test.NewTestHost(hybridLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			resp := multiRuleResp([3]int{10000, 1, 60})
+			host.CallOnRedisCall(0, resp)
+
+			require.Nil(t, host.GetLocalResponse())
+
+			host.CompleteHttp()
+		})
+
+		// 多规则同时触发，验证 rejected 报告 global（reset=60 而非 rule_item 的 30）
+		t.Run("hybrid limit both triggered reports global first", func(t *testing.T) {
+			host, status := test.NewTestHost(hybridLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+				{"x-api-key", "vip-key"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			resp := multiRuleResp(
+				[3]int{10000, 10001, 60},
+				[3]int{100, 101, 30},
+			)
+			host.CallOnRedisCall(0, resp)
+
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.Equal(t, uint32(429), localResponse.StatusCode)
+
+			// LocalHttpResponse.Headers 类型为 [][2]string，按切片迭代查找目标头
+			var resetHeader string
+			for _, h := range localResponse.Headers {
+				if strings.EqualFold(h[0], RateLimitResetHeader) && h[1] != "" {
+					resetHeader = h[1]
+					break
+				}
+			}
+			require.Equal(t, "60", resetHeader, "应报告 global 规则的 reset 时间")
+
+			host.CompleteHttp()
+		})
+
+		// 多规则未触发，剩余比例不同 → LimitContext 取 tightest（剩余比例最小）
+		t.Run("multi-rule no trigger takes tightest", func(t *testing.T) {
+			host, status := test.NewTestHost(hybridLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+				{"x-api-key", "vip-key"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			resp := multiRuleResp(
+				[3]int{10000, 9000, 60},
+				[3]int{100, 10, 60},
+			)
+			host.CallOnRedisCall(0, resp)
+
+			require.Nil(t, host.GetLocalResponse())
+
+			host.CompleteHttp()
+		})
 	})
 }
 
@@ -459,7 +720,7 @@ func TestOnHttpStreamingBody(t *testing.T) {
 			})
 
 			// 模拟 Redis 调用响应
-			resp := test.CreateRedisRespArray([]interface{}{1000, 1, 60})
+			resp := multiRuleResp([3]int{1000, 1, 60})
 			host.CallOnRedisCall(0, resp)
 
 			// 处理流式响应体
@@ -499,7 +760,7 @@ func TestOnHttpStreamingBody(t *testing.T) {
 			})
 
 			// 模拟 Redis 调用响应
-			resp := test.CreateRedisRespArray([]interface{}{1000, 1, 60})
+			resp := multiRuleResp([3]int{1000, 1, 60})
 			host.CallOnRedisCall(0, resp)
 
 			// 处理流式响应体
@@ -510,6 +771,31 @@ func TestOnHttpStreamingBody(t *testing.T) {
 			result := host.GetRequestBody()
 			require.Equal(t, responseBody, result)
 			// 应该返回 ActionContinue
+			require.Equal(t, types.ActionContinue, action)
+
+			host.CompleteHttp()
+		})
+
+		// 多规则下响应阶段应触发 2-key INCRBY
+		t.Run("streaming body multi-rule incrby", func(t *testing.T) {
+			host, status := test.NewTestHost(hybridLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+				{"x-api-key", "vip-key"},
+			})
+			resp := multiRuleResp(
+				[3]int{10000, 1, 60},
+				[3]int{100, 1, 60},
+			)
+			host.CallOnRedisCall(0, resp)
+
+			body := []byte(`{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":10,"completion_tokens":15,"total_tokens":25}}`)
+			action := host.CallOnHttpStreamingRequestBody(body, true)
 			require.Equal(t, types.ActionContinue, action)
 
 			host.CompleteHttp()
@@ -537,7 +823,7 @@ func TestCompleteFlow(t *testing.T) {
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
 			// 2. 模拟 Redis 调用响应
-			resp := test.CreateRedisRespArray([]interface{}{100, 1, 60})
+			resp := multiRuleResp([3]int{100, 1, 60})
 			host.CallOnRedisCall(0, resp)
 
 			// 3. 处理流式响应体
@@ -554,4 +840,25 @@ func TestCompleteFlow(t *testing.T) {
 			host.CompleteHttp()
 		})
 	})
+}
+
+// multiRuleResp 构建多规则嵌套 Redis 响应（RESP wire format）。
+// test.CreateRedisRespArray 不支持嵌套数组，因此直接用 resp.Writer 构造。
+// 每个 [3]int 元组为 {threshold, current, ttl}。
+// 注意：不能使用 resp.Value.Bytes()——它返回的是显示用字符串，不是 RESP wire 格式。
+// 必须用 resp.Writer.WriteArray 或 Value.MarshalRESP() 输出真正的 RESP 字节流。
+func multiRuleResp(items ...[3]int) []byte {
+	values := make([]resp.Value, len(items))
+	for i, it := range items {
+		values[i] = resp.ArrayValue([]resp.Value{
+			resp.IntegerValue(it[0]),
+			resp.IntegerValue(it[1]),
+			resp.IntegerValue(it[2]),
+		})
+	}
+	b, err := resp.ArrayValue(values).MarshalRESP()
+	if err != nil {
+		panic(fmt.Sprintf("failed to marshal multiRuleResp: %v", err))
+	}
+	return b
 }

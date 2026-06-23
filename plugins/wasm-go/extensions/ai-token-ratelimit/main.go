@@ -45,57 +45,52 @@ func init() {
 
 const (
 	RedisKeyPrefix string = "higress-token-ratelimit"
-	// AiTokenGlobalRateLimitFormat  全局限流模式 redis key 为 RedisKeyPrefix:限流规则名称:global_threshold:时间窗口
-	AiTokenGlobalRateLimitFormat = RedisKeyPrefix + ":%s:global_threshold:%d"
-	// AiTokenRateLimitFormat 规则限流模式 redis key 为 RedisKeyPrefix:限流规则名称:限流类型:时间窗口:限流key名称:限流key对应的实际值
-	AiTokenRateLimitFormat        = RedisKeyPrefix + ":%s:%s:%d:%s:%s"
-	RequestPhaseFixedWindowScript = `
-		local current = redis.call('get', KEYS[1])
-		local ttl = redis.call('ttl', KEYS[1])
-		local threshold = tonumber(ARGV[1])
-		local window = tonumber(ARGV[2])
-	
-    	-- 键不存在时，返回初始状态（计数0，窗口时间为过期时间）
-		if not current then
-			return {threshold, 0, window}
+	// AiTokenGlobalRateLimitFormat  全局限流模式 redis key 为 RedisKeyPrefix:{限流规则名称}:global_threshold:时间窗口
+	// 使用 {rule_name} hash tag 让多规则多键操作在 Redis Cluster 下落到同一 slot
+	AiTokenGlobalRateLimitFormat = RedisKeyPrefix + ":{%s}:global_threshold:%d"
+	// AiTokenRateLimitFormat 规则限流模式 redis key 为 RedisKeyPrefix:{限流规则名称}:限流类型:时间窗口:限流key名称:限流key对应的实际值
+	AiTokenRateLimitFormat = RedisKeyPrefix + ":{%s}:%s:%d:%s:%s"
+	// MultiKeyRequestPhaseScript 多规则请求阶段只读检查脚本
+	// KEYS = [key1, ..., keyN]
+	// ARGV = [threshold1, window1, threshold2, window2, ..., thresholdN, windowN]
+	// 返回嵌套数组 {{threshold_i, current_i, ttl_i}, ...}
+	MultiKeyRequestPhaseScript = `
+		local results = {}
+		for i = 1, #KEYS do
+			local threshold = tonumber(ARGV[2*i - 1])
+			local window    = tonumber(ARGV[2*i])
+			local current = tonumber(redis.call('get', KEYS[i]) or "0")
+			local ttl = redis.call('ttl', KEYS[i])
+			if ttl < 0 then ttl = window end
+			table.insert(results, {threshold, current, ttl})
 		end
-
-		-- 修复异常过期时间（确保窗口有效）
-		if ttl < 0 then
-			ttl = window
-		end
-	
-    	-- 返回窗口状态：阈值、当前计数、剩余时间
-		return {threshold, tonumber(current), ttl}
+		return results
 	`
-	ResponsePhaseFixedWindowScript = `
-        local key = KEYS[1]
-        local threshold = tonumber(ARGV[1])
-        local window = tonumber(ARGV[2])
-        local added = tonumber(ARGV[3])  -- 需要累加的token数量
-        
-        local current = tonumber(redis.call('get', key) or "0")
-        
-        -- 只有当前计数未超过阈值时才执行累加
-        if current <= threshold then
-            current = redis.call('incrby', key, added)
-            -- 第一次设置值时初始化过期时间
-            if current == added then
-                redis.call('expire', key, window)
-            else
-                -- 非首次设置时检查过期时间，确保窗口有效性
-                local ttl = redis.call('ttl', key)
-                if ttl < 0 then
-                    redis.call('expire', key, window)
-                end
-            end
-        end
-        
-        -- 返回当前窗口状态：阈值、当前计数、剩余时间
-        return {threshold, current, redis.call('ttl', key)}
-    `
+	// MultiKeyResponsePhaseScript 多规则响应阶段累加脚本（仅 ai-token-ratelimit 使用）
+	// KEYS = [key1, ..., keyN]
+	// ARGV = [threshold1, window1, count1, ..., thresholdN, windowN, countN]
+	// 每条规则独立判断 current <= threshold 才累加；返回 KEYS 数量
+	MultiKeyResponsePhaseScript = `
+		for i = 1, #KEYS do
+			local threshold = tonumber(ARGV[3*i - 2])
+			local window    = tonumber(ARGV[3*i - 1])
+			local added     = tonumber(ARGV[3*i])
+			local current = tonumber(redis.call('get', KEYS[i]) or "0")
+			if current <= threshold then
+				current = redis.call('incrby', KEYS[i], added)
+				if current == added then
+					redis.call('expire', KEYS[i], window)
+				else
+					local ttl = redis.call('ttl', KEYS[i])
+					if ttl < 0 then redis.call('expire', KEYS[i], window) end
+				end
+			end
+		end
+		return #KEYS
+	`
 
 	LimitRedisContextKey = "LimitRedisContext"
+	LimitContextKey     = "LimitContext"
 
 	CookieHeader = "cookie"
 
@@ -110,10 +105,16 @@ type LimitContext struct {
 	reset     int
 }
 
+// MatchedRule 表示请求阶段命中的单条限流规则（global 或 rule_item）
+type MatchedRule struct {
+	key    string  // 完整 Redis key
+	count  int64  // 时间窗口内的限额（与 LimitConfigItem.Count / GlobalThreshold.Count 同义）
+	window int64  // 时间窗口大小（秒）
+}
+
+// LimitRedisContext 暂存请求阶段命中的全部规则，供响应阶段多键 INCRBY 使用
 type LimitRedisContext struct {
-	key    string
-	count  int64
-	window int64
+	rules []MatchedRule
 }
 
 func parseConfig(json gjson.Result, cfg *config.AiTokenRateLimitConfig) error {
@@ -132,59 +133,75 @@ func parseConfig(json gjson.Result, cfg *config.AiTokenRateLimitConfig) error {
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig) types.Action {
 	ctx.DisableReroute()
-	limitKey, count, timeWindow := "", int64(0), int64(0)
 
-	if cfg.GlobalThreshold != nil {
-		// 全局限流模式
-		limitKey = fmt.Sprintf(AiTokenGlobalRateLimitFormat, cfg.RuleName, cfg.GlobalThreshold.TimeWindow)
-		count = cfg.GlobalThreshold.Count
-		timeWindow = cfg.GlobalThreshold.TimeWindow
-	} else {
-		// 规则限流模式
-		val, ruleItem, configItem := checkRequestAgainstLimitRule(ctx, cfg.RuleItems)
-		if ruleItem == nil || configItem == nil {
-			// 没有匹配到限流规则直接返回
-			return types.ActionContinue
-		}
-
-		limitKey = fmt.Sprintf(AiTokenRateLimitFormat, cfg.RuleName, ruleItem.LimitType, configItem.TimeWindow, ruleItem.Key, val)
-		count = configItem.Count
-		timeWindow = configItem.TimeWindow
+	matched := collectMatchedRules(ctx, cfg)
+	if len(matched) == 0 {
+		// 无任何规则命中：直接放行，不发起 Redis 调用
+		return types.ActionContinue
 	}
 
-	ctx.SetContext(LimitRedisContextKey, LimitRedisContext{
-		key:    limitKey,
-		count:  count,
-		window: timeWindow,
-	})
+	n := len(matched)
+	keys := make([]interface{}, n)
+	args := make([]interface{}, 0, n*2)
+	for i, m := range matched {
+		keys[i] = m.key
+		args = append(args, m.count, m.window)
+	}
 
-	// 执行限流逻辑
-	keys := []interface{}{limitKey}
-	args := []interface{}{count, timeWindow}
-	err := cfg.RedisClient.Eval(RequestPhaseFixedWindowScript, 1, keys, args, func(response resp.Value) {
-		resultArray := response.Array()
-		if len(resultArray) != 3 {
-			log.Errorf("redis response parse error, response: %v", response)
+	// 暂存命中规则，供响应阶段多键 INCRBY 使用
+	ctx.SetContext(LimitRedisContextKey, LimitRedisContext{rules: matched})
+
+	err := cfg.RedisClient.Eval(MultiKeyRequestPhaseScript, n, keys, args, func(response resp.Value) {
+		arr := response.Array()
+		if len(arr) != n {
+			log.Errorf("redis response length mismatch: got %d, want %d", len(arr), n)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
 
-		// 获取限流结果
-		threshold, current, ttl := resultArray[0].Integer(), resultArray[1].Integer(), resultArray[2].Integer()
-		context := LimitContext{
-			count:     threshold,
-			remaining: threshold - current,
-			reset:     ttl,
+		// 单次遍历：触发即 return；未触发则持续找 tightest
+		tightestIdx := 0
+		tightestRatio := float64(arr[0].Array()[0].Integer()-arr[0].Array()[1].Integer()) / float64(arr[0].Array()[0].Integer())
+
+		for i, sub := range arr {
+			a := sub.Array()
+			if len(a) != 3 {
+				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(a))
+				proxywasm.ResumeHttpRequest()
+				return
+			}
+			threshold, current, ttl := a[0].Integer(), a[1].Integer(), a[2].Integer()
+
+			if current > threshold {
+				// 命中触发的第一条规则（按 collectMatchedRules 顺序，global 优先）
+				ctx.SetUserAttribute("token_ratelimit_status", "limited")
+				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+				rejected(cfg, LimitContext{
+					count:     threshold,
+					remaining: 0,
+					reset:     ttl,
+				})
+				return
+			}
+
+			if ratio := float64(threshold-current) / float64(threshold); ratio < tightestRatio {
+				tightestIdx = i
+				tightestRatio = ratio
+			}
 		}
-		if current > threshold {
-			// 触发限流
-			ctx.SetUserAttribute("token_ratelimit_status", "limited")
-			ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
-			rejected(cfg, context)
-		} else {
-			proxywasm.ResumeHttpRequest()
-		}
+
+		// 未触发：写入 tightest 规则到 LimitContext（仅用于潜在的诊断/未来扩展）
+		tightSub := arr[tightestIdx].Array()
+		tightThreshold, tightCurrent, tightTtl := tightSub[0].Integer(), tightSub[1].Integer(), tightSub[2].Integer()
+		ctx.SetContext(LimitContextKey, LimitContext{
+			count:     tightThreshold,
+			remaining: tightThreshold - tightCurrent,
+			reset:     tightTtl,
+		})
+
+		proxywasm.ResumeHttpRequest()
 	})
+
 	if err != nil {
 		log.Errorf("redis call failed: %v", err)
 		return types.ActionContinue
@@ -197,36 +214,73 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCon
 		ctx.SetContext(tokenusage.CtxKeyInputToken, usage.InputToken)
 		ctx.SetContext(tokenusage.CtxKeyOutputToken, usage.OutputToken)
 	}
-	if endOfStream {
-		if ctx.GetContext(tokenusage.CtxKeyInputToken) == nil || ctx.GetContext(tokenusage.CtxKeyOutputToken) == nil {
-			return data
-		}
-		inputToken := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
-		outputToken := ctx.GetContext(tokenusage.CtxKeyOutputToken).(int64)
-		limitRedisContext, ok := ctx.GetContext(LimitRedisContextKey).(LimitRedisContext)
-		if !ok {
-			return data
-		}
-		keys := []interface{}{limitRedisContext.key}
-		args := []interface{}{limitRedisContext.count, limitRedisContext.window, inputToken + outputToken}
-		err := cfg.RedisClient.Eval(ResponsePhaseFixedWindowScript, 1, keys, args, nil)
-		if err != nil {
-			log.Errorf("redis call failed: %v", err)
-		}
+	if !endOfStream {
+		return data
+	}
+
+	inputTokenRaw := ctx.GetContext(tokenusage.CtxKeyInputToken)
+	outputTokenRaw := ctx.GetContext(tokenusage.CtxKeyOutputToken)
+	if inputTokenRaw == nil || outputTokenRaw == nil {
+		return data
+	}
+	inputToken, ok1 := inputTokenRaw.(int64)
+	outputToken, ok2 := outputTokenRaw.(int64)
+	if !ok1 || !ok2 {
+		return data
+	}
+
+	limitRedisContextRaw := ctx.GetContext(LimitRedisContextKey)
+	if limitRedisContextRaw == nil {
+		return data
+	}
+	limitRedisContext, ok := limitRedisContextRaw.(LimitRedisContext)
+	if !ok || len(limitRedisContext.rules) == 0 {
+		return data
+	}
+
+	// 多键 INCRBY：每条规则一组 (threshold, window, added)
+	n := len(limitRedisContext.rules)
+	keys := make([]interface{}, n)
+	args := make([]interface{}, 0, n*3)
+	added := inputToken + outputToken
+	for i, r := range limitRedisContext.rules {
+		keys[i] = r.key
+		args = append(args, r.count, r.window, added)
+	}
+
+	err := cfg.RedisClient.Eval(MultiKeyResponsePhaseScript, n, keys, args, nil)
+	if err != nil {
+		log.Errorf("redis call failed: %v", err)
 	}
 	return data
 }
 
-func checkRequestAgainstLimitRule(ctx wrapper.HttpContext, ruleItems []config.LimitRuleItem) (string, *config.LimitRuleItem, *config.LimitConfigItem) {
-	if len(ruleItems) > 0 {
-		for _, rule := range ruleItems {
-			val, ruleItem, configItem := hitRateRuleItem(ctx, rule)
-			if ruleItem != nil && configItem != nil {
-				return val, ruleItem, configItem
-			}
+// collectMatchedRules 遍历 global_threshold 和 rule_items，返回所有命中规则。
+// 顺序：global_threshold（如有）→ rule_items 中所有命中项（按数组顺序追加）。
+// 该顺序决定了"触发时优先报告哪条规则"以及"未触发时 tightest 的选择范围"。
+func collectMatchedRules(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig) []MatchedRule {
+	var matched []MatchedRule
+
+	if cfg.GlobalThreshold != nil {
+		matched = append(matched, MatchedRule{
+			key:    fmt.Sprintf(AiTokenGlobalRateLimitFormat, cfg.RuleName, cfg.GlobalThreshold.TimeWindow),
+			count:  cfg.GlobalThreshold.Count,
+			window: cfg.GlobalThreshold.TimeWindow,
+		})
+	}
+
+	for _, ruleItem := range cfg.RuleItems {
+		val, hitRule, hitItem := hitRateRuleItem(ctx, ruleItem)
+		if hitRule != nil && hitItem != nil {
+			matched = append(matched, MatchedRule{
+				key:    fmt.Sprintf(AiTokenRateLimitFormat, cfg.RuleName, hitRule.LimitType, hitItem.TimeWindow, hitRule.Key, val),
+				count:  hitItem.Count,
+				window: hitItem.TimeWindow,
+			})
 		}
 	}
-	return "", nil, nil
+
+	return matched
 }
 
 func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string, *config.LimitRuleItem, *config.LimitConfigItem) {
