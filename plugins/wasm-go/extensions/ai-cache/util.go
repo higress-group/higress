@@ -106,6 +106,11 @@ func processStreamLastChunk(ctx wrapper.HttpContext, c config.PluginConfig, chun
 
 func processSSEMessage(ctx wrapper.HttpContext, c config.PluginConfig, sseMessage string, log log.Log) (string, error) {
 	content := ""
+	// done 标记本次 sseMessage 是否遇到 [DONE]。当最后一段 content 与 [DONE]
+	// 处于同一 buffer 时，必须跳出循环后由循环外的 merge 逻辑统一合并到
+	// CACHE_CONTENT_CONTEXT_KEY，否则本次解析的最后一段 content 会被 [DONE]
+	// 早 return 丢弃（PR #3962 review）。
+	done := false
 	for _, chunk := range strings.Split(sseMessage, "\n\n") {
 		log.Debugf("single sse message: %s", chunk)
 		subMessages := strings.Split(chunk, "\n")
@@ -124,12 +129,9 @@ func processSSEMessage(ctx wrapper.HttpContext, c config.PluginConfig, sseMessag
 		bodyJson := message[5:]
 
 		if strings.TrimSpace(bodyJson) == "[DONE]" {
-			// [DONE] 标记 SSE 流结束；本函数局部 content 始终为空，
-			// 需要把先前 chunk 在 ctx 里累积好的值返回给调用方写入缓存。
-			if tempContentI := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY); tempContentI != nil {
-				return tempContentI.(string), nil
-			}
-			return content, nil
+			// 跳出循环，把已解析的局部 content 留到循环外统一合并。
+			done = true
+			break
 		}
 
 		// Extract values from JSON fields
@@ -147,17 +149,24 @@ func processSSEMessage(ctx wrapper.HttpContext, c config.PluginConfig, sseMessag
 		}
 	}
 
-	if content == "" {
+	// 本次 sseMessage 既没解析到 content 也没遇到 [DONE]：保持 ctx 不变，直接返回。
+	if content == "" && !done {
 		log.Debugf("[processSSEMessage] no content extracted; skipping cache update: %s", sseMessage)
-		return content, nil
+		return "", nil
 	}
 
-	tempContentI := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY)
-	// If there is no content in the cache, initialize and set the content
-	if tempContentI == nil {
-		ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, content)
-	} else {
-		ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, tempContentI.(string)+content)
+	if content != "" {
+		if v := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY); v == nil {
+			ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, content)
+		} else {
+			ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, v.(string)+content)
+		}
 	}
-	return content, nil
+
+	// handleStreamChunk 不使用返回值；processStreamLastChunk 把它作为 cacheResponse 的
+	// SET value，必须是完整累积值（避免最后一段 content 因 [DONE] 早 return 被丢）。
+	if v := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY); v != nil {
+		return v.(string), nil
+	}
+	return "", nil
 }

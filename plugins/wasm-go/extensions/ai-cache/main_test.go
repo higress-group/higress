@@ -983,6 +983,82 @@ data: {"id":"0b8ed3c9-3710-920b-abd9-581a0a77fd28","object":"chat.completion.chu
 				"SET command should contain the accumulated value, got query: %q", setQuery)
 		})
 
+		// 测试流式响应体处理：最后一个 buffer 同时包含最后一段 content 与 data: [DONE]
+		// 验证：
+		//   1) 同一 buffer 内的最后一段 content 不会被 [DONE] 早 return 丢掉；
+		//   2) cacheResponse SET 写入的值是先前 chunk 与本次合并后的完整累积文本。
+		// 回归保护：PR #3962 review 指出当 content 与 [DONE] 在同一 lastChunk 到达时，
+		// processSSEMessage 会在 [DONE] 处直接 return ctx 旧值，导致最后一段 content 丢失。
+		t.Run("stream response body with final content and [DONE] in same chunk", func(t *testing.T) {
+			host, status := test.NewTestHost(basicRedisConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 设置请求头
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+			})
+
+			// 设置流式请求体
+			requestBody := `{
+				"model": "hy-mt2-pro",
+				"messages": [
+					{
+						"role": "user",
+						"content": "介绍天津"
+					}
+				],
+				"stream": true
+			}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			// 模拟 Redis 缓存未命中（消费 CheckCacheForKey 的 GET）
+			host.CallOnRedisCall(0, test.CreateRedisRespNull())
+
+			// 设置流式响应头
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+
+			// 非末次 chunk：先累积 "天津"
+			firstChunk := `data: {"id":"0b8ed3c9-3710-920b-abd9-581a0a77fd28","object":"chat.completion.chunk","created":1781169426,"model":"hy-mt2-pro","choices":[{"index":0,"delta":{"content":"天津"}}]}
+
+`
+
+			// 末次 chunk：最后一段 content + [DONE] 同一个 buffer 到达
+			finalChunk := `data: {"id":"0b8ed3c9-3710-920b-abd9-581a0a77fd28","object":"chat.completion.chunk","created":1781169426,"model":"hy-mt2-pro","choices":[{"index":0,"delta":{"content":"是历史文化名城"}}]}
+
+data: [DONE]
+
+`
+
+			action := host.CallOnHttpStreamingResponseBody([]byte(firstChunk), false)
+			require.Equal(t, types.ActionContinue, action)
+
+			action = host.CallOnHttpStreamingResponseBody([]byte(finalChunk), true)
+			require.Equal(t, types.ActionContinue, action)
+
+			// 在消费前快照 callout —— 框架在 CallOnRedisCall 同步把条目从 map 里清掉。
+			redisCalls := host.GetRedisCalloutAttributes()
+			require.GreaterOrEqual(t, len(redisCalls), 1,
+				"expected a SET redis callout after [DONE], got %d", len(redisCalls))
+
+			// 模拟 Redis SET 响应
+			host.CallOnRedisCall(0, test.CreateRedisRespString("OK"))
+
+			// 断言 SET value 必须是完整累积文本，而非被 [DONE] 截断后的 "天津"
+			setCall := redisCalls[len(redisCalls)-1]
+			setQuery := string(setCall.Query)
+			require.Contains(t, setQuery, "higress-ai-cache:介绍天津",
+				"SET command should target the cache key derived from the request, got query: %q", setQuery)
+			require.Contains(t, setQuery, "天津是历史文化名城",
+				"SET command should contain the full accumulated value (final chunk content must not be dropped by [DONE]), got query: %q", setQuery)
+		})
+
 		// 测试无缓存键的响应体处理
 		t.Run("response body without cache key", func(t *testing.T) {
 			host, status := test.NewTestHost(basicRedisConfig)
