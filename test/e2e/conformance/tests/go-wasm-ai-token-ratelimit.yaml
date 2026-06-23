@@ -1,0 +1,88 @@
+# Copyright (c) 2026 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+
+# Deploy Redis service (isolated from other E2E tests)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-ai-token
+  namespace: higress-conformance-infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-ai-token
+  template:
+    metadata:
+      labels:
+        app: redis-ai-token
+    spec:
+      containers:
+        - name: redis
+          image: redis:6.2
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-ai-token
+  namespace: higress-conformance-infra
+spec:
+  ports:
+    - port: 6379
+      targetPort: 6379
+  selector:
+    app: redis-ai-token
+---
+# Ingress points to llm-mock-service (base infra in higress-conformance-ai-backend namespace)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-token-ratelimit
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "ai-token-ratelimit.test.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+# 混合限流配置：
+# - global_threshold: token_per_minute=100
+# - rule_items: x-api-key=vip-key 限 25 token/分钟
+# llm-mock 每次响应消耗 10 token
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-token-ratelimit
+  namespace: higress-system
+spec:
+  defaultConfig:
+    rule_name: "e2e-ai-token-hybrid"
+    global_threshold:
+      token_per_minute: 100
+    rule_items:
+      - limit_by_header: "x-api-key"
+        limit_keys:
+          - key: "vip-key"
+            token_per_minute: 25
+    redis:
+      service_name: "redis-ai-token.higress-conformance-infra.svc.cluster.local"
+      service_port: 6379
+      timeout: 1000
+    rejected_code: 429
+    rejected_msg: "Too many AI token requests"
+  url: file:///opt/plugins/wasm-go/extensions/ai-token-ratelimit/plugin.wasm
