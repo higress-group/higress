@@ -39,6 +39,11 @@ spec:
           securityContext:
             {{- toYaml .Values.controller.securityContext | nindent 12 }}
           image: "{{ .Values.controller.hub | default .Values.global.hub }}/higress/{{ .Values.controller.image | default "higress" }}:{{ .Values.controller.tag | default .Chart.AppVersion }}"
+          {{- if .Values.controller.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.controller.imagePullPolicy }}
+          {{- else if .Values.global.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- end }}
           args:
           - "serve"
           - --gatewaySelectorKey=higress
