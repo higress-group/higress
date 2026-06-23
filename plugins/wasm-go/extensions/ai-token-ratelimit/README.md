@@ -4,12 +4,23 @@ keywords: [ AI网关, AI token限流 ]
 description: AI Token限流插件配置参考
 ---
 
+> ⚠️ **行为变更提示（无版本号变化）**
+>
+> 自本次更新起，`rule_items` 的匹配语义从 **first-match-wins**（命中第一条即返回）改为 **all-match OR 叠加**（所有命中规则都评估，任一触发即拒绝）。同时解除 `global_threshold` 与 `rule_items` 的互斥约束，支持混合配置。
+>
+> - 老配置（单条 `rule_items` 或仅 `global_threshold`）：行为不变
+> - 老配置（多条 `rule_items` 期望短路匹配）：**行为会变** —— 所有命中规则都会评估
+> - Redis key 格式新增 `{rule_name}` hash tag 以兼容 Redis Cluster，老计数器数据不兼容
+>
+> 详见下方"功能说明"与"配置示例"。
+
 ## 功能说明
 
-`ai-token-ratelimit`插件基于 Redis 实现了 AI Token 限流功能，支持以下两种限流模式：
+`ai-token-ratelimit`插件基于 Redis 实现了 AI Token 限流功能，支持以下三种限流模式：
 
 - **规则级全局限流**：依据相同的`rule_name`与`global_threshold`配置，为自定义规则组设置全局 token 限流阈值
 - **Key 级动态限流**：根据请求中的动态 Key（包括 URL 参数、请求头、客户端 IP、Consumer 名称或 Cookie 字段等）进行分组 token 限流
+- **混合限流**：同时配置 `global_threshold`（全局兜底）和 `rule_items`（按维度细分），所有命中的规则**叠加生效**，任一触发即拒绝。
 
 ## 运行属性
 
@@ -21,8 +32,8 @@ description: AI Token限流插件配置参考
 | 配置项                  | 类型   | 必填 | 默认值 | 说明                                                                        |
 | ----------------------- | ------ | ---- | ------ |---------------------------------------------------------------------------|
 | rule_name               | string | 是 | - | 限流规则名称，根据限流规则名称+限流类型+限流key名称+限流key对应的实际值来拼装redis key                      |
-| global_threshold | Object | 否，`global_threshold` 或 `rule_items` 选填一项 | - | 对整个自定义规则组进行限流 |
-| rule_items | array of object | 否，`global_threshold` 或 `rule_items` 选填一项 | -                | 限流规则项，按照rule_items下的排列顺序，匹配第一个rule_item后命中限流规则，后续规则将被忽略                   |
+| global_threshold | Object | 否，至少一项；可同时配置 | - | 对整个自定义规则组进行限流 |
+| rule_items | array of object | 否，至少一项；可同时配置 | -                | 限流规则项，最多支持 **10 条**。所有满足匹配条件的 `rule_item` 都会参与限流，规则之间是"或"关系，任一触发即拒绝；规则的执行顺序不影响最终结果。详见下方"配置说明"展开。 |
 | rejected_code           | int | 否 | 429 | 请求被限流时，返回的HTTP状态码                                                         |
 | rejected_msg            | string | 否 | Too many requests | 请求被限流时，返回的响应体                                                             |
 | redis                   | object          | 是                                                           | -                | redis相关配置                                                                 |
@@ -50,6 +61,50 @@ description: AI Token限流插件配置参考
 | limit_by_per_cookie   | string          | 否，`limit_by_*`中选填一项 | -      | 按规则匹配特定 Cookie，并对每个 Cookie 分别计算限流，配置获取限流键值的来源 Cookie中 key 名称，配置`limit_keys`时支持正则表达式或`*` |
 | limit_by_per_ip       | string          | 否，`limit_by_*`中选填一项 | -      | 按规则匹配特定 IP，并对每个 IP 分别计算限流，配置获取限流键值的来源 IP 参数名称，从请求头获取，以`from-header-对应的header名`，示例：`from-header-x-forwarded-for`，直接获取对端socket ip，配置为`from-remote-addr` |
 | limit_keys            | array of object | 是                         | -      | 配置匹配键值后的限流次数                                     |
+
+#### `rule_items` 多规则匹配语义
+
+`rule_items` 是一个数组，**所有满足匹配条件**的 `rule_item` 都会被评估，规则之间是"或"关系，**任一触发即拒绝**。规则的执行顺序不影响最终结果。
+
+> `rule_items` 数组最多支持 **10 条**规则。每条 `rule_item` 会按命中的 `limit_keys` 产生独立的 Redis 计数器。
+
+##### 同维度多值匹配（合并到一条 rule_item）
+
+同一 `limit_by_*` + key 下的多个匹配值（如多个 apikey）应收纳到**一条** `rule_item` 的 `limit_keys` 数组中，不要拆成多条 `rule_item`：
+
+❌ 错误（3 条 rule_item，浪费配额）：
+```yaml
+rule_items:
+  - { limit_by_param: apikey, limit_keys: [{key: k1, token_per_minute: 100}] }
+  - { limit_by_param: apikey, limit_keys: [{key: k2, token_per_minute: 200}] }
+  - { limit_by_param: apikey, limit_keys: [{key: k3, token_per_minute: 300}] }
+```
+
+✅ 正确（1 条 rule_item）：
+```yaml
+rule_items:
+  - limit_by_param: apikey
+    limit_keys:
+      - { key: k1, token_per_minute: 100 }
+      - { key: k2, token_per_minute: 200 }
+      - { key: k3, token_per_minute: 300 }
+```
+
+##### 多时间窗口限流（合法的"重复"）
+
+同一 `limit_by_*` + key 但**不同时间窗**的两条 `rule_items` 是合法配置，会产生两个独立 Redis 计数器，实现"每分钟 + 每小时"双层限流（解析时会输出信息性 warn，可忽略）：
+
+```yaml
+rule_items:
+  - limit_by_param: apikey
+    limit_keys: [{key: k1, token_per_minute: 100}]
+  - limit_by_param: apikey
+    limit_keys: [{key: k1, token_per_hour: 1000}]   # 同 type+key，不同时间窗
+```
+
+##### 完全相同的重复（应避免）
+
+同 type+key+时间窗的完全重复会产生同一 Redis key 的多次评估，属冗余配置，应合并为一条。
 
 `limit_keys`中每一项的配置字段说明。
 
