@@ -213,21 +213,69 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 
 	// there is no need to read request body when it is on chat completion mode
 	context.DontReadRequestBody()
-	// check quota here
-	config.redisClient.Get(config.RedisKeyPrefix+consumer, func(response resp.Value) {
-		isDenied := false
+
+	// 读取 group header（不校验格式——与 name 一致；GC11）。
+	group := ""
+	if rawGroup, gErr := proxywasm.GetHttpRequestHeader("x-mse-consumer-group"); gErr == nil && rawGroup != "" {
+		group = rawGroup
+	}
+	context.SetContext("group", group)
+
+	// 按 group 是否非空走两条路径：
+	// - group == ""：走老 ai-quota 路径（Get + DecrBy），字节级一致
+	// - group != ""：走 Lua Eval，原子双 key 操作
+	consumerKey := config.RedisKeyPrefix + consumer
+	if group == "" {
+		// 老路径——单池 GET，行为与 ai-quota 升级前完全一致
+		config.redisClient.Get(consumerKey, func(response resp.Value) {
+			isDenied := false
+			if err := response.Error(); err != nil {
+				isDenied = true
+			}
+			if response.IsNull() {
+				isDenied = true
+			}
+			if response.Integer() <= 0 {
+				isDenied = true
+			}
+			if isDenied {
+				util.SendResponse(http.StatusTooManyRequests, "ai-quota.consumer_exhausted", "text/plain", "Request denied by ai quota check, ai-quota.consumer_exhausted: consumer quota exhausted")
+				return
+			}
+			proxywasm.ResumeHttpRequest()
+		})
+		return types.HeaderStopAllIterationAndWatermark
+	}
+
+	// 新路径——Lua Eval，原子读 group + consumer 两池
+	groupKey := config.RedisKeyPrefix + group
+	keys := []interface{}{groupKey, consumerKey}
+	_ = config.redisClient.Eval(RequestPhaseQuotaReadScript, 2, keys, nil, func(response resp.Value) {
 		if err := response.Error(); err != nil {
-			isDenied = true
+			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
+			return
 		}
-		if response.IsNull() {
-			isDenied = true
+		arr := response.Array()
+		if len(arr) != 2 {
+			log.Errorf("phase1 unexpected response: %v", response)
+			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", "quota check response parse error")
+			return
 		}
-		if response.Integer() <= 0 {
-			isDenied = true
+		gRem := arr[0].Integer()
+		cRem := arr[1].Integer()
+
+		// 严格模式：任一池 ≤ 0 即拒（GC7）
+		var code, detail string
+		switch {
+		case gRem <= 0 && cRem <= 0:
+			code, detail = "ai-quota.both_exhausted", "group and consumer quota exhausted"
+		case gRem <= 0:
+			code, detail = "ai-quota.group_exhausted", "group quota exhausted"
+		case cRem <= 0:
+			code, detail = "ai-quota.consumer_exhausted", "consumer quota exhausted"
 		}
-		log.Debugf("get consumer:%s quota:%d isDenied:%t", consumer, response.Integer(), isDenied)
-		if isDenied {
-			util.SendResponse(http.StatusForbidden, "ai-quota.noquota", "text/plain", "Request denied by ai quota check, No quota left")
+		if code != "" {
+			util.SendResponse(http.StatusTooManyRequests, code, "text/plain", "Request denied by ai quota check, "+code+": "+detail)
 			return
 		}
 		proxywasm.ResumeHttpRequest()
