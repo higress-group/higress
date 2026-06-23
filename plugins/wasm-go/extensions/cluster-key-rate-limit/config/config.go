@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"cluster-key-rate-limit/util"
-	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 	"github.com/zmap/go-iptree/iptree"
@@ -47,6 +46,9 @@ const (
 	SecondsPerMinute       = 60 * Second
 	SecondsPerHour         = 60 * SecondsPerMinute
 	SecondsPerDay          = 24 * SecondsPerHour
+
+	// MaxRuleItems 限制 rule_items 数组最大长度
+	MaxRuleItems = 10
 )
 
 var timeWindows = map[string]int64{
@@ -169,8 +171,6 @@ func initLimitRule(json gjson.Result, config *ClusterKeyRateLimitConfig) error {
 	hasRule := ruleItemsResult.Exists()
 	if !hasGlobal && !hasRule {
 		return errors.New("at least one of 'global_threshold' or 'rule_items' must be set")
-	} else if hasGlobal && hasRule {
-		return errors.New("'global_threshold' and 'rule_items' cannot be set at the same time")
 	}
 
 	// 处理全局限流配置
@@ -180,35 +180,26 @@ func initLimitRule(json gjson.Result, config *ClusterKeyRateLimitConfig) error {
 			return fmt.Errorf("failed to parse global_threshold: %w", err)
 		}
 		config.GlobalThreshold = threshold
-		return nil
 	}
 
 	// 处理条件限流规则
+	if !hasRule {
+		return nil
+	}
 	items := ruleItemsResult.Array()
 	if len(items) == 0 {
 		return errors.New("config rule_items cannot be empty")
 	}
+	if len(items) > MaxRuleItems {
+		return fmt.Errorf("rule_items length %d exceeds maximum %d", len(items), MaxRuleItems)
+	}
 
 	var ruleItems []LimitRuleItem
-	// 用于记录已出现的LimitType和Key的组合
-	seenLimitRules := make(map[string]bool)
-
 	for _, item := range items {
 		ruleItem, err := parseLimitRuleItem(item)
 		if err != nil {
 			return fmt.Errorf("failed to parse rule_item in rule_items: %w", err)
 		}
-
-		// 构造LimitType和Key的唯一标识
-		ruleKey := string(ruleItem.LimitType) + ":" + ruleItem.Key
-
-		// 检查是否有重复的LimitType和Key组合
-		if seenLimitRules[ruleKey] {
-			log.Warnf("duplicate rule found: %s='%s' in rule_items", ruleItem.LimitType, ruleItem.Key)
-		} else {
-			seenLimitRules[ruleKey] = true
-		}
-
 		ruleItems = append(ruleItems, *ruleItem)
 	}
 	config.RuleItems = ruleItems
@@ -286,7 +277,7 @@ func parseLimitRuleItem(item gjson.Result) (*LimitRuleItem, error) {
 	}
 
 	if limitType == "" {
-		return nil, errors.New("only one of 'limit_by_header' and 'limit_by_param' and 'limit_by_consumer' and 'limit_by_cookie' and 'limit_by_per_header' and 'limit_by_per_param' and 'limit_by_per_consumer' and 'limit_by_per_cookie' and 'limit_by_per_ip' can be set")
+		return nil, errors.New("at least one of 'limit_by_header', 'limit_by_param', 'limit_by_consumer', 'limit_by_cookie', 'limit_by_per_header', 'limit_by_per_param', 'limit_by_per_consumer', 'limit_by_per_cookie', 'limit_by_per_ip' must be set")
 	}
 	ruleItem.LimitType = limitType
 
