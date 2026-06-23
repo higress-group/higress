@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -240,7 +241,7 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 		} else {
 			consumer.Credentials = consumerCredentials
 		}
-		// 解析 group 字段（不校验格式——与 name 一致；G∩N 校验在 Task 2）
+		// 解析 group 字段（不校验格式——与 name 一致）
 		if groupResult := item.Get("group"); groupResult.Exists() {
 			consumer.Group = groupResult.String()
 		}
@@ -249,6 +250,32 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 		for _, credential := range consumerCredentials {
 			global.credential2Name[credential] = name.String()
 		}
+	}
+
+	// G∩N 校验：group 名集合与 consumer name 集合必须互斥（§4.5 / §10.1）。
+	// 冲突会让 ai-quota 把 group 写入 chat_quota:<group> 时覆盖同名 consumer 的私有池 quota key。
+	// 全部冲突必须一次列出（spec §10.1 "不允许部分通过"），避免运维改一个冲突再重启一次才发现下一个。
+	nameSet := make(map[string]struct{}, len(global.consumers))
+	for _, c := range global.consumers {
+		nameSet[c.Name] = struct{}{}
+	}
+	var conflicts []string
+	seenConflict := make(map[string]struct{}) // 去重：多个 consumer 共享同一 group 时，同一冲突只报一次
+	for _, c := range global.consumers {
+		if c.Group == "" {
+			continue
+		}
+		if _, conflict := nameSet[c.Group]; !conflict {
+			continue
+		}
+		if _, dup := seenConflict[c.Group]; dup {
+			continue
+		}
+		seenConflict[c.Group] = struct{}{}
+		conflicts = append(conflicts, fmt.Sprintf("group '%s' conflicts with consumer name '%s'", c.Group, c.Group))
+	}
+	if len(conflicts) > 0 {
+		return fmt.Errorf("consumer group/name conflicts: %s", strings.Join(conflicts, "; "))
 	}
 	return nil
 }
