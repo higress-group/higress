@@ -3,12 +3,49 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 )
+
+// testLogger satisfies log.Log so log.Warnf calls during tests write to
+// stderr instead of nil-panicking. The config parser emits a warn when
+// duplicate limit_by+key combinations appear in rule_items.
+type testLogger struct{}
+
+func (l *testLogger) Trace(msg string) { fmt.Fprintf(os.Stderr, "[TRACE] %s\n", msg) }
+func (l *testLogger) Tracef(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[TRACE] "+format+"\n", args...)
+}
+func (l *testLogger) Debug(msg string) { fmt.Fprintf(os.Stderr, "[DEBUG] %s\n", msg) }
+func (l *testLogger) Debugf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+}
+func (l *testLogger) Info(msg string) { fmt.Fprintf(os.Stderr, "[INFO] %s\n", msg) }
+func (l *testLogger) Infof(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[INFO] "+format+"\n", args...)
+}
+func (l *testLogger) Warn(msg string) { fmt.Fprintf(os.Stderr, "[WARN] %s\n", msg) }
+func (l *testLogger) Warnf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[WARN] "+format+"\n", args...)
+}
+func (l *testLogger) Error(msg string) { fmt.Fprintf(os.Stderr, "[ERROR] %s\n", msg) }
+func (l *testLogger) Errorf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[ERROR] "+format+"\n", args...)
+}
+func (l *testLogger) Critical(msg string) { fmt.Fprintf(os.Stderr, "[CRITICAL] %s\n", msg) }
+func (l *testLogger) Criticalf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[CRITICAL] "+format+"\n", args...)
+}
+func (l *testLogger) ResetID(pluginID string) {}
+
+func init() {
+	log.SetPluginLog(&testLogger{})
+}
 
 func TestParseAiTokenRateLimitConfig(t *testing.T) {
 	tests := []struct {
@@ -229,6 +266,9 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 			},
 		},
 		{
+			// Multi-window with the same limit_by + key is not supported: a warn
+			// is logged at parse time, but the parser still accepts the config so
+			// business logic remains preserved.
 			name: "DuplicateRules_DiffWindow",
 			json: `{
 				"rule_name": "dup-diff-window",
@@ -266,6 +306,9 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 			},
 		},
 		{
+			// Exact duplicate of (limit_by + key + window) is not allowed: a warn
+			// is logged at parse time, but the parser still accepts the config so
+			// business logic remains preserved.
 			name: "DuplicateRules_SameWindow",
 			json: `{
 				"rule_name": "dup-same-window",
