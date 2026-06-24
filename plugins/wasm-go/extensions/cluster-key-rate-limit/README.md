@@ -71,28 +71,6 @@ description: 基于 Key 集群限流插件配置参考
 
 > `rule_items` 数组最多支持 **10 条**规则。每条 `rule_item` 会按命中的 `limit_keys` 产生独立的 Redis 计数器。
 
-##### 同维度多值匹配（合并到一条 rule_item）
-
-同一 `limit_by_*` + key 下的多个匹配值（如多个 apikey）应收纳到**一条** `rule_item` 的 `limit_keys` 数组中，不要拆成多条 `rule_item`：
-
-❌ 错误（3 条 rule_item，浪费配额）：
-```yaml
-rule_items:
-  - { limit_by_param: apikey, limit_keys: [{key: k1, query_per_minute: 100}] }
-  - { limit_by_param: apikey, limit_keys: [{key: k2, query_per_minute: 200}] }
-  - { limit_by_param: apikey, limit_keys: [{key: k3, query_per_minute: 300}] }
-```
-
-✅ 正确（1 条 rule_item）：
-```yaml
-rule_items:
-  - limit_by_param: apikey
-    limit_keys:
-      - { key: k1, query_per_minute: 100 }
-      - { key: k2, query_per_minute: 200 }
-      - { key: k3, query_per_minute: 300 }
-```
-
 ##### 重复的 rule_items（不允许）
 
 同一 `limit_by_*` + key 组合的 `rule_item` **只允许出现一次**，包括不同时间窗的多窗口场景（例如同一 apikey 同时配置每分钟与每小时的限制）。重复声明会在配置解析阶段输出 warn 日志：

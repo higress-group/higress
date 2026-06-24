@@ -72,28 +72,6 @@ Plugin execution priority: `600`
 
 > The `rule_items` array supports up to **10** rules. Each `rule_item` produces independent Redis counters for each matched `limit_keys`.
 
-##### Multi-Value Matching on the Same Dimension (merge into a single rule_item)
-
-Multiple matched values under the same `limit_by_*` + key (e.g., multiple apikeys) should be placed into the `limit_keys` array of a **single** `rule_item`, not split into multiple `rule_item`s:
-
-❌ Wrong (3 rule_items, wastes quota):
-```yaml
-rule_items:
-  - { limit_by_param: apikey, limit_keys: [{key: k1, token_per_minute: 100}] }
-  - { limit_by_param: apikey, limit_keys: [{key: k2, token_per_minute: 200}] }
-  - { limit_by_param: apikey, limit_keys: [{key: k3, token_per_minute: 300}] }
-```
-
-✅ Correct (1 rule_item):
-```yaml
-rule_items:
-  - limit_by_param: apikey
-    limit_keys:
-      - { key: k1, token_per_minute: 100 }
-      - { key: k2, token_per_minute: 200 }
-      - { key: k3, token_per_minute: 300 }
-```
-
 ##### Duplicate rule_items (not allowed)
 
 A `rule_item` with the same `limit_by_*` + key combination may **only appear once**, including multi-window scenarios where the same key has different time windows (e.g., per-minute and per-hour limits for the same apikey). Duplicate declarations will emit a warn log during config parsing:

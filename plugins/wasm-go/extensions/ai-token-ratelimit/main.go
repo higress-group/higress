@@ -46,8 +46,8 @@ func init() {
 
 const (
 	RedisKeyPrefix string = "higress-token-ratelimit"
-	// AiTokenGlobalRateLimitFormat  全局限流模式 redis key 为 RedisKeyPrefix:{限流规则名称}:global_threshold:时间窗口
 	// 使用 {rule_name} hash tag 让多规则多键操作在 Redis Cluster 下落到同一 slot
+	// AiTokenGlobalRateLimitFormat  全局限流模式 redis key 为 RedisKeyPrefix:{限流规则名称}:global_threshold:时间窗口
 	AiTokenGlobalRateLimitFormat = RedisKeyPrefix + ":{%s}:global_threshold:%d"
 	// AiTokenRateLimitFormat 规则限流模式 redis key 为 RedisKeyPrefix:{限流规则名称}:限流类型:时间窗口:限流key名称:限流key对应的实际值
 	AiTokenRateLimitFormat = RedisKeyPrefix + ":{%s}:%s:%d:%s:%s"
@@ -107,7 +107,7 @@ type LimitContext struct {
 
 // MatchedRule 表示请求阶段命中的单条限流规则（global 或 rule_item）
 type MatchedRule struct {
-	key    string  // 完整 Redis key
+	key    string // 完整 Redis key
 	count  int64  // 时间窗口内的限额（与 LimitConfigItem.Count / GlobalThreshold.Count 同义）
 	window int64  // 时间窗口大小（秒）
 }
@@ -180,7 +180,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 				_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 				rejected(cfg, LimitContext{
 					count:     threshold,
-					remaining: 0,
+					remaining: threshold - current,
 					reset:     ttl,
 				})
 				return

@@ -47,9 +47,10 @@ func init() {
 const (
 	// RedisKeyPrefix 集群限流插件在 Redis 中 key 的统一前缀
 	RedisKeyPrefix = "higress-cluster-key-rate-limit"
-	// ClusterGlobalRateLimitFormat 全局限流模式 redis key，使用 {rule_name} hash tag 让多键操作在 Redis Cluster 下落到同一 slot
+	// 使用 {rule_name} hash tag 让多规则多键操作在 Redis Cluster 下落到同一 slot
+	// ClusterGlobalRateLimitFormat  全局限流模式 redis key 为 RedisKeyPrefix:限流规则名称:global_threshold:时间窗口
 	ClusterGlobalRateLimitFormat = RedisKeyPrefix + ":{%s}:global_threshold:%d"
-	// ClusterRateLimitFormat 规则限流模式 redis key
+	// ClusterRateLimitFormat 规则限流模式 redis key 为 RedisKeyPrefix:限流规则名称:限流类型:时间窗口:限流key名称:限流key对应的实际值
 	ClusterRateLimitFormat = RedisKeyPrefix + ":{%s}:%s:%d:%s:%s"
 	// MultiKeyFixedWindowScript 多规则请求阶段 check + incr 合一脚本（cluster-key-rate-limit 使用）
 	// KEYS = [key1, ..., keyN]
@@ -96,7 +97,7 @@ type LimitContext struct {
 
 // MatchedRule 表示请求阶段命中的单条限流规则（global 或 rule_item）
 type MatchedRule struct {
-	key    string  // 完整 Redis key
+	key    string // 完整 Redis key
 	count  int64  // 时间窗口内的限额
 	window int64  // 时间窗口大小（秒）
 }
@@ -153,7 +154,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 			if current > threshold {
 				rejected(cfg, LimitContext{
 					count:     threshold,
-					remaining: 0,
+					remaining: threshold - current,
 					reset:     ttl,
 				})
 				return
