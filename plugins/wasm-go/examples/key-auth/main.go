@@ -142,9 +142,6 @@ type KeyAuthConfig struct {
 	// @Description en-US Consumers to be allowed for matched requests.
 	allow []string `yaml:"allow"`
 
-	// 字段类型: 之前是 map[string]string（credential → name），
-	// 改为 map[string]Consumer（credential → 完整 consumer）以便在 token 命中后
-	// 一次性拿到 Group 字段做 header 注入。
 	credential2Consumer map[string]Consumer `yaml:"-"`
 }
 
@@ -244,7 +241,7 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 		} else {
 			consumer.Credentials = consumerCredentials
 		}
-		// 解析 group 字段（不校验格式——与 name 一致）
+
 		if groupResult := item.Get("group"); groupResult.Exists() {
 			consumer.Group = groupResult.String()
 		}
@@ -255,9 +252,9 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 		}
 	}
 
-	// G∩N 校验：group 名集合与 consumer name 集合必须互斥（§4.5 / §10.1）。
+	// G∩N 校验：group 名集合与 consumer name 集合必须互斥。
 	// 冲突会让 ai-quota 把 group 写入 chat_quota:<group> 时覆盖同名 consumer 的私有池 quota key。
-	// 全部冲突必须一次列出（spec §10.1 "不允许部分通过"），避免运维改一个冲突再重启一次才发现下一个。
+	// 全部冲突必须一次列出，避免运维改一个冲突再重启一次才发现下一个。
 	nameSet := make(map[string]struct{}, len(global.consumers))
 	for _, c := range global.consumers {
 		nameSet[c.Name] = struct{}{}
