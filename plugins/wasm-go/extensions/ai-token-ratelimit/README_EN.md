@@ -94,21 +94,17 @@ rule_items:
       - { key: k3, token_per_minute: 300 }
 ```
 
-##### Multi-Window Rate Limiting (legal "duplicates")
+##### Duplicate rule_items (not allowed)
 
-Two `rule_items` with the same `limit_by_*` + key but **different time windows** are a legal configuration. They produce two independent Redis counters to enforce layered "per-minute + per-hour" rate limiting (an informational warn is emitted during parsing and can be ignored):
+A `rule_item` with the same `limit_by_*` + key combination may **only appear once**, including multi-window scenarios where the same key has different time windows (e.g., per-minute and per-hour limits for the same apikey). Duplicate declarations will emit a warn log during config parsing, prompting consolidation into a single `rule_item`:
 
 ```yaml
 rule_items:
   - limit_by_param: apikey
     limit_keys: [{key: k1, token_per_minute: 100}]
   - limit_by_param: apikey
-    limit_keys: [{key: k1, token_per_hour: 1000}]   # same type+key, different window
+    limit_keys: [{key: k1, token_per_hour: 1000}]   # duplicate: same type+key, triggers warn
 ```
-
-##### Completely Identical Duplicates (should be avoided)
-
-A complete duplicate with the same type + key + time window causes multiple evaluations against the same Redis key. This is redundant configuration and should be merged into a single rule.
 
 
 ### Description of Configuration Fields in `limit_keys`

@@ -90,21 +90,17 @@ rule_items:
       - { key: k3, token_per_minute: 300 }
 ```
 
-##### 多时间窗口限流（合法的"重复"）
+##### 重复的 rule_items（不允许）
 
-同一 `limit_by_*` + key 但**不同时间窗**的两条 `rule_items` 是合法配置，会产生两个独立 Redis 计数器，实现"每分钟 + 每小时"双层限流（解析时会输出信息性 warn，可忽略）：
+同一 `limit_by_*` + key 组合的 `rule_item` **只允许出现一次**，包括不同时间窗的多窗口场景（例如同一 apikey 同时配置每分钟与每小时的限制）。重复声明会在配置解析阶段输出 warn 日志，提示合并为单条 `rule_item`：
 
 ```yaml
 rule_items:
   - limit_by_param: apikey
     limit_keys: [{key: k1, token_per_minute: 100}]
   - limit_by_param: apikey
-    limit_keys: [{key: k1, token_per_hour: 1000}]   # 同 type+key，不同时间窗
+    limit_keys: [{key: k1, token_per_hour: 1000}]   # 重复：同 type+key，将触发 warn
 ```
-
-##### 完全相同的重复（应避免）
-
-同 type+key+时间窗的完全重复会产生同一 Redis key 的多次评估，属冗余配置，应合并为一条。
 
 `limit_keys`中每一项的配置字段说明。
 
