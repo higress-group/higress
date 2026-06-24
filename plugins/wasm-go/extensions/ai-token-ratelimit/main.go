@@ -16,7 +16,6 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -173,9 +172,6 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 		// 单次遍历：触发即 return；未触发则放行。
 		// ai-token-ratelimit 不对外暴露 LimitContext（与 cluster-key-ratelimit 不同，
 		// 后者通过 X-RateLimit-* 头可观测 tightest 选择），因此此处不再写入 Context。
-		// tightestRatio 用 math.MaxFloat64 初始化，避免依赖 arr[0] 形状（防 0/0 NaN）。
-		tightestRatio := math.MaxFloat64
-
 		for _, ruleResult := range arr {
 			ruleState := ruleResult.Array()
 			if len(ruleState) != 3 {
@@ -195,10 +191,6 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 					reset:     ttl,
 				})
 				return
-			}
-
-			if ratio := float64(threshold-current) / float64(threshold); ratio < tightestRatio {
-				tightestRatio = ratio
 			}
 		}
 
