@@ -57,7 +57,7 @@ ai-quota 支持按 consumer group 共享配额池：组内任一 consumer 消耗
 
 > **Group 的来源**：`group` 不是 ai-quota 自己的配置项——它由上游认证插件（如 `key-auth`）在认证时通过 `X-Mse-Consumer-Group` HTTP header 注入，ai-quota 仅在请求阶段读取。在 `key-auth` 的 consumer 配置中给成员加 `group: <name>` 字段即可。`X-Mse-Consumer-Group` 缺失时 ai-quota 走 legacy 单池路径，只扣 consumer 私有池。
 
-> **Redis Cluster 兼容性**：group 非空时，Phase 1/2 使用 Lua 脚本同时操作 group 与 consumer 两把 key。Redis Cluster 要求多 key 操作的 key 落在同一 slot，否则报 `CROSSSLOT`。ai-quota 自动将 `redis_key_prefix` 包成 hash tag（`chat_quota:` → `{chat_quota}`），所有 quota key 共享同一 slot。**代价**：所有 ai-quota 流量集中在一个 slot，失去 Cluster 分片能力。如果配额流量较大且需要横向分片，可改用多个 `redis_key_prefix`（如 `tenant_a_quota:`、`tenant_b_quota:`）按租户切分。
+> **Redis Cluster 兼容性**：group 非空时，Phase 1/2 使用 Lua 脚本同时操作 group 与 consumer 两把 key。Redis Cluster 要求多 key 操作的 key 落在同一 slot，否则报 `CROSSSLOT`。ai-quota 的 Redis key 格式为 `{chat_quota}:<subject>`，使用 `{}` 作为 hash tag 确保所有 quota key 落在同一 slot。**代价**：所有 ai-quota 流量集中在一个 slot，失去 Cluster 分片能力。
 >
 > **升级迁移**：旧版（≤ v1.0.x）的 key 形如 `chat_quota:consumer1`，新版变为 `{chat_quota}:consumer1`。升级后请通过 admin API 对每个 consumer/group 重新 `refresh` 一次，或直接清空 Redis 中老前缀的 key。
 

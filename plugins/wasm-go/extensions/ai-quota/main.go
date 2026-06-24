@@ -23,6 +23,15 @@ import (
 const (
 	pluginName = "ai-quota"
 
+	// RedisKeyPrefix 集群限流插件在 Redis 中 key 的统一前缀
+	// 使用 {} 包裹作为 hash tag，确保 group/consumer quota key 在 Redis Cluster 中落在同一 slot
+	RedisKeyPrefix = "{chat_quota}"
+
+	// QuotaKeyFormat Redis key 格式：{chat_quota}:<subject>
+	// subject 可为 consumer name 或 group name
+	// 例：{chat_quota}:alice, {chat_quota}:team-a
+	QuotaKeyFormat = RedisKeyPrefix + ":%s"
+
 	// RequestPhaseQuotaReadScript 阶段 1 严格模式读
 	// **仅 group != "" 时调用**——group == "" 走 plugin 端 Get，与老 ai-quota 字节级一致。
 	// plugin Go 端用 `if group != ""` 决定走 Lua 还是非 Lua 路径，不引入显式 hasGroup 变量。
@@ -82,7 +91,6 @@ func init() {
 
 type QuotaConfig struct {
 	redisInfo          RedisInfo         `yaml:"redis"`
-	RedisKeyPrefix     string            `yaml:"redis_key_prefix"`
 	AdminConsumer      string            `yaml:"admin_consumer"`
 	AdminPath          string            `yaml:"admin_path"`
 	EnablePathSuffixes []string          `yaml:"enable_path_suffixes"`
@@ -135,10 +143,6 @@ func parseConfig(json gjson.Result, config *QuotaConfig) error {
 		return errors.New("missing admin_consumer in config")
 	}
 	// Redis
-	config.RedisKeyPrefix = json.Get("redis_key_prefix").String()
-	if config.RedisKeyPrefix == "" {
-		config.RedisKeyPrefix = "chat_quota:"
-	}
 	redisConfig := json.Get("redis")
 	if !redisConfig.Exists() {
 		return errors.New("missing redis in config")
@@ -224,7 +228,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 	// 按 group 是否非空走两条路径：
 	// - group == ""：走老 ai-quota 路径（Get + DecrBy），字节级一致
 	// - group != ""：走 Lua Eval，原子双 key 操作
-	consumerKey := quotaKey(config.RedisKeyPrefix, consumer)
+	consumerKey := fmt.Sprintf(QuotaKeyFormat, consumer)
 	if group == "" {
 		// 老路径——单池 GET，行为与 ai-quota 升级前完全一致
 		config.redisClient.Get(consumerKey, func(response resp.Value) {
@@ -248,7 +252,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 	}
 
 	// 新路径——Lua Eval，原子读 group + consumer 两池
-	groupKey := quotaKey(config.RedisKeyPrefix, group)
+	groupKey := fmt.Sprintf(QuotaKeyFormat, group)
 	keys := []interface{}{groupKey, consumerKey}
 	_ = config.redisClient.Eval(RequestPhaseQuotaReadScript, 2, keys, nil, func(response resp.Value) {
 		if err := response.Error(); err != nil {
@@ -342,7 +346,7 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 	// 按 group 是否非空走两条路径：
 	// - group == ""：走老 ai-quota 路径（单 DECRBY），字节级一致
 	// - group != ""：走 Lua Eval，原子双 key DECRBY
-	consumerKey := quotaKey(config.RedisKeyPrefix, consumer)
+	consumerKey := fmt.Sprintf(QuotaKeyFormat, consumer)
 	if group == "" {
 		log.Debugf("update consumer:%s, totalToken:%d", consumer, totalToken)
 		config.redisClient.DecrBy(consumerKey, totalToken, nil)
@@ -350,7 +354,7 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 	}
 
 	// 新路径——Lua Eval，原子双池 DECRBY
-	groupKey := quotaKey(config.RedisKeyPrefix, group)
+	groupKey := fmt.Sprintf(QuotaKeyFormat, group)
 	keys := []interface{}{groupKey, consumerKey}
 	args := []interface{}{totalToken}
 	log.Debugf("phase2 decrby consumer:%s group:%s cost:%d", consumer, group, totalToken)
@@ -419,9 +423,10 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 	}
 
 	sourceAddr := string(getSourceAddress())
+	subjectKey := fmt.Sprintf(QuotaKeyFormat, subject)
 
-	err2 := config.redisClient.Set(quotaKey(config.RedisKeyPrefix, subject), quota, func(response resp.Value) {
-		log.Infof("admin refresh quota: admin=%s subject=%s key=%s quota=%d from=%s", adminConsumer, subject, quotaKey(config.RedisKeyPrefix, subject), quota, sourceAddr)
+	err2 := config.redisClient.Set(subjectKey, quota, func(response resp.Value) {
+		log.Infof("admin refresh quota: admin=%s subject=%s key=%s quota=%d from=%s", adminConsumer, subject, subjectKey, quota, sourceAddr)
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 			return
@@ -459,7 +464,7 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	if queryGroup != "" {
 		subject = queryGroup
 	}
-	err := config.redisClient.Get(quotaKey(config.RedisKeyPrefix, subject), func(response resp.Value) {
+	err := config.redisClient.Get(fmt.Sprintf(QuotaKeyFormat, subject), func(response resp.Value) {
 		quota := 0
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
@@ -516,10 +521,11 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	}
 
 	sourceAddr := string(getSourceAddress())
+	subjectKey := fmt.Sprintf(QuotaKeyFormat, subject)
 
 	if value >= 0 {
-		err := config.redisClient.IncrBy(quotaKey(config.RedisKeyPrefix, subject), value, func(response resp.Value) {
-			log.Infof("admin delta quota (incr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, quotaKey(config.RedisKeyPrefix, subject), value, sourceAddr)
+		err := config.redisClient.IncrBy(subjectKey, value, func(response resp.Value) {
+			log.Infof("admin delta quota (incr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, subjectKey, value, sourceAddr)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
@@ -531,8 +537,8 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 			return types.ActionContinue
 		}
 	} else {
-		err := config.redisClient.DecrBy(quotaKey(config.RedisKeyPrefix, subject), 0-value, func(response resp.Value) {
-			log.Infof("admin delta quota (decr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, quotaKey(config.RedisKeyPrefix, subject), value, sourceAddr)
+		err := config.redisClient.DecrBy(subjectKey, 0-value, func(response resp.Value) {
+			log.Infof("admin delta quota (decr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, subjectKey, value, sourceAddr)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
@@ -554,16 +560,4 @@ func getSourceAddress() []byte {
 		return nil
 	}
 	return bs
-}
-
-// quotaKey 构造带 Redis Cluster hash tag 的 quota key。
-// 将 RedisKeyPrefix（默认 "chat_quota:"）末尾的 ":" 去掉后用 {} 包成 hash tag，
-// 保证 group quota Lua 脚本中双 key 落在同一 slot，避免 CROSSSLOT 错误。
-// 例：prefix="chat_quota:" subject="team-a" → "{chat_quota}:team-a"
-//
-// 注意：key 格式变化不向后兼容。升级后需 admin 重新 refresh 一次，将数据从
-// 旧 key（chat_quota:team-a）写到新 key（{chat_quota}:team-a）。
-func quotaKey(prefix, subject string) string {
-	tag := strings.TrimSuffix(prefix, ":")
-	return "{" + tag + "}:" + subject
 }
