@@ -55,7 +55,11 @@ redis:
 
 ai-quota 支持按 consumer group 共享配额池：组内任一 consumer 消耗都扣减共享池，consumer 私有池仍按人扣减。两个池都 > 0 才放行（严格模式）。
 
-Group 由 key-auth 在认证时通过 `X-Mse-Consumer-Group` header 注入。ai-quota 兼容 group 缺失场景——按老逻辑仅扣 consumer 私有池。
+> **Group 的来源**：`group` 不是 ai-quota 自己的配置项——它由上游认证插件（如 `key-auth`）在认证时通过 `X-Mse-Consumer-Group` HTTP header 注入，ai-quota 仅在请求阶段读取。在 `key-auth` 的 consumer 配置中给成员加 `group: <name>` 字段即可。`X-Mse-Consumer-Group` 缺失时 ai-quota 走 legacy 单池路径，只扣 consumer 私有池。
+
+> **Redis Cluster 兼容性**：group 非空时，Phase 1/2 使用 Lua 脚本同时操作 group 与 consumer 两把 key。Redis Cluster 要求多 key 操作的 key 落在同一 slot，否则报 `CROSSSLOT`。ai-quota 自动将 `redis_key_prefix` 包成 hash tag（`chat_quota:` → `{chat_quota}`），所有 quota key 共享同一 slot。**代价**：所有 ai-quota 流量集中在一个 slot，失去 Cluster 分片能力。如果配额流量较大且需要横向分片，可改用多个 `redis_key_prefix`（如 `tenant_a_quota:`、`tenant_b_quota:`）按租户切分。
+>
+> **升级迁移**：旧版（≤ v1.0.x）的 key 形如 `chat_quota:consumer1`，新版变为 `{chat_quota}:consumer1`。升级后请通过 admin API 对每个 consumer/group 重新 `refresh` 一次，或直接清空 Redis 中老前缀的 key。
 
 ###  刷新 quota
 
@@ -108,4 +112,11 @@ Redis 中 key `chat_quota:team-a` 增减 500。
 | 401 | `ai-quota.no_key` | 缺少 `X-Mse-Consumer` header |
 | 403 | `ai-quota.unauthorized` | consumer 未配置或非 admin consumer |
 
-> **破坏性变更**：老版本（≤ v1.0.x）chat completion 路径的配额耗尽返回 `403 ai-quota.noquota`，新版本统一为 `429 ai-quota.consumer_exhausted`。依赖 403/noquota 字符串的 client 需要同步更新。另外 admin `queryQuota` 返回的 JSON 字段 `"consumer"` 在新版本中更名为 `"name"`，以同时承载 consumer 与 group 名称。
+> **破坏性变更（≤ v1.0.x → 当前版本）**：
+>
+> 1. **HTTP 状态码**：chat completion 路径的配额耗尽由 `403 ai-quota.noquota` 改为 `429 ai-quota.consumer_exhausted`。依赖 403/noquota 字符串的 client 需同步更新。
+> 2. **新增 admin `group` 参数**：`refresh`/`query`/`delta` 三个 admin 接口新增可选 `group` 参数，与 `consumer` **互斥**（同时设置或都不设置均返回 `400 ai-quota.invalid_param`）。
+> 3. **新增配额拒绝错误码**：`ai-quota.group_exhausted`（group 池耗尽）、`ai-quota.both_exhausted`（两池都耗尽）；旧 client 只匹配 `consumer_exhausted` 时无法区分拒绝原因。
+> 4. **admin 入参错误码迁移**：旧版空 consumer / 缺 quota 等参数错误返回 `403 ai-quota.unauthorized`，新版统一为 `400 ai-quota.invalid_param`，与"鉴权失败"区分。
+> 5. **Redis key 格式**：`{redis_key_prefix}<subject>` → `{<prefix>}:<subject>`（如 `chat_quota:consumer1` → `{chat_quota}:consumer1`），用于 Redis Cluster hash tag。升级后需重新 `refresh` 一次或清空老前缀的 key。
+> 6. **admin `queryQuota` JSON 字段**：`"consumer"` 改为 `"name"`，以同时承载 consumer 与 group 名称。

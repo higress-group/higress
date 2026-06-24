@@ -430,6 +430,58 @@ func TestLuaScripts_Defined(t *testing.T) {
 	require.Contains(t, ResponsePhaseQuotaDecrbyScript, "DECRBY")
 }
 
+// quotaKey 单元测试：保证 Redis Cluster hash tag 格式正确
+func TestQuotaKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		prefix   string
+		subject  string
+		expected string
+	}{
+		{
+			name:     "默认前缀（带冒号）",
+			prefix:   "chat_quota:",
+			subject:  "team-a",
+			expected: "{chat_quota}:team-a",
+		},
+		{
+			name:     "显式冒号前缀",
+			prefix:   "foo:",
+			subject:  "alice",
+			expected: "{foo}:alice",
+		},
+		{
+			name:     "无冒号前缀",
+			prefix:   "bar",
+			subject:  "alice",
+			expected: "{bar}:alice",
+		},
+		{
+			name:     "多冒号前缀（仅 trim 末尾）",
+			prefix:   "ns:chat_quota:",
+			subject:  "team-a",
+			expected: "{ns:chat_quota}:team-a",
+		},
+		{
+			name:     "subject 含 group",
+			prefix:   "chat_quota:",
+			subject:  "team-a",
+			expected: "{chat_quota}:team-a",
+		},
+		{
+			name:     "subject 含特殊字符（透传，不做校验）",
+			prefix:   "chat_quota:",
+			subject:  "alice:bob",
+			expected: "{chat_quota}:alice:bob",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, quotaKey(tt.prefix, tt.subject))
+		})
+	}
+}
+
 // chat completion 模式 + group 非空 + 两池都 > 0 → ActionContinue
 func TestOnHttpRequestHeaders_WithGroup_BothPositive(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
@@ -533,7 +585,76 @@ func TestOnHttpRequestHeaders_WithGroup_BothExhausted(t *testing.T) {
 	})
 }
 
+// Phase 1 legacy Get 路径下 Redis 返回 nil（key 不存在）→ 429 consumer_exhausted
+// 锁定 main.go:235-237 的 IsNull() 分支，与 Integer() <= 0 分支独立。
+// 业务语义：从未 refresh 过该 consumer 配额 → 视为无配额拒绝。
+func TestOnHttpRequestHeaders_LegacyPhase1_NullKey_Denied(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		// 不带 x-mse-consumer-group → legacy 单池路径
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+			{"x-mse-consumer", "alice"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		// RESP nil reply：模拟 key 不存在
+		host.CallOnRedisCall(0, test.CreateRedisRespNull())
+
+		resp := host.GetLocalResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, uint32(http.StatusTooManyRequests), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.consumer_exhausted")
+		host.CompleteHttp()
+	})
+}
+
+// Phase 1 Lua Eval 路径下 Redis 返回错误 → 503 ai-quota.error
+// 锁定 main.go:254-257 的 response.Error() 分支。
+// 区分此路径（503）与 legacy 路径（429）的语义：Redis 故障不应被静默归类为配额拒绝。
+func TestOnHttpRequestHeaders_LuaPhase1_RedisError_503(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+			{"x-mse-consumer", "alice"},
+			{"x-mse-consumer-group", "team-a"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		// RESP error reply：模拟 Redis 报错（如 network blip、AUTH 失败）
+		host.CallOnRedisCall(0, test.CreateRedisRespError("connection refused"))
+
+		resp := host.GetLocalResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, uint32(http.StatusServiceUnavailable), resp.StatusCode)
+		// 503 路径的 body 仅含 "redis error:%v"，错误码通过 SendResponse 的 statusCodeDetails
+		// 字段（"ai-quota.error"）传给 Envoy，不在 response.Data 中。
+		require.Contains(t, string(resp.Data), "redis error:")
+		host.CompleteHttp()
+	})
+}
+
 // 阶段 2 group 非空 → Eval 调用 group + consumer 双池 DECRBY
+//
+// 每个 CallOnRedisCall 的角色在内部注释说明，便于以后排查：
+//   - 第 1 次 (idx=0)：模拟 Phase 1 Lua MGET 的响应 {group_remaining, consumer_remaining}
+//   - 第 2 次 (idx=0)：模拟 Phase 2 Lua DECRBY 的响应 {group_remaining, consumer_remaining}
+//
+// Wasm filter 不暴露 Redis 调用参数（key 列表 / cost），框架也没有 RedisCallCount inspector。
+// 为了让"实际走的是 Lua 双池路径而不是 legacy 单池路径"在重构时可见，单独有 sister 测试
+// TestOnHttpStreamingResponseBody_LegacyDecrby_SinglePool 覆盖 group == "" 路径——
+// 若有人把 Lua 分支误替换成 legacy 分支，本测试的 mock 值（数组）会让 DecrBy 解析失败或状态错位。
 func TestOnHttpStreamingResponseBody_WithGroup_DecrbyBothPools(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
@@ -547,17 +668,62 @@ func TestOnHttpStreamingResponseBody_WithGroup_DecrbyBothPools(t *testing.T) {
 			{"x-mse-consumer", "alice"},
 			{"x-mse-consumer-group", "team-a"},
 		})
-		// 阶段 1 跑通
+
+		// Phase 1 Lua 响应：{group_rem=1000, consumer_rem=500} → 两池都 > 0，ResumeHttpRequest
 		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{1000, 500}))
 
 		// 流式 chunk 携带 usage，触发 tokenusage 提取（必需，否则 onHttpStreamingResponseBody 早返回）
 		data := []byte(`{"choices": [{"delta": {"content": "Hello"}}], "usage": {"prompt_tokens": 15, "completion_tokens": 15, "total_tokens": 30}}`)
-		host.CallOnHttpStreamingResponseBody(data, false)
-		host.CallOnHttpStreamingResponseBody(data, true)
+		// 非结束流直接返回 data，不触发任何 Redis 操作
+		result := host.CallOnHttpStreamingResponseBody(data, false)
+		require.Equal(t, types.ActionContinue, result)
 
-		// 阶段 2 跑 Eval，模拟成功（status=0 与现有测试一致）
-		resp := test.CreateRedisRespArray([]interface{}{970, 470})
-		host.CallOnRedisCall(0, resp)
+		// 结束流 → Phase 2 Lua DECRBY 双池
+		result = host.CallOnHttpStreamingResponseBody(data, true)
+		require.Equal(t, types.ActionContinue, result)
+
+		// Phase 2 响应：{group_rem=970, consumer_rem=470}（cost=30 扣减后）
+		// 回调是 nil，仅用于满足框架调度，本地无 response 可断言。
+		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{970, 470}))
+
+		// post-state 断言：Wasm filter 必须原样透传 stream body（main.go:357-358 return data）
+		require.Equal(t, data, host.GetResponseBody())
+		host.CompleteHttp()
+	})
+}
+
+// Sister 测试：Phase 2 legacy 路径（group == ""，无 x-mse-consumer-group header）→ 单 DecrBy。
+// 与 WithGroup 版对照：若有人把 Lua 路径误换成 legacy 路径，WithGroup 测试的数组响应会让
+// legacy DecrBy（只接受 integer reply）解析行为差异可见，反之亦然。
+func TestOnHttpStreamingResponseBody_LegacyDecrby_SinglePool(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		// 不带 x-mse-consumer-group → legacy 路径
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+			{"x-mse-consumer", "alice"},
+		})
+
+		// Phase 1 legacy Get 返回 integer reply
+		host.CallOnRedisCall(0, test.CreateRedisResp(1000))
+
+		data := []byte(`{"choices": [{"delta": {"content": "Hello"}}], "usage": {"prompt_tokens": 15, "completion_tokens": 15, "total_tokens": 30}}`)
+		result := host.CallOnHttpStreamingResponseBody(data, false)
+		require.Equal(t, types.ActionContinue, result)
+
+		result = host.CallOnHttpStreamingResponseBody(data, true)
+		require.Equal(t, types.ActionContinue, result)
+
+		// Phase 2 legacy DecrBy 响应：单 integer（扣减后剩余），回调为 nil
+		host.CallOnRedisCall(0, test.CreateRedisResp(970))
+
+		// post-state 断言：data 透传
+		require.Equal(t, data, host.GetResponseBody())
 		host.CompleteHttp()
 	})
 }
@@ -664,6 +830,80 @@ func TestAdminDelta_Group(t *testing.T) {
 		response := host.GetLocalResponse()
 		require.Equal(t, uint32(http.StatusOK), response.StatusCode)
 		require.Equal(t, "delta quota successful", string(response.Data))
+		host.CompleteHttp()
+	})
+}
+
+// 互斥校验：consumer 与 group 都未设置 → 400 invalid_param（refresh）
+// 锁定 (a == "" && b == "") 分支，避免只测 "都设置" 时的偏覆盖。
+func TestAdminRefresh_NeitherSet_Rejected(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions/quota/refresh"},
+			{":method", "POST"},
+			{"x-mse-consumer", "admin"},
+		})
+		// 仅 quota，不带 consumer 与 group → 互斥校验应拦截
+		host.CallOnHttpRequestBody([]byte("quota=1000"))
+
+		resp := host.GetLocalResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, uint32(http.StatusBadRequest), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.invalid_param")
+		host.CompleteHttp()
+	})
+}
+
+// 互斥校验：consumer 与 group 都未设置 → 400 invalid_param（query，URL 参数版）
+func TestAdminQuery_NeitherSet_Rejected(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		// 不带 ?consumer= 也不带 ?group= → query 入口互斥校验拦截
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions/quota"},
+			{":method", "GET"},
+			{"x-mse-consumer", "admin"},
+		})
+		// 校验失败走 ActionContinue（util.SendResponse 后立即返回）
+		require.Equal(t, types.ActionContinue, action)
+
+		resp := host.GetLocalResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, uint32(http.StatusBadRequest), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.invalid_param")
+		host.CompleteHttp()
+	})
+}
+
+// 互斥校验：consumer 与 group 都未设置 → 400 invalid_param（delta）
+func TestAdminDelta_NeitherSet_Rejected(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions/quota/delta"},
+			{":method", "POST"},
+			{"x-mse-consumer", "admin"},
+		})
+		// 仅 value，不带 consumer 与 group → 互斥校验应拦截
+		host.CallOnHttpRequestBody([]byte("value=100"))
+
+		resp := host.GetLocalResponse()
+		require.NotNil(t, resp)
+		require.Equal(t, uint32(http.StatusBadRequest), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.invalid_param")
 		host.CompleteHttp()
 	})
 }
