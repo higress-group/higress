@@ -151,7 +151,7 @@ docker-buildx-push: clean-env docker.higress-buildx
 export PARENT_GIT_TAG:=$(shell cat VERSION)
 export PARENT_GIT_REVISION:=$(TAG)
 
-export ENVOY_PACKAGE_URL_PATTERN?=https://github.com/higress-group/proxy/releases/download/v2.2.2/envoy-symbol-ARCH.tar.gz
+export ENVOY_PACKAGE_URL_PATTERN?=https://github.com/higress-group/proxy/releases/download/v2.2.3/envoy-symbol-ARCH.tar.gz
 
 build-envoy: prebuild
 	./tools/hack/build-envoy.sh
