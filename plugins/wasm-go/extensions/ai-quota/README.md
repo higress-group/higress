@@ -108,4 +108,4 @@ Redis 中 key `chat_quota:team-a` 增减 500。
 | 401 | `ai-quota.no_key` | 缺少 `X-Mse-Consumer` header |
 | 403 | `ai-quota.unauthorized` | consumer 未配置或非 admin consumer |
 
-> **破坏性变更**：老版本（≤ v1.0.x）chat completion 路径的配额耗尽返回 `403 ai-quota.noquota`，新版本统一为 `429 ai-quota.consumer_exhausted`（spec §5.5、§8.1）。依赖 403/noquota 字符串的 client 需要同步更新。另外 admin `queryQuota` 返回的 JSON 字段 `"consumer"` 在新版本中更名为 `"name"`，以同时承载 consumer 与 group 名称（spec §5.4.2、§8.1）。
+> **破坏性变更**：老版本（≤ v1.0.x）chat completion 路径的配额耗尽返回 `403 ai-quota.noquota`，新版本统一为 `429 ai-quota.consumer_exhausted`。依赖 403/noquota 字符串的 client 需要同步更新。另外 admin `queryQuota` 返回的 JSON 字段 `"consumer"` 在新版本中更名为 `"name"`，以同时承载 consumer 与 group 名称。

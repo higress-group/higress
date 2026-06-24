@@ -133,7 +133,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 		})
 
 		// 测试聊天完成模式配额耗尽（legacy Phase 1 路径，group == ""）
-		// 锁定 403→429 / noquota→consumer_exhausted 破坏性变更（spec §8.1）
+		// 锁定 403→429 / noquota→consumer_exhausted 破坏性变更
 		t.Run("chat completion mode denied", func(t *testing.T) {
 			host, status := test.NewTestHost(basicConfig)
 			defer host.Reset()
@@ -589,7 +589,7 @@ func TestAdminRefresh_Group(t *testing.T) {
 	})
 }
 
-// admin refresh 同时设置 consumer + group → 400 invalid_param（GC6）
+// admin refresh 同时设置 consumer + group → 400 invalid_param
 func TestAdminRefresh_BothConsumerAndGroup_Rejected(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)

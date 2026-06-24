@@ -23,7 +23,7 @@ import (
 const (
 	pluginName = "ai-quota"
 
-	// RequestPhaseQuotaReadScript 阶段 1 严格模式读（§5.3.1）
+	// RequestPhaseQuotaReadScript 阶段 1 严格模式读
 	// **仅 group != "" 时调用**——group == "" 走 plugin 端 Get，与老 ai-quota 字节级一致。
 	// plugin Go 端用 `if group != ""` 决定走 Lua 还是非 Lua 路径，不引入显式 hasGroup 变量。
 	// 用 2 次 GET 而非 1 次 MGET：Lua 脚本在 Redis 单线程上原子执行，
@@ -37,7 +37,7 @@ local nc = tonumber(redis.call("GET", KEYS[2]) or "0")
 return {ng, nc}
 `
 
-	// ResponsePhaseQuotaDecrbyScript 阶段 2 原子 DECRBY（§5.3.2）
+	// ResponsePhaseQuotaDecrbyScript 阶段 2 原子 DECRBY
 	// **仅 group != "" 时调用**——group == "" 走 plugin 端 DecrBy。
 	// 两把 key 都 DECRBY，原子执行避免双池扣减顺序竞争。
 	// KEYS[1]=group_quota_key      KEYS[2]=consumer_quota_key
@@ -214,7 +214,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 	// there is no need to read request body when it is on chat completion mode
 	context.DontReadRequestBody()
 
-	// 读取 group header（不校验格式——与 name 一致；GC11）。
+	// 读取 group header（不校验格式——与 name 一致）。
 	group := ""
 	if rawGroup, gErr := proxywasm.GetHttpRequestHeader("x-mse-consumer-group"); gErr == nil && rawGroup != "" {
 		group = rawGroup
@@ -264,7 +264,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 		gRem := arr[0].Integer()
 		cRem := arr[1].Integer()
 
-		// 严格模式：任一池 ≤ 0 即拒（GC7）
+		// 严格模式：任一池 ≤ 0 即拒
 		var code, detail string
 		switch {
 		case gRem <= 0 && cRem <= 0:
@@ -349,7 +349,7 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 		return data
 	}
 
-	// 新路径——Lua Eval，原子双池 DECRBY（§5.3.2）
+	// 新路径——Lua Eval，原子双池 DECRBY
 	groupKey := config.RedisKeyPrefix + group
 	keys := []interface{}{groupKey, consumerKey}
 	args := []interface{}{totalToken}
@@ -403,7 +403,7 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 	queryGroup := values["group"]
 	quota, err := strconv.Atoi(values["quota"])
 
-	// 互斥校验（GC6）
+	// 互斥校验：consumer 与 group 必须恰好设置一个
 	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
 		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: exactly one of 'consumer' or 'group' must be set")
 		return types.ActionContinue
