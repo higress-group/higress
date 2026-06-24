@@ -792,7 +792,7 @@ func TestParseGlobalConfig_SharedGroupAllowed(t *testing.T) {
 	})
 }
 
-// 多对 group/name 同时冲突：启动失败（spec §10.1 "不允许部分通过"）
+// 多对 group/name 同时冲突：启动失败（一次性报告全部冲突）
 var multipleGroupConflictsConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
 		"consumers": []map[string]interface{}{
