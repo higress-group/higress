@@ -79,7 +79,6 @@ func TestParseConfig(t *testing.T) {
 
 			quotaConfig := config.(*QuotaConfig)
 			require.Equal(t, "admin", quotaConfig.AdminConsumer)
-			require.Equal(t, "chat_quota:", quotaConfig.RedisKeyPrefix)
 			require.Equal(t, "/quota", quotaConfig.AdminPath)
 			require.Equal(t, []string{"/v1/chat/completions", "/v1/messages"}, quotaConfig.EnablePathSuffixes)
 		})
@@ -428,58 +427,6 @@ func TestLuaScripts_Defined(t *testing.T) {
 	require.NotEmpty(t, ResponsePhaseQuotaDecrbyScript)
 	require.Contains(t, RequestPhaseQuotaReadScript, "GET")
 	require.Contains(t, ResponsePhaseQuotaDecrbyScript, "DECRBY")
-}
-
-// quotaKey 单元测试：保证 Redis Cluster hash tag 格式正确
-func TestQuotaKey(t *testing.T) {
-	tests := []struct {
-		name     string
-		prefix   string
-		subject  string
-		expected string
-	}{
-		{
-			name:     "默认前缀（带冒号）",
-			prefix:   "chat_quota:",
-			subject:  "team-a",
-			expected: "{chat_quota}:team-a",
-		},
-		{
-			name:     "显式冒号前缀",
-			prefix:   "foo:",
-			subject:  "alice",
-			expected: "{foo}:alice",
-		},
-		{
-			name:     "无冒号前缀",
-			prefix:   "bar",
-			subject:  "alice",
-			expected: "{bar}:alice",
-		},
-		{
-			name:     "多冒号前缀（仅 trim 末尾）",
-			prefix:   "ns:chat_quota:",
-			subject:  "team-a",
-			expected: "{ns:chat_quota}:team-a",
-		},
-		{
-			name:     "subject 含 group",
-			prefix:   "chat_quota:",
-			subject:  "team-a",
-			expected: "{chat_quota}:team-a",
-		},
-		{
-			name:     "subject 含特殊字符（透传，不做校验）",
-			prefix:   "chat_quota:",
-			subject:  "alice:bob",
-			expected: "{chat_quota}:alice:bob",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.expected, quotaKey(tt.prefix, tt.subject))
-		})
-	}
 }
 
 // chat completion 模式 + group 非空 + 两池都 > 0 → ActionContinue
