@@ -176,14 +176,14 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 		// tightestRatio 用 math.MaxFloat64 初始化，避免依赖 arr[0] 形状（防 0/0 NaN）。
 		tightestRatio := math.MaxFloat64
 
-		for _, sub := range arr {
-			a := sub.Array()
-			if len(a) != 3 {
-				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(a))
+		for _, ruleResult := range arr {
+			ruleState := ruleResult.Array()
+			if len(ruleState) != 3 {
+				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(ruleState))
 				_ = proxywasm.ResumeHttpRequest()
 				return
 			}
-			threshold, current, ttl := a[0].Integer(), a[1].Integer(), a[2].Integer()
+			threshold, current, ttl := ruleState[0].Integer(), ruleState[1].Integer(), ruleState[2].Integer()
 
 			if current > threshold {
 				// 命中触发的第一条规则（按 collectMatchedRules 顺序，global 优先）
