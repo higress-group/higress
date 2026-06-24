@@ -97,7 +97,7 @@ rule_items:
 
 ##### Duplicate rule_items (not allowed)
 
-A `rule_item` with the same `limit_by_*` + key combination may **only appear once**, including multi-window scenarios where the same key has different time windows (e.g., per-minute and per-hour limits for the same apikey). Duplicate declarations will emit a warn log during config parsing, prompting consolidation into a single `rule_item`:
+A `rule_item` with the same `limit_by_*` + key combination may **only appear once**, including multi-window scenarios where the same key has different time windows (e.g., per-minute and per-hour limits for the same apikey). Duplicate declarations will emit a warn log during config parsing:
 
 ```yaml
 rule_items:
