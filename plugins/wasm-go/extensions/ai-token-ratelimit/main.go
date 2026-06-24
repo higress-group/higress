@@ -24,6 +24,7 @@ import (
 
 	"ai-token-ratelimit/config"
 	"ai-token-ratelimit/util"
+
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -60,10 +61,20 @@ const (
 		for i = 1, #KEYS do
 			local threshold = tonumber(ARGV[2*i - 1])
 			local window    = tonumber(ARGV[2*i])
-			local current = tonumber(redis.call('get', KEYS[i]) or "0")
+			local current = redis.call('get', KEYS[i])
 			local ttl = redis.call('ttl', KEYS[i])
-			if ttl < 0 then ttl = window end
-			table.insert(results, {threshold, current, ttl})
+
+			-- 键不存在时，返回初始状态（计数0，窗口时间为过期时间）
+			if not current then
+				table.insert(results, {threshold, 0, window})
+			else
+				-- 修复异常过期时间（确保窗口有效）
+				if ttl < 0 then
+					ttl = window
+				end
+				-- 返回窗口状态：阈值、当前计数、剩余时间
+				table.insert(results, {threshold, tonumber(current), ttl})
+			end
 		end
 		return results
 	`
