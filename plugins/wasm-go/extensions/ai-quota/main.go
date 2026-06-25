@@ -323,7 +323,9 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 
 	inputToken := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
 	outputToken := ctx.GetContext(tokenusage.CtxKeyOutputToken).(int64)
+	// consumer 必填，前面代码已判断不为 nil。
 	consumer := ctx.GetContext("consumer").(string)
+	// group 选填（请求可无 x-mse-consumer-group header），用二值断言把 nil 兜底成 ""，交给下方 group == "" 分支走老路径。
 	group, _ := ctx.GetContext("group").(string)
 	totalToken := int(inputToken + outputToken)
 	consumerKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, consumer)
