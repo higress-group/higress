@@ -221,6 +221,7 @@ type AISecurityConfig struct {
 	CustomLabelLevelBar                    string
 	Timeout                                uint32
 	BufferLimit                            int
+	BufferFlushTimeInterval                int
 	Metrics                                map[string]proxywasm.MetricCounter
 	ConsumerRequestCheckService            []map[string]interface{}
 	ConsumerResponseCheckService           []map[string]interface{}
@@ -402,6 +403,9 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 	if obj := json.Get("bufferLimit"); obj.Exists() {
 		config.BufferLimit = int(obj.Int())
 	}
+	if obj := json.Get("bufferFlushTimeInterval"); obj.Exists() {
+		config.BufferFlushTimeInterval = int(obj.Int())
+	}
 	if obj := json.Get("consumerRequestCheckService"); obj.Exists() {
 		for _, item := range json.Get("consumerRequestCheckService").Array() {
 			m := make(map[string]interface{})
@@ -571,7 +575,8 @@ func (config *AISecurityConfig) SetDefaultValues() {
 	config.MaliciousUrlLevelBar = MaxRisk
 	config.CustomLabelLevelBar = MaxRisk
 	config.Timeout = DefaultTimeout
-	config.BufferLimit = 1000
+	config.BufferLimit = 200
+	config.BufferFlushTimeInterval = 0
 	config.ApiType = ApiTextGeneration
 	config.ProviderType = ProviderOpenAI
 	config.RiskAction = "block"
