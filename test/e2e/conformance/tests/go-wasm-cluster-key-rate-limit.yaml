@@ -92,4 +92,24 @@ spec:
     show_limit_quota_header: true
     rejected_code: 429
     rejected_msg: "Too many requests"
+  matchRules:
+    - config:
+        rule_name: "e2e-cluster-key-hybrid"
+        global_threshold:
+          query_per_minute: 3
+        rule_items:
+          - limit_by_header: "x-api-key"
+            limit_keys:
+              - key: "vip-key"
+                query_per_minute: 1
+        redis:
+          service_name: "redis-cluster-key.higress-conformance-infra.svc.cluster.local"
+          service_port: 6379
+          timeout: 1000
+        show_limit_quota_header: true
+        rejected_code: 429
+        rejected_msg: "Too many requests"
+      configDisable: false
+      ingress:
+        - higress-conformance-infra/cluster-key-rate-limit
   url: file:///opt/plugins/wasm-go/extensions/cluster-key-rate-limit/plugin.wasm

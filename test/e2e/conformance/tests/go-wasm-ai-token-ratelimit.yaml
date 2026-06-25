@@ -91,4 +91,23 @@ spec:
       timeout: 1000
     rejected_code: 429
     rejected_msg: "Too many AI token requests"
+  matchRules:
+    - config:
+        rule_name: "e2e-ai-token-hybrid"
+        global_threshold:
+          token_per_minute: 100
+        rule_items:
+          - limit_by_header: "x-api-key"
+            limit_keys:
+              - key: "vip-key"
+                token_per_minute: 25
+        redis:
+          service_name: "redis-ai-token.higress-conformance-infra.svc.cluster.local"
+          service_port: 6379
+          timeout: 1000
+        rejected_code: 429
+        rejected_msg: "Too many AI token requests"
+      configDisable: false
+      ingress:
+        - higress-conformance-ai-backend/ai-token-ratelimit
   url: file:///opt/plugins/wasm-go/extensions/ai-token-ratelimit/plugin.wasm
