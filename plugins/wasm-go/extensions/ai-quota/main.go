@@ -427,10 +427,10 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 	}
 
 	sourceAddr := string(getSourceAddress())
-	subjectKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, subject)
+	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, subject)
 
-	err2 := config.redisClient.Set(subjectKey, quota, func(response resp.Value) {
-		log.Infof("admin refresh quota: admin=%s subject=%s key=%s quota=%d from=%s", adminConsumer, subject, subjectKey, quota, sourceAddr)
+	err2 := config.redisClient.Set(quotaKey, quota, func(response resp.Value) {
+		log.Infof("admin refresh quota: admin=%s subject=%s key=%s quota=%d from=%s", adminConsumer, subject, quotaKey, quota, sourceAddr)
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 			return
@@ -525,11 +525,11 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	}
 
 	sourceAddr := string(getSourceAddress())
-	subjectKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, subject)
+	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, subject)
 
 	if value >= 0 {
-		err := config.redisClient.IncrBy(subjectKey, value, func(response resp.Value) {
-			log.Infof("admin delta quota (incr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, subjectKey, value, sourceAddr)
+		err := config.redisClient.IncrBy(quotaKey, value, func(response resp.Value) {
+			log.Infof("admin delta quota (incr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, quotaKey, value, sourceAddr)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
@@ -541,8 +541,8 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 			return types.ActionContinue
 		}
 	} else {
-		err := config.redisClient.DecrBy(subjectKey, 0-value, func(response resp.Value) {
-			log.Infof("admin delta quota (decr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, subjectKey, value, sourceAddr)
+		err := config.redisClient.DecrBy(quotaKey, 0-value, func(response resp.Value) {
+			log.Infof("admin delta quota (decr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, quotaKey, value, sourceAddr)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
