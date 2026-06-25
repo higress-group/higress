@@ -1,0 +1,133 @@
+# Copyright (c) 2022 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-token-statistics-openai
+  namespace: higress-conformance-infra
+  annotations:
+    # No specific annotations needed for basic routing
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "dashscope.aliyuncs.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-token-statistics-qwen
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "qwen.ai.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+# Token Statistics Plugin Configuration
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: token-statistics
+  namespace: higress-system
+spec:
+  # Token statistics should run after ai-proxy (priority 201)
+  # but potentially before or after ai-cache (priority 400)
+  # Setting it to 300 ensures proper ordering
+  priority: 300
+  matchRules:
+    - config:
+        # Configure path suffixes to track
+        enable_path_suffixes:
+          - "/v1/chat/completions"
+          - "/v1/completions"
+          - "/chat/completions"
+          - "/completions"
+        # Configure content types to process
+        enable_content_types:
+          - "application/json"
+          - "text/event-stream"
+        # Exporter configuration for metrics and logging
+        exporters:
+          - type: "log"
+            config:
+              level: "info"
+          - type: "prometheus"
+            config:
+              namespace: "higress"
+              subsystem: "token_statistics"
+        # Optional: dimensions for advanced tracking
+        dimensions:
+          - name: "model"
+            value_source: "response_body"
+            value: "model"
+            apply_to_metric: true
+            apply_to_log: true
+          - name: "provider"
+            value_source: "request_header"
+            value: "x-ai-provider"
+            default_value: "unknown"
+            apply_to_metric: false
+            apply_to_log: true
+      ingress:
+        - higress-conformance-infra/wasmplugin-token-statistics-openai
+        - higress-conformance-infra/wasmplugin-token-statistics-qwen
+  # For CI/CD, point to the built plugin or OCI registry
+  # Option 1: Local file (for development)
+  # url: file:///opt/plugins/wasm-go/extensions/token-statistics/plugin.wasm
+  # Option 2: OCI registry (for production/CI)
+  url: oci://registry.cn-shanghai.aliyuncs.com/suchunsv/higress_ai:1.18
+---
+# AI Proxy Plugin Configuration
+# This plugin should run before token-statistics to handle AI provider routing
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-proxy
+  namespace: higress-system
+spec:
+  priority: 201
+  matchRules:
+    - config:
+        provider:
+          type: "qwen"
+          qwenEnableCompatible: true
+          apiTokens:
+            - "{{secret.qwenApiKey}}"
+          timeout: 1200000
+          modelMapping:
+            "*": "qwen-long"
+            "qwen-turbo": "qwen-turbo"
+            "gpt-4-test": "qwen-long"
+      ingress:
+        - higress-conformance-infra/wasmplugin-token-statistics-openai
+        - higress-conformance-infra/wasmplugin-token-statistics-qwen
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-proxy:2.0.0
+
