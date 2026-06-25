@@ -133,7 +133,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 		})
 
 		// 测试聊天完成模式配额耗尽（legacy Phase 1 路径，group == ""）
-		// 锁定 403→429 / noquota→consumer_exhausted 破坏性变更
+		// 锁定 403 / ai-quota.noquota：body 含 "consumer quota exhausted" 细节
 		t.Run("chat completion mode denied", func(t *testing.T) {
 			host, status := test.NewTestHost(basicConfig)
 			defer host.Reset()
@@ -156,8 +156,9 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 
 			response := host.GetLocalResponse()
 			require.NotNil(t, response)
-			require.Equal(t, uint32(http.StatusTooManyRequests), response.StatusCode)
-			require.Contains(t, string(response.Data), "ai-quota.consumer_exhausted")
+			require.Equal(t, uint32(http.StatusForbidden), response.StatusCode)
+			require.Contains(t, string(response.Data), "ai-quota.noquota")
+			require.Contains(t, string(response.Data), "consumer quota exhausted")
 			host.CompleteHttp()
 		})
 
@@ -455,7 +456,7 @@ func TestOnHttpRequestHeaders_WithGroup_BothPositive(t *testing.T) {
 	})
 }
 
-// group 非空 + group ≤ 0 → 拒绝（ai-quota.group_exhausted）
+// group 非空 + group ≤ 0 → 拒绝（ai-quota.noquota: group quota exhausted）
 func TestOnHttpRequestHeaders_WithGroup_GroupExhausted(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
@@ -475,13 +476,14 @@ func TestOnHttpRequestHeaders_WithGroup_GroupExhausted(t *testing.T) {
 
 		resp := host.GetLocalResponse()
 		require.NotNil(t, resp)
-		require.Equal(t, uint32(http.StatusTooManyRequests), resp.StatusCode)
-		require.Contains(t, string(resp.Data), "ai-quota.group_exhausted")
+		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.noquota")
+		require.Contains(t, string(resp.Data), "group quota exhausted")
 		host.CompleteHttp()
 	})
 }
 
-// group 非空 + consumer ≤ 0 → 拒绝（ai-quota.consumer_exhausted）
+// group 非空 + consumer ≤ 0 → 拒绝（ai-quota.noquota: consumer quota exhausted）
 func TestOnHttpRequestHeaders_WithGroup_ConsumerExhausted(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
@@ -501,13 +503,14 @@ func TestOnHttpRequestHeaders_WithGroup_ConsumerExhausted(t *testing.T) {
 
 		resp := host.GetLocalResponse()
 		require.NotNil(t, resp)
-		require.Equal(t, uint32(http.StatusTooManyRequests), resp.StatusCode)
-		require.Contains(t, string(resp.Data), "ai-quota.consumer_exhausted")
+		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.noquota")
+		require.Contains(t, string(resp.Data), "consumer quota exhausted")
 		host.CompleteHttp()
 	})
 }
 
-// group 非空 + 两池都 ≤ 0 → 拒绝（ai-quota.both_exhausted）
+// group 非空 + 两池都 ≤ 0 → 拒绝（ai-quota.noquota: group and consumer quota exhausted）
 func TestOnHttpRequestHeaders_WithGroup_BothExhausted(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
@@ -527,13 +530,14 @@ func TestOnHttpRequestHeaders_WithGroup_BothExhausted(t *testing.T) {
 
 		resp := host.GetLocalResponse()
 		require.NotNil(t, resp)
-		require.Equal(t, uint32(http.StatusTooManyRequests), resp.StatusCode)
-		require.Contains(t, string(resp.Data), "ai-quota.both_exhausted")
+		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.noquota")
+		require.Contains(t, string(resp.Data), "group and consumer quota exhausted")
 		host.CompleteHttp()
 	})
 }
 
-// Phase 1 legacy Get 路径下 Redis 返回 nil（key 不存在）→ 429 consumer_exhausted
+// Phase 1 legacy Get 路径下 Redis 返回 nil（key 不存在）→ 403 ai-quota.noquota
 // 锁定 main.go:235-237 的 IsNull() 分支，与 Integer() <= 0 分支独立。
 // 业务语义：从未 refresh 过该 consumer 配额 → 视为无配额拒绝。
 func TestOnHttpRequestHeaders_LegacyPhase1_NullKey_Denied(t *testing.T) {
@@ -556,8 +560,9 @@ func TestOnHttpRequestHeaders_LegacyPhase1_NullKey_Denied(t *testing.T) {
 
 		resp := host.GetLocalResponse()
 		require.NotNil(t, resp)
-		require.Equal(t, uint32(http.StatusTooManyRequests), resp.StatusCode)
-		require.Contains(t, string(resp.Data), "ai-quota.consumer_exhausted")
+		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.noquota")
+		require.Contains(t, string(resp.Data), "consumer quota exhausted")
 		host.CompleteHttp()
 	})
 }
@@ -703,7 +708,7 @@ func TestAdminRefresh_Group(t *testing.T) {
 	})
 }
 
-// admin refresh 同时设置 consumer + group → 400 invalid_param
+// admin refresh 同时设置 consumer + group → 403 ai-quota.unauthorized
 func TestAdminRefresh_BothConsumerAndGroup_Rejected(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
@@ -721,8 +726,9 @@ func TestAdminRefresh_BothConsumerAndGroup_Rejected(t *testing.T) {
 
 		resp := host.GetLocalResponse()
 		require.NotNil(t, resp)
-		require.Equal(t, uint32(http.StatusBadRequest), resp.StatusCode)
-		require.Contains(t, string(resp.Data), "ai-quota.invalid_param")
+		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.unauthorized")
+		require.Contains(t, string(resp.Data), "consumer or group must be set")
 		host.CompleteHttp()
 	})
 }
@@ -809,7 +815,7 @@ func TestAdminDelta_Group(t *testing.T) {
 	})
 }
 
-// 互斥校验：consumer 与 group 都未设置 → 400 invalid_param（refresh）
+// 互斥校验：consumer 与 group 都未设置 → 403 ai-quota.unauthorized（refresh）
 // 锁定 (a == "" && b == "") 分支，避免只测 "都设置" 时的偏覆盖。
 func TestAdminRefresh_NeitherSet_Rejected(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
@@ -828,13 +834,14 @@ func TestAdminRefresh_NeitherSet_Rejected(t *testing.T) {
 
 		resp := host.GetLocalResponse()
 		require.NotNil(t, resp)
-		require.Equal(t, uint32(http.StatusBadRequest), resp.StatusCode)
-		require.Contains(t, string(resp.Data), "ai-quota.invalid_param")
+		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.unauthorized")
+		require.Contains(t, string(resp.Data), "consumer or group must be set")
 		host.CompleteHttp()
 	})
 }
 
-// 互斥校验：consumer 与 group 都未设置 → 400 invalid_param（query，URL 参数版）
+// 互斥校验：consumer 与 group 都未设置 → 403 unauthorized（query，URL 参数版）
 func TestAdminQuery_NeitherSet_Rejected(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
@@ -853,13 +860,14 @@ func TestAdminQuery_NeitherSet_Rejected(t *testing.T) {
 
 		resp := host.GetLocalResponse()
 		require.NotNil(t, resp)
-		require.Equal(t, uint32(http.StatusBadRequest), resp.StatusCode)
-		require.Contains(t, string(resp.Data), "ai-quota.invalid_param")
+		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.unauthorized")
+		require.Contains(t, string(resp.Data), "consumer or group must be set")
 		host.CompleteHttp()
 	})
 }
 
-// 互斥校验：consumer 与 group 都未设置 → 400 invalid_param（delta）
+// 互斥校验：consumer 与 group 都未设置 → 403 unauthorized（delta）
 func TestAdminDelta_NeitherSet_Rejected(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
@@ -877,8 +885,9 @@ func TestAdminDelta_NeitherSet_Rejected(t *testing.T) {
 
 		resp := host.GetLocalResponse()
 		require.NotNil(t, resp)
-		require.Equal(t, uint32(http.StatusBadRequest), resp.StatusCode)
-		require.Contains(t, string(resp.Data), "ai-quota.invalid_param")
+		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
+		require.Contains(t, string(resp.Data), "ai-quota.unauthorized")
+		require.Contains(t, string(resp.Data), "consumer or group must be set")
 		host.CompleteHttp()
 	})
 }

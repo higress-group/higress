@@ -72,7 +72,7 @@ Redis 中 key 为 chat_quota:consumer1 的值就会被刷新为 10000
 ```bash
 curl https://example.com/v1/chat/completions/quota/refresh -H "Authorization: Bearer credential3" -d "group=team-a&quota=10000"
 ```
-Redis 中 key 为 `chat_quota:team-a` 的值会被刷新为 10000。`consumer` 与 `group` 必须恰好设置一个；同时设置或都不设置返回 `400 ai-quota.invalid_param`。
+Redis 中 key 为 `chat_quota:team-a` 的值会被刷新为 10000。`consumer` 与 `group` 必须恰好设置一个；同时设置或都不设置返回 `403 ai-quota.unauthorized`，body 说明具体原因。
 
 ### 查询 quota
 
@@ -104,19 +104,13 @@ Redis 中 key `chat_quota:team-a` 增减 500。
 | 200 | `ai-quota.queryquota` | admin `/quota` 查询成功 |
 | 200 | `ai-quota.deltaquota` | admin `/delta` 成功 |
 | 200 | - | 普通 chat completion 通过 |
-| 429 | `ai-quota.group_exhausted` | group 共享池 ≤ 0（仅 group != "" 路径） |
-| 429 | `ai-quota.consumer_exhausted` | consumer 私有池 ≤ 0 |
-| 429 | `ai-quota.both_exhausted` | 两池都 ≤ 0（仅 group != "" 路径） |
-| 400 | `ai-quota.invalid_param` | admin API 入参错误（consumer/group 互斥违反，或 quota/value 非整数） |
+| 403 | `ai-quota.noquota` | 配额耗尽（legacy 单池：consumer 池 ≤ 0；group 路径：group / consumer 任一池 ≤ 0，body 区分 `consumer quota exhausted` / `group quota exhausted` / `group and consumer quota exhausted`） |
 | 503 | `ai-quota.error` | Redis 调用失败 |
 | 401 | `ai-quota.no_key` | 缺少 `X-Mse-Consumer` header |
-| 403 | `ai-quota.unauthorized` | consumer 未配置或非 admin consumer |
+| 403 | `ai-quota.unauthorized` | consumer 未配置、非 admin consumer，或 admin API 入参错误（consumer/group 互斥违反，quota/value 非整数） |
 
 > **破坏性变更（≤ v1.0.x → 当前版本）**：
 >
-> 1. **HTTP 状态码**：chat completion 路径的配额耗尽由 `403 ai-quota.noquota` 改为 `429 ai-quota.consumer_exhausted`。依赖 403/noquota 字符串的 client 需同步更新。
-> 2. **新增 admin `group` 参数**：`refresh`/`query`/`delta` 三个 admin 接口新增可选 `group` 参数，与 `consumer` **互斥**（同时设置或都不设置均返回 `400 ai-quota.invalid_param`）。
-> 3. **新增配额拒绝错误码**：`ai-quota.group_exhausted`（group 池耗尽）、`ai-quota.both_exhausted`（两池都耗尽）；旧 client 只匹配 `consumer_exhausted` 时无法区分拒绝原因。
-> 4. **admin 入参错误码迁移**：旧版空 consumer / 缺 quota 等参数错误返回 `403 ai-quota.unauthorized`，新版统一为 `400 ai-quota.invalid_param`，与"鉴权失败"区分。
-> 5. **Redis key 格式**：`{redis_key_prefix}<targetName>` → `{<prefix>}:<targetName>`（如 `chat_quota:consumer1` → `{chat_quota}:consumer1`），用于 Redis Cluster hash tag。升级后需重新 `refresh` 一次或清空老前缀的 key。
-> 6. **admin `queryQuota` JSON 字段按入参类型二选一**：consumer 查询响应含 `consumer` 字段（与老版本字段名一致，老 client 零迁移），group 查询响应含 `group` 字段（新增字段，仅影响会查 group 的调用方）；响应里不出现 `name` 统一字段。
+> 1. **新增 admin `group` 参数**：`refresh`/`query`/`delta` 三个 admin 接口新增可选 `group` 参数，与 `consumer` **互斥**（同时设置或都不设置均返回 `403 ai-quota.unauthorized`）。HTTP 状态码与原 main 一致，body 给出具体原因。
+> 2. **Redis key 格式**：`{redis_key_prefix}<targetName>` → `{<prefix>}:<targetName>`（如 `chat_quota:consumer1` → `{chat_quota}:consumer1`），用于 Redis Cluster hash tag。升级后需重新 `refresh` 一次或清空老前缀的 key。
+> 3. **admin `queryQuota` JSON 字段按入参类型二选一**：consumer 查询响应含 `consumer` 字段（与老版本字段名一致，老 client 零迁移），group 查询响应含 `group` 字段（新增字段，仅影响会查 group 的调用方）；响应里不出现 `name` 统一字段。

@@ -59,7 +59,7 @@ Refresh a group shared pool:
 ```bash
 curl https://example.com/v1/chat/completions/quota/refresh -H "Authorization: Bearer credential3" -d "group=team-a&quota=10000"
 ```
-The Redis key `chat_quota:team-a` is set to 10000. Exactly one of `consumer` or `group` must be set; setting both or neither returns `400 ai-quota.invalid_param`.
+The Redis key `chat_quota:team-a` is set to 10000. Exactly one of `consumer` or `group` must be set; setting both or neither returns `403 ai-quota.unauthorized`, with the specific reason given in the body.
 
 ### Query Quota
 To query the quota of a specific user, you can use:
@@ -91,19 +91,13 @@ Adjusts the Redis key `chat_quota:team-a` by 500 (negative values supported).
 | 200 | `ai-quota.queryquota` | admin `/quota` query succeeded |
 | 200 | `ai-quota.deltaquota` | admin `/delta` succeeded |
 | 200 | - | normal chat completion allowed |
-| 429 | `ai-quota.group_exhausted` | group shared pool ≤ 0 (only when `group != ""`) |
-| 429 | `ai-quota.consumer_exhausted` | consumer private pool ≤ 0 |
-| 429 | `ai-quota.both_exhausted` | both pools ≤ 0 (only when `group != ""`) |
-| 400 | `ai-quota.invalid_param` | admin API parameter error (consumer/group mutual-exclusion violation, or non-integer quota/value) |
+| 403 | `ai-quota.noquota` | quota exhausted (legacy single-pool: consumer pool ≤ 0; group path: either group or consumer pool ≤ 0 — body distinguishes `consumer quota exhausted` / `group quota exhausted` / `group and consumer quota exhausted`) |
 | 503 | `ai-quota.error` | Redis call failed |
 | 401 | `ai-quota.no_key` | missing `X-Mse-Consumer` header |
-| 403 | `ai-quota.unauthorized` | consumer not configured, or non-admin consumer calling admin API |
+| 403 | `ai-quota.unauthorized` | consumer not configured, non-admin consumer calling admin API, or admin API parameter error (consumer/group mutual-exclusion violation, or non-integer quota/value) |
 
 > **Breaking changes (≤ v1.0.x → current)**:
 >
-> 1. **HTTP status**: chat-completion quota denial changed from `403 ai-quota.noquota` to `429 ai-quota.consumer_exhausted`. Clients that match on the 403/noquota string must be updated.
-> 2. **New admin `group` parameter**: `refresh`/`query`/`delta` now accept an optional `group` parameter, **mutually exclusive** with `consumer` (setting both or neither returns `400 ai-quota.invalid_param`).
-> 3. **New quota-denial codes**: `ai-quota.group_exhausted` (group pool exhausted) and `ai-quota.both_exhausted` (both pools exhausted). Clients that match only `consumer_exhausted` will not be able to distinguish the rejection reason.
-> 4. **Admin parameter-error migration**: in the old version, missing consumer / non-integer quota returned `403 ai-quota.unauthorized`; the new version returns `400 ai-quota.invalid_param`, separating parameter errors from authentication failures.
-> 5. **Redis key format**: `{redis_key_prefix}<targetName>` → `{<prefix>}:<targetName>` (e.g., `chat_quota:consumer1` → `{chat_quota}:consumer1`) for Redis Cluster hash tags. After upgrade, re-run `refresh` once or flush the old-prefixed keys.
-> 6. **admin `queryQuota` JSON field**: `"consumer"` renamed to `"name"`, so the same field carries either consumer or group names.
+> 1. **New admin `group` parameter**: `refresh`/`query`/`delta` now accept an optional `group` parameter, **mutually exclusive** with `consumer` (setting both or neither returns `403 ai-quota.unauthorized`). HTTP status code and statusCodeDetails match the previous main branch; the body gives the specific reason.
+> 2. **Redis key format**: `{redis_key_prefix}<targetName>` → `{<prefix>}:<targetName>` (e.g., `chat_quota:consumer1` → `{chat_quota}:consumer1`) for Redis Cluster hash tags. After upgrade, re-run `refresh` once or flush the old-prefixed keys.
+> 3. **admin `queryQuota` JSON field is type-dependent**: consumer queries return a `consumer` field (matching the old field name — zero migration for existing clients); group queries return a `group` field (new — only affects callers querying groups); no unified `name` field is introduced.
