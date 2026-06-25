@@ -899,6 +899,88 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+
+		// 测试响应头处理时 context 中无 LimitContext（覆盖 GetContext 返回 nil 的分支）。
+		// 场景：使用 headerLimitConfig（仅 x-ca-key 规则），ensureContextInitialized 调用的
+		// onHttpRequestHeaders 因为缺少 x-ca-key 头而 matched 为空，返回 ActionContinue，
+		// 此时 SetContext 未被调用。后续 onHttpResponseHeaders 应通过类型断言失败分支安全返回。
+		t.Run("no prior context", func(t *testing.T) {
+			host, status := test.NewTestHost(headerLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 直接处理响应头：测试框架会通过 ensureContextInitialized 触发默认请求头处理，
+			// 但缺少 x-ca-key，因此 collectMatchedRules 返回空，SetContext 未调用。
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			// 应该返回 ActionContinue，且不 panic
+			require.Equal(t, types.ActionContinue, action)
+
+			// 不应写入限流配额响应头
+			responseHeaders := host.GetResponseHeaders()
+			require.False(t, test.HasHeader(responseHeaders, "x-ratelimit-limit"))
+			require.False(t, test.HasHeader(responseHeaders, "x-ratelimit-remaining"))
+
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestRejectedHidesQuotaHeadersWhenDisabled 验证 rejected() 在 show_limit_quota_header=false
+// 时只设置 X-RateLimit-Reset，不设置 X-RateLimit-Limit / X-RateLimit-Remaining（覆盖 line 339-341）。
+func TestRejectedHidesQuotaHeadersWhenDisabled(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		hideQuotaConfig := func() json.RawMessage {
+			data, _ := json.Marshal(map[string]interface{}{
+				"rule_name": "routeA-rejected-hide-quota",
+				"global_threshold": map[string]interface{}{
+					"query_per_minute": 1,
+				},
+				"redis": map[string]interface{}{
+					"service_name": "redis.static",
+					"service_port": 6379,
+				},
+				"show_limit_quota_header": false,
+				"rejected_code":           429,
+				"rejected_msg":            "Too many requests",
+			})
+			return data
+		}()
+
+		host, status := test.NewTestHost(hideQuotaConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		// 触发限流：current (2) > threshold (1)
+		resp := multiRuleResp([3]int{1, 2, 60})
+		host.CallOnRedisCall(0, resp)
+
+		// 应返回 429 本地响应
+		localResponse := host.GetLocalResponse()
+		require.NotNil(t, localResponse)
+		require.Equal(t, uint32(429), localResponse.StatusCode)
+
+		// X-RateLimit-Reset 应保留（始终设置）
+		require.True(t, test.HasHeader(localResponse.Headers, "x-ratelimit-reset"),
+			"X-RateLimit-Reset should always be present on rejection")
+
+		// X-RateLimit-Limit / X-RateLimit-Remaining 应缺失（show_limit_quota_header=false）
+		require.False(t, test.HasHeader(localResponse.Headers, "x-ratelimit-limit"),
+			"X-RateLimit-Limit should be hidden when show_limit_quota_header=false")
+		require.False(t, test.HasHeader(localResponse.Headers, "x-ratelimit-remaining"),
+			"X-RateLimit-Remaining should be hidden when show_limit_quota_header=false")
+
+		host.CompleteHttp()
 	})
 }
 

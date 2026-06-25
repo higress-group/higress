@@ -818,6 +818,30 @@ func TestOnHttpStreamingBody(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+
+		// 流式响应体处理时无前置 context（覆盖 line 216-225, 227-234）：
+		// 使用 headerLimitConfig（仅 x-api-key 规则），ensureContextInitialized 自动触发的
+		// onHttpRequestHeaders 因为缺少 x-api-key 头而 matched 为空，返回 ActionContinue，
+		// 此时 token context / LimitRedisContext 均未被设置。后续 streaming body 应通过
+		// GetContext 判空分支安全返回 data，不 panic、不调用 Redis。
+		t.Run("streaming body without prior context", func(t *testing.T) {
+			host, status := test.NewTestHost(headerLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 直接处理流式响应体（缺少 x-api-key，matched 为空，SetContext 未调用）
+			body := []byte(`{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":10,"completion_tokens":15,"total_tokens":25}}`)
+			streamAction := host.CallOnHttpStreamingResponseBody(body, true)
+
+			// 应安全返回 ActionContinue
+			require.Equal(t, types.ActionContinue, streamAction)
+
+			// 不应触发任何 Redis callout（前置 context 缺失时跳过响应阶段）
+			require.Equal(t, 0, len(host.GetRedisCalloutAttributes()),
+				"missing token context should skip response-phase INCRBY")
+
+			host.CompleteHttp()
+		})
 	})
 }
 
