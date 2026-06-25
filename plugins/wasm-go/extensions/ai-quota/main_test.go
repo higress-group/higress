@@ -80,7 +80,6 @@ func TestParseConfig(t *testing.T) {
 			quotaConfig := config.(*QuotaConfig)
 			require.Equal(t, "admin", quotaConfig.AdminConsumer)
 			require.Equal(t, "chat_quota:", quotaConfig.RedisKeyPrefix)
-			require.Equal(t, "{chat_quota:}:%s", quotaConfig.quotaKeyFormat)
 			require.Equal(t, "/quota", quotaConfig.AdminPath)
 			require.Equal(t, []string{"/v1/chat/completions", "/v1/messages"}, quotaConfig.EnablePathSuffixes)
 		})
