@@ -32,10 +32,7 @@ const (
 	QuotaKeyFormat = "{%s}:%s"
 
 	// RequestPhaseQuotaReadScript 阶段 1 严格模式读
-	// **仅 group != "" 时调用**——group == "" 走 plugin 端 Get，与老 ai-quota 字节级一致。
-	// plugin Go 端用 `if group != ""` 决定走 Lua 还是非 Lua 路径，不引入显式 hasGroup 变量。
-	// 用 2 次 GET 而非 1 次 MGET：Lua 脚本在 Redis 单线程上原子执行，
-	// 脚本内两次 GET 与 MGET 等价但更可读。
+	// **仅 group != "" 时调用**group == "" 走 plugin 端 Get，与老 ai-quota 一致。
 	// KEYS[1]=group_quota_key      KEYS[2]=consumer_quota_key
 	// ARGV=（无；脚本不读任何 ARGV）
 	// 返回: {group_remaining, consumer_remaining}
@@ -46,8 +43,7 @@ return {ng, nc}
 `
 
 	// ResponsePhaseQuotaDecrbyScript 阶段 2 原子 DECRBY
-	// **仅 group != "" 时调用**——group == "" 走 plugin 端 DecrBy。
-	// 两把 key 都 DECRBY，原子执行避免双池扣减顺序竞争。
+	// **仅 group != "" 时调用**group == "" 走 plugin 端 DecrBy。
 	// KEYS[1]=group_quota_key      KEYS[2]=consumer_quota_key
 	// ARGV[1]=cost
 	// 返回: {group_remaining, consumer_remaining}（扣减后，可为负）
@@ -222,32 +218,31 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 	// there is no need to read request body when it is on chat completion mode
 	context.DontReadRequestBody()
 
-	// 读取 group header。
-	group := ""
-	if rawGroup, gErr := proxywasm.GetHttpRequestHeader("x-mse-consumer-group"); gErr == nil && rawGroup != "" {
-		group = rawGroup
-	}
-	context.SetContext("group", group)
-
-	// 按 group 是否非空走两条路径：
-	// - group == ""：走老 ai-quota 路径（Get + DecrBy），字节级一致
-	// - group != ""：走 Lua Eval，原子双 key 操作
 	consumerKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, consumer)
-	if group == "" {
-		// 老路径——单池 GET，行为与 ai-quota 升级前完全一致
-		config.redisClient.Get(consumerKey, func(response resp.Value) {
+	// 读取 group header。
+	group, err := proxywasm.GetHttpRequestHeader("x-mse-consumer-group")
+
+	// 新路径——Lua Eval，原子读 group + consumer 两池
+	if err == nil && group != "" {
+		context.SetContext("group", group)
+		groupKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, group)
+		keys := []interface{}{groupKey, consumerKey}
+		_ = config.redisClient.Eval(RequestPhaseQuotaReadScript, 2, keys, nil, func(response resp.Value) {
 			isDenied := false
 			if err := response.Error(); err != nil {
 				isDenied = true
 			}
-			if response.IsNull() {
+			arr := response.Array()
+			if len(arr) != 2 {
 				isDenied = true
 			}
-			if response.Integer() <= 0 {
+			gRem := arr[0].Integer()
+			cRem := arr[1].Integer()
+			if gRem <= 0 || cRem <= 0 {
 				isDenied = true
 			}
 			if isDenied {
-				util.SendResponse(http.StatusTooManyRequests, "ai-quota.consumer_exhausted", "text/plain", "Request denied by ai quota check, ai-quota.consumer_exhausted: consumer quota exhausted")
+				util.SendResponse(http.StatusForbidden, "ai-quota.noquota", "text/plain", "Request denied by ai quota check, ai-quota.noquota: consumer quota exhausted")
 				return
 			}
 			proxywasm.ResumeHttpRequest()
@@ -255,35 +250,20 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 		return types.HeaderStopAllIterationAndWatermark
 	}
 
-	// 新路径——Lua Eval，原子读 group + consumer 两池
-	groupKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, group)
-	keys := []interface{}{groupKey, consumerKey}
-	_ = config.redisClient.Eval(RequestPhaseQuotaReadScript, 2, keys, nil, func(response resp.Value) {
+	// 老路径——单池 GET，行为与 ai-quota 升级前完全一致
+	_ = config.redisClient.Get(consumerKey, func(response resp.Value) {
+		isDenied := false
 		if err := response.Error(); err != nil {
-			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
-			return
+			isDenied = true
 		}
-		arr := response.Array()
-		if len(arr) != 2 {
-			log.Errorf("phase1 unexpected response: %v", response)
-			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", "quota check response parse error")
-			return
+		if response.IsNull() {
+			isDenied = true
 		}
-		gRem := arr[0].Integer()
-		cRem := arr[1].Integer()
-
-		// 严格模式：任一池 ≤ 0 即拒
-		var code, detail string
-		switch {
-		case gRem <= 0 && cRem <= 0:
-			code, detail = "ai-quota.both_exhausted", "group and consumer quota exhausted"
-		case gRem <= 0:
-			code, detail = "ai-quota.group_exhausted", "group quota exhausted"
-		case cRem <= 0:
-			code, detail = "ai-quota.consumer_exhausted", "consumer quota exhausted"
+		if response.Integer() <= 0 {
+			isDenied = true
 		}
-		if code != "" {
-			util.SendResponse(http.StatusTooManyRequests, code, "text/plain", "Request denied by ai quota check, "+code+": "+detail)
+		if isDenied {
+			util.SendResponse(http.StatusForbidden, "ai-quota.noquota", "text/plain", "Request denied by ai quota check, ai-quota.noquota: consumer quota exhausted")
 			return
 		}
 		proxywasm.ResumeHttpRequest()
@@ -346,22 +326,20 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 	consumer := ctx.GetContext("consumer").(string)
 	group, _ := ctx.GetContext("group").(string)
 	totalToken := int(inputToken + outputToken)
-
-	// 按 group 是否非空走两条路径：
-	// - group == ""：走老 ai-quota 路径（单 DECRBY），字节级一致
-	// - group != ""：走 Lua Eval，原子双 key DECRBY
 	consumerKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, consumer)
+
+	// - group == ""：走老 ai-quota 路径（单 DECRBY）
 	if group == "" {
 		log.Debugf("update consumer:%s, totalToken:%d", consumer, totalToken)
 		config.redisClient.DecrBy(consumerKey, totalToken, nil)
 		return data
 	}
 
-	// 新路径——Lua Eval，原子双池 DECRBY
+	// - group != ""：走 Lua Eval，原子双 key DECRBY
 	groupKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, group)
 	keys := []interface{}{groupKey, consumerKey}
 	args := []interface{}{totalToken}
-	log.Debugf("phase2 decrby consumer:%s group:%s cost:%d", consumer, group, totalToken)
+	log.Debugf("update consumer:%s and group:%s, totalToken:%d", consumer, group, totalToken)
 	_ = config.redisClient.Eval(ResponsePhaseQuotaDecrbyScript, 2, keys, args, nil)
 	return data
 }
@@ -413,11 +391,11 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 
 	// 互斥校验：consumer 与 group 必须恰好设置一个
 	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
-		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: exactly one of 'consumer' or 'group' must be set")
+		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: consumer or group must be set (exactly one).")
 		return types.ActionContinue
 	}
 	if err != nil {
-		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: quota must be an integer")
+		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: quota must be an integer.")
 		return types.ActionContinue
 	}
 
@@ -426,11 +404,10 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 		targetName = queryGroup
 	}
 
-	sourceAddr := string(getSourceAddress())
 	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName)
 
 	err2 := config.redisClient.Set(quotaKey, quota, func(response resp.Value) {
-		log.Infof("admin refresh quota: admin=%s targetName=%s key=%s quota=%d from=%s", adminConsumer, targetName, quotaKey, quota, sourceAddr)
+		log.Debugf("Redis set key = %s quota = %d", quotaKey, quota)
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 			return
@@ -461,7 +438,7 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	queryConsumer := values["consumer"]
 	queryGroup := values["group"]
 	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
-		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: exactly one of 'consumer' or 'group' must be set")
+		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: consumer or group must be set (exactly one).")
 		return types.ActionContinue
 	}
 	targetName := queryConsumer
@@ -511,11 +488,11 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	queryGroup := values["group"]
 	value, err := strconv.Atoi(values["value"])
 	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
-		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: exactly one of 'consumer' or 'group' must be set")
+		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: consumer or group must be set (exactly one).")
 		return types.ActionContinue
 	}
 	if err != nil {
-		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: value must be an integer")
+		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: value must be an integer.")
 		return types.ActionContinue
 	}
 
@@ -524,12 +501,11 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 		targetName = queryGroup
 	}
 
-	sourceAddr := string(getSourceAddress())
 	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName)
 
 	if value >= 0 {
 		err := config.redisClient.IncrBy(quotaKey, value, func(response resp.Value) {
-			log.Infof("admin delta quota (incr): admin=%s targetName=%s key=%s value=%d from=%s", adminConsumer, targetName, quotaKey, value, sourceAddr)
+			log.Debugf("Redis Incr key = %s value = %d", quotaKey, value)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
@@ -542,7 +518,7 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 		}
 	} else {
 		err := config.redisClient.DecrBy(quotaKey, 0-value, func(response resp.Value) {
-			log.Infof("admin delta quota (decr): admin=%s targetName=%s key=%s value=%d from=%s", adminConsumer, targetName, quotaKey, value, sourceAddr)
+			log.Debugf("Redis Incr key = %s value = %d", quotaKey, value)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
@@ -556,12 +532,4 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	}
 
 	return types.ActionPause
-}
-
-func getSourceAddress() []byte {
-	bs, err := proxywasm.GetProperty([]string{"source", "address"})
-	if err != nil {
-		return nil
-	}
-	return bs
 }
