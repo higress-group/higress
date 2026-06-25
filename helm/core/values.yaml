@@ -463,6 +463,9 @@ gateway:
     # -- If enabled, roles will be created to enable accessing certificates from Gateways. This is not needed
     # when using http://gateway-api.org/.
     enabled: true
+    # -- If enabled, ClusterRole and ClusterRoleBinding will be created for the gateway.
+    # Set to false when cluster-level RBAC is pre-provisioned by a cluster admin.
+    create: true
 
   serviceAccount:
     # -- If set, a service account will be created. Otherwise, the default is used
@@ -597,6 +600,7 @@ controller:
   imagePullSecrets: []
 
   rbac:
+    # -- If enabled, ClusterRole and ClusterRoleBinding will be created for the controller. Set to false when cluster-level RBAC is pre-provisioned by a cluster admin.
     create: true
 
   serviceAccount:
