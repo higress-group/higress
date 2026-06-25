@@ -184,7 +184,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 
 			response := host.GetLocalResponse()
 			require.Equal(t, uint32(http.StatusOK), response.StatusCode)
-			require.Equal(t, "{\"name\":\"consumer1\",\"quota\":500}", string(response.Data))
+			require.Equal(t, "{\"consumer\":\"consumer1\",\"quota\":500}", string(response.Data))
 			host.CompleteHttp()
 		})
 
@@ -749,7 +749,34 @@ func TestAdminQuery_Group(t *testing.T) {
 
 		response := host.GetLocalResponse()
 		require.Equal(t, uint32(http.StatusOK), response.StatusCode)
-		require.JSONEq(t, `{"name":"team-a","quota":2000}`, string(response.Data))
+		require.JSONEq(t, `{"group":"team-a","quota":2000}`, string(response.Data))
+		host.CompleteHttp()
+	})
+}
+
+// admin query with consumer → 响应含 consumer 字段（不出现 name 字段）。
+// 与老 main 分支字节级一致 —— consumer 查询响应字段名保持 `consumer`，老 client 零迁移。
+func TestAdminQuery_Consumer(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions/quota?consumer=consumer1"},
+			{":method", "GET"},
+			{"x-mse-consumer", "admin"},
+		})
+		require.Equal(t, types.ActionPause, action)
+
+		host.CallOnRedisCall(0, test.CreateRedisResp(500))
+
+		response := host.GetLocalResponse()
+		require.Equal(t, uint32(http.StatusOK), response.StatusCode)
+		require.JSONEq(t, `{"consumer":"consumer1","quota":500}`, string(response.Data))
+		// 防御性：响应里不出现 name 字段（spec §5.4.2 决策 —— 不创造 targetName 统一抽象）
+		require.NotContains(t, string(response.Data), `"name"`)
 		host.CompleteHttp()
 	})
 }
