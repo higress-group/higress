@@ -228,21 +228,23 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 		groupKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, group)
 		keys := []interface{}{groupKey, consumerKey}
 		_ = config.redisClient.Eval(RequestPhaseQuotaReadScript, 2, keys, nil, func(response resp.Value) {
-			isDenied := false
+			// 三种 outcome：
+			//   1. response.Error() 非空 → Redis 故障，503 ai-quota.error（区别于配额耗尽 403）
+			//   2. arr 长度 != 2       → 协议/Lua 错，归 403
+			//   3. gRem 或 cRem ≤ 0   → 配额耗尽，403 ai-quota.noquota（body 区分耗尽池）
 			if err := response.Error(); err != nil {
-				isDenied = true
+				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
+				return
 			}
 			arr := response.Array()
 			if len(arr) != 2 {
-				isDenied = true
+				denyNoQuota(noQuotaReasonGroupAndConsumer)
+				return
 			}
 			gRem := arr[0].Integer()
 			cRem := arr[1].Integer()
 			if gRem <= 0 || cRem <= 0 {
-				isDenied = true
-			}
-			if isDenied {
-				util.SendResponse(http.StatusForbidden, "ai-quota.noquota", "text/plain", "Request denied by ai quota check, ai-quota.noquota: consumer quota exhausted")
+				denyNoQuota(noQuotaBodyReasonFromPools(gRem, cRem))
 				return
 			}
 			proxywasm.ResumeHttpRequest()
@@ -356,6 +358,59 @@ func deniedUnauthorizedConsumer() types.Action {
 	return types.ActionContinue
 }
 
+// resolveExclusiveTarget 校验 consumer/group 互斥（必须恰好设置一个），返回 targetName。
+// 不通过时返回 ok=false，caller 应使用 denyInvalidTarget() 发送 403 并 return。
+func resolveExclusiveTarget(consumer, group string) (targetName string, ok bool) {
+	if (consumer == "" && group == "") || (consumer != "" && group != "") {
+		return "", false
+	}
+	if group != "" {
+		return group, true
+	}
+	return consumer, true
+}
+
+// denyInvalidTarget 发送 consumer/group 互斥校验失败的 403 响应，返回 ActionContinue。
+func denyInvalidTarget() types.Action {
+	util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: consumer or group must be set (exactly one).")
+	return types.ActionContinue
+}
+
+// firstValues 把 url.Values 展平成 map[string]string（取每键第一个值）。
+func firstValues(queryValues url.Values) map[string]string {
+	values := make(map[string]string, len(queryValues))
+	for k, v := range queryValues {
+		values[k] = v[0]
+	}
+	return values
+}
+
+// noQuotaBodyReason 描述当前请求被拒的池耗尽原因，对应 ai-quota.noquota 403 响应的 body 尾段。
+type noQuotaBodyReason string
+
+const (
+	noQuotaReasonConsumer         noQuotaBodyReason = "consumer quota exhausted"
+	noQuotaReasonGroup            noQuotaBodyReason = "group quota exhausted"
+	noQuotaReasonGroupAndConsumer noQuotaBodyReason = "group and consumer quota exhausted"
+)
+
+// noQuotaBodyReasonFromPools 根据 gRem/cRem 算出 body 尾段。
+func noQuotaBodyReasonFromPools(gRem, cRem int) noQuotaBodyReason {
+	switch {
+	case gRem <= 0 && cRem <= 0:
+		return noQuotaReasonGroupAndConsumer
+	case gRem <= 0:
+		return noQuotaReasonGroup
+	default:
+		return noQuotaReasonConsumer
+	}
+}
+
+// denyNoQuota 发送 ai-quota.noquota 403 响应，body 拼接具体的池耗尽原因。
+func denyNoQuota(reason noQuotaBodyReason) {
+	util.SendResponse(http.StatusForbidden, "ai-quota.noquota", "text/plain", "Request denied by ai quota check, ai-quota.noquota: "+string(reason))
+}
+
 func getOperationMode(path string, adminPath string, pathSuffixes []string) (ChatMode, AdminMode) {
 	fullAdminPath := "/v1/chat/completions" + adminPath
 	if strings.HasSuffix(path, fullAdminPath+"/refresh") {
@@ -383,27 +438,17 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 	}
 
 	queryValues, _ := url.ParseQuery(body)
-	values := make(map[string]string, len(queryValues))
-	for k, v := range queryValues {
-		values[k] = v[0]
-	}
-	queryConsumer := values["consumer"]
-	queryGroup := values["group"]
-	quota, err := strconv.Atoi(values["quota"])
+	values := firstValues(queryValues)
 
-	// 互斥校验：consumer 与 group 必须恰好设置一个
-	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
-		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: consumer or group must be set (exactly one).")
-		return types.ActionContinue
+	targetName, ok := resolveExclusiveTarget(values["consumer"], values["group"])
+	if !ok {
+		return denyInvalidTarget()
 	}
+
+	quota, err := strconv.Atoi(values["quota"])
 	if err != nil {
 		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: quota must be an integer.")
 		return types.ActionContinue
-	}
-
-	targetName := queryConsumer
-	if queryGroup != "" {
-		targetName = queryGroup
 	}
 
 	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName)
@@ -431,22 +476,14 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check. Unauthorized admin consumer.")
 		return types.ActionContinue
 	}
-	// check url
-	queryValues := url.Query()
-	values := make(map[string]string, len(queryValues))
-	for k, v := range queryValues {
-		values[k] = v[0]
+
+	values := firstValues(url.Query())
+	targetName, ok := resolveExclusiveTarget(values["consumer"], values["group"])
+	if !ok {
+		return denyInvalidTarget()
 	}
-	queryConsumer := values["consumer"]
-	queryGroup := values["group"]
-	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
-		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: consumer or group must be set (exactly one).")
-		return types.ActionContinue
-	}
-	targetName := queryConsumer
-	if queryGroup != "" {
-		targetName = queryGroup
-	}
+	isGroup := values["group"] != ""
+
 	err := config.redisClient.Get(fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName), func(response resp.Value) {
 		quota := 0
 		if err := response.Error(); err != nil {
@@ -458,7 +495,7 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 			quota = response.Integer()
 		}
 		result := make(map[string]any)
-		if queryGroup != "" {
+		if isGroup {
 			result["group"] = targetName
 		} else {
 			result["consumer"] = targetName
@@ -482,25 +519,17 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	}
 
 	queryValues, _ := url.ParseQuery(body)
-	values := make(map[string]string, len(queryValues))
-	for k, v := range queryValues {
-		values[k] = v[0]
+	values := firstValues(queryValues)
+
+	targetName, ok := resolveExclusiveTarget(values["consumer"], values["group"])
+	if !ok {
+		return denyInvalidTarget()
 	}
-	queryConsumer := values["consumer"]
-	queryGroup := values["group"]
+
 	value, err := strconv.Atoi(values["value"])
-	if (queryConsumer == "" && queryGroup == "") || (queryConsumer != "" && queryGroup != "") {
-		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: consumer or group must be set (exactly one).")
-		return types.ActionContinue
-	}
 	if err != nil {
 		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: value must be an integer.")
 		return types.ActionContinue
-	}
-
-	targetName := queryConsumer
-	if queryGroup != "" {
-		targetName = queryGroup
 	}
 
 	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName)
@@ -520,7 +549,7 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 		}
 	} else {
 		err := config.redisClient.DecrBy(quotaKey, 0-value, func(response resp.Value) {
-			log.Debugf("Redis Incr key = %s value = %d", quotaKey, value)
+			log.Debugf("Redis Decr key = %s value = %d", quotaKey, 0-value)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
