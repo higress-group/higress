@@ -46,7 +46,7 @@ ai-quota supports per-consumer-group shared quota pools: any consumer in the gro
 
 > **Where `group` comes from**: `group` is not a configuration field of ai-quota itself — it is injected by an upstream authentication plugin (e.g., `key-auth`) via the `X-Mse-Consumer-Group` HTTP header at authentication time, and ai-quota only reads it at request phase. To make a consumer a member of a group, add the `group: <name>` field to the consumer definition in `key-auth`. When `X-Mse-Consumer-Group` is absent, ai-quota falls back to the legacy single-pool path and only charges the consumer's private pool.
 
-> **Redis Cluster compatibility**: when `group` is set, Phase 1/2 use Lua scripts that operate on both the group and consumer keys atomically. Redis Cluster requires all keys in a multi-key operation to land on the same slot, otherwise it returns `CROSSSLOT`. ai-quota uses the key format `{chat_quota}:<subject>`, where `{}` acts as a hash tag ensuring all quota keys land on the same slot. **Trade-off**: all ai-quota traffic concentrates on a single slot, losing Cluster sharding.
+> **Redis Cluster compatibility**: when `group` is set, Phase 1/2 use Lua scripts that operate on both the group and consumer keys atomically. Redis Cluster requires all keys in a multi-key operation to land on the same slot, otherwise it returns `CROSSSLOT`. ai-quota uses the key format `{chat_quota}:<targetName>`, where `{}` acts as a hash tag ensuring all quota keys land on the same slot. **Trade-off**: all ai-quota traffic concentrates on a single slot, losing Cluster sharding.
 >
 > **Upgrade migration**: in versions ≤ v1.0.x, keys had the form `chat_quota:consumer1`; in the new version they become `{chat_quota}:consumer1`. After upgrade, either re-run `refresh` for every consumer/group via the admin API, or flush the old-prefixed keys in Redis.
 
@@ -64,13 +64,13 @@ The Redis key `chat_quota:team-a` is set to 10000. Exactly one of `consumer` or 
 ### Query Quota
 To query the quota of a specific user, you can use:
 curl https://example.com/v1/chat/completions/quota?consumer=consumer1 -H "Authorization: Bearer credential3"
-The response will return: `{"name": "consumer1", "quota": 10000}`
+The response will return: `{"consumer": "consumer1", "quota": 10000}`
 
 Query a group shared pool:
 ```bash
 curl https://example.com/v1/chat/completions/quota?group=team-a -H "Authorization: Bearer credential3"
 ```
-Returns: `{"name":"team-a","quota":10000}`
+Returns: `{"group":"team-a","quota":10000}`
 
 ### Increase or Decrease Quota
 To increase or decrease the quota of a specific user, you can use:
@@ -105,5 +105,5 @@ Adjusts the Redis key `chat_quota:team-a` by 500 (negative values supported).
 > 2. **New admin `group` parameter**: `refresh`/`query`/`delta` now accept an optional `group` parameter, **mutually exclusive** with `consumer` (setting both or neither returns `400 ai-quota.invalid_param`).
 > 3. **New quota-denial codes**: `ai-quota.group_exhausted` (group pool exhausted) and `ai-quota.both_exhausted` (both pools exhausted). Clients that match only `consumer_exhausted` will not be able to distinguish the rejection reason.
 > 4. **Admin parameter-error migration**: in the old version, missing consumer / non-integer quota returned `403 ai-quota.unauthorized`; the new version returns `400 ai-quota.invalid_param`, separating parameter errors from authentication failures.
-> 5. **Redis key format**: `{redis_key_prefix}<subject>` → `{<prefix>}:<subject>` (e.g., `chat_quota:consumer1` → `{chat_quota}:consumer1`) for Redis Cluster hash tags. After upgrade, re-run `refresh` once or flush the old-prefixed keys.
+> 5. **Redis key format**: `{redis_key_prefix}<targetName>` → `{<prefix>}:<targetName>` (e.g., `chat_quota:consumer1` → `{chat_quota}:consumer1`) for Redis Cluster hash tags. After upgrade, re-run `refresh` once or flush the old-prefixed keys.
 > 6. **admin `queryQuota` JSON field**: `"consumer"` renamed to `"name"`, so the same field carries either consumer or group names.

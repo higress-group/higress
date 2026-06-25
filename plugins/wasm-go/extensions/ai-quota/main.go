@@ -26,9 +26,9 @@ const (
 	// DefaultRedisKeyPrefix 默认 Redis key 前缀
 	DefaultRedisKeyPrefix = "chat_quota"
 
-	// QuotaKeyFormat Redis key 格式：{redis_key_prefix}:<subject>
+	// QuotaKeyFormat Redis key 格式：{redis_key_prefix}:<targetName>
 	// 使用 {} 包裹前缀作为 hash tag，确保 group/consumer quota key 在 Redis Cluster 中落在同一 slot
-	// 例：prefix="chat_quota" subject="team-a" → "{chat_quota}:team-a"
+	// 例：prefix="chat_quota" targetName="team-a" → "{chat_quota}:team-a"
 	QuotaKeyFormat = "{%s}:%s"
 
 	// RequestPhaseQuotaReadScript 阶段 1 严格模式读
@@ -222,7 +222,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 	// there is no need to read request body when it is on chat completion mode
 	context.DontReadRequestBody()
 
-	// 读取 group header（不校验格式——与 name 一致）。
+	// 读取 group header。
 	group := ""
 	if rawGroup, gErr := proxywasm.GetHttpRequestHeader("x-mse-consumer-group"); gErr == nil && rawGroup != "" {
 		group = rawGroup
@@ -421,16 +421,16 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 		return types.ActionContinue
 	}
 
-	subject := queryConsumer
+	targetName := queryConsumer
 	if queryGroup != "" {
-		subject = queryGroup
+		targetName = queryGroup
 	}
 
 	sourceAddr := string(getSourceAddress())
-	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, subject)
+	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName)
 
 	err2 := config.redisClient.Set(quotaKey, quota, func(response resp.Value) {
-		log.Infof("admin refresh quota: admin=%s subject=%s key=%s quota=%d from=%s", adminConsumer, subject, quotaKey, quota, sourceAddr)
+		log.Infof("admin refresh quota: admin=%s targetName=%s key=%s quota=%d from=%s", adminConsumer, targetName, quotaKey, quota, sourceAddr)
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 			return
@@ -464,11 +464,11 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 		util.SendResponse(http.StatusBadRequest, "ai-quota.invalid_param", "text/plain", "ai-quota.invalid_param: exactly one of 'consumer' or 'group' must be set")
 		return types.ActionContinue
 	}
-	subject := queryConsumer
+	targetName := queryConsumer
 	if queryGroup != "" {
-		subject = queryGroup
+		targetName = queryGroup
 	}
-	err := config.redisClient.Get(fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, subject), func(response resp.Value) {
+	err := config.redisClient.Get(fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName), func(response resp.Value) {
 		quota := 0
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
@@ -478,13 +478,13 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 		} else {
 			quota = response.Integer()
 		}
-		result := struct {
-			Name  string `json:"name"`
-			Quota int    `json:"quota"`
-		}{
-			Name:  subject,
-			Quota: quota,
+		result := make(map[string]any)
+		if queryGroup != "" {
+			result["group"] = targetName
+		} else {
+			result["consumer"] = targetName
 		}
+		result["quota"] = quota
 		body, _ := json.Marshal(result)
 		util.SendResponse(http.StatusOK, "ai-quota.queryquota", "application/json", string(body))
 	})
@@ -519,17 +519,17 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 		return types.ActionContinue
 	}
 
-	subject := queryConsumer
+	targetName := queryConsumer
 	if queryGroup != "" {
-		subject = queryGroup
+		targetName = queryGroup
 	}
 
 	sourceAddr := string(getSourceAddress())
-	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, subject)
+	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName)
 
 	if value >= 0 {
 		err := config.redisClient.IncrBy(quotaKey, value, func(response resp.Value) {
-			log.Infof("admin delta quota (incr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, quotaKey, value, sourceAddr)
+			log.Infof("admin delta quota (incr): admin=%s targetName=%s key=%s value=%d from=%s", adminConsumer, targetName, quotaKey, value, sourceAddr)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
@@ -542,7 +542,7 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 		}
 	} else {
 		err := config.redisClient.DecrBy(quotaKey, 0-value, func(response resp.Value) {
-			log.Infof("admin delta quota (decr): admin=%s subject=%s key=%s value=%d from=%s", adminConsumer, subject, quotaKey, value, sourceAddr)
+			log.Infof("admin delta quota (decr): admin=%s targetName=%s key=%s value=%d from=%s", adminConsumer, targetName, quotaKey, value, sourceAddr)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
