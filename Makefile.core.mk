@@ -91,7 +91,11 @@ $(ARM64_OUT_LINUX)/higress:
 
 .PHONY: build-hgctl
 build-hgctl: prebuild $(OUT)
+ifeq ($(GOOS_LOCAL), darwin)
+	CGO_ENABLED=1 STATIC=0 GOPROXY=$(GOPROXY) GOOS=$(GOOS_LOCAL) GOARCH=$(GOARCH_LOCAL) LDFLAGS=$(RELEASE_LDFLAGS) PROJECT_DIR="$(HGCTL_PROJECT_DIR)" tools/hack/gobuild.sh $(OUT)/ $(HGCTL_BINARIES)
+else
 	GOPROXY=$(GOPROXY) GOOS=$(GOOS_LOCAL) GOARCH=$(GOARCH_LOCAL) LDFLAGS=$(RELEASE_LDFLAGS) PROJECT_DIR="$(HGCTL_PROJECT_DIR)" tools/hack/gobuild.sh $(OUT)/ $(HGCTL_BINARIES)
+endif
 
 .PHONY: build-linux-hgctl
 build-linux-hgctl: prebuild $(OUT)
