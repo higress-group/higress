@@ -82,6 +82,7 @@ const (
 	LLMServiceDuration     = "llm_service_duration"
 	LLMDurationCount       = "llm_duration_count"
 	LLMStreamDurationCount = "llm_stream_duration_count"
+	LLMFailureCount        = "llm_failure_count"
 	ResponseType           = "response_type"
 	ChatID                 = "chat_id"
 	ChatRound              = "chat_round"
@@ -874,7 +875,7 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, dat
 		_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 
 		// Write metrics
-		writeMetric(ctx, config)
+		writeMetric(ctx, config, data)
 	}
 	return data
 }
@@ -928,7 +929,7 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body
 	_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 
 	// Write metrics
-	writeMetric(ctx, config)
+	writeMetric(ctx, config, body)
 
 	return types.ActionContinue
 }
@@ -1341,7 +1342,36 @@ func setSpanAttribute(key string, value interface{}) {
 	}
 }
 
-func writeMetric(ctx wrapper.HttpContext, config AIStatisticsConfig) {
+// isErrorResponse checks whether the LLM response indicates an error.
+// Detects errors by:
+// 1. Response body contains non-null "error" field at root level (OpenAI/Anthropic format)
+// 2. HTTP status code >= 400 as fallback when body is empty
+func isErrorResponse(body []byte) bool {
+	// Check if error object exists in body and is not null/empty
+	if len(body) > 0 {
+		errorVal := gjson.GetBytes(body, "error")
+		if errorVal.Exists() && errorVal.Value() != nil {
+			// Reject empty string error values (false positive prevention)
+			if errorVal.Type == gjson.String && errorVal.String() == "" {
+				return false
+			}
+			return true
+		}
+	}
+	// Fallback: check HTTP status code for errors with empty body (connection reset, timeout, etc.)
+	if len(body) == 0 {
+		if statusCode, err := proxywasm.GetHttpResponseHeader(":status"); err == nil {
+			code := 0
+			fmt.Sscanf(statusCode, "%d", &code)
+			if code >= 400 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func writeMetric(ctx wrapper.HttpContext, config AIStatisticsConfig, body []byte) {
 	// Generate usage metrics
 	var ok bool
 	var route, cluster, model string
@@ -1355,6 +1385,19 @@ func writeMetric(ctx wrapper.HttpContext, config AIStatisticsConfig) {
 	if !ok {
 		log.Info("ClusterName type assert failed, skip metric record")
 		return
+	}
+
+	// Get model for metric label (may be empty for error responses)
+	modelStr := "-"
+	if m := ctx.GetUserAttribute(tokenusage.CtxKeyModel); m != nil {
+		if ms, ok := m.(string); ok {
+			modelStr = ms
+		}
+	}
+
+	// Count failure before usage check, so error responses without usage info are still counted
+	if isErrorResponse(body) {
+		config.incrementCounter(generateMetricName(route, cluster, modelStr, consumer, LLMFailureCount), 1)
 	}
 
 	if config.disableOpenaiUsage {
