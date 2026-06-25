@@ -85,11 +85,13 @@ func NetworkingIngressAvailable(client kube.Client) bool {
 }
 
 // SortIngressByCreationTime sorts the list of config objects in ascending order by their creation time (if available).
+// When creation timestamps are equal, sort by namespace.name to ensure base ingress resources are prioritized
+// over canary variants (e.g., "default.xx-hg" comes before "default.xx-hg-canary-by-header").
 func SortIngressByCreationTime(configs []config.Config) {
 	sort.Slice(configs, func(i, j int) bool {
 		if configs[i].CreationTimestamp == configs[j].CreationTimestamp {
-			in := configs[i].Name + "." + configs[i].Namespace
-			jn := configs[j].Name + "." + configs[j].Namespace
+			in := configs[i].Namespace + "." + configs[i].Name
+			jn := configs[j].Namespace + "." + configs[j].Name
 			return in < jn
 		}
 		return configs[i].CreationTimestamp.Before(configs[j].CreationTimestamp)
