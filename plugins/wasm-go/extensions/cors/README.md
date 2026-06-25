@@ -170,7 +170,7 @@ curl -v -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example
 #### 预检请求
 
 ```shell
-curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: POST"  -H "Access-Control-Request-Headers: Content-Type, Token" http://127.0.0.1/anything/get\?foo\=1
+curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: POST"  -H "Access-Control-Request-Headers: Content-Type,Token" http://127.0.0.1/anything/get\?foo\=1
 
 < HTTP/1.1 200 OK
 < x-cors-version: 1.0.0
@@ -191,51 +191,65 @@ curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: http
 #### 非法 CORS Origin 预检请求
 
 ```shell
-curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: GET"  http://127.0.0.1/anything/get\?foo\=1
+curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: GET"  -H "Access-Control-Request-Headers: Content-Type,Token" http://127.0.0.1/anything/get\?foo\=1
 
- HTTP/1.1 403 Forbidden
-< content-length: 70
-< content-type: text/plain
+ < HTTP/1.1 200 OK
 < x-cors-version: 1.0.0
-< date: Tue, 23 May 2023 11:27:01 GMT
-< server: istio-envoy
-<
+< vary: Origin
+< access-control-allow-methods: GET,POST,PATCH
+< access-control-allow-headers: Content-Type,Token,Authorization
+< access-control-expose-headers: X-Custom-Header,X-Env-UTM
+< access-control-allow-credentials: true
+< access-control-max-age: 3600
+< date: Tue, 15 Apr 2025 15:26:52 GMT
+< server: envoy
+< content-length: 0
+< 
 * Connection #0 to host 127.0.0.1 left intact
-Invalid CORS request
 ```
 
 #### 非法 CORS Method 预检请求
 
 ```shell
-curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: DELETE"  http://127.0.0.1/anything/get\?foo\=1
+curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: DELETE"  -H "Access-Control-Request-Headers: Content-Type,Token" http://127.0.0.1/anything/get\?foo\=1
 
-< HTTP/1.1 403 Forbidden
-< content-length: 49
-< content-type: text/plain
+< HTTP/1.1 200 OK
 < x-cors-version: 1.0.0
-< date: Tue, 23 May 2023 11:28:51 GMT
-< server: istio-envoy
-<
+< vary: Origin
+< access-control-allow-origin: http://httpbin2.example.org:9090
+< access-control-allow-methods: GET,POST,PATCH
+< access-control-allow-headers: Content-Type,Token,Authorization
+< access-control-expose-headers: X-Custom-Header,X-Env-UTM
+< access-control-allow-credentials: true
+< access-control-max-age: 3600
+< date: Tue, 15 Apr 2025 15:27:44 GMT
+< server: envoy
+< content-length: 0
+< 
 * Connection #0 to host 127.0.0.1 left intact
-Invalid CORS request
 ```
 
 #### 非法 CORS Header 预检请求
 
 ```shell
- curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: GET" -H "Access-Control-Request-Headers: TokenView"  http://127.0.0.1/anything/get\?foo\=1
+curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: GET" -H "Access-Control-Request-Headers: TokenView"  http://127.0.0.1/anything/get\?foo\=1
 
-< HTTP/1.1 403 Forbidden
-< content-length: 52
-< content-type: text/plain
+< HTTP/1.1 200 OK
 < x-cors-version: 1.0.0
-< date: Tue, 23 May 2023 11:31:03 GMT
-< server: istio-envoy
-<
+< vary: Origin
+< access-control-allow-methods: GET,POST,PATCH
+< access-control-allow-headers: Content-Type,Token,Authorization
+< access-control-expose-headers: X-Custom-Header,X-Env-UTM
+< access-control-allow-credentials: true
+< access-control-max-age: 3600
+< date: Tue, 15 Apr 2025 15:28:34 GMT
+< server: envoy
+< content-length: 0
+< 
 * Connection #0 to host 127.0.0.1 left intact
-Invalid CORS request
 ```
 
 ## 参考文档
 - https://www.ruanyifeng.com/blog/2016/04/cors.html
 - https://fetch.spec.whatwg.org/#http-cors-protocol
+- https://www.cnblogs.com/sunmmi/articles/5956554.html
