@@ -25,6 +25,8 @@ struct Asset;
 pub(crate) struct DenyWord {
     jieba: Jieba,
     words: HashSet<String>,
+    max_char_size: usize,
+    max_byte_size: usize,
 }
 
 impl DenyWord {
@@ -37,6 +39,12 @@ impl DenyWord {
             if w.is_empty() {
                 continue;
             }
+            if w.len() > deny_word.max_byte_size {
+                deny_word.max_byte_size = w.len();
+            }
+            if w.chars().count() > deny_word.max_char_size {
+                deny_word.max_char_size = w.chars().count();
+            }
             deny_word.jieba.add_word(w, None, None);
             deny_word.words.insert(w.to_string());
         }
@@ -48,6 +56,8 @@ impl DenyWord {
         DenyWord {
             jieba: Jieba::empty(),
             words: HashSet::new(),
+            max_char_size: 0,
+            max_byte_size: 0,
         }
     }
 
@@ -67,5 +77,8 @@ impl DenyWord {
             }
         }
         None
+    }
+    pub(crate) fn get_max_size(&self) -> (usize, usize) {
+        (self.max_char_size, self.max_byte_size)
     }
 }
