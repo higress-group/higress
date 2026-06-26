@@ -18,9 +18,47 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/config"
 )
+
+func TestWildcardHostForSSLPassthrough(t *testing.T) {
+	server := CreateSSLPassthroughServer("", 443, "")
+	assert.Equal(t, []string{"*"}, server.Hosts)
+
+	vs := NewWrapperVirtualService("", &WrapperConfig{})
+	assert.Equal(t, []string{"*"}, vs.VirtualService.Hosts)
+
+	route := CreateTLSRoute("", []*networking.RouteDestination{{Weight: 100}})
+	assert.Equal(t, []string{"*"}, route.Match[0].SniHosts)
+	vs.VirtualService.Tls = append(vs.VirtualService.Tls, route)
+	assert.True(t, vs.HasTLSRouteForHost(""))
+}
+
+func TestPassthroughTLSHostOwnerNilMapAllowsStandaloneConversion(t *testing.T) {
+	cfg := &config.Config{
+		Meta: config.Meta{
+			Namespace: "default",
+			Name:      "tls-passthrough",
+		},
+	}
+
+	// A nil owner map means the caller did not prepare ownership from the full ingress snapshot.
+	assert.True(t, IsPassthroughTLSHostOwner(&ConvertOptions{}, cfg, "example.com"))
+	assert.Nil(t, PassthroughTLSHostOwner(&ConvertOptions{}, "example.com"))
+
+	// A non-nil owner map means ownership has been prepared and missing hosts have no owner.
+	options := &ConvertOptions{
+		PassthroughTLSHostOwners: map[string]*config.Config{},
+	}
+	assert.False(t, IsPassthroughTLSHostOwner(options, cfg, "example.com"))
+	assert.Nil(t, PassthroughTLSHostOwner(options, "example.com"))
+
+	options.PassthroughTLSHostOwners["example.com"] = cfg
+	assert.True(t, IsPassthroughTLSHostOwner(options, cfg, "example.com"))
+	assert.Equal(t, cfg, PassthroughTLSHostOwner(options, "example.com"))
+}
 
 func TestIngressDomainCache(t *testing.T) {
 	cache := NewIngressDomainCache()

@@ -14,10 +14,20 @@ const (
 	defaultVllmDomain = "vllm-service.cluster.local"
 )
 
-// isVllmDirectPath checks if the path is a known standard vLLM interface path.
+// isVllmDirectPath checks if the path is a known standard vLLM interface path,
+// i.e. the configured vllmCustomUrl already points at a concrete endpoint rather
+// than a base path. Such paths are forwarded as-is; base paths get the per-API
+// suffix appended. Must cover every endpoint in DefaultCapabilities that a user
+// might configure directly, otherwise the path is mistakenly treated as a base
+// and double-appended (e.g. /v1/responses -> /v1/responses/responses).
 func isVllmDirectPath(path string) bool {
 	return strings.HasSuffix(path, "/completions") ||
-		strings.HasSuffix(path, "/rerank")
+		strings.HasSuffix(path, "/rerank") ||
+		strings.HasSuffix(path, "/responses") ||
+		strings.HasSuffix(path, "/messages") ||
+		strings.HasSuffix(path, "/count_tokens") ||
+		strings.HasSuffix(path, "/transcriptions") ||
+		strings.HasSuffix(path, "/translations")
 }
 
 type vllmProviderInitializer struct{}
@@ -36,6 +46,13 @@ func (m *vllmProviderInitializer) DefaultCapabilities() map[string]string {
 		string(ApiNameModels):         PathOpenAIModels,
 		string(ApiNameEmbeddings):     PathOpenAIEmbeddings,
 		string(ApiNameCohereV1Rerank): PathCohereV1Rerank,
+		// vLLM also natively serves the Anthropic Messages API and newer OpenAI
+		// endpoints; expose them as passthrough (no protocol translation).
+		string(ApiNameAnthropicMessages):    PathAnthropicMessages,
+		string(ApiNameAnthropicCountTokens): PathAnthropicMessagesCountTokens,
+		string(ApiNameResponses):            PathOpenAIResponses,
+		string(ApiNameAudioTranscription):   PathOpenAIAudioTranscriptions,
+		string(ApiNameAudioTranslation):     PathOpenAIAudioTranslations,
 	}
 }
 
@@ -153,6 +170,22 @@ func (m *vllmProvider) GetApiName(path string) ApiName {
 	}
 	if strings.Contains(path, PathCohereV1Rerank) {
 		return ApiNameCohereV1Rerank
+	}
+	// count_tokens must be matched before /v1/messages: the former contains the latter.
+	if strings.Contains(path, PathAnthropicMessagesCountTokens) {
+		return ApiNameAnthropicCountTokens
+	}
+	if strings.Contains(path, PathAnthropicMessages) {
+		return ApiNameAnthropicMessages
+	}
+	if strings.Contains(path, PathOpenAIResponses) {
+		return ApiNameResponses
+	}
+	if strings.Contains(path, PathOpenAIAudioTranscriptions) {
+		return ApiNameAudioTranscription
+	}
+	if strings.Contains(path, PathOpenAIAudioTranslations) {
+		return ApiNameAudioTranslation
 	}
 	return ""
 }

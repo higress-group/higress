@@ -39,6 +39,7 @@ func init() {
 		wrapper.ProcessRequestBodyBy(onHttpRequestBody),
 		wrapper.ProcessResponseHeadersBy(onHttpResponseHeaders),
 		wrapper.ProcessResponseBodyBy(onHttpResponseBody),
+		wrapper.WithRebuildMaxMemBytes[TransformerConfig](200*1024*1024),
 	)
 }
 
@@ -343,11 +344,12 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config TransformerConfig, log
 	isValidRequestContent := isValidRequestContentType(contentType)
 	isBodyChange := config.reqTrans.IsBodyChange()
 	needBodyMapSource := config.reqTrans.NeedBodyMapSource()
+	hasRequestBody := ctx.HasRequestBody()
 
-	log.Debugf("contentType:%s, isValidRequestContent:%v, isBodyChange:%v, needBodyMapSource:%v",
-		contentType, isValidRequestContent, isBodyChange, needBodyMapSource)
+	log.Debugf("contentType:%s, isValidRequestContent:%v, isBodyChange:%v, needBodyMapSource:%v, hasRequestBody:%v",
+		contentType, isValidRequestContent, isBodyChange, needBodyMapSource, hasRequestBody)
 
-	if isBodyChange && isValidRequestContent {
+	if isBodyChange && isValidRequestContent && hasRequestBody {
 		delete(hs, "content-length")
 	}
 
@@ -361,7 +363,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config TransformerConfig, log
 	ctx.SetContext("headers", hs)
 	ctx.SetContext("querys", qs)
 
-	if !isValidRequestContent || (!isBodyChange && !needBodyMapSource) {
+	if !hasRequestBody || !isValidRequestContent || (!isBodyChange && !needBodyMapSource) {
 		ctx.DontReadRequestBody()
 	} else if needBodyMapSource {
 		// we need do transform during body phase

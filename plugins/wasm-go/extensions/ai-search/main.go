@@ -529,7 +529,7 @@ func executeSearch(ctx wrapper.HttpContext, config Config, queryIndex int, body 
 							if err != nil {
 								log.Errorf("modify request message content failed, err:%v, body:%s", err, body)
 							} else {
-								log.Debugf("modifeid body:%s", modifiedBody)
+								log.Debugf("modified body:%s", modifiedBody)
 								proxywasm.ReplaceHttpRequestBody(modifiedBody)
 								if config.needReference {
 									ctx.SetContext("References", strings.Join(formattedReferences, "\n\n"))

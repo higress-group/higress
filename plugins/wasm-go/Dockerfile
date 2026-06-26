@@ -14,6 +14,7 @@ COPY . .
 WORKDIR /workspace/extensions/$PLUGIN_NAME
 
 RUN go mod tidy
+RUN if [ -f prepare.sh ]; then sh ./prepare.sh; fi
 RUN \
     GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o /main.wasm .
 
