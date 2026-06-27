@@ -20,9 +20,12 @@ import (
 	"strings"
 	"testing"
 
+	"ai-token-ratelimit/config"
+
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/resp"
 )
 
@@ -190,6 +193,29 @@ var regexpLimitConfig = func() json.RawMessage {
 		},
 		"rejected_code": 429,
 		"rejected_msg":  "User ID rate limit exceeded",
+	})
+	return data
+}()
+
+// 测试配置：基于 IP 头（from-header-x-forwarded-for）的限流配置
+var ipHeaderLimitConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"rule_name": "ai-token-ip-header",
+		"rule_items": []map[string]interface{}{
+			{
+				"limit_by_per_ip": "from-header-x-forwarded-for",
+				"limit_keys": []map[string]interface{}{
+					{
+						"key":              "10.0.0.0/8",
+						"token_per_minute": 200,
+					},
+				},
+			},
+		},
+		"redis": map[string]interface{}{
+			"service_name": "redis.static",
+			"service_port": 6379,
+		},
 	})
 	return data
 }()
@@ -903,4 +929,304 @@ func multiRuleResp(items ...[3]int) []byte {
 		panic(fmt.Sprintf("failed to marshal multiRuleResp: %v", err))
 	}
 	return b
+}
+
+// TestCoverageEdgeCases 覆盖 Codecov 报告中标记缺失的多规则/边缘分支。
+// 目标：把 main.go 的 patch coverage 从 ~78% 提升到接近 100%。
+// 覆盖范围：
+//   - hitRateRuleItem 的 param / consumer / cookie 缺值分支（lines 320-348）
+//   - hitRateRuleItem 的 LimitByPerIpType 分支 + getDownStreamIp（lines 351-364, 391-414）
+//   - findMatchingItem 的 per-type regexp/all 分支（lines 375-388）
+//   - onHttpRequestHeaders eval 回调的子数组长度异常（lines 185-189）
+//   - onHttpStreamingBody 的 !endOfStream / 无 token 用量分支（lines 227-236）
+//   - parseConfig 的 redis 初始化错误分支（lines 132-138）
+func TestCoverageEdgeCases(t *testing.T) {
+	// parseConfig 错误分支：缺少 redis 字段时 InitRedisClusterClient 直接返回 error，
+	// 触发 line 132-133。直接调用 parseConfig 验证该路径。
+	t.Run("parseConfig missing redis returns error", func(t *testing.T) {
+		cfg := &config.AiTokenRateLimitConfig{}
+		err := parseConfig(gjson.Parse(`{"rule_name":"x"}`), cfg)
+		require.Error(t, err)
+	})
+
+	// parseConfig 错误分支：ParseAiTokenRateLimitConfig 失败（既无 global_threshold 也无
+	// rule_items），触发 line 136-138 返回 error，进而导致 OnPluginStart 返回 Failed。
+	// 走 NewTestHost 路径可避免直接调用 parseConfig 时未初始化 host emulator 导致的
+	// RedisInit nil 解引用 panic。
+	badParseConfig := func() json.RawMessage {
+		data, _ := json.Marshal(map[string]interface{}{
+			"rule_name": "ai-token-bad",
+			"redis": map[string]interface{}{
+				"service_name": "redis.static",
+				"service_port": 6379,
+			},
+			// 不提供 global_threshold 且不提供 rule_items，
+			// 触发 "at least one of 'global_threshold' or 'rule_items' must be set"。
+		})
+		return data
+	}()
+	t.Run("parseConfig ParseAiTokenRateLimitConfig returns error", func(t *testing.T) {
+		host, status := test.NewTestHost(badParseConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusFailed, status)
+	})
+
+	// hitRateRuleItem param 分支：query 缺少限流键（line 328-330）。
+	// 结果：matched 为空 → onHttpRequestHeaders 返回 ActionContinue。
+	t.Run("param rule key absent in query", func(t *testing.T) {
+		host, status := test.NewTestHost(paramLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"}, // 没有 apikey 查询参数
+			{":method", "POST"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// hitRateRuleItem consumer 分支：缺少 x-mse-consumer 头（line 335-337）。
+	t.Run("consumer header absent", func(t *testing.T) {
+		host, status := test.NewTestHost(consumerLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// hitRateRuleItem cookie 分支：完全缺少 cookie 头（line 342-344）。
+	t.Run("cookie header absent", func(t *testing.T) {
+		host, status := test.NewTestHost(cookieLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// hitRateRuleItem cookie 分支：cookie 存在但不含目标 key（line 346-348）。
+	t.Run("cookie key not found in cookie header", func(t *testing.T) {
+		host, status := test.NewTestHost(cookieLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+			{"cookie", "other-key=other-value"}, // 没有 session-id
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// 测试配置：基于 IP 头（from-header-x-forwarded-for）的限流配置
+// (var declaration moved to package scope near other config vars)
+
+	// hitRateRuleItem IP 分支 + getDownStreamIp：RemoteAddrSourceType 走 GetProperty
+	// "source"/"address"（lines 351-364, 401-405）。设置 source address 为匹配网段。
+	t.Run("ip rule matches via remote-addr", func(t *testing.T) {
+		host, status := test.NewTestHost(ipLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		// 192.168.1.0/24 网段内的一个地址
+		require.NoError(t, host.SetProperty([]string{"source", "address"}, []byte("192.168.1.50:54321")))
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		resp := multiRuleResp([3]int{300, 1, 60})
+		host.CallOnRedisCall(0, resp)
+
+		require.Nil(t, host.GetLocalResponse())
+		host.CompleteHttp()
+	})
+
+	// getDownStreamIp HeaderSourceType 分支（lines 396-400）：从指定请求头读 IP，
+	// 且验证 Split 后取第一段（处理 "1.1.1.1, 2.2.2.2" 这种逗号分隔的多值）。
+	t.Run("ip rule matches via from-header source", func(t *testing.T) {
+		host, status := test.NewTestHost(ipHeaderLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+			{"x-forwarded-for", "10.1.2.3, 192.168.1.1"}, // 命中 10.0.0.0/8；逗号分隔验证 Split
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		resp := multiRuleResp([3]int{200, 1, 60})
+		host.CallOnRedisCall(0, resp)
+
+		require.Nil(t, host.GetLocalResponse())
+		host.CompleteHttp()
+	})
+
+	// hitRateRuleItem IP 分支：IP 不在网段内 → 命中 IpNet.Get 返回 not found，
+	// 继续循环后 fall through 返回 ("", nil, nil)，matched 为空。
+	t.Run("ip rule source ip outside configured cidr", func(t *testing.T) {
+		host, status := test.NewTestHost(ipLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		// 10.0.0.1 不在 192.168.1.0/24 网段
+		require.NoError(t, host.SetProperty([]string{"source", "address"}, []byte("10.0.0.1:54321")))
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// hitRateRuleItem IP 分支：getDownStreamIp 解析失败（IP 无效），
+	// 走 line 411-413 返回 error，外层 line 354 走 log.Warnf + 返回 ("", &rule, nil)，
+	// matched 长度为 1（含 nil ptr 不可能；实际 hitRule=&rule, hitItem=nil → collectMatchedRules
+	// 内部 if hitRule != nil && hitItem != nil 失败，不加入），最终 ActionContinue。
+	// 注：此分支在 collectMatchedRules 内被过滤为不加入 matched，故最终仍 ActionContinue。
+	t.Run("ip rule invalid source ip returns continue", func(t *testing.T) {
+		host, status := test.NewTestHost(ipLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.NoError(t, host.SetProperty([]string{"source", "address"}, []byte("not-an-ip")))
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// findMatchingItem per-type regexp 分支：limit_by_per_header + regexp key 匹配（lines 375-382）。
+	// regexpLimitConfig 用 ^user-\d+$，x-user-id=user-123 应匹配。
+	t.Run("regexp per-header rule matches", func(t *testing.T) {
+		host, status := test.NewTestHost(regexpLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+			{"x-user-id", "user-123"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		resp := multiRuleResp([3]int{150, 1, 60})
+		host.CallOnRedisCall(0, resp)
+
+		require.Nil(t, host.GetLocalResponse())
+		host.CompleteHttp()
+	})
+
+	// findMatchingItem per-type regexp 分支：不匹配时不返回 any rule → ActionContinue。
+	t.Run("regexp per-header rule does not match", func(t *testing.T) {
+		host, status := test.NewTestHost(regexpLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+			{"x-user-id", "admin"}, // 不匹配 ^user-\d+$
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// onHttpRequestHeaders eval 回调：子数组长度异常（lines 185-189）。
+	// 匹配 1 条规则（headerLimitConfig），但 Redis 返回的子数组只有 2 个元素（不是 3）。
+	t.Run("redis sub-array length mismatch within loop", func(t *testing.T) {
+		host, status := test.NewTestHost(headerLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+			{"x-api-key", "test-key-123"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		badResp, err := resp.ArrayValue([]resp.Value{
+			resp.ArrayValue([]resp.Value{
+				resp.IntegerValue(100),
+				resp.IntegerValue(1),
+			}),
+		}).MarshalRESP()
+		require.NoError(t, err)
+		host.CallOnRedisCall(0, badResp)
+
+		require.Nil(t, host.GetLocalResponse())
+		host.CompleteHttp()
+	})
+
+	// onHttpStreamingBody：endOfStream=false 时直接 return data（lines 227-229）。
+	// 必须先完成请求阶段以建立 LimitRedisContext，然后发送中间 chunk。
+	t.Run("streaming body mid-chunk returns immediately", func(t *testing.T) {
+		host, status := test.NewTestHost(globalThresholdConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+		})
+		host.CallOnRedisCall(0, multiRuleResp([3]int{1000, 1, 60}))
+
+		// endOfStream=false：中间 chunk 应原样返回，且不发起新的 Redis callout。
+		body := []byte(`{"choices":[{"message":{"content":"partial..."}}]}`)
+		streamAction := host.CallOnHttpStreamingResponseBody(body, false)
+		require.Equal(t, types.ActionContinue, streamAction)
+		require.Equal(t, 0, len(host.GetRedisCalloutAttributes()),
+			"mid-chunk should not trigger Redis callout")
+
+		host.CompleteHttp()
+	})
+
+	// onHttpStreamingBody：endOfStream=true 但响应体不含 token usage（lines 233-236）。
+	// GetContext 返回 nil → 直接 return data。
+	t.Run("streaming body no token usage at end-of-stream", func(t *testing.T) {
+		host, status := test.NewTestHost(globalThresholdConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+		})
+		host.CallOnRedisCall(0, multiRuleResp([3]int{1000, 1, 60}))
+
+		// 不含 usage 字段 → TotalToken=0 → SetContext 未被调用。
+		body := []byte(`{"choices":[{"message":{"content":"hi"}}]}`)
+		streamAction := host.CallOnHttpStreamingResponseBody(body, true)
+		require.Equal(t, types.ActionContinue, streamAction)
+		// 无 token context → 跳过响应阶段 INCRBY。
+		require.Equal(t, 0, len(host.GetRedisCalloutAttributes()),
+			"missing token usage should skip response-phase INCRBY")
+
+		host.CompleteHttp()
+	})
 }

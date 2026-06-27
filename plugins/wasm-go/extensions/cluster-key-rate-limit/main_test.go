@@ -25,6 +25,7 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/resp"
 )
 
@@ -221,6 +222,29 @@ var regexpLimitConfig = func() json.RawMessage {
 			"service_port": 6379,
 		},
 		"show_limit_quota_header": true,
+	})
+	return data
+}()
+
+// 测试配置：基于 from-remote-addr 的 IP 限流配置
+var ipRemoteAddrConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"rule_name": "routeA-remote-addr-limit",
+		"rule_items": []map[string]interface{}{
+			{
+				"limit_by_per_ip": "from-remote-addr",
+				"limit_keys": []map[string]interface{}{
+					{
+						"key":              "192.168.0.0/16",
+						"query_per_minute": 100,
+					},
+				},
+			},
+		},
+		"redis": map[string]interface{}{
+			"service_name": "redis.static",
+			"service_port": 6379,
+		},
 	})
 	return data
 }()
@@ -1045,4 +1069,169 @@ func multiRuleResp(items ...[3]int) []byte {
 		panic(fmt.Sprintf("failed to marshal multiRuleResp: %v", err))
 	}
 	return b
+}
+
+// TestCoverageEdgeCases 覆盖 Codecov 报告中标记缺失的边缘分支。
+// 目标：把 cluster-key main.go 的 hitRateRuleItem / findMatchingItem / getDownStreamIp
+// 覆盖率提升，消掉 Codecov 报告里的 missing lines。
+func TestCoverageEdgeCases(t *testing.T) {
+	// parseConfig 错误分支：缺少 redis 配置触发 InitRedisClusterClient error。
+	t.Run("parseConfig missing redis returns error", func(t *testing.T) {
+		cfg := &config.ClusterKeyRateLimitConfig{}
+		err := parseConfig(gjson.Parse(`{"rule_name":"x"}`), cfg)
+		require.Error(t, err)
+	})
+
+	// parseConfig 错误分支：ParseClusterKeyRateLimitConfig 失败（无 global_threshold
+	// 且 rule_items 为空），触发 line 110-112。
+	badParseConfig := func() json.RawMessage {
+		data, _ := json.Marshal(map[string]interface{}{
+			"rule_name": "ck-bad",
+			"redis": map[string]interface{}{
+				"service_name": "redis.static",
+				"service_port": 6379,
+			},
+		})
+		return data
+	}()
+	t.Run("parseConfig ParseClusterKeyRateLimitConfig returns error", func(t *testing.T) {
+		host, status := test.NewTestHost(badParseConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusFailed, status)
+	})
+
+	// hitRateRuleItem param 分支：query 中缺限流键 → ActionContinue。
+	t.Run("param rule key absent in query", func(t *testing.T) {
+		host, status := test.NewTestHost(paramLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"}, // 没有 apikey
+			{":method", "GET"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// hitRateRuleItem consumer 分支：缺少 x-mse-consumer 头 → ActionContinue。
+	t.Run("consumer header absent", func(t *testing.T) {
+		host, status := test.NewTestHost(consumerLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// hitRateRuleItem cookie 分支：cookie 存在但不含目标 key → ActionContinue。
+	t.Run("cookie key not found in cookie header", func(t *testing.T) {
+		host, status := test.NewTestHost(cookieLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+			{"cookie", "other-key=other-value"}, // cookieLimitConfig 期望 key1
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// findMatchingItem per-type regexp 分支：apikey 以 "a" 开头 → 命中 regexp:^a.*。
+	t.Run("regexp per-param rule matches", func(t *testing.T) {
+		host, status := test.NewTestHost(regexpLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test?apikey=apple"},
+			{":method", "GET"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		resp := multiRuleResp([3]int{10, 1, 1})
+		host.CallOnRedisCall(0, resp)
+		host.CompleteHttp()
+	})
+
+	// findMatchingItem per-type "*" 通配分支：apikey 名称不以 a/b 开头 → 命中 "*" 项。
+	t.Run("regexp wildcard match in per-param", func(t *testing.T) {
+		host, status := test.NewTestHost(regexpLimitConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test?apikey=zzz"},
+			{":method", "GET"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		resp := multiRuleResp([3]int{1000, 1, 3600})
+		host.CallOnRedisCall(0, resp)
+		host.CompleteHttp()
+	})
+
+	// getDownStreamIp RemoteAddrSourceType 分支（line 339-344）：通过 GetProperty
+	// 读 source/address。覆盖 RemoteAddrSourceType 整段 + IP 在网段内匹配。
+	t.Run("ip rule matches via remote-addr source", func(t *testing.T) {
+		host, status := test.NewTestHost(ipRemoteAddrConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.NoError(t, host.SetProperty([]string{"source", "address"}, []byte("192.168.1.50:54321")))
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		resp := multiRuleResp([3]int{100, 1, 60})
+		host.CallOnRedisCall(0, resp)
+		host.CompleteHttp()
+	})
+
+	// getDownStreamIp RemoteAddrSourceType 分支：source address 解析失败 → 覆盖
+	// line 340-341 (GetProperty/读 source) + line 345-347 (无效 IP 返回 error)。
+	// hitRateRuleItem IP 分支 line 291-293 (getDownStreamIp 失败时) 也被覆盖。
+	t.Run("ip rule remote-addr source is invalid ip", func(t *testing.T) {
+		host, status := test.NewTestHost(ipRemoteAddrConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.NoError(t, host.SetProperty([]string{"source", "address"}, []byte("not-an-ip")))
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// hitRateRuleItem IP 分支：RemoteAddrSourceType 但 IP 不在网段内 → 循环中
+	// IpNet.Get 返回 not found，fall through 返回 ("", nil, nil)。
+	t.Run("ip rule remote-addr ip outside configured cidr", func(t *testing.T) {
+		host, status := test.NewTestHost(ipRemoteAddrConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.NoError(t, host.SetProperty([]string{"source", "address"}, []byte("10.0.0.1:54321")))
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+	})
 }
