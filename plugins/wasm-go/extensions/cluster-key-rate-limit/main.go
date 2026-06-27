@@ -119,7 +119,16 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 
 	matched := collectMatchedRules(ctx, cfg)
 	if len(matched) == 0 {
+		// 无任何规则命中：直接放行，不发起 Redis 调用
+		log.Debugf("cluster-key-rate-limit: no rule matched, path=%s host=%s", ctx.Path(), ctx.Host())
 		return types.ActionContinue
+	}
+
+	log.Debugf("cluster-key-rate-limit: request phase matched %d rule(s), path=%s host=%s",
+		len(matched), ctx.Path(), ctx.Host())
+	for i, m := range matched {
+		log.Debugf("cluster-key-rate-limit:   rule[%d] key=%s threshold=%d window=%ds",
+			i, m.key, m.count, m.window)
 	}
 
 	n := len(matched)
@@ -150,8 +159,13 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 				return
 			}
 			threshold, current, ttl := a[0].Integer(), a[1].Integer(), a[2].Integer()
+			log.Debugf("cluster-key-rate-limit:   eval rule[%d] key=%s threshold=%d current=%d ttl=%ds",
+				i, matched[i].key, threshold, current, ttl)
 
 			if current > threshold {
+				// 命中触发的第一条规则（按 collectMatchedRules 顺序，global 优先）
+				log.Debugf("cluster-key-rate-limit: rule[%d] key=%s triggered (current=%d > threshold=%d), rejecting with code %d",
+					i, matched[i].key, current, threshold, cfg.RejectedCode)
 				rejected(cfg, LimitContext{
 					count:     threshold,
 					remaining: threshold - current,
@@ -169,6 +183,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 		// 未触发：写入 tightest 规则到 LimitContext，供 onHttpResponseHeaders 读取 X-RateLimit-* 头
 		tightSub := arr[tightestIdx].Array()
 		tightThreshold, tightCurrent, tightTtl := tightSub[0].Integer(), tightSub[1].Integer(), tightSub[2].Integer()
+		log.Debugf("cluster-key-rate-limit: all %d rule(s) within threshold, tightest rule[%d] key=%s (count=%d remaining=%d reset=%ds)",
+			n, tightestIdx, matched[tightestIdx].key, tightThreshold, tightThreshold-tightCurrent, tightTtl)
 		ctx.SetContext(LimitContextKey, LimitContext{
 			count:     tightThreshold,
 			remaining: tightThreshold - tightCurrent,
@@ -188,11 +204,14 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config config.ClusterKeyRateLimitConfig) types.Action {
 	limitContext, ok := ctx.GetContext(LimitContextKey).(LimitContext)
 	if !ok {
+		log.Debugf("cluster-key-rate-limit: response phase reached with no LimitContext, skipping X-RateLimit-* headers")
 		return types.ActionContinue
 	}
 	if config.ShowLimitQuotaHeader {
 		_ = proxywasm.ReplaceHttpResponseHeader(RateLimitLimitHeader, strconv.Itoa(limitContext.count))
 		_ = proxywasm.ReplaceHttpResponseHeader(RateLimitRemainingHeader, strconv.Itoa(limitContext.remaining))
+		log.Debugf("cluster-key-rate-limit: response phase wrote X-RateLimit-Limit=%d X-RateLimit-Remaining=%d",
+			limitContext.count, limitContext.remaining)
 	}
 	return types.ActionContinue
 }

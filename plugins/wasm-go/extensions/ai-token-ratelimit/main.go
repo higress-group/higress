@@ -147,7 +147,15 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 	matched := collectMatchedRules(ctx, cfg)
 	if len(matched) == 0 {
 		// 无任何规则命中：直接放行，不发起 Redis 调用
+		log.Debugf("ai-token-ratelimit: no rule matched, path=%s host=%s", ctx.Path(), ctx.Host())
 		return types.ActionContinue
+	}
+
+	log.Debugf("ai-token-ratelimit: request phase matched %d rule(s), path=%s host=%s",
+		len(matched), ctx.Path(), ctx.Host())
+	for i, m := range matched {
+		log.Debugf("ai-token-ratelimit:   rule[%d] key=%s threshold=%d window=%ds",
+			i, m.key, m.count, m.window)
 	}
 
 	n := len(matched)
@@ -172,7 +180,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 		// 单次遍历：触发即 return；未触发则放行。
 		// ai-token-ratelimit 不对外暴露 LimitContext（与 cluster-key-ratelimit 不同，
 		// 后者通过 X-RateLimit-* 头可观测 tightest 选择），因此此处不再写入 Context。
-		for _, ruleResult := range arr {
+		for i, ruleResult := range arr {
 			ruleState := ruleResult.Array()
 			if len(ruleState) != 3 {
 				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(ruleState))
@@ -180,9 +188,13 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 				return
 			}
 			threshold, current, ttl := ruleState[0].Integer(), ruleState[1].Integer(), ruleState[2].Integer()
+			log.Debugf("ai-token-ratelimit:   eval rule[%d] key=%s threshold=%d current=%d ttl=%ds",
+				i, matched[i].key, threshold, current, ttl)
 
 			if current > threshold {
 				// 命中触发的第一条规则（按 collectMatchedRules 顺序，global 优先）
+				log.Debugf("ai-token-ratelimit: rule[%d] key=%s triggered (current=%d > threshold=%d), rejecting with code %d",
+					i, matched[i].key, current, threshold, cfg.RejectedCode)
 				ctx.SetUserAttribute("token_ratelimit_status", "limited")
 				_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 				rejected(cfg, LimitContext{
@@ -194,6 +206,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 			}
 		}
 
+		log.Debugf("ai-token-ratelimit: all %d rule(s) within threshold, allowing request to proceed", n)
 		_ = proxywasm.ResumeHttpRequest()
 	})
 
@@ -206,6 +219,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 
 func onHttpStreamingBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig, data []byte, endOfStream bool) []byte {
 	if usage := tokenusage.GetTokenUsage(ctx, data); usage.TotalToken > 0 {
+		log.Debugf("ai-token-ratelimit: token usage detected input=%d output=%d total=%d",
+			usage.InputToken, usage.OutputToken, usage.TotalToken)
 		ctx.SetContext(tokenusage.CtxKeyInputToken, usage.InputToken)
 		ctx.SetContext(tokenusage.CtxKeyOutputToken, usage.OutputToken)
 	}
@@ -216,20 +231,25 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCon
 	inputTokenRaw := ctx.GetContext(tokenusage.CtxKeyInputToken)
 	outputTokenRaw := ctx.GetContext(tokenusage.CtxKeyOutputToken)
 	if inputTokenRaw == nil || outputTokenRaw == nil {
+		log.Debugf("ai-token-ratelimit: response phase end-of-stream reached but no token usage recorded, skipping")
 		return data
 	}
 	inputToken, ok1 := inputTokenRaw.(int64)
 	outputToken, ok2 := outputTokenRaw.(int64)
 	if !ok1 || !ok2 {
+		log.Errorf("ai-token-ratelimit: response phase token usage context has unexpected types: input=%T output=%T",
+			inputTokenRaw, outputTokenRaw)
 		return data
 	}
 
 	limitRedisContextRaw := ctx.GetContext(LimitRedisContextKey)
 	if limitRedisContextRaw == nil {
+		log.Debugf("ai-token-ratelimit: response phase reached with no LimitRedisContext, skipping accumulation")
 		return data
 	}
 	limitRedisContext, ok := limitRedisContextRaw.(LimitRedisContext)
 	if !ok || len(limitRedisContext.rules) == 0 {
+		log.Debugf("ai-token-ratelimit: response phase LimitRedisContext is empty, skipping accumulation")
 		return data
 	}
 
@@ -238,12 +258,19 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCon
 	keys := make([]interface{}, n)
 	args := make([]interface{}, 0, n*3)
 	added := inputToken + outputToken
+	log.Debugf("ai-token-ratelimit: response phase accumulating tokens input=%d output=%d total=%d across %d rule(s)",
+		inputToken, outputToken, added, n)
 	for i, r := range limitRedisContext.rules {
 		keys[i] = r.key
 		args = append(args, r.count, r.window, added)
+		log.Debugf("ai-token-ratelimit:   rule[%d] key=%s threshold=%d window=%ds added=%d",
+			i, r.key, r.count, r.window, added)
 	}
 
-	err := cfg.RedisClient.Eval(MultiKeyResponsePhaseScript, n, keys, args, nil)
+	err := cfg.RedisClient.Eval(MultiKeyResponsePhaseScript, n, keys, args, func(response resp.Value) {
+		incremented := response.Integer()
+		log.Debugf("ai-token-ratelimit: response phase INCRBY done, %d/%d rule(s) updated", incremented, n)
+	})
 	if err != nil {
 		log.Errorf("redis call failed: %v", err)
 	}
