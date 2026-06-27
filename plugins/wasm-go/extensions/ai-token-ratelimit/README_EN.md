@@ -4,12 +4,23 @@ keywords: [ AI Gateway, AI Token Rate Limiting ]
 description: AI Token Rate Limiting Plugin Configuration Reference
 ---
 
+> ⚠️ **Behavior Change Notice (no version bump)**
+>
+> As of this update, `rule_items` matching semantics changed from **first-match-wins** (returns on first hit) to **all-match OR overlay** (all matched rules are evaluated, any trigger rejects). The mutual exclusion between `global_threshold` and `rule_items` is also removed to support hybrid configuration.
+>
+> - Existing config (single `rule_items` or only `global_threshold`): behavior unchanged
+> - Existing config (multiple `rule_items` expecting short-circuit match): **behavior will change** — all matched rules are evaluated
+> - Redis key format adds `{rule_name}` hash tag for Redis Cluster compatibility; old counter data is incompatible
+>
+> See "Features" and "Configuration Examples" below for details.
+
 ## Function Description
 
-The `ai-token-ratelimit` plugin implements AI Token rate limiting based on Redis, supporting the following two rate limiting modes:
+The `ai-token-ratelimit` plugin implements AI Token rate limiting based on Redis, supporting the following three rate limiting modes:
 
 - **Rule-level Global Rate Limiting**: Sets a global token rate limit threshold for custom rule groups based on the same `rule_name` and `global_threshold` configurations.
 - **Key-level Dynamic Rate Limiting**: Performs grouped token rate limiting based on dynamic keys in requests (including URL parameters, request headers, client IP, Consumer name, or Cookie fields, etc.).
+- **Hybrid rate limiting**: Configure `global_threshold` (global fallback) and `rule_items` (per-dimension) simultaneously. All matched rules take effect together; any trigger rejects the request.
 
 
 ## Runtime Properties
@@ -23,8 +34,8 @@ Plugin execution priority: `600`
 | Configuration Item       | Type           | Required | Default Value | Description                                                                                     |
 |--------------------------|----------------|----------|---------------|-------------------------------------------------------------------------------------------------|
 | rule_name                | string         | Yes      | -             | Name of the rate limiting rule. The Redis key is assembled based on the rate limiting rule name + rate limiting type + rate limiting key name + actual value corresponding to the rate limiting key. |
-| global_threshold         | Object         | No, either `global_threshold` or `rule_items` is required | - | Rate limits the entire custom rule group |
-| rule_items               | array of object| No, either `global_threshold` or `rule_items` is required | - | Rate limiting rule items. The first matching `rule_item` in the order of `rule_items` triggers the rate limiting rule, and subsequent rules are ignored. |
+| global_threshold         | Object         | No, at least one of them is required; can be configured simultaneously | - | Rate limits the entire custom rule group |
+| rule_items               | array of object| No, at least one of them is required; can be configured simultaneously | - | Rate limiting rule items. Supports up to **10** rules. All matched `rule_item`s are evaluated and combined with an OR relationship; any trigger rejects the request. The execution order of rules does not affect the final result. See the expanded `rule_items` notes below for details. |
 | rejected_code            | int            | No       | 429           | HTTP status code returned when a request is rate-limited                                         |
 | rejected_msg             | string         | No       | Too many requests | Response body returned when a request is rate-limited                                            |
 | redis                    | object         | Yes      | -             | Redis-related configurations                                                                   |
@@ -54,6 +65,24 @@ Plugin execution priority: `600`
 | limit_by_per_cookie         | string          | No, one of `limit_by_*` is required | - | Matches specific Cookies by rule and calculates rate limits for each Cookie separately. Configures the source of the rate limiting key value as the key name in the Cookie. Regular expressions or `*` are supported when configuring `limit_keys`.             |
 | limit_by_per_ip             | string          | No, one of `limit_by_*` is required | - | Matches specific IPs by rule and calculates rate limits for each IP separately. Configures the source of the rate limiting key value as the IP parameter name, obtained from the request header in the format `from-header-corresponding_header_name` (e.g., `from-header-x-forwarded-for`), or directly obtains the peer socket IP by configuring `from-remote-addr`. |
 | limit_keys                  | array of object | Yes      | -             | Configures the rate limiting count after matching the key value                                                                                                                                             |
+
+#### `rule_items` Multi-Rule Matching Semantics
+
+`rule_items` is an array. **All** `rule_item`s whose match conditions are satisfied are evaluated, and the rules are combined with an OR relationship: **any trigger rejects the request**. The execution order of rules does not affect the final result.
+
+> The `rule_items` array supports up to **10** rules. Each `rule_item` produces independent Redis counters for each matched `limit_keys`.
+
+##### Duplicate rule_items (not allowed)
+
+A `rule_item` with the same `limit_by_*` + key combination may **only appear once**, including multi-window scenarios where the same key has different time windows (e.g., per-minute and per-hour limits for the same apikey). Duplicate declarations will emit a warn log during config parsing:
+
+```yaml
+rule_items:
+  - limit_by_param: apikey
+    limit_keys: [{key: k1, token_per_minute: 100}]
+  - limit_by_param: apikey
+    limit_keys: [{key: k1, token_per_hour: 1000}]   # duplicate: same type+key, triggers warn
+```
 
 
 ### Description of Configuration Fields in `limit_keys`
