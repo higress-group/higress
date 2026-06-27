@@ -115,7 +115,7 @@ func TestOnHttpRequestHeaders_GlobalAuthTrue_RouteAllow_ConsumerAllowed(t *testi
 
 // global_auth=true + route-scoped allow + consumer not in allow → 403 via
 // deniedUnauthorizedConsumer (main.go:344-348). The credential decodes and
-// authenticates against credential2Name — `consumer2` exists but is not
+// authenticates against credential2Consumer — `consumer2` exists but is not
 // permitted on route-a — distinct from the "credential not configured"
 // variant already covered by main_test.go's "invalid api key" case.
 func TestOnHttpRequestHeaders_GlobalAuthTrue_RouteAllow_ConsumerNotAllowed(t *testing.T) {

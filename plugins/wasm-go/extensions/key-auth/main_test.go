@@ -349,9 +349,9 @@ func TestParseGlobalConfig(t *testing.T) {
 			keyAuthConfig := config.(*KeyAuthConfig)
 			require.Len(t, keyAuthConfig.consumers, 2)
 			require.Equal(t, []string{"token1", "token1-alt"}, keyAuthConfig.consumers[0].Credentials)
-			require.Equal(t, "consumer1", keyAuthConfig.credential2Name["token1"])
-			require.Equal(t, "consumer1", keyAuthConfig.credential2Name["token1-alt"])
-			require.Equal(t, "consumer2", keyAuthConfig.credential2Name["token2"])
+			require.Equal(t, "consumer1", keyAuthConfig.credential2Consumer["token1"].Name)
+			require.Equal(t, "consumer1", keyAuthConfig.credential2Consumer["token1-alt"].Name)
+			require.Equal(t, "consumer2", keyAuthConfig.credential2Consumer["token2"].Name)
 		})
 
 		// 测试全局认证关闭配置
@@ -724,5 +724,152 @@ func TestOnHTTPRequestHeaders(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+	})
+}
+
+// group 字段解析成功
+var consumerWithGroupConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{"name": "consumer1", "credential": "token1", "group": "team-a"},
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"global_auth": true,
+	})
+	return data
+}()
+
+func TestParseGlobalConfig_ConsumerGroup_OK(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(consumerWithGroupConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+	})
+}
+
+// group 与 consumer name 冲突
+var conflictingGroupConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{"name": "alice", "credential": "token1", "group": "team-a"},
+			{"name": "team-a", "credential": "token2"}, // name 与上面的 group 冲突
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"global_auth": true,
+	})
+	return data
+}()
+
+func TestParseGlobalConfig_GroupNameConflict(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(conflictingGroupConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusFailed, status)
+	})
+}
+
+// 同一 group 多个 consumer 是合法的（仅校验与 name 集合的交集）
+var sharedGroupConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{"name": "alice", "credential": "token1", "group": "team-a"},
+			{"name": "bob", "credential": "token2", "group": "team-a"},
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"global_auth": true,
+	})
+	return data
+}()
+
+func TestParseGlobalConfig_SharedGroupAllowed(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(sharedGroupConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+	})
+}
+
+// 多对 group/name 同时冲突：启动失败（一次性报告全部冲突）
+var multipleGroupConflictsConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{"name": "alice", "credential": "token1", "group": "team-a"},
+			{"name": "bob", "credential": "token2", "group": "team-b"},
+			{"name": "team-a", "credential": "token3"}, // 与 alice.group 冲突
+			{"name": "team-b", "credential": "token4"}, // 与 bob.group 冲突
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"global_auth": true,
+	})
+	return data
+}()
+
+func TestParseGlobalConfig_MultipleGroupConflicts(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(multipleGroupConflictsConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusFailed, status)
+	})
+}
+
+// 带 group 的消费者，命中后应注入 X-Mse-Consumer-Group
+var consumerWithGroupAuthConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{"name": "alice", "credential": "token1", "group": "team-a"},
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"global_auth": true,
+	})
+	return data
+}()
+
+func TestOnHTTPRequestHeaders_InjectsConsumerGroupHeader(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(consumerWithGroupAuthConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/test"},
+			{":method", "GET"},
+			{"x-api-key", "token1"},
+		})
+
+		require.Equal(t, types.ActionContinue, action)
+		require.Nil(t, host.GetLocalResponse())
+		require.True(t, test.HasHeaderWithValue(host.GetRequestHeaders(), "X-Mse-Consumer", "alice"))
+		require.True(t, test.HasHeaderWithValue(host.GetRequestHeaders(), "X-Mse-Consumer-Group", "team-a"))
+		host.CompleteHttp()
+	})
+}
+
+// 无 group 的消费者，命中后不应注入 X-Mse-Consumer-Group
+func TestOnHTTPRequestHeaders_NoConsumerGroupHeader(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicKeyAuthConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/test"},
+			{":method", "GET"},
+			{"x-api-key", "token1"},
+		})
+
+		require.Equal(t, types.ActionContinue, action)
+		require.Nil(t, host.GetLocalResponse())
+		require.True(t, test.HasHeaderWithValue(host.GetRequestHeaders(), "X-Mse-Consumer", "consumer1"))
+		// consumer1 没有 group 字段：不应注入 X-Mse-Consumer-Group
+		require.False(t, test.HasHeader(host.GetRequestHeaders(), "x-mse-consumer-group"))
+		require.False(t, test.HasHeader(host.GetRequestHeaders(), "X-Mse-Consumer-Group"))
+		host.CompleteHttp()
 	})
 }
