@@ -557,35 +557,40 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 		config.valueLengthLimit = 32000
 	}
 
-	// Parse attributes or use defaults
+	// Parse user-supplied attributes (validated the same way regardless of mode).
+	customAttributes := make([]Attribute, len(attributeConfigs))
+	for i, attributeConfig := range attributeConfigs {
+		attribute := Attribute{}
+		err := json.Unmarshal([]byte(attributeConfig.Raw), &attribute)
+		if err != nil {
+			log.Errorf("parse config failed, %v", err)
+			return err
+		}
+		if attribute.Rule != "" && attribute.Rule != RuleFirst && attribute.Rule != RuleReplace && attribute.Rule != RuleAppend {
+			return errors.New("value of rule must be one of [nil, first, replace, append]")
+		}
+		customAttributes[i] = attribute
+	}
+
+	// Parse attributes or use defaults. When a default mode is enabled, any
+	// user-supplied attributes extend (not replace) the default set, so callers
+	// can add a few custom fields without re-declaring the whole default list.
 	if useDefaultAttributes {
-		config.attributes = getDefaultAttributes()
+		config.attributes = append(getDefaultAttributes(), customAttributes...)
 		// Update value_length_limit to default when using default attributes
 		if !configJson.Get("value_length_limit").Exists() {
 			config.valueLengthLimit = 10485760 // 10MB
 		}
 		log.Infof("Using default attributes configuration")
 	} else if useDefaultResponseAttributes {
-		config.attributes = getDefaultResponseAttributes()
+		config.attributes = append(getDefaultResponseAttributes(), customAttributes...)
 		// Use a reasonable default for lightweight mode
 		if !configJson.Get("value_length_limit").Exists() {
 			config.valueLengthLimit = 4000
 		}
 		log.Infof("Using default response attributes configuration (lightweight mode)")
 	} else {
-		config.attributes = make([]Attribute, len(attributeConfigs))
-		for i, attributeConfig := range attributeConfigs {
-			attribute := Attribute{}
-			err := json.Unmarshal([]byte(attributeConfig.Raw), &attribute)
-			if err != nil {
-				log.Errorf("parse config failed, %v", err)
-				return err
-			}
-			if attribute.Rule != "" && attribute.Rule != RuleFirst && attribute.Rule != RuleReplace && attribute.Rule != RuleAppend {
-				return errors.New("value of rule must be one of [nil, first, replace, append]")
-			}
-			config.attributes[i] = attribute
-		}
+		config.attributes = customAttributes
 	}
 
 	// Check if any attribute needs request body or streaming body buffering

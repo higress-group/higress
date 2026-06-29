@@ -2167,3 +2167,46 @@ func TestConfigWithDefaultAttributes(t *testing.T) {
 		})
 	})
 }
+
+// use_default_attributes / use_default_response_attributes combined with a
+// custom attributes list: the custom attributes must extend (not replace) the
+// default set, so callers can add a few fields without re-declaring the whole
+// default list. See issue #4018. GetMatchConfig only returns the parsed config
+// in go mode, so these run via RunGoTest.
+func TestConfigDefaultAttributesExtendedByCustom(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		t.Run("default attributes extended by custom", func(t *testing.T) {
+			host, status := test.NewTestHost([]byte(`{
+				"use_default_attributes": true,
+				"attributes": [
+					{"key": "custom_tag", "value_source": "request_header", "value": "x-tag", "apply_to_log": true}
+				]
+			}`))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			conf, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			c := conf.(*AIStatisticsConfig)
+			require.Len(t, c.attributes, len(getDefaultAttributes())+1)
+			require.Equal(t, "custom_tag", c.attributes[len(c.attributes)-1].Key)
+		})
+
+		t.Run("default response attributes extended by custom", func(t *testing.T) {
+			host, status := test.NewTestHost([]byte(`{
+				"use_default_response_attributes": true,
+				"attributes": [
+					{"key": "custom_tag", "value_source": "request_header", "value": "x-tag", "apply_to_log": true}
+				]
+			}`))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			conf, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			c := conf.(*AIStatisticsConfig)
+			require.Len(t, c.attributes, len(getDefaultResponseAttributes())+1)
+			require.Equal(t, "custom_tag", c.attributes[len(c.attributes)-1].Key)
+		})
+	})
+}

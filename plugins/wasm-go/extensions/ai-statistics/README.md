@@ -26,7 +26,7 @@ description: AI可观测配置参考
 |----------------|-------|------|-----|------------------------|
 | `use_default_attributes` | bool | 非必填  | false   | 是否使用默认完整属性配置，包含 messages、answer、question 等所有字段。适用于调试、审计场景 |
 | `use_default_response_attributes` | bool | 非必填  | false   | 是否使用轻量级默认属性配置（推荐），包含 model 和 token 统计，不缓冲流式响应体。适用于高并发生产环境 |
-| `attributes` | []Attribute | 非必填  | -   | 用户希望记录在log/span中的信息 |
+| `attributes` | []Attribute | 非必填  | -   | 用户希望记录在log/span中的信息。当同时开启 `use_default_attributes` 或 `use_default_response_attributes` 时，这里配置的属性会追加到默认属性集之后，无需重新声明整套默认属性 |
 | `disable_openai_usage` | bool | 非必填  | false   | 非openai兼容协议时，model、token的支持非标，配置为true时可以避免报错 |
 | `value_length_limit` | int | 非必填  | 4000   | 记录的单个value的长度限制 |
 | `enable_path_suffixes` | []string    | 非必填   | []     | 只对这些特定路径后缀的请求生效，可以配置为 "\*" 以匹配所有路径（通配符检查会优先进行以提高性能）。如果为空数组，则对所有路径生效 |
@@ -464,6 +464,19 @@ use_default_attributes: true
 | `output_token_details` | 输出 token 详情 | 无 |
 
 **注意**：完整模式适用于调试、审计等需要完整对话记录的场景，但在高并发生产环境可能消耗大量内存。
+
+#### 默认属性 + 自定义属性
+
+开启 `use_default_attributes` 或 `use_default_response_attributes` 时，仍可在 `attributes` 中追加自定义属性，它们会附加到默认属性集之后，无需重新声明整套默认属性：
+
+```yaml
+use_default_attributes: true
+attributes:
+  - key: custom_tag
+    value_source: request_header
+    value: x-tag
+    apply_to_log: true
+```
 
 ### 流式日志示例
 
