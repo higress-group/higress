@@ -19,16 +19,18 @@ description: 跨域资源共享插件配置参考
 |-----------------------|-----------------|----------|----------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | allow_origins         | array of string | 选填     | *                                                                                                                          | 允许跨域访问的 Origin，格式为 scheme://host:port，示例如 http://example.com:8081。当 allow_credentials 为 false 时，可以使用 * 来表示允许所有 Origin 通过                                                                                    |
 | allow_origin_patterns | array of string | 选填     | -                                                                                                                          | 允许跨域访问的 Origin 模式匹配， 用 * 匹配域名或者端口， <br/>比如 http://*.example.com -- 匹配域名， http://*.example.com:[8080,9090] -- 匹配域名和指定端口， http://*.example.com:[*] -- 匹配域名和所有端口。单独 * 表示匹配所有域名和端口 |
-| allow_methods         | array of string | 选填     | GET, PUT, POST, DELETE, PATCH, OPTIONS                                                                                     | 允许跨域访问的 Method，比如：GET，POST 等。可以使用 * 来表示允许所有 Method。                                                                                                                                                                |
-| allow_headers         | array of string | 选填     | DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With，<br/>If-Modified-Since,Cache-Control,Content-Type,Authorization | 允许跨域访问时请求方携带哪些非 CORS 规范以外的 Header。可以使用 * 来表示允许任意 Header。                                                                                                                                                    |
-| expose_headers        | array of string | 选填     | -                                                                                                                          | 允许跨域访问时响应方携带哪些非 CORS 规范以外的 Header。可以使用 * 来表示允许任意 Header。                                                                                                                                                    |
+| allow_methods         | array of string | 选填     | GET, PUT, POST, DELETE, PATCH, OPTIONS                                                                                     | 允许跨域访问的 Method，比如：GET，POST 等。可以使用 * 来表示允许所有 Method；预检响应会回显本次请求的 `Access-Control-Request-Method`。                                                                                                      |
+| allow_headers         | array of string | 选填     | DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With，<br/>If-Modified-Since,Cache-Control,Content-Type,Authorization | 允许跨域访问时请求方携带哪些非 CORS 规范以外的 Header。可以使用 * 来表示允许任意 Header；预检响应会回显规范化后的 `Access-Control-Request-Headers`，没有请求头时不返回 `Access-Control-Allow-Headers`。                                      |
+| expose_headers        | array of string | 选填     | -                                                                                                                          | 允许跨域访问时响应方携带哪些非 CORS 规范以外的 Header。可以使用 *；但当请求携带凭据时，浏览器会把 `Access-Control-Expose-Headers: *` 当作字面量 Header 名称，而不是暴露所有 Header。                                                          |
 | allow_credentials     | bool            | 选填     | false                                                                                                                      | 是否允许跨域访问的请求方携带凭据（如 Cookie 等）。根据 CORS 规范，如果设置该选项为 true，在 allow_origins 不能使用 *， 替换成使用 allow_origin_patterns *                                                                                    |
 | max_age               | number          | 选填     | 86400秒                                                                                                                    | 浏览器缓存 CORS 结果的最大时间，单位为秒。<br/>在这个时间范围内，浏览器会复用上一次的检查结果                                                                                                                                                |
 
 > 注意
 > * allow_credentials 是一个很敏感的选项，请谨慎开启。开启之后，allow_credentials 和 allow_origins 为 * 不能同时使用，同时设置时， allow_origins 值为 "*" 生效。
 > * allow_origins 和 allow_origin_patterns 可以同时设置， 先检查 allow_origins 是否匹配，然后再检查 allow_origin_patterns 是否匹配
-> * 非法 CORS 请求， HTTP 状态码返回是 403， 返回体内容为 "Invalid CORS request"
+> * 对于实际 CORS 请求，如果 Origin 或 Method 不匹配配置，插件会继续转发到后端，但不会添加 CORS 响应头，并会移除后端返回的 CORS policy 响应头，由浏览器根据 CORS 规则拦截结果。
+> * 对于 CORS 预检请求，合法请求由插件直接返回 `204 No Content` 和配置对应的 CORS 响应头；非法请求由插件直接返回 `204 No Content`，但不返回 `Access-Control-Allow-*`、`Access-Control-Expose-Headers`、`Access-Control-Allow-Credentials` 或 `Access-Control-Max-Age`，浏览器会判定预检失败。
+> * 当 `Access-Control-Allow-Origin` 返回具体 Origin 而不是 `*` 时，插件会合并返回 `Vary: Origin`，避免缓存复用错误的跨域响应。
 
 ## 配置示例
 
@@ -165,6 +167,7 @@ curl -v -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example
 > access-control-allow-origin: http://httpbin2.example.org:9090
 > access-control-expose-headers: X-Custom-Header,X-Env-UTM
 > access-control-allow-credentials: true
+> vary: Origin
 ```
 
 #### 预检请求
@@ -172,14 +175,15 @@ curl -v -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example
 ```shell
 curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: POST"  -H "Access-Control-Request-Headers: Content-Type, Token" http://127.0.0.1/anything/get\?foo\=1
 
-< HTTP/1.1 200 OK
-< x-cors-version: 1.0.0
+< HTTP/1.1 204 No Content
+< x-cors-trace: trace
 < access-control-allow-origin: http://httpbin2.example.org:9090
 < access-control-allow-methods: GET,POST,PATCH
 < access-control-allow-headers: Content-Type,Token,Authorization
 < access-control-expose-headers: X-Custom-Header,X-Env-UTM
 < access-control-allow-credentials: true
 < access-control-max-age: 3600
+< vary: Origin
 < date: Tue, 23 May 2023 11:41:28 GMT
 < server: istio-envoy
 < content-length: 0
@@ -190,18 +194,18 @@ curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: http
 
 #### 非法 CORS Origin 预检请求
 
+非法预检请求会返回 `204 No Content`，但不包含 `access-control-allow-*` 等 CORS policy 响应头，浏览器会判定预检失败。
+
 ```shell
 curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: GET"  http://127.0.0.1/anything/get\?foo\=1
 
- HTTP/1.1 403 Forbidden
-< content-length: 70
-< content-type: text/plain
-< x-cors-version: 1.0.0
+< HTTP/1.1 204 No Content
+< x-cors-trace: trace
 < date: Tue, 23 May 2023 11:27:01 GMT
 < server: istio-envoy
+< content-length: 0
 <
 * Connection #0 to host 127.0.0.1 left intact
-Invalid CORS request
 ```
 
 #### 非法 CORS Method 预检请求
@@ -209,15 +213,13 @@ Invalid CORS request
 ```shell
 curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: DELETE"  http://127.0.0.1/anything/get\?foo\=1
 
-< HTTP/1.1 403 Forbidden
-< content-length: 49
-< content-type: text/plain
-< x-cors-version: 1.0.0
+< HTTP/1.1 204 No Content
+< x-cors-trace: trace
 < date: Tue, 23 May 2023 11:28:51 GMT
 < server: istio-envoy
+< content-length: 0
 <
 * Connection #0 to host 127.0.0.1 left intact
-Invalid CORS request
 ```
 
 #### 非法 CORS Header 预检请求
@@ -225,15 +227,13 @@ Invalid CORS request
 ```shell
  curl -v -X OPTIONS -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com" -H "Access-Control-Request-Method: GET" -H "Access-Control-Request-Headers: TokenView"  http://127.0.0.1/anything/get\?foo\=1
 
-< HTTP/1.1 403 Forbidden
-< content-length: 52
-< content-type: text/plain
-< x-cors-version: 1.0.0
+< HTTP/1.1 204 No Content
+< x-cors-trace: trace
 < date: Tue, 23 May 2023 11:31:03 GMT
 < server: istio-envoy
+< content-length: 0
 <
 * Connection #0 to host 127.0.0.1 left intact
-Invalid CORS request
 ```
 
 ## 参考文档

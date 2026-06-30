@@ -188,7 +188,7 @@ func TestCorsConfig_checkMethods(t *testing.T) {
 			name:          "default *",
 			allowMethods:  []string{"*"},
 			requestMethod: "GET",
-			wantMethods:   defaultAllAllowMethods,
+			wantMethods:   "GET",
 			wantOk:        true,
 		},
 		{
