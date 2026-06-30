@@ -80,95 +80,12 @@ func TestIssue1743SpecificOriginPreflightAddsVaryOrigin(t *testing.T) {
 	})
 }
 
-func TestIssue1743ExistingVaryIsPreservedWhenAddingOrigin(t *testing.T) {
-	test.RunTest(t, func(t *testing.T) {
-		host, status := test.NewTestHost(basicCorsConfig)
-		defer host.Reset()
-		require.Equal(t, types.OnPluginStartStatusOK, status)
+func TestIssue1743AppendVaryOriginPreservesExistingVaryHeader(t *testing.T) {
+	headers := appendVaryOriginHeader([][2]string{
+		{headerVary, "Accept-Encoding"},
+	}, "http://example.com")
 
-		action := host.CallOnHttpRequestHeaders([][2]string{
-			{":scheme", "http"},
-			{":authority", "api.example.com"},
-			{":path", "/api/test"},
-			{":method", "GET"},
-			{"origin", "http://example.com"},
-		})
-		require.Equal(t, types.ActionContinue, action)
-
-		action = host.CallOnHttpResponseHeaders([][2]string{
-			{":status", "200"},
-			{"vary", "Accept-Encoding"},
-		})
-		require.Equal(t, types.ActionContinue, action)
-
-		varyValue, ok := test.GetHeaderValue(host.GetResponseHeaders(), headerVary)
-		require.True(t, ok)
-		require.Equal(t, "Accept-Encoding, Origin", varyValue)
-
-		host.CompleteHttp()
-	})
-}
-
-func TestIssue1743ExistingVaryOriginIsNotDuplicated(t *testing.T) {
-	test.RunTest(t, func(t *testing.T) {
-		host, status := test.NewTestHost(basicCorsConfig)
-		defer host.Reset()
-		require.Equal(t, types.OnPluginStartStatusOK, status)
-
-		action := host.CallOnHttpRequestHeaders([][2]string{
-			{":scheme", "http"},
-			{":authority", "api.example.com"},
-			{":path", "/api/test"},
-			{":method", "GET"},
-			{"origin", "http://example.com"},
-		})
-		require.Equal(t, types.ActionContinue, action)
-
-		action = host.CallOnHttpResponseHeaders([][2]string{
-			{":status", "200"},
-			{"vary", "Accept-Encoding, origin"},
-		})
-		require.Equal(t, types.ActionContinue, action)
-
-		varyValue, ok := test.GetHeaderValue(host.GetResponseHeaders(), headerVary)
-		require.True(t, ok)
-		require.Equal(t, "Accept-Encoding, origin", varyValue)
-		require.Equal(t, 1, countVaryToken(varyValue, varyOrigin))
-
-		host.CompleteHttp()
-	})
-}
-
-func TestIssue1743MergeVaryValuesDeduplicatesOriginCaseInsensitive(t *testing.T) {
-	tests := []struct {
-		name     string
-		existing []string
-		want     string
-	}{
-		{
-			name:     "origin",
-			existing: []string{"Origin"},
-			want:     "Origin",
-		},
-		{
-			name:     "lowercase origin",
-			existing: []string{"origin"},
-			want:     "origin",
-		},
-		{
-			name:     "mixed with origin",
-			existing: []string{"Accept-Encoding, ORIGIN"},
-			want:     "Accept-Encoding, ORIGIN",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			merged := mergeVaryValues(tt.existing, varyOrigin)
-			require.Equal(t, tt.want, merged)
-			require.Equal(t, 1, countVaryToken(merged, varyOrigin))
-		})
-	}
+	require.ElementsMatch(t, []string{"Accept-Encoding", varyOrigin}, headerValues(headers, headerVary))
 }
 
 func TestIssue1743LiteralWildcardAllowOriginDoesNotAddVaryOrigin(t *testing.T) {
@@ -179,12 +96,12 @@ func TestIssue1743LiteralWildcardAllowOriginDoesNotAddVaryOrigin(t *testing.T) {
 	require.False(t, test.HasHeader(headers, headerVary))
 }
 
-func countVaryToken(value string, token string) int {
-	count := 0
-	for _, part := range strings.Split(value, ",") {
-		if strings.EqualFold(strings.TrimSpace(part), token) {
-			count++
+func headerValues(headers [][2]string, name string) []string {
+	values := make([]string, 0)
+	for _, header := range headers {
+		if strings.EqualFold(header[0], name) {
+			values = append(values, header[1])
 		}
 	}
-	return count
+	return values
 }

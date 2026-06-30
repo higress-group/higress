@@ -180,75 +180,17 @@ func appendVaryOriginHeader(headers [][2]string, allowOrigin string) [][2]string
 	if !shouldVaryOrigin(allowOrigin) {
 		return headers
 	}
-
-	varyValues := make([]string, 0, 1)
-	for _, header := range headers {
-		if strings.EqualFold(header[0], headerVary) {
-			varyValues = append(varyValues, header[1])
-		}
-	}
-	mergedVary := mergeVaryValues(varyValues, varyOrigin)
-	if len(mergedVary) == 0 {
-		return headers
-	}
-
-	filteredHeaders := make([][2]string, 0, len(headers)+1)
-	for _, header := range headers {
-		if !strings.EqualFold(header[0], headerVary) {
-			filteredHeaders = append(filteredHeaders, header)
-		}
-	}
-	return append(filteredHeaders, [2]string{headerVary, mergedVary})
+	return append(headers, [2]string{headerVary, varyOrigin})
 }
 
 func addVaryOriginHeader(allowOrigin string) {
 	if !shouldVaryOrigin(allowOrigin) {
 		return
 	}
-
-	headers, err := proxywasm.GetHttpResponseHeaders()
-	if err != nil {
-		return
-	}
-
-	varyValues := make([]string, 0, 1)
-	for _, header := range headers {
-		if strings.EqualFold(header[0], headerVary) {
-			varyValues = append(varyValues, header[1])
-		}
-	}
-	mergedVary := mergeVaryValues(varyValues, varyOrigin)
-	if len(mergedVary) == 0 {
-		return
-	}
-
-	proxywasm.RemoveHttpResponseHeader(headerVary)
-	proxywasm.AddHttpResponseHeader(headerVary, mergedVary)
+	proxywasm.AddHttpResponseHeader(headerVary, varyOrigin)
 }
 
 func shouldVaryOrigin(allowOrigin string) bool {
 	allowOrigin = strings.TrimSpace(allowOrigin)
 	return len(allowOrigin) > 0 && allowOrigin != "*"
-}
-
-func mergeVaryValues(values []string, extraValues ...string) string {
-	merged := make([]string, 0, len(values)+len(extraValues))
-	seen := make(map[string]struct{}, len(values)+len(extraValues))
-
-	for _, value := range append(values, extraValues...) {
-		for _, token := range strings.Split(value, ",") {
-			token = strings.TrimSpace(token)
-			if len(token) == 0 {
-				continue
-			}
-			normalizedToken := strings.ToLower(token)
-			if _, ok := seen[normalizedToken]; ok {
-				continue
-			}
-			seen[normalizedToken] = struct{}{}
-			merged = append(merged, token)
-		}
-	}
-
-	return strings.Join(merged, ", ")
 }
