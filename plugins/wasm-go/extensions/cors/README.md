@@ -17,9 +17,18 @@ description: 跨域资源共享插件配置参考
 
 ### 2.0.1
 
-相比 `2.0.0`，本版本保持插件在 `AUTHN` 阶段执行，并将执行优先级从 `1001` 调整为 `2000`。
+相比 `2.0.0`，本版本对齐浏览器 CORS 语义，并将插件执行优先级调整为 `2000`。
 
-该调整用于覆盖 Virtual MCP Server 当前 mock 路由场景中 Envoy 原生 CORS 策略无法生效的问题，使 `cors` 插件可以先于 `mcp-router`（`AUTHN` 阶段，优先级 `1010`）处理 CORS 请求。升级时请注意，`cors` 插件在 `AUTHN` 阶段的执行顺序会提前，如有其他同阶段插件依赖 CORS 处理前后的请求/响应头，请同步确认插件优先级配置。
+具体变更和升级注意事项：
+
+* 实际 CORS 请求的 Origin 或 Method 不匹配时，插件不再直接返回 `403`，而是继续转发到后端；插件不会添加 CORS 允许响应头，并会移除后端返回的 CORS policy 响应头，由浏览器按 CORS 规则拦截。若已有监控或客户端逻辑依赖网关直接返回 `403`，升级后需要相应调整。
+* CORS 预检请求统一由插件直接返回 `204 No Content`。非法预检请求不会返回 `Access-Control-Allow-*`、`Access-Control-Expose-Headers`、`Access-Control-Allow-Credentials` 或 `Access-Control-Max-Age`，浏览器会判定预检失败；若已有逻辑依赖非法预检返回 `403`，升级后需要相应调整。
+* 同源 `OPTIONS` 请求即使携带类似预检的请求头，也会继续转发到后端，避免被 CORS 插件误拦截。
+* `allow_methods: ["*"]` 会在预检响应中回显本次请求的 `Access-Control-Request-Method`；`allow_headers: ["*"]` 会回显规范化后的 `Access-Control-Request-Headers`，没有请求头时不返回 `Access-Control-Allow-Headers`。
+* 默认 Method/Header 解析会按逗号拆分并去除空格，避免默认值被当作单个不可匹配的条目。
+* Origin 模式匹配会锚定完整 Origin，避免类似 `http://api.example.com.evil.com` 误匹配 `http://*.example.com`；如果历史配置依赖非完整匹配，需要调整为明确的 Origin 模式。
+* 当 `Access-Control-Allow-Origin` 返回具体 Origin 而不是 `*` 时，插件会合并返回 `Vary: Origin`，避免缓存复用错误的跨域响应。
+* `expose_headers: ["*"]` 在携带凭据的请求中仍按兼容方式接受配置，但浏览器会把 `Access-Control-Expose-Headers: *` 当作字面量 Header 名称，而不是暴露所有 Header。
 
 ## 配置字段
 

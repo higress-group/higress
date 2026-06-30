@@ -14,9 +14,18 @@ Plugin execution priority: `2000`
 
 ### 2.0.1
 
-Compared with `2.0.0`, this version keeps the plugin in the `AUTHN` phase and changes the execution priority from `1001` to `2000`.
+Compared with `2.0.0`, this version aligns the plugin behavior with browser CORS semantics and changes the plugin execution priority to `2000`.
 
-This change addresses Virtual MCP Server mock-route scenarios where Envoy native CORS policies do not take effect. The `cors` plugin now runs before `mcp-router` (`AUTHN` phase, priority `1010`) and can process CORS requests first. When upgrading, note that the `cors` plugin runs earlier in the `AUTHN` phase; if other plugins in the same phase depend on request or response headers before or after CORS processing, verify their priority configuration as well.
+Changes and upgrade notes:
+
+* When the Origin or Method of an actual CORS request does not match the configuration, the plugin no longer returns a direct `403`. The request continues upstream; the plugin does not add CORS allow response headers and removes upstream CORS policy response headers, so browsers block the result according to CORS rules. If monitoring or client logic depends on a gateway-level `403`, adjust it before upgrading.
+* CORS preflight requests are answered directly with `204 No Content`. Invalid preflight responses omit `Access-Control-Allow-*`, `Access-Control-Expose-Headers`, `Access-Control-Allow-Credentials`, and `Access-Control-Max-Age`, so browsers treat the preflight as failed. If existing logic depends on invalid preflights returning `403`, adjust it before upgrading.
+* Same-origin `OPTIONS` requests continue upstream even when they carry preflight-like request headers, preventing the CORS plugin from intercepting them incorrectly.
+* `allow_methods: ["*"]` echoes the current `Access-Control-Request-Method` in preflight responses; `allow_headers: ["*"]` echoes normalized `Access-Control-Request-Headers` and omits `Access-Control-Allow-Headers` when no request headers were requested.
+* Default Method/Header values are split by comma and trimmed, preventing defaults from being treated as one unmatchable item.
+* Origin pattern matching is anchored to the full Origin value, avoiding accidental matches such as `http://api.example.com.evil.com` for `http://*.example.com`. If an existing configuration relied on partial matching, update it to an explicit Origin pattern.
+* When `Access-Control-Allow-Origin` is a specific Origin instead of `*`, the plugin merges `Vary: Origin` into the response to prevent cache reuse with the wrong CORS headers.
+* `expose_headers: ["*"]` remains accepted for compatibility when credentials are allowed, but browsers treat `Access-Control-Expose-Headers: *` as a literal header name for credentialed requests instead of exposing all headers.
 
 ## Configuration Fields
 | Name                  | Data Type        | Required | Default Value                                                                                                                | Description                                                                                                                                                                                                                                       |
