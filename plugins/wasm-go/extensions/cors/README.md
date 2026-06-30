@@ -13,6 +13,14 @@ description: 跨域资源共享插件配置参考
 插件执行阶段：`认证阶段`
 插件执行优先级：`2000`
 
+## 版本说明
+
+### 2.0.1
+
+相比 `2.0.0`，本版本保持插件在 `AUTHN` 阶段执行，并将执行优先级从 `1001` 调整为 `2000`。
+
+该调整用于覆盖 Virtual MCP Server 当前 mock 路由场景中 Envoy 原生 CORS 策略无法生效的问题，使 `cors` 插件可以先于 `mcp-router`（`AUTHN` 阶段，优先级 `1010`）处理 CORS 请求。升级时请注意，`cors` 插件在 `AUTHN` 阶段的执行顺序会提前，如有其他同阶段插件依赖 CORS 处理前后的请求/响应头，请同步确认插件优先级配置。
+
 ## 配置字段
 
 | 名称                  | 数据类型        | 填写要求 | 默认值                                                                                                                     | 描述                                                                                                                                                                                                                                         |
@@ -152,7 +160,7 @@ spec:
       configDisable: false
       ingress:
         - ingress-cors-httpbin
-  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cors:1.0.0
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cors:2.0.1
   imagePullPolicy: Always
 ```
 
@@ -163,7 +171,7 @@ spec:
 curl -v -H "Origin: http://httpbin2.example.org:9090" -H  "Host: httpbin.example.com"  http://127.0.0.1/anything/get\?foo\=1
 
 < HTTP/1.1 200 OK
-> x-cors-version: 1.0.0
+> x-cors-version: 2.0.1
 > access-control-allow-origin: http://httpbin2.example.org:9090
 > access-control-expose-headers: X-Custom-Header,X-Env-UTM
 > access-control-allow-credentials: true

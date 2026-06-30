@@ -143,7 +143,7 @@ type HttpCorsContext struct {
 }
 
 func (c *CorsConfig) GetVersion() string {
-	return "1.0.0"
+	return "2.0.1"
 }
 
 func (c *CorsConfig) FillDefaultValues() {

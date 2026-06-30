@@ -10,6 +10,14 @@ The `cors` plugin can enable CORS (Cross-Origin Resource Sharing) HTTP response 
 Plugin execution phase: `AUTHN`  
 Plugin execution priority: `2000`
 
+## Release Notes
+
+### 2.0.1
+
+Compared with `2.0.0`, this version keeps the plugin in the `AUTHN` phase and changes the execution priority from `1001` to `2000`.
+
+This change addresses Virtual MCP Server mock-route scenarios where Envoy native CORS policies do not take effect. The `cors` plugin now runs before `mcp-router` (`AUTHN` phase, priority `1010`) and can process CORS requests first. When upgrading, note that the `cors` plugin runs earlier in the `AUTHN` phase; if other plugins in the same phase depend on request or response headers before or after CORS processing, verify their priority configuration as well.
+
 ## Configuration Fields
 | Name                  | Data Type        | Required | Default Value                                                                                                                | Description                                                                                                                                                                                                                                       |
 |-----------------------|------------------|----------|-----------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -144,7 +152,7 @@ spec:
       configDisable: false
       ingress:
         - ingress-cors-httpbin
-  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cors:1.0.0
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cors:2.0.1
   imagePullPolicy: Always
 ```
 
@@ -153,7 +161,7 @@ spec:
 ```shell
 curl -v -H "Origin: http://httpbin2.example.org:9090" -H "Host: httpbin.example.com" http://127.0.0.1/anything/get\?foo\=1
 < HTTP/1.1 200 OK
-> x-cors-version: 1.0.0
+> x-cors-version: 2.0.1
 > access-control-allow-origin: http://httpbin2.example.org:9090
 > access-control-expose-headers: X-Custom-Header,X-Env-UTM
 > access-control-allow-credentials: true
