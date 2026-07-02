@@ -1,0 +1,6 @@
+plugin.wasm
+*.wasm
+.tmp/
+.gocache/
+PR.md
+bpe/o200k_base.tiktoken

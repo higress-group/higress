@@ -54,6 +54,7 @@ func Test_getApiName(t *testing.T) {
 		{"openai delete fine tuning checkpoint permission", "/v1/fine_tuning/checkpoints/checkpointid/permissions/permissionid", provider.ApiNameDeleteFineTuningCheckpointPermission},
 		{"openai responses", "/v1/responses", provider.ApiNameResponses},
 		// Anthropic
+		{"anthropic count_tokens", "/v1/messages/count_tokens", provider.ApiNameAnthropicCountTokens},
 		{"anthropic messages", "/v1/messages", provider.ApiNameAnthropicMessages},
 		{"anthropic complete", "/v1/complete", provider.ApiNameAnthropicComplete},
 		// Gemini
