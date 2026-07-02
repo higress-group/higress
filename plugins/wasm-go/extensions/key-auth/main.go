@@ -62,6 +62,11 @@ type Consumer struct {
 	// @Description en-US The credentials of the consumer. Cannot be configured together with credential.
 	// @Scope GLOBAL
 	Credentials []string `yaml:"credentials"`
+
+	// Keys/in_query/in_header 为空(nil)时回退到全局配置。
+	Keys     []string `yaml:"keys,omitempty"`
+	InQuery  *bool    `yaml:"in_query,omitempty"`
+	InHeader *bool    `yaml:"in_header,omitempty"`
 }
 
 // @Name key-auth
@@ -134,7 +139,7 @@ type KeyAuthConfig struct {
 	// @Description en-US Consumers to be allowed for matched requests.
 	allow []string `yaml:"allow"`
 
-	credential2Name map[string]string `yaml:"-"`
+	credential2Consumer map[string]Consumer `yaml:"-"`
 }
 
 func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) error {
@@ -142,40 +147,16 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 
 	// init
 	ruleSet = false
-	global.credential2Name = make(map[string]string)
+	global.credential2Consumer = make(map[string]Consumer)
+
+	// needGlobalKeys: 只要任一 consumer 没自带 keys 即为 true，此时要求全局 keys+来源。
+	needGlobalKeys := false
 
 	// global_auth
 	globalAuth := json.Get("global_auth")
 	if globalAuth.Exists() {
 		ga := globalAuth.Bool()
 		global.globalAuth = &ga
-	}
-
-	// keys
-	names := json.Get("keys")
-	if !names.Exists() {
-		return errors.New("keys is required")
-	}
-	if len(names.Array()) == 0 {
-		return errors.New("keys cannot be empty")
-	}
-
-	for _, name := range names.Array() {
-		global.Keys = append(global.Keys, name.String())
-	}
-
-	// in_query and in_header
-	in_query := json.Get("in_query")
-	in_header := json.Get("in_header")
-	if !in_query.Exists() && !in_header.Exists() {
-		return errors.New("must one of in_query/in_header required")
-	}
-
-	if in_query.Exists() {
-		global.InQuery = in_query.Bool()
-	}
-	if in_header.Exists() {
-		global.InHeader = in_header.Bool()
 	}
 
 	// consumers
@@ -220,7 +201,7 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 		}
 
 		for _, credential := range consumerCredentials {
-			if _, ok := global.credential2Name[credential]; ok {
+			if _, ok := global.credential2Consumer[credential]; ok {
 				return errors.New("duplicate consumer credential: " + credential)
 			}
 		}
@@ -234,11 +215,57 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 			consumer.Credentials = consumerCredentials
 		}
 
+		// per-consumer key 来源。未自带 keys 的 consumer
+		// 标记需要全局回退；自带 keys 的 consumer 记录其来源字段。
+		if k := item.Get("keys"); k.Exists() && len(k.Array()) > 0 {
+			for _, kk := range k.Array() {
+				consumer.Keys = append(consumer.Keys, kk.String())
+			}
+			if iq := item.Get("in_query"); iq.Exists() {
+				v := iq.Bool()
+				consumer.InQuery = &v
+			}
+			if ih := item.Get("in_header"); ih.Exists() {
+				v := ih.Bool()
+				consumer.InHeader = &v
+			}
+		} else {
+			needGlobalKeys = true
+		}
+
 		global.consumers = append(global.consumers, consumer)
 		for _, credential := range consumerCredentials {
-			global.credential2Name[credential] = name.String()
+			global.credential2Consumer[credential] = consumer
 		}
 	}
+
+	// keys / in_query / in_header 仅在需要全局回退时校验。
+	// 全部 consumer 都自带 keys 时（控制台场景），顶层来源不是必需的。
+	if needGlobalKeys {
+		names := json.Get("keys")
+		if !names.Exists() {
+			return errors.New("keys is required")
+		}
+		if len(names.Array()) == 0 {
+			return errors.New("keys cannot be empty")
+		}
+		for _, name := range names.Array() {
+			global.Keys = append(global.Keys, name.String())
+		}
+
+		in_query := json.Get("in_query")
+		in_header := json.Get("in_header")
+		if !in_query.Exists() && !in_header.Exists() {
+			return errors.New("must one of in_query/in_header required")
+		}
+		if in_query.Exists() {
+			global.InQuery = in_query.Bool()
+		}
+		if in_header.Exists() {
+			global.InHeader = in_header.Bool()
+		}
+	}
+
 	return nil
 }
 
@@ -261,6 +288,40 @@ func parseOverrideRuleConfig(json gjson.Result, global KeyAuthConfig, config *Ke
 	ruleSet = true
 
 	return nil
+}
+
+// tryFindConsumer attempts to extract a credential using the given keys/sources
+// and checks if it belongs to the specified consumer. Returns true on the first match.
+func tryFindConsumer(inHeader, inQuery bool, keys []string, c *Consumer, credential2Consumer map[string]Consumer) bool {
+	for _, key := range keys {
+		cred := extractCredential(inHeader, inQuery, key)
+		if cred == "" {
+			continue
+		}
+		owner, ok := credential2Consumer[cred]
+		if ok && owner.Name == c.Name {
+			return true
+		}
+	}
+	return false
+}
+
+func extractCredential(inHeader, inQuery bool, key string) string {
+	if inHeader {
+		if value, err := proxywasm.GetHttpRequestHeader(key); err == nil && value != "" {
+			return value
+		}
+	}
+	if inQuery {
+		requestUrl, _ := proxywasm.GetHttpRequestHeader(":path")
+		if u, err := url.Parse(requestUrl); err == nil {
+			queryValues := u.Query()
+			if values, ok := queryValues[key]; ok && len(values) > 0 {
+				return values[0]
+			}
+		}
+	}
+	return ""
 }
 
 // key-auth 插件认证逻辑：
@@ -292,82 +353,73 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config KeyAuthConfig, log log
 		}
 	}
 
-	// 以下需要认证：
-	// - 从 header 中获取 tokens 信息
-	// - 从 query 中获取 tokens 信息
-	var tokens []string
-	if config.InHeader {
-		// 匹配keys中的 keyname
-		for _, key := range config.Keys {
-			value, err := proxywasm.GetHttpRequestHeader(key)
-			if err == nil && value != "" {
-				tokens = append(tokens, value)
-			}
+	var consumer *Consumer
+	for i := range config.consumers {
+		c := &config.consumers[i]
+		keys := c.Keys
+		if len(keys) == 0 {
+			keys = config.Keys
 		}
-	} else if config.InQuery {
-		requestUrl, _ := proxywasm.GetHttpRequestHeader(":path")
-		url, _ := url.Parse(requestUrl)
-		queryValues := url.Query()
-		for _, key := range config.Keys {
-			values, ok := queryValues[key]
-			if ok && len(values) > 0 {
-				tokens = append(tokens, values...)
-			}
+		inHeader := config.InHeader
+		if c.InHeader != nil {
+			inHeader = *c.InHeader
+		}
+		inQuery := config.InQuery
+		if c.InQuery != nil {
+			inQuery = *c.InQuery
+		}
+
+		if tryFindConsumer(inHeader, inQuery, keys, c, config.credential2Consumer) {
+			consumer = c
+			break
 		}
 	}
 
-	// header/query
-	if len(tokens) > 1 {
-		return deniedMultiKeyAuthData()
-	} else if len(tokens) <= 0 {
-		return deniedNoKeyAuthData()
+	if consumer == nil {
+		log.Warnf("no valid credential found")
+		return deniedInvalidCredential()
 	}
 
-	// 验证token
-	name, ok := config.credential2Name[tokens[0]]
-	if !ok {
-		log.Warnf("credential %q is not configured", tokens[0])
-		return deniedUnauthorizedConsumer()
-	}
+	log.Infof("Consumer %q", consumer.Name)
 
-	proxywasm.AddHttpRequestHeader("X-Mse-Consumer", name)
+	proxywasm.AddHttpRequestHeader("X-Mse-Consumer", consumer.Name)
 
 	// 全局生效：
 	// - global_auth == true 且 当前 domain/route 未配置该插件
 	// - global_auth 未设置 且 没有任何一个 domain/route 配置该插件
 	if (globalAuthSetTrue && noAllow) || (globalAuthNoSet && !ruleSet) {
-		log.Infof("consumer %q authenticated", name)
-		return authenticated(name)
+		log.Infof("consumer %q authenticated", consumer.Name)
+		return authenticated(consumer.Name)
 	}
 
 	// 全局生效，但当前 domain/route 配置了 allow 列表
 	if globalAuthSetTrue && !noAllow {
-		if !contains(config.allow, name) {
-			log.Warnf("consumer %q is not allowed", name)
+		if !contains(config.allow, consumer.Name) {
+			log.Warnf("consumer %q is not allowed", consumer.Name)
 			return deniedUnauthorizedConsumer()
 		}
-		log.Infof("consumer %q authenticated", name)
-		return authenticated(name)
+		log.Infof("consumer %q authenticated", consumer.Name)
+		return authenticated(consumer.Name)
 	}
 
 	// 非全局生效
 	if globalAuthSetFalse || (globalAuthNoSet && ruleSet) {
 		if !noAllow { // 配置了 allow 列表
-			if !contains(config.allow, name) {
-				log.Warnf("consumer %q is not allowed", name)
+			if !contains(config.allow, consumer.Name) {
+				log.Warnf("consumer %q is not allowed", consumer.Name)
 				return deniedUnauthorizedConsumer()
 			}
-			log.Infof("consumer %q authenticated", name)
-			return authenticated(name)
+			log.Infof("consumer %q authenticated", consumer.Name)
+			return authenticated(consumer.Name)
 		}
 	}
 
 	return types.ActionContinue
 }
 
-func deniedMultiKeyAuthData() types.Action {
-	_ = proxywasm.SendHttpResponseWithDetail(http.StatusUnauthorized, "key-auth.multi_key", WWWAuthenticateHeader(protectionSpace),
-		[]byte("Request denied by Key Auth check. Multi Key Authentication information found."), -1)
+func deniedInvalidCredential() types.Action {
+	_ = proxywasm.SendHttpResponseWithDetail(http.StatusUnauthorized, "key-auth.invalid_credential", WWWAuthenticateHeader(protectionSpace),
+		[]byte("Request denied by Key Auth check. Invalid API key."), -1)
 	return types.ActionContinue
 }
 
