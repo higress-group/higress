@@ -272,6 +272,12 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 		imageUrl, ok := secondElement["image_url"].(map[string]interface{})
 		require.True(t, ok)
 		assert.Contains(t, imageUrl["url"], "data:image/jpeg;base64,")
+
+		// Verify that the image_url item does NOT carry an empty "text" field.
+		// Strict providers reject content items that mix text and image_url modalities
+		// with "The item of `content` should be a message of a certain modal".
+		_, hasTextKey := secondElement["text"]
+		assert.False(t, hasTextKey, "image_url content item must not include an empty text field")
 	})
 
 	t.Run("convert_simple_string_content", func(t *testing.T) {
@@ -893,6 +899,169 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 		assert.Equal(t, "user", rawCompanionText["role"])
 		assert.Equal(t, "continue", rawCompanionText["content"])
 		assert.NotContains(t, rawCompanionText, "reasoning_content")
+	})
+
+	t.Run("convert_tool_result_with_image_content", func(t *testing.T) {
+		// A tool_result whose content array contains only an image.
+		// The image cannot live inside the OpenAI tool message (string-only),
+		// so it should be emitted as a follow-up user message.
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "user",
+				"content": [{
+					"type": "tool_result",
+					"tool_use_id": "toolu_screenshot",
+					"content": [{
+						"type": "image",
+						"source": {
+							"type": "base64",
+							"media_type": "image/png",
+							"data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+						}
+					}]
+				}]
+			}],
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		require.Len(t, messages, 2)
+
+		// First message: tool role with empty text content
+		rawTool := messages[0].(map[string]interface{})
+		assert.Equal(t, "tool", rawTool["role"])
+		assert.Equal(t, "", rawTool["content"])
+		assert.Equal(t, "toolu_screenshot", rawTool["tool_call_id"])
+
+		// Second message: user role carrying the image
+		rawImageMsg := messages[1].(map[string]interface{})
+		assert.Equal(t, "user", rawImageMsg["role"])
+		contentArray, ok := rawImageMsg["content"].([]interface{})
+		require.True(t, ok)
+		require.Len(t, contentArray, 1)
+		imgItem, ok := contentArray[0].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, contentTypeImageUrl, imgItem["type"])
+		imgUrl, ok := imgItem["image_url"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Contains(t, imgUrl["url"], "data:image/png;base64,")
+		// Verify no spurious text field on the image item
+		_, hasTextKey := imgItem["text"]
+		assert.False(t, hasTextKey)
+	})
+
+	t.Run("convert_tool_result_with_text_and_image", func(t *testing.T) {
+		// A tool_result whose content array contains text + image, plus a
+		// sibling text block at the message level.
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "user",
+				"content": [{
+					"type": "tool_result",
+					"tool_use_id": "toolu_read_img",
+					"content": [{
+						"type": "text",
+						"text": "Screenshot captured."
+					}, {
+						"type": "image",
+						"source": {
+							"type": "base64",
+							"media_type": "image/png",
+							"data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+						}
+					}]
+				}, {
+					"type": "text",
+					"text": "What do you see?"
+				}]
+			}],
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		require.Len(t, messages, 2)
+
+		// First: tool message with text extracted from tool_result
+		rawTool := messages[0].(map[string]interface{})
+		assert.Equal(t, "tool", rawTool["role"])
+		assert.Equal(t, "Screenshot captured.", rawTool["content"])
+		assert.Equal(t, "toolu_read_img", rawTool["tool_call_id"])
+
+		// Second: user message with sibling text + extracted image
+		rawUserMsg := messages[1].(map[string]interface{})
+		assert.Equal(t, "user", rawUserMsg["role"])
+		contentArray, ok := rawUserMsg["content"].([]interface{})
+		require.True(t, ok)
+		require.Len(t, contentArray, 2)
+
+		textItem, ok := contentArray[0].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, contentTypeText, textItem["type"])
+		assert.Equal(t, "What do you see?", textItem["text"])
+
+		imgItem, ok := contentArray[1].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, contentTypeImageUrl, imgItem["type"])
+	})
+
+	t.Run("convert_tool_result_with_url_image", func(t *testing.T) {
+		// A tool_result whose content array contains a URL-type image.
+		claudeRequest := `{
+			"model": "anthropic/claude-sonnet-4",
+			"messages": [{
+				"role": "user",
+				"content": [{
+					"type": "tool_result",
+					"tool_use_id": "toolu_fetch",
+					"content": [{
+						"type": "image",
+						"source": {
+							"type": "url",
+							"url": "https://example.com/image.png"
+						}
+					}]
+				}]
+			}],
+			"max_tokens": 1000
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var rawJSON map[string]interface{}
+		err = json.Unmarshal(result, &rawJSON)
+		require.NoError(t, err)
+		messages := rawJSON["messages"].([]interface{})
+		require.Len(t, messages, 2)
+
+		rawTool := messages[0].(map[string]interface{})
+		assert.Equal(t, "tool", rawTool["role"])
+
+		rawImageMsg := messages[1].(map[string]interface{})
+		assert.Equal(t, "user", rawImageMsg["role"])
+		contentArray, ok := rawImageMsg["content"].([]interface{})
+		require.True(t, ok)
+		require.Len(t, contentArray, 1)
+		imgItem, ok := contentArray[0].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, contentTypeImageUrl, imgItem["type"])
+		imgUrl, ok := imgItem["image_url"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "https://example.com/image.png", imgUrl["url"])
 	})
 
 	t.Run("convert_multiple_tool_calls", func(t *testing.T) {

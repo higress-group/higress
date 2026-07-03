@@ -127,6 +127,11 @@ type contentConversionResult struct {
 	toolResults         []claudeChatMessageContent
 	openaiContents      []chatMessageContent
 	hasReasoningBlocks  bool
+	// toolResultImages holds images extracted from tool_result content arrays.
+	// OpenAI tool messages only support string content, so images cannot live
+	// inside the tool message itself. They are emitted as a follow-up user
+	// message after the tool messages.
+	toolResultImages []chatMessageContent
 }
 
 type ClaudeToOpenAIConvertOptions struct {
@@ -230,7 +235,27 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body [
 				// Also add visible text content if present alongside tool results.
 				// This companion message intentionally does not carry reasoning_content:
 				// tool_result content is user/tool-side data, while thinking belongs to assistant turns.
-				if len(conversionResult.textParts) > 0 {
+				// When images were extracted from tool_result content, emit them here as
+				// a multimodal user message (OpenAI tool messages only accept string content).
+				hasImages := len(conversionResult.toolResultImages) > 0
+				hasText := len(conversionResult.textParts) > 0
+				if hasImages && hasText {
+					var contents []chatMessageContent
+					contents = append(contents, chatMessageContent{
+						Type: contentTypeText,
+						Text: strings.Join(conversionResult.textParts, "\n\n"),
+					})
+					contents = append(contents, conversionResult.toolResultImages...)
+					openaiRequest.Messages = append(openaiRequest.Messages, chatMessage{
+						Role:    claudeMsg.Role,
+						Content: contents,
+					})
+				} else if hasImages {
+					openaiRequest.Messages = append(openaiRequest.Messages, chatMessage{
+						Role:    claudeMsg.Role,
+						Content: conversionResult.toolResultImages,
+					})
+				} else if hasText {
 					textMsg := chatMessage{
 						Role:    claudeMsg.Role,
 						Content: strings.Join(conversionResult.textParts, "\n\n"),
@@ -1040,6 +1065,30 @@ func openAIFinishReasonToClaude(reason string) string {
 	}
 }
 
+// claudeImageToOpenAIContent converts a Claude image content block to an OpenAI
+// image_url chatMessageContent. Returns ok=false when the source is missing or
+// uses an unsupported transport type.
+func claudeImageToOpenAIContent(claudeContent claudeChatMessageContent) (chatMessageContent, bool) {
+	if claudeContent.Source == nil {
+		return chatMessageContent{}, false
+	}
+	switch claudeContent.Source.Type {
+	case "base64":
+		dataUrl := fmt.Sprintf("data:%s;base64,%s", claudeContent.Source.MediaType, claudeContent.Source.Data)
+		return chatMessageContent{
+			Type:     contentTypeImageUrl,
+			ImageUrl: &chatMessageContentImageUrl{Url: dataUrl},
+		}, true
+	case "url":
+		return chatMessageContent{
+			Type:     contentTypeImageUrl,
+			ImageUrl: &chatMessageContentImageUrl{Url: claudeContent.Source.Url},
+		}, true
+	default:
+		return chatMessageContent{}, false
+	}
+}
+
 // convertContentArray converts an array of Claude content to OpenAI content format
 func (c *ClaudeToOpenAIConverter) convertContentArray(claudeContents []claudeChatMessageContent) *contentConversionResult {
 	result := &contentConversionResult{
@@ -1079,24 +1128,8 @@ func (c *ClaudeToOpenAIConverter) convertContentArray(claudeContents []claudeCha
 			preserveClaudeContentBlocks = true
 			// data is an opaque Claude blob, not portable reasoning text.
 		case "image":
-			if claudeContent.Source != nil {
-				if claudeContent.Source.Type == "base64" {
-					// Convert base64 image to OpenAI format
-					dataUrl := fmt.Sprintf("data:%s;base64,%s", claudeContent.Source.MediaType, claudeContent.Source.Data)
-					result.openaiContents = append(result.openaiContents, chatMessageContent{
-						Type: contentTypeImageUrl,
-						ImageUrl: &chatMessageContentImageUrl{
-							Url: dataUrl,
-						},
-					})
-				} else if claudeContent.Source.Type == "url" {
-					result.openaiContents = append(result.openaiContents, chatMessageContent{
-						Type: contentTypeImageUrl,
-						ImageUrl: &chatMessageContentImageUrl{
-							Url: claudeContent.Source.Url,
-						},
-					})
-				}
+			if imgContent, ok := claudeImageToOpenAIContent(claudeContent); ok {
+				result.openaiContents = append(result.openaiContents, imgContent)
 			}
 		case "tool_use":
 			preserveClaudeContentBlocks = true
@@ -1126,6 +1159,20 @@ func (c *ClaudeToOpenAIConverter) convertContentArray(claudeContents []claudeCha
 			// Store tool results for processing
 			result.toolResults = append(result.toolResults, claudeContent)
 			log.Debugf("[Claude->OpenAI] Found tool_result for tool_use_id: %s", claudeContent.ToolUseId)
+			// Extract images embedded in tool_result content arrays.
+			// OpenAI tool messages only accept string content, so we cannot
+			// place images inside the tool message. Collect them here and emit
+			// them as a follow-up user message after the tool messages.
+			if claudeContent.Content != nil {
+				for _, innerBlock := range claudeContent.Content.GetArrayValue() {
+					if innerBlock.Type != "image" || innerBlock.Source == nil {
+						continue
+					}
+					if imgContent, ok := claudeImageToOpenAIContent(innerBlock); ok {
+						result.toolResultImages = append(result.toolResultImages, imgContent)
+					}
+				}
+			}
 		}
 		claudeContentBlocks = append(claudeContentBlocks, preservedClaudeContent)
 	}
