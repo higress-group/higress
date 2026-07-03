@@ -827,6 +827,10 @@ func (m *IngressConfig) convertEnvoyFilter(convertOptions *common.ConvertOptions
 		}
 	}
 
+	if aiLoadBalancerClusterHeaderEnvoyFilter := m.constructAILoadBalancerClusterHeaderEnvoyFilter(convertOptions); aiLoadBalancerClusterHeaderEnvoyFilter != nil {
+		envoyFilters = append(envoyFilters, *aiLoadBalancerClusterHeaderEnvoyFilter)
+	}
+
 	// TODO Support other envoy filters
 
 	IngressLog.Infof("Found %d number of envoyFilters", len(envoyFilters))
