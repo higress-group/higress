@@ -216,17 +216,36 @@ lb_config:
 
 | 名称                | 数据类型         | 填写要求          | 默认值       | 描述                                 |
 |--------------------|-----------------|------------------|-------------|-------------------------------------|
-| `mode`      | string | required | | how to use cluster metrics, value of `[LeastBusy, LeastTotalLatency, LeastFirstTokenLatency ]` |
+| `mode`      | string | required | | how to use cluster metrics, value of `[LeastBusy, LeastTotalLatency, LeastFirstTokenLatency, AdaptiveScore]` |
 | `service_list`      | []string | required | | service list of current route |
 | `rate_limit`      | string | optional | 1 | The maximum percentage of requests a single node can receive, value of 0~1 |
 | `cluster_header` | string | optional | `x-higress-target-cluster` | By retrieving the value of this header, we can determine which backend service to route to |
 | `queue_size`      | int | optional | 100 | The metrics is calculated based on the number of most recent requests. |
+| `ewma_beta` | float | optional | 0.5 | Historical EWMA weight used by `AdaptiveScore`, value of 0~1 |
+| `p2c_choices` | int | optional | 2 | Number of sampled services compared by `AdaptiveScore`; compares all services when the value is not less than the service count |
+| `ttft_weight` | float | optional | 0.7 | First-token latency weight used by `AdaptiveScore` |
+| `total_latency_weight` | float | optional | 0.3 | Total response latency weight used by `AdaptiveScore` |
+| `error_penalty` | float | optional | 3.0 | Recent error-rate penalty used by `AdaptiveScore` |
+| `failure_cooldown_ms` | int | optional | 30000 | Cooldown duration after a failed request in `AdaptiveScore` |
+| `metrics_missing_policy` | string | optional | `least_busy` | Fallback policy when `AdaptiveScore` has no latency samples, defaulting to current in-flight requests |
+| `global_inflight_enabled` | bool | optional | false | Whether `AdaptiveScore` uses Redis to track global in-flight requests across gateway instances |
+| `serviceFQDN` | string | required when `global_inflight_enabled=true` | | Redis service FQDN |
+| `servicePort` | int | required when `global_inflight_enabled=true` | | Redis service port |
+| `username` | string | optional | | Redis username |
+| `password` | string | optional | empty | Redis password |
+| `database` | int | optional | 0 | Redis database number |
+| `global_inflight_key_prefix` | string | optional | `higress:adaptive_score_inflight` | Redis key prefix for global in-flight counters. The actual key also includes route and mode |
+| `global_inflight_timeout` | int | optional | 3000 | Redis request timeout in milliseconds |
+| `global_inflight_key_ttl` | int | optional | 1800 | TTL for global in-flight Redis keys in seconds |
 
 The meanings of the values ​​for `mode` are as follows:
 
 - `LeastBusy`: Routes to the service with the fewest concurrent requests.
 - `LeastTotalLatency`: Routes to the service with the lowest response time (RT).
 - `LeastFirstTokenLatency`: Routes to the service with the lowest RT for the first packet.
+- `AdaptiveScore`: Combines EWMA first-token latency, EWMA total latency, current in-flight requests, and error rate into a score, then routes to the lowest-score service. It is designed for LLM backends whose latency and load fluctuate continuously.
+
+When `global_inflight_enabled` is enabled, `AdaptiveScore` uses Redis Lua to atomically select the service with the lowest score after applying global in-flight pressure, then increments the selected service counter by 1. The counter is decremented when the request stream completes. If Redis initialization, dispatch, or response handling fails, the plugin falls back to local `AdaptiveScore` without blocking the request.
 
 ## Configuration Example
 
@@ -234,8 +253,23 @@ The meanings of the values ​​for `mode` are as follows:
 lb_type: cluster
 lb_policy: cluster_metrics
 lb_config:
-  mode: LeastTotalLatency
+  mode: AdaptiveScore
   rate_limit: 0.6
+  ewma_beta: 0.5
+  p2c_choices: 2
+  ttft_weight: 0.7
+  total_latency_weight: 0.3
+  error_penalty: 3.0
+  failure_cooldown_ms: 30000
+  global_inflight_enabled: true
+  serviceFQDN: redis.static
+  servicePort: 6379
+  username: default
+  password: ""
+  database: 0
+  global_inflight_key_prefix: higress:adaptive_score_inflight
+  global_inflight_timeout: 3000
+  global_inflight_key_ttl: 1800
   service_list:
   - outbound|80||test-1.dns
   - outbound|80||test-2.static

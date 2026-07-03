@@ -214,16 +214,35 @@ lb_config:
 
 | 名称                | 数据类型         | 填写要求          | 默认值       | 描述                                 |
 |--------------------|-----------------|------------------|-------------|-------------------------------------|
-| `mode`      | string | 必填 | | 如何使用服务级指标做负载均衡，当前支持`[LeastBusy, LeastTotalLatency, LeastFirstTokenLatency ]` |
+| `mode`      | string | 必填 | | 如何使用服务级指标做负载均衡，当前支持`[LeastBusy, LeastTotalLatency, LeastFirstTokenLatency, AdaptiveScore]` |
 | `service_list`      | []string | 必填 | | 路由后端服务列表 |
 | `rate_limit`      | string | 选填 | 1 | 单个服务处理请求比例上限，取值范围0~1 |
 | `cluster_header` | string | 选填 | `x-higress-target-cluster` | 通过取该header的值得知需要路由到哪个后端服务 |
 | `queue_size`      | int | 选填 | 100 | 根据最近的多少个请求进行观测指标的计算 |
+| `ewma_beta` | float | 选填 | 0.5 | `AdaptiveScore` 中历史 EWMA 值的权重，取值范围 0~1 |
+| `p2c_choices` | int | 选填 | 2 | `AdaptiveScore` 每次随机采样并比较的候选服务数，配置值不小于服务数时比较全部服务 |
+| `ttft_weight` | float | 选填 | 0.7 | `AdaptiveScore` 首包延迟权重 |
+| `total_latency_weight` | float | 选填 | 0.3 | `AdaptiveScore` 总响应延迟权重 |
+| `error_penalty` | float | 选填 | 3.0 | `AdaptiveScore` 对近期错误率的惩罚系数 |
+| `failure_cooldown_ms` | int | 选填 | 30000 | `AdaptiveScore` 请求失败后服务进入冷却的时间 |
+| `metrics_missing_policy` | string | 选填 | `least_busy` | `AdaptiveScore` 缺少延迟指标时的兜底策略，默认按当前并发数选择 |
+| `global_inflight_enabled` | bool | 选填 | false | `AdaptiveScore` 是否使用 Redis 记录跨网关实例的全局 in-flight |
+| `serviceFQDN` | string | `global_inflight_enabled=true` 时必填 | | Redis 服务的 FQDN |
+| `servicePort` | int | `global_inflight_enabled=true` 时必填 | | Redis 服务的端口 |
+| `username` | string | 选填 | | Redis 用户名 |
+| `password` | string | 选填 | 空 | Redis 密码 |
+| `database` | int | 选填 | 0 | Redis 数据库序号 |
+| `global_inflight_key_prefix` | string | 选填 | `higress:adaptive_score_inflight` | 全局 in-flight 计数 Redis key 前缀，实际 key 会追加 route 和 mode |
+| `global_inflight_timeout` | int | 选填 | 3000 | Redis 请求超时时间，单位毫秒 |
+| `global_inflight_key_ttl` | int | 选填 | 1800 | 全局 in-flight Redis key 的 TTL，单位秒 |
 
 `mode` 各取值含义如下：
 - `LeastBusy`: 路由到当前并发请求数最少的服务
 - `LeastTotalLatency`: 路由到当前RT最低的服务
 - `LeastFirstTokenLatency`: 路由到当前首包RT最低的服务
+- `AdaptiveScore`: 综合 EWMA 首包延迟、EWMA 总延迟、当前并发数和失败率计算分数，选择分数最低的服务；适合 LLM 后端服务延迟和负载持续波动的场景
+
+`AdaptiveScore` 开启 `global_inflight_enabled` 后，会使用 Redis Lua 原子完成“按本地分数和全局 in-flight 修正后的分数选择服务，并将选中服务计数 +1”。请求结束时插件会将该服务计数 -1。Redis 初始化、请求或返回异常时会降级到本地 `AdaptiveScore`，不阻断请求。
 
 ## 配置示例
 
@@ -231,9 +250,24 @@ lb_config:
 lb_type: cluster
 lb_policy: cluster_metrics
 lb_config:
-  mode: LeastTotalLatency # 策略名称
+  mode: AdaptiveScore # 策略名称
   queue_size: 100 # 统计指标时使用的最近请求数
   rate_limit: 0.6 # 单个服务承载的最大请求比例
+  ewma_beta: 0.5 # 历史 EWMA 值权重
+  p2c_choices: 2 # 每次比较的候选服务数
+  ttft_weight: 0.7 # 首包延迟权重
+  total_latency_weight: 0.3 # 总响应延迟权重
+  error_penalty: 3.0 # 错误率惩罚系数
+  failure_cooldown_ms: 30000 # 失败冷却时间
+  global_inflight_enabled: true # 开启跨网关实例全局 in-flight
+  serviceFQDN: redis.static # Redis 服务
+  servicePort: 6379
+  username: default
+  password: ""
+  database: 0
+  global_inflight_key_prefix: higress:adaptive_score_inflight
+  global_inflight_timeout: 3000
+  global_inflight_key_ttl: 1800
   service_list:
   - outbound|80||test-1.dns
   - outbound|80||test-2.static
