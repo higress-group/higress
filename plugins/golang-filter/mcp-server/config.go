@@ -55,20 +55,24 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 		return conf, nil
 	}
 
-	for _, serverConfig := range serverConfigs {
-		serverConfigMap, ok := serverConfig.(map[string]interface{})
+	var parseErrors []string
+	for index, rawServerConfig := range serverConfigs {
+		serverConfigMap, ok := rawServerConfig.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("server config must be an object")
+			parseErrors = append(parseErrors, fmt.Sprintf("server config at index %d must be an object", index))
+			continue
 		}
 
 		serverType, ok := serverConfigMap["type"].(string)
 		if !ok {
-			return nil, fmt.Errorf("server type is not set")
+			parseErrors = append(parseErrors, fmt.Sprintf("server config at index %d type is not set", index))
+			continue
 		}
 
 		serverPath, ok := serverConfigMap["path"].(string)
 		if !ok {
-			return nil, fmt.Errorf("server %s path is not set", serverType)
+			parseErrors = append(parseErrors, fmt.Sprintf("server %s path is not set", serverType))
+			continue
 		}
 
 		// Parse domain list directly into HostMatchers for efficient matching
@@ -87,12 +91,14 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 
 		serverName, ok := serverConfigMap["name"].(string)
 		if !ok {
-			return nil, fmt.Errorf("server %s name is not set", serverType)
+			parseErrors = append(parseErrors, fmt.Sprintf("server %s name is not set", serverType))
+			continue
 		}
-		server := common.GlobalRegistry.GetServer(serverType)
+		server := common.GlobalRegistry.NewServerConfig(serverType)
 
 		if server == nil {
-			return nil, fmt.Errorf("server %s is not registered", serverType)
+			parseErrors = append(parseErrors, fmt.Sprintf("server %s is not registered", serverType))
+			continue
 		}
 		serverConfig, ok := serverConfigMap["config"].(map[string]interface{})
 		if !ok {
@@ -102,12 +108,14 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 
 		err := server.ParseConfig(serverConfig)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse server config: %w", err)
+			parseErrors = append(parseErrors, fmt.Sprintf("server %s failed to parse config: %v", serverName, err))
+			continue
 		}
 
 		serverInstance, err := server.NewServer(serverName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize MCP Server: %w", err)
+			parseErrors = append(parseErrors, fmt.Sprintf("server %s failed to initialize MCP Server: %v", serverName, err))
+			continue
 		}
 
 		conf.servers = append(conf.servers, &SSEServerWrapper{
@@ -117,6 +125,9 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 			HostMatchers: hostMatchers,
 		})
 		api.LogDebug(fmt.Sprintf("Registered MCP Server: %s", serverType))
+	}
+	if len(parseErrors) > 0 {
+		api.LogWarnf("mcp-server: some servers failed to load and were skipped: %v", parseErrors)
 	}
 
 	return conf, nil
