@@ -49,7 +49,7 @@ var WasmPluginCacheControl = suite.ConformanceTest{
 					ExpectedResponse: http.Response{
 						StatusCode: 200,
 						Headers: map[string]string{
-							"Cache-Control": "maxAge=3600",
+							"Cache-Control": "max-age=3600",
 						},
 					},
 				},
