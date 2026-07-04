@@ -93,6 +93,8 @@ func CreateNacosMcpRegistry(config *NacosConfig) (*NacosMcpRegistry, error) {
 		namingClient:             namingClient,
 		serviceMatcher:           *config.ServiceMatcher,
 		toolChangeEventListeners: []registry.ToolChangeEventListener{},
+		toolsDescription:         map[string]*registry.ToolDescription{},
+		toolsRpcContext:          map[string]*registry.RpcContext{},
 		currentServiceSet:        map[string]bool{},
 	}, nil
 }
