@@ -28,9 +28,9 @@ The plugin now supports **automatic protocol detection**, allowing seamless comp
 > When the request path suffix matches `/v1/images/generations`, it corresponds to text-to-image scenarios. The request body will be parsed using OpenAI's image generation protocol and then converted to the corresponding LLM vendor's image generation protocol.
 
 ## Execution Properties
+
 Plugin execution phase: `Default Phase`
 Plugin execution priority: `100`
-
 
 ## Configuration Fields
 
@@ -288,6 +288,7 @@ For DeepL, the corresponding `type` is `deepl`. Its unique configuration field i
 | `targetLang` | string    | Required    | -       | The target language required by the DeepL translation service |
 
 #### Google Vertex AI
+
 For Vertex, the corresponding `type` is `vertex`. It supports two authentication modes:
 
 **Standard Mode** (using Service Account):
@@ -342,6 +343,10 @@ Its unique configuration fields are:
 | `awsSecretKey`            | string          | Either this or apiTokens | -       | AWS Secret Access Key for AWS Signature V4 authentication          |
 | `awsRegion`               | string          | Required                 | -       | AWS region, e.g., us-east-1                                        |
 | `bedrockAdditionalFields` | map             | Optional                 | -       | Additional inference parameters that the model supports            |
+
+#### Cerebras
+
+For Cerebras, the corresponding `type` is `cerebras`. It has no unique configuration fields.
 
 ## Usage Examples
 
@@ -1773,6 +1778,7 @@ Here, `model` denotes the service tier of DeepL and can only be either `Free` or
 ### Utilizing OpenAI Protocol Proxy for Together-AI Services
 
 **Configuration Information**
+
 ```yaml
 provider:
   type: together-ai
@@ -1783,6 +1789,7 @@ provider:
 ```
 
 **Request Example**
+
 ```json
 {
     "model": "Qwen/Qwen2.5-72B-Instruct-Turbo",
@@ -1796,6 +1803,7 @@ provider:
 ```
 
 **Response Example**
+
 ```json
 {
   "id": "8f5809d54b73efac",
@@ -1826,6 +1834,7 @@ provider:
 
 ### Utilizing OpenAI Protocol Proxy for Google Vertex Services (Standard Mode)
 **Configuration Information**
+
 ```yaml
 provider:
   type: vertex
@@ -1844,6 +1853,7 @@ provider:
 ```
 
 **Request Example**
+
 ```json
 {
   "model": "gemini-2.0-flash-001",
@@ -1858,6 +1868,7 @@ provider:
 ```
 
 **Response Example**
+
 ```json
 {
   "id": "chatcmpl-0000000000000",
@@ -2109,6 +2120,7 @@ AWS Bedrock supports two authentication methods:
 #### Method 1: Using AWS Access Key/Secret Key Authentication (AWS Signature V4)
 
 **Configuration Information**
+
 ```yaml
 provider:
   type: bedrock
@@ -2133,6 +2145,7 @@ provider:
 ```
 
 **Request Example**
+
 ```json
 {
   "model": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
@@ -2147,6 +2160,7 @@ provider:
 ```
 
 **Response Example**
+
 ```json
 {
   "id": "d52da49d-daf3-49d9-a105-0b527481fe14",
@@ -2167,6 +2181,62 @@ provider:
     "prompt_tokens": 10,
     "completion_tokens": 57,
     "total_tokens": 67
+  }
+}
+```
+
+### Utilizing OpenAI Protocol Proxy for Cerebras Services
+
+**Configuration Information**
+
+```yaml
+provider:
+  type: cerebras
+  apiTokens:
+    - "YOUR_CEREBRAS_API_TOKEN"
+  modelMapping:
+    "gpt-4": "llama3.1-70b"
+    "gpt-3.5-turbo": "llama3.1-8b"
+    "*": "llama3.1-8b"
+```
+
+**Request Example**
+
+```json
+{
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "who are you"
+    }
+  ],
+  "stream": false
+}
+```
+
+**Response Example**
+
+```json
+{
+  "id": "cmpl-123456789",
+  "object": "chat.completion",
+  "created": 1699123456,
+  "model": "llama3.1-70b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Hello! I am an AI assistant powered by Cerebras, based on the Llama 3.1 model. I can help answer questions, engage in conversations, and provide various information. How can I assist you today?"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 50,
+    "total_tokens": 60
   }
 }
 ```
@@ -2200,6 +2270,7 @@ providers:
   "stream": false
 }
 ```
+
 **Response Example**
 
 ```json
