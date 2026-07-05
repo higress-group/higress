@@ -1,3 +1,17 @@
+// Copyright (c) 2022 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package config
 
 import (
@@ -104,19 +118,30 @@ func routeMatchesWasmRule(route *common.WrapperHTTPRoute, rule *structpb.Struct)
 	if route == nil || route.HTTPRoute == nil || rule == nil {
 		return false
 	}
+	routes := stringList(rule.Fields[wasmMatchRouteKey])
+	routePrefixes := stringList(rule.Fields[wasmMatchRoutePrefixKey])
+	services := stringList(rule.Fields[wasmMatchServiceKey])
+	domains := stringList(rule.Fields[wasmMatchDomainKey])
+
 	switch {
-	case len(stringList(rule.Fields[wasmMatchRouteKey])) > 0:
-		return stringListContains(stringList(rule.Fields[wasmMatchRouteKey]), route.HTTPRoute.Name)
-	case len(stringList(rule.Fields[wasmMatchDomainKey])) > 0:
-		return domainListMatches(stringList(rule.Fields[wasmMatchDomainKey]), route.Host)
-	case len(stringList(rule.Fields[wasmMatchServiceKey])) > 0:
-		return serviceListMatches(stringList(rule.Fields[wasmMatchServiceKey]), route.HTTPRoute.Route)
-	case len(stringList(rule.Fields[wasmMatchRoutePrefixKey])) > 0:
-		for _, prefix := range stringList(rule.Fields[wasmMatchRoutePrefixKey]) {
+	case len(routes) > 0:
+		if !stringListContains(routes, route.HTTPRoute.Name) {
+			return false
+		}
+		if len(services) > 0 {
+			return serviceListMatches(services, route.HTTPRoute.Route)
+		}
+		return true
+	case len(routePrefixes) > 0:
+		for _, prefix := range routePrefixes {
 			if strings.HasPrefix(route.HTTPRoute.Name, prefix) {
 				return true
 			}
 		}
+	case len(services) > 0:
+		return serviceListMatches(services, route.HTTPRoute.Route)
+	case len(domains) > 0:
+		return domainListMatches(domains, route.Host)
 	}
 	return false
 }

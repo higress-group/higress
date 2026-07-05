@@ -1,3 +1,17 @@
+// Copyright (c) 2022 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package config
 
 import (
@@ -88,6 +102,36 @@ func TestClusterHeaderForPluginConfigMatchesDomainAndService(t *testing.T) {
 
 	require.True(t, routeMatchesWasmRule(route, domainRule))
 	require.True(t, routeMatchesWasmRule(route, serviceRule))
+}
+
+func TestRouteMatchesWasmRuleRequiresRouteAndService(t *testing.T) {
+	route := wrapperRoute("route-c", "api.example.com", "llm-c.internal.dns", 8080)
+	rule := mustStruct(t, map[string]interface{}{
+		"_match_route_":   []interface{}{"route-c"},
+		"_match_service_": []interface{}{"llm-other.internal.dns:8080"},
+		"lb_type":         "cluster",
+	})
+
+	require.False(t, routeMatchesWasmRule(route, rule))
+
+	rule = mustStruct(t, map[string]interface{}{
+		"_match_route_":   []interface{}{"route-c"},
+		"_match_service_": []interface{}{"llm-c.internal.dns:8080"},
+		"lb_type":         "cluster",
+	})
+
+	require.True(t, routeMatchesWasmRule(route, rule))
+}
+
+func TestRouteMatchesWasmRuleUsesRoutePrefixBeforeServiceWithoutRoute(t *testing.T) {
+	route := wrapperRoute("route-c", "api.example.com", "llm-c.internal.dns", 8080)
+	rule := mustStruct(t, map[string]interface{}{
+		"_match_route_prefix_": []interface{}{"route-"},
+		"_match_service_":      []interface{}{"llm-other.internal.dns:8080"},
+		"lb_type":              "cluster",
+	})
+
+	require.True(t, routeMatchesWasmRule(route, rule))
 }
 
 func TestConstructAILoadBalancerClusterHeaderEnvoyFilter(t *testing.T) {
