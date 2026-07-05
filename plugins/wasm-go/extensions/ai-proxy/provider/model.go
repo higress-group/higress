@@ -25,6 +25,7 @@ const (
 	contentTypeImageUrl   = "image_url"
 	contentTypeInputAudio = "input_audio"
 	contentTypeFile       = "file"
+	contentTypeDocument   = "document"
 
 	reasoningStartTag = "<think>"
 	reasoningEndTag   = "</think>"
@@ -221,6 +222,7 @@ type chatMessage struct {
 	FunctionCall             *functionCall              `json:"function_call,omitempty"` // For legacy OpenAI format
 	Refusal                  string                     `json:"refusal,omitempty"`
 	ToolCallId               string                     `json:"tool_call_id,omitempty"`
+	IsToolResultError       bool                       `json:"is_tool_result_error,omitempty"`
 }
 
 func (m *chatMessage) handleNonStreamingReasoningContent(reasoningContentMode string) {

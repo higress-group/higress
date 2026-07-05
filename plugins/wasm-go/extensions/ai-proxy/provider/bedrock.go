@@ -112,10 +112,15 @@ func (b *bedrockProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name 
 	}
 	var responseBuilder strings.Builder
 	for _, event := range events {
+		// Handle stream exception events (e.g., service error, throttling)
+		if event.StopReason != nil && *event.StopReason == "content_filtered" {
+			log.Warnf("[onStreamingResponseBody] stream stopped due to content filtering")
+		}
 		outputEvent, err := b.convertEventFromBedrockToOpenAI(ctx, event)
 		if err != nil {
 			log.Errorf("[onStreamingResponseBody] failed to process streaming event: %v\n%s", err, chunk)
-			return chunk, err
+			// Continue processing remaining events instead of aborting entirely
+			continue
 		}
 		responseBuilder.WriteString(string(outputEvent))
 	}
@@ -368,7 +373,37 @@ func extractAmazonEventStreamEvents(ctx wrapper.HttpContext, chunk []byte) []Con
 				break
 			}
 			log.Errorf("failed to decode message: %v", err)
-			break
+			// Stream error recovery: skip the current malformed message and try to find
+			// the next valid message by scanning for the event stream preamble pattern.
+			// Amazon event stream messages start with a 4-byte total length field followed
+			// by a 4-byte headers length, so we attempt to resync by advancing byte-by-byte.
+			recovered := false
+			currentPos := r.Size() - int64(r.Len())
+			for currentPos < r.Size()-12 { // Minimum message size is 12 bytes (prelude)
+				// Seek forward one byte and try again
+				if _, seekErr := r.Seek(currentPos+1, 0); seekErr != nil {
+					break
+				}
+				testMsg, testErr := decodeMessage(r, messageBuffer)
+				if testErr == nil {
+					// Found a valid message after recovery
+					var event ConverseStreamEvent
+					if jsonErr := json.Unmarshal(testMsg.Payload, &event); jsonErr == nil {
+						if eventType, ok := amazonEventType(testMsg.Headers); ok && eventType == "contentBlockStop" {
+							event.ContentBlockStop = &contentBlockStop{ContentBlockIndex: event.ContentBlockIndex}
+						}
+						events = append(events, event)
+					}
+					recovered = true
+					currentPos = r.Size() - int64(r.Len())
+					continue
+				}
+				currentPos++
+			}
+			if !recovered {
+				break
+			}
+			continue
 		}
 		var event ConverseStreamEvent
 		if err = json.Unmarshal(msg.Payload, &event); err == nil {
@@ -1376,8 +1411,19 @@ type toolResultBlock struct {
 }
 
 type toolResultContentBlock struct {
-	Text  *string     `json:"text,omitempty"`
-	Image *imageBlock `json:"image,omitempty"`
+	Text     *string          `json:"text,omitempty"`
+	Image    *imageBlock      `json:"image,omitempty"`
+	Document *documentBlock   `json:"document,omitempty"`
+}
+
+type documentBlock struct {
+	Format string      `json:"format"`
+	Name   string      `json:"name"`
+	Source sourceBlock `json:"source"`
+}
+
+type sourceBlock struct {
+	Bytes string `json:"bytes,omitempty"`
 }
 
 type toolUseBlock struct {
@@ -1450,6 +1496,10 @@ type tokenUsage struct {
 func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMessageContent {
 	toolResultContent := &toolResultBlock{}
 	toolResultContent.ToolUseId = chatMessage.ToolCallId
+	// Set error status if the tool call result indicates an error
+	if chatMessage.IsToolResultError {
+		toolResultContent.Status = "error"
+	}
 	if text, ok := chatMessage.Content.(string); ok {
 		toolResultContent.Content = []toolResultContentBlock{
 			{
@@ -1459,10 +1509,39 @@ func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMe
 	} else if contentList, ok := chatMessage.Content.([]any); ok {
 		for _, contentItem := range contentList {
 			contentMap, ok := contentItem.(map[string]any)
-			if ok && contentMap["type"] == contentTypeText {
+			if !ok {
+				continue
+			}
+			contentType, _ := contentMap["type"].(string)
+			switch contentType {
+			case contentTypeText:
 				if text, ok := contentMap[contentTypeText].(string); ok {
 					toolResultContent.Content = append(toolResultContent.Content, toolResultContentBlock{
 						Text: util.Ptr(text),
+					})
+				}
+			case contentTypeImageUrl:
+				if imageUrl, ok := contentMap["image_url"].(map[string]any); ok {
+					if urlStr, ok := imageUrl["url"].(string); ok {
+						prefix, imageType, err := extractImageType(urlStr)
+						if err != nil {
+							log.Warnf("failed to extract image type from tool result: %v", err)
+							continue
+						}
+						base64WoPrefix, _ := strings.CutPrefix(urlStr, prefix)
+						toolResultContent.Content = append(toolResultContent.Content, toolResultContentBlock{
+							Image: &imageBlock{
+								Format: imageType,
+								Source: imageSource{Bytes: base64WoPrefix},
+							},
+						})
+					}
+				}
+			case contentTypeDocument:
+				docBlock := buildDocumentBlockFromContent(contentMap)
+				if docBlock != nil {
+					toolResultContent.Content = append(toolResultContent.Content, toolResultContentBlock{
+						Document: docBlock,
 					})
 				}
 			}
@@ -1472,6 +1551,22 @@ func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMe
 	}
 	return bedrockMessageContent{
 		ToolResult: toolResultContent,
+	}
+}
+
+// buildDocumentBlockFromContent creates a Bedrock document block from OpenAI-compatible content map
+func buildDocumentBlockFromContent(contentMap map[string]any) *documentBlock {
+	format, _ := contentMap["format"].(string)
+	name, _ := contentMap["name"].(string)
+	source, _ := contentMap["source"].(map[string]any)
+	if format == "" || name == "" || source == nil {
+		return nil
+	}
+	bytes, _ := source["bytes"].(string)
+	return &documentBlock{
+		Format: format,
+		Name:   name,
+		Source: sourceBlock{Bytes: bytes},
 	}
 }
 
@@ -1654,6 +1749,11 @@ func (b *bedrockProvider) setAuthHeaders(apiName ApiName, body []byte, headers h
 	signature := b.generateSignatureWithService(path, amzDate, dateStamp, body, service)
 	headers.Set("X-Amz-Date", amzDate)
 	util.OverwriteRequestAuthorizationHeader(headers, fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s/%s/%s/aws4_request, SignedHeaders=%s, Signature=%s", accessKey, dateStamp, region, service, bedrockSignedHeaders, signature))
+
+	// Set AWS STS Session Token if available (for assumed roles / temporary credentials)
+	if len(b.config.awsSessionToken) > 0 {
+		headers.Set("X-Amz-Security-Token", b.config.awsSessionToken)
+	}
 }
 
 func (b *bedrockProvider) generateSignature(path, amzDate, dateStamp string, body []byte) string {
@@ -1662,14 +1762,23 @@ func (b *bedrockProvider) generateSignature(path, amzDate, dateStamp string, bod
 
 func (b *bedrockProvider) generateSignatureWithService(path, amzDate, dateStamp string, body []byte, service string) string {
 	canonicalURI := encodeSigV4Path(path)
+	canonicalQueryString := extractCanonicalQueryString(path)
 	hashedPayload := sha256Hex(body)
 	region := strings.TrimSpace(b.config.awsRegion)
 	secretKey := strings.TrimSpace(b.config.awsSecretKey)
 
 	endpoint := bedrockAWSEndpoint(service, region)
+	signedHeaders := bedrockSignedHeaders
 	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-date:%s\n", endpoint, amzDate)
-	canonicalRequest := fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s",
-		httpPostMethod, canonicalURI, canonicalHeaders, bedrockSignedHeaders, hashedPayload)
+
+	// Include x-amz-security-token in signed headers if session token is present
+	if len(b.config.awsSessionToken) > 0 {
+		signedHeaders = "host;x-amz-date;x-amz-security-token"
+		canonicalHeaders = fmt.Sprintf("host:%s\nx-amz-date:%s\nx-amz-security-token:%s\n", endpoint, amzDate, b.config.awsSessionToken)
+	}
+
+	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s",
+		httpPostMethod, canonicalURI, canonicalQueryString, canonicalHeaders, signedHeaders, hashedPayload)
 
 	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStamp, region, service)
 	hashedCanonReq := sha256Hex([]byte(canonicalRequest))
@@ -1679,6 +1788,28 @@ func (b *bedrockProvider) generateSignatureWithService(path, amzDate, dateStamp 
 	signingKey := getSignatureKey(secretKey, dateStamp, region, service)
 	signature := hmacHex(signingKey, stringToSign)
 	return signature
+}
+
+// extractCanonicalQueryString extracts and sorts query parameters from the path for SigV4 signing
+func extractCanonicalQueryString(path string) string {
+	queryIndex := strings.Index(path, "?")
+	if queryIndex < 0 {
+		return ""
+	}
+	queryString := path[queryIndex+1:]
+	if queryString == "" {
+		return ""
+	}
+	params := strings.Split(queryString, "&")
+	// Sort query parameters for canonical form
+	for i := 0; i < len(params)-1; i++ {
+		for j := i + 1; j < len(params); j++ {
+			if params[i] > params[j] {
+				params[i], params[j] = params[j], params[i]
+			}
+		}
+	}
+	return strings.Join(params, "&")
 }
 
 func bedrockAWSService(apiName ApiName) string {

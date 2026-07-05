@@ -372,6 +372,9 @@ type ProviderConfig struct {
 	// @Title zh-CN Amazon Bedrock Region
 	// @Description zh-CN 仅适用于Amazon Bedrock服务访问
 	awsRegion string `required:"false" yaml:"awsRegion" json:"awsRegion"`
+	// @Title zh-CN Amazon Bedrock Session Token
+	// @Description zh-CN 仅适用于Amazon Bedrock服务鉴权，用于AWS STS临时凭证（AssumeRole等场景）
+	awsSessionToken string `required:"false" yaml:"awsSessionToken" json:"awsSessionToken"`
 	// @Title zh-CN Amazon Bedrock 额外模型请求参数
 	// @Description zh-CN 仅适用于Amazon Bedrock服务，用于设置模型特定的推理参数
 	bedrockAdditionalFields map[string]interface{} `required:"false" yaml:"bedrockAdditionalFields" json:"bedrockAdditionalFields"`
@@ -613,6 +616,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	c.awsAccessKey = json.Get("awsAccessKey").String()
 	c.awsSecretKey = json.Get("awsSecretKey").String()
 	c.awsRegion = json.Get("awsRegion").String()
+	c.awsSessionToken = json.Get("awsSessionToken").String()
 	if c.typ == providerTypeBedrock {
 		c.bedrockAdditionalFields = make(map[string]interface{})
 		for k, v := range json.Get("bedrockAdditionalFields").Map() {
