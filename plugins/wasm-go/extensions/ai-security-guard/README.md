@@ -15,12 +15,12 @@ description: 阿里云内容安全检测
 ## 配置说明
 | Name | Type | Requirement | Default | Description |
 | ------------ | ------------ | ------------ | ------------ | ------------ |
-| `serviceName` | string | requried | - | 服务名 |
-| `servicePort` | string | requried | - | 服务端口 |
-| `serviceHost` | string | requried | - | 阿里云内容安全endpoint的域名 |
-| `accessKey` | string | requried | - | 阿里云AK |
-| `secretKey` | string | requried | - | 阿里云SK |
-| `action` | string | requried | - | 阿里云ai安全业务接口 |
+| `serviceName` | string | required | - | 服务名 |
+| `servicePort` | string | required | - | 服务端口 |
+| `serviceHost` | string | required | - | 阿里云内容安全endpoint的域名 |
+| `accessKey` | string | required | - | 阿里云AK |
+| `secretKey` | string | required | - | 阿里云SK |
+| `action` | string | required | - | 阿里云ai安全业务接口 |
 | `securityToken` | string | optional | - | 阿里云安全令牌（用于临时凭证） |
 | `checkRequest` | bool | optional | false | 检查提问内容是否合规 |
 | `checkResponse` | bool | optional | false | 检查大模型的回答内容是否合规，生效时会使流式响应变为非流式 |

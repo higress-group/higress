@@ -269,6 +269,40 @@ func TestApplyGateway(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "skip passthrough server",
+			input: &networking.Gateway{
+				Servers: []*networking.Server{
+					{
+						Port: &networking.Port{
+							Protocol: "TLS",
+						},
+						Tls: &networking.ServerTLSSettings{
+							Mode: networking.ServerTLSSettings_PASSTHROUGH,
+						},
+					},
+				},
+			},
+			config: &Ingress{
+				DownstreamTLS: &DownstreamTLSConfig{
+					CipherSuites: []string{"ECDHE-RSA-AES256-GCM-SHA384"},
+					MinVersion:   "TLSv1.2",
+					MaxVersion:   "TLSv1.3",
+				},
+			},
+			expect: &networking.Gateway{
+				Servers: []*networking.Server{
+					{
+						Port: &networking.Port{
+							Protocol: "TLS",
+						},
+						Tls: &networking.ServerTLSSettings{
+							Mode: networking.ServerTLSSettings_PASSTHROUGH,
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
