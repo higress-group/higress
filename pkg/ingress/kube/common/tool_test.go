@@ -1025,8 +1025,34 @@ func TestSortIngressByCreationTime(t *testing.T) {
 
 	assert.Equal(t, expectedNamespace, actualNamespace, "When the names are the same, the configuration should be sorted by namespace")
 
+	mixedConfigs := []config.Config{
+		{
+			Meta: config.Meta{
+				Name:      "z-ingress",
+				Namespace: "a-ns",
+			},
+		},
+		{
+			Meta: config.Meta{
+				Name:      "a-ingress",
+				Namespace: "b-ns",
+			},
+		},
+	}
+
+	expectedNamespacedNames := []string{"a-ns/z-ingress", "b-ns/a-ingress"}
+
+	SortIngressByCreationTime(mixedConfigs)
+
+	var actualNamespacedNames []string
+	for _, cfg := range mixedConfigs {
+		actualNamespacedNames = append(actualNamespacedNames, cfg.Namespace+"/"+cfg.Name)
+	}
+
+	assert.Equal(t, expectedNamespacedNames, actualNamespacedNames, "When timestamps are the same, configurations should be sorted by namespace before name")
+
 	// Test canary ingress sorting - base ingress should come before canary variants
-	// Using Namespace.Name format ensures "default.xx-hg" < "default.xx-hg-canary-*"
+	// Using namespace before name ensures "default/xx-hg" < "default/xx-hg-canary-*"
 	canaryConfigs := []config.Config{
 		{
 			Meta: config.Meta{
@@ -1057,7 +1083,7 @@ func TestSortIngressByCreationTime(t *testing.T) {
 		actualCanary = append(actualCanary, cfg.Name)
 	}
 
-	assert.Equal(t, expectedCanary, actualCanary, "Base ingress should be sorted before canary variants (using Namespace.Name format)")
+	assert.Equal(t, expectedCanary, actualCanary, "Base ingress should be sorted before canary variants")
 }
 
 func TestPartMd5(t *testing.T) {
