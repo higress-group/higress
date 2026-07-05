@@ -77,6 +77,7 @@ const (
 	ApiNameGeminiGenerateContent       ApiName = "gemini/v1beta/generatecontent"
 	ApiNameGeminiStreamGenerateContent ApiName = "gemini/v1beta/streamgeneratecontent"
 	ApiNameAnthropicMessages           ApiName = "anthropic/v1/messages"
+	ApiNameAnthropicCountTokens        ApiName = "anthropic/v1/messages/count_tokens"
 	ApiNameAnthropicComplete           ApiName = "anthropic/v1/complete"
 	ApiNameVertexRaw                   ApiName = "vertex/raw"
 
@@ -115,8 +116,9 @@ const (
 	PathOpenAIRetrieveVideoContent                 = "/v1/videos/{video_id}/content"
 
 	// Anthropic
-	PathAnthropicMessages = "/v1/messages"
-	PathAnthropicComplete = "/v1/complete"
+	PathAnthropicMessages            = "/v1/messages"
+	PathAnthropicMessagesCountTokens = "/v1/messages/count_tokens"
+	PathAnthropicComplete            = "/v1/complete"
 
 	// Cohere
 	PathCohereV1Rerank = "/v1/rerank"
@@ -577,7 +579,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	if compatible := json.Get("qwenEnableCompatible"); compatible.Exists() {
 		c.qwenEnableCompatible = compatible.Bool()
 	} else {
-		// Default use official compatiable mode
+		// Default use official compatible mode
 		c.qwenEnableCompatible = true
 	}
 	c.qwenDomain = json.Get("qwenDomain").String()
@@ -1478,7 +1480,8 @@ func (c *ProviderConfig) needToProcessRequestBody(apiName ApiName) bool {
 		ApiNameResponses,
 		ApiNameGeminiGenerateContent,
 		ApiNameGeminiStreamGenerateContent,
-		ApiNameAnthropicMessages:
+		ApiNameAnthropicMessages,
+		ApiNameAnthropicCountTokens:
 		return true
 	}
 	return false

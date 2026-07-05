@@ -115,7 +115,8 @@ jobs:
       run: |
         echo "Building WASM for ${{ matrix.plugin }}..."
         
-        # 检查是否存在main.go文件
+        # Run prepare.sh if it exists (e.g., download BPE vocabulary)
+        if [ -f prepare.sh ]; then sh ./prepare.sh; fi
         
         export GOOS=wasip1
         export GOARCH=wasm
