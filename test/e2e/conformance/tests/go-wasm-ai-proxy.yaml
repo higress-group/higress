@@ -204,6 +204,25 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
+  name: wasmplugin-ai-proxy-moonshot
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.moonshot.cn"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
   name: wasmplugin-ai-proxy-qwen-compatible-mode
   namespace: higress-conformance-ai-backend
 spec:
@@ -504,6 +523,16 @@ spec:
           type: mistral
       ingress:
         - higress-conformance-ai-backend/wasmplugin-ai-proxy-mistral
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          modelMapping:
+            "gpt-3": moonshot-v1-8k
+            "*": moonshot-v1-32k
+          type: moonshot
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-moonshot
     - config:
         provider:
           apiTokens:
