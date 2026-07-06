@@ -472,10 +472,10 @@ type ProviderConfig struct {
 	// @Description zh-CN 流式请求中收到上游服务第一个响应包的超时时间，单位为毫秒。默认值为 0，表示不开启首包超时
 	firstByteTimeout uint32 `required:"false" yaml:"firstByteTimeout" json:"firstByteTimeout"`
 	// @Title zh-CN Triton Model Version
-	// @Description 仅适用于 NVIDIA Triton Interference Server :path 中的 modelVersion 参考："https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/protocol/extension_generate.html"
+	// @Description zh-CN 仅适用于 NVIDIA Triton Inference Server，指定 :path 中的 modelVersion，参考："https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/protocol/extension_generate.html"
 	tritonModelVersion string `required:"false" yaml:"tritonModelVersion" json:"tritonModelVersion"`
 	// @Title zh-CN Triton Server 部署的 Domain
-	// @Description 仅适用于 NVIDIA Triton Interference Server :path 中的 modelVersion 参考："https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/protocol/extension_generate.html"
+	// @Description zh-CN 仅适用于 NVIDIA Triton Inference Server，指定 Triton Server 部署的请求 Domain
 	tritonDomain string `required:"false" yaml:"tritonDomain" json:"tritonDomain"`
 	// @Title zh-CN vLLM自定义后端URL
 	// @Description zh-CN 仅适用于vLLM服务。vLLM服务的完整URL，包含协议、域名、端口等

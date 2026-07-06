@@ -157,9 +157,6 @@ git config --get user.name
 git config --get user.email
 ```
 
-* when submitting pr, please add a brief description of the current changes to the X.X.X.md file under the 'changes/' folder
-
-
 In addition, in the code change part, we suggest that all contributors should read the [code style of Higress](#code-style).
 
 No matter commit message, or commit content, we do take more emphasis on code review.
@@ -213,7 +210,7 @@ Any test case would be welcomed. Currently, Higress function test cases are high
 
 ### How to write tests
 
-* For unit tests, create a test file named `xxxTest.go` in the test directory of the same module.
+* For unit tests, create a test file named `xxx_test.go` in the same directory as the code under test.
 * For integration tests, you can put the integration test in the test directory.
 * For Wasm plugin E2E tests, add test cases in `test/e2e/conformance/tests/`. See [test/README.md](./test/README.md) for details.
 ## Engage to help anything

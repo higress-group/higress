@@ -2,7 +2,7 @@
 
 Higress のハッキングに興味がある場合は、温かく歓迎します。まず、このような意欲を非常に奨励します。そして、以下は貢献ガイドのリストです。
 
-[[中文](./CONTRIBUTING.md)] | [[English Contributing Document](./CONTRIBUTING_EN.md)]
+[[中文](./CONTRIBUTING_CN.md)] | [[English Contributing Document](./CONTRIBUTING_EN.md)]
 
 ## トピック
 
@@ -154,8 +154,6 @@ git config --get user.name
 git config --get user.email
 ```
 
-* pr を提出する際には、'changes/' フォルダーの下の XXX.md ファイルに現在の変更の簡単な説明を追加してください。
-
 さらに、コード変更部分では、すべての貢献者が Higress の [コードスタイル](#コードスタイル) を読むことをお勧めします。
 
 コミットメッセージやコミット内容に関係なく、コードレビューに重点を置いています。
@@ -208,7 +206,7 @@ make prebuild && go mod tidy
 
 ### テストの書き方
 
-* ユニットテストの場合、同じモジュールの test ディレクトリに `xxxTest.go` という名前のテストファイルを作成します。
+* ユニットテストの場合、テスト対象のコードと同じディレクトリに `xxx_test.go` という名前のテストファイルを作成します。
 * 統合テストの場合、統合テストを test ディレクトリに配置します。
 * Wasm プラグイン E2E テストの場合、`test/e2e/conformance/tests/` にテストケースを追加します。詳細は [test/README.md](./test/README.md) を参照してください。
 

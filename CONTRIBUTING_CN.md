@@ -1,6 +1,6 @@
 # 为 Higress 做贡献
 
-如果你有兴趣寻找关于Higress的漏洞，我们会热烈欢迎。首先，我们非常鼓励这种意愿。这是为您提供的贡献指南列表。
+如果你有兴趣为Higress做贡献，我们会热烈欢迎。首先，我们非常鼓励这种意愿。这是为您提供的贡献指南列表。
 
 [[English Contributing Document](./CONTRIBUTING_EN.md)]
 
@@ -157,9 +157,6 @@ git config --get user.name
 git config --get user.email
 ```
 
-* 提交pr时，请在'changes/'文件夹下的XXXmd文件中添加当前更改的简要说明
-
-
 另外，在代码变更部分，我们建议所有贡献者阅读Higress的 [代码风格](#代码风格)。
 
 无论是提交信息，还是提交内容，我们都更加重视代码审查。
@@ -213,7 +210,7 @@ make prebuild && go mod tidy
 
 ### 如何编写测试
 
-* 对于单元测试，在同一模块的 test 目录中创建一个名为 `xxxTest.go` 的测试文件。
+* 对于单元测试，在被测代码所在目录中创建一个名为 `xxx_test.go` 的测试文件。
 * 对于集成测试，将集成测试放在 test 目录。
 * 对于 Wasm 插件 E2E 测试，在 `test/e2e/conformance/tests/` 中添加测试用例。详见 [test/README.md](./test/README.md)。
 

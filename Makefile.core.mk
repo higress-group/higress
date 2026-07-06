@@ -357,7 +357,7 @@ kube-load-image: $(tools/kind) ## Install the Higress image to a kind cluster us
 	tools/hack/kind-load-image.sh registry.cn-hangzhou.aliyuncs.com/hinsteny/nacos-standlone-rc3 1.0.0-RC3
 
 # run-higress-e2e-test-setup starts to setup ingress e2e tests.
-.PHONT: run-higress-e2e-test-setup
+.PHONY: run-higress-e2e-test-setup
 run-higress-e2e-test-setup:
 	@echo -e "\n\033[36mRunning higress conformance tests...\033[0m"
 	@echo -e "\n\033[36mWaiting higress-controller to be ready...\033[0m\n"

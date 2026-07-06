@@ -384,14 +384,37 @@ AWS Bedrock 所对应的 type 为 bedrock。它支持两种认证方式：
 | `awsRegion`               | string        | 必填              | -     | AWS 区域，例如：us-east-1                              |
 | `bedrockAdditionalFields` | map           | 非必填            | -     | Bedrock 额外模型请求参数                               |
 
-#### NVIDIA Triton Interference Server
+#### NVIDIA Triton Inference Server
 
-NVIDIA Triton Interference Server 所对应的 type 为 triton。它特有的配置字段如下：
+NVIDIA Triton Inference Server 所对应的 type 为 triton。它特有的配置字段如下：
 
 | 名称                   | 数据类型 | 填写要求 | 默认值 | 描述                                      |
 |----------------------|--------|--------|-------|------------------------------------------|
 | `tritonModelVersion` | string | 非必填   | -     | 用于指定 Triton Server 中 model version     |
 | `tritonDomain`       | string | 非必填   | -     | Triton Server 部署的指定请求 Domain          |
+
+#### LongCat
+
+LongCat 所对应的 `type` 为 `longcat`。它并无特有的配置字段，但要求配置通用字段 `apiTokens`。
+
+#### vLLM
+
+vLLM 所对应的 `type` 为 `vllm`。vLLM 服务支持鉴权与免鉴权两种访问方式：配置了 `apiTokens` 时将用于鉴权，未配置时以免鉴权方式访问。它特有的配置字段如下：
+
+| 名称             | 数据类型 | 填写要求 | 默认值 | 描述                                                     |
+|------------------|--------|--------|-------|----------------------------------------------------------|
+| `vllmCustomUrl`  | string | 非必填   | -     | vLLM 服务的完整 URL，包含协议、域名、端口等                    |
+| `vllmServerHost` | string | 非必填   | -     | vLLM 服务器的主机地址，例如：vllm-service.cluster.local        |
+
+#### 可灵 AI（Kling AI）
+
+可灵 AI 所对应的 `type` 为 `kling`，用于代理其视频生成相关接口。鉴权支持两种方式（二选一）：配置 `apiTokens`，或配置 `klingAccessKey` 与 `klingSecretKey`（用于生成并签名 JWT Token）。它特有的配置字段如下：
+
+| 名称                     | 数据类型 | 填写要求              | 默认值 | 描述                                              |
+|--------------------------|--------|----------------------|-------|---------------------------------------------------|
+| `klingAccessKey`         | string | 与 `apiTokens` 二选一 | -     | KlingAI 官方服务鉴权的 Access Key，用于生成 JWT Token |
+| `klingSecretKey`         | string | 与 `apiTokens` 二选一 | -     | KlingAI 官方服务鉴权的 Secret Key，用于签名 JWT Token |
+| `klingTokenRefreshAhead` | number | 非必填               | 60    | Kling JWT 过期前提前刷新的时间，单位为秒               |
 
 ## 用法示例
 
@@ -2399,7 +2422,7 @@ provider:
 }
 ```
 
-### 使用 OpenAI 协议代理 NVIDIA Triton Interference Server 服务
+### 使用 OpenAI 协议代理 NVIDIA Triton Inference Server 服务
 
 **配置信息**
 

@@ -343,6 +343,29 @@ Its unique configuration fields are:
 | `awsRegion`               | string          | Required                 | -       | AWS region, e.g., us-east-1                                        |
 | `bedrockAdditionalFields` | map             | Optional                 | -       | Additional inference parameters that the model supports            |
 
+#### LongCat
+
+For LongCat, the corresponding `type` is `longcat`. It has no unique configuration fields, but the common `apiTokens` field is required.
+
+#### vLLM
+
+For vLLM, the corresponding `type` is `vllm`. vLLM services support both authenticated and unauthenticated access: if `apiTokens` is configured, it will be used for authentication; otherwise the service is accessed without authentication. Its unique configuration fields are:
+
+| Name             | Data Type | Requirement | Default | Description                                                        |
+|------------------|-----------|-------------|---------|--------------------------------------------------------------------|
+| `vllmCustomUrl`  | string    | Optional    | -       | The full URL of the vLLM service, including protocol, domain, port, etc. |
+| `vllmServerHost` | string    | Optional    | -       | The host address of the vLLM server, e.g., vllm-service.cluster.local   |
+
+#### Kling AI
+
+For Kling AI, the corresponding `type` is `kling`. It proxies Kling's video generation APIs. Two authentication methods are supported (choose one): configure `apiTokens`, or configure `klingAccessKey` and `klingSecretKey` (used to generate and sign a JWT token). Its unique configuration fields are:
+
+| Name                     | Data Type | Requirement                 | Default | Description                                                    |
+|--------------------------|-----------|-----------------------------|---------|-----------------------------------------------------------------|
+| `klingAccessKey`         | string    | Either this or `apiTokens`  | -       | Access Key for KlingAI official service, used to generate the JWT token |
+| `klingSecretKey`         | string    | Either this or `apiTokens`  | -       | Secret Key for KlingAI official service, used to sign the JWT token     |
+| `klingTokenRefreshAhead` | number    | Optional                    | 60      | How many seconds before expiry the Kling JWT is refreshed              |
+
 ## Usage Examples
 
 ### Using OpenAI Protocol Proxy for Azure OpenAI Service
@@ -2171,7 +2194,7 @@ provider:
 }
 ```
 
-### Utilizing OpenAI Protocol Proxy for NVIDIA Triton Interference Server Services
+### Utilizing OpenAI Protocol Proxy for NVIDIA Triton Inference Server Services
 
 **Configuration Information**
 

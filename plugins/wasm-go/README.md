@@ -198,7 +198,7 @@ func TestMyPlugin(t *testing.T) {
 ### step1. 编写 test cases
 在目录./test/e2e/conformance/tests/下面, 分别添加xxx.yaml文件和xxx.go文件, 比如测试插件request-block
 
-./test/e2e/conformance/tests/request-block.yaml
+./test/e2e/conformance/tests/go-wasm-request-block.yaml
 ```
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -212,39 +212,19 @@ spec:
 ```
 `其中url中extensions后面的'request-block'为插件所在文件夹名称`
 
-./test/e2e/conformance/tests/request-block.go
+./test/e2e/conformance/tests/go-wasm-request-block.go
 
-### step2. 添加 test cases
-将上述所写test cases添加到e2e测试列表中,
+### step2. 注册 test cases
+无需修改 `./test/e2e/e2e_test.go`。在你新增的测试用例文件（xxx.go）中通过 `init()` 函数调用 `Register` 注册用例，所有用例会在初始化阶段被收集到 `tests.ConformanceTests` 中并由 e2e 测试统一执行：
 
-./test/e2e/e2e_test.go
-
-```
-...
-cSuite.Setup(t)
-	var higressTests []suite.ConformanceTest
-
-	if *isWasmPluginTest {
-		if strings.Compare(*wasmPluginType, "CPP") == 0 {
-			m := make(map[string]suite.ConformanceTest)
-			m["request_block"] = tests.CPPWasmPluginsRequestBlock
-			m["key_auth"] = tests.CPPWasmPluginsKeyAuth
-
-			higressTests = []suite.ConformanceTest{
-				m[*wasmPluginName],
-			}
-		} else {
-			higressTests = []suite.ConformanceTest{
-				tests.WasmPluginsRequestBlock,
-        //这里新增你新写的case方法名称
-			}
-		}
-	} else {
-...
+```go
+func init() {
+	Register(WasmPluginsRequestBlock)
+}
 ```
 
 ### step3. 编译插件并执行 test cases
-考虑到本地构建wasm比较耗时, 我们支持只构建需要测试的插件(同时你也可以临时修改上面第二小步的测试cases列表, 只执行你新写的case)。
+考虑到本地构建wasm比较耗时, 我们支持只构建需要测试的插件(同时你也可以通过 `TEST_SHORTNAME=<用例的ShortName>` 只执行你新写的case)。
 
 ```bash
 PLUGIN_NAME=request-block make higress-wasmplugin-test

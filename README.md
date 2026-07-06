@@ -53,9 +53,9 @@ You can click the button below to install the enterprise version of Higress:
 ## Summary
 
 - [**Quick Start**](#quick-start)
-- [**Feature Showcase**](#feature-showcase)
 - [**Use Cases**](#use-cases)
 - [**Core Advantages**](#core-advantages)
+- [**Feature Showcase**](#feature-showcase)
 - [**Community**](#community)
 
 ## Quick Start
@@ -178,6 +178,50 @@ If you are deploying on the cloud, it is recommended to use the [Enterprise Edit
   Based on Ingress API and Gateway API standards, provides out-of-the-box UI console, WAF protection plugin, IP/Cookie CC protection plugin ready to use.
 
   Supports connecting to Let's Encrypt for automatic issuance and renewal of free certificates, and can be deployed outside of K8s, started with a single Docker command, convenient for individual developers to use.
+
+## Feature Showcase
+
+### AI Gateway Demo
+
+[Migrate from OpenAI to other LLMs in 30 seconds](https://www.bilibili.com/video/BV1dT421a7w7/?spm_id_from=333.788.recommend_more_video.14)
+
+
+### Higress UI Console
+    
+- **Rich Observability**
+
+  Provides out-of-the-box observability. Grafana & Prometheus can be either the built-in ones or your own self-hosted instances
+
+  ![](./docs/images/monitor.gif)
+    
+
+- **Plugin Extension Mechanism**
+
+  Official plugins are provided out of the box, and you can also [develop](./plugins/wasm-go) your own plugins, build them as docker/oci images, and configure them in the console. Plugin logic can be changed in real time without any traffic loss.
+
+  ![](./docs/images/plugin.gif)
+
+
+- **Multiple Service Discovery Mechanisms**
+
+  K8s Service discovery is provided by default. Registries such as Nacos/ZooKeeper can be connected through configuration, and services can also be discovered based on static IPs or DNS
+
+  ![](./docs/images/service-source.gif)
+    
+
+- **Domain and Certificate Management**
+
+  TLS certificates can be created and managed, and the HTTP/HTTPS behavior of domains can be configured. Domain policies support applying plugins to specific domains
+
+  ![](./docs/images/domain.gif)
+
+
+- **Rich Routing Capabilities**
+
+  Services discovered through the service discovery mechanisms above appear in the service list. When creating a route, select a domain, define the route matching rules, and then select the target service for routing. Route policies support applying plugins to specific routes
+
+  ![](./docs/images/route-service.gif)
+
 
 ## Community
 

@@ -192,7 +192,7 @@ When you complete a GO plug-in function, you can create associated e2e test case
 ### step1. write test cases
 In the directory of `./ test/e2e/conformance/tests/`, add the xxx.yaml file and xxx.go file. Such as test for `request-block` wasm-plugin,
 
-./test/e2e/conformance/tests/request-block.yaml
+./test/e2e/conformance/tests/go-wasm-request-block.yaml
 ```
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -206,39 +206,19 @@ spec:
 ```
 `Above of the url, the name of after extensions indicates the name of the folder where the plug-in resides.`
 
-./test/e2e/conformance/tests/request-block.go
+./test/e2e/conformance/tests/go-wasm-request-block.go
 
-### step2. add test cases
-Add the test cases written above to the e2e test list,
+### step2. register test cases
+There is no need to modify `./test/e2e/e2e_test.go`. Register your test case in the `init()` function of your new test case file (xxx.go) by calling `Register`. All test cases are collected into `tests.ConformanceTests` during the initialization phase and executed by the e2e test:
 
-./test/e2e/e2e_test.go
-
-```
-...
-cSuite.Setup(t)
-	var higressTests []suite.ConformanceTest
-
-	if *isWasmPluginTest {
-		if strings.Compare(*wasmPluginType, "CPP") == 0 {
-			m := make(map[string]suite.ConformanceTest)
-			m["request_block"] = tests.CPPWasmPluginsRequestBlock
-			m["key_auth"] = tests.CPPWasmPluginsKeyAuth
-
-			higressTests = []suite.ConformanceTest{
-				m[*wasmPluginName],
-			}
-		} else {
-			higressTests = []suite.ConformanceTest{
-				tests.WasmPluginsRequestBlock,
-        //Add your newly written case method name here
-			}
-		}
-	} else {
-...
+```go
+func init() {
+	Register(WasmPluginsRequestBlock)
+}
 ```
 
 ### step3. compile and run test cases
-Considering that building wasm locally is time-consuming, we support building only the plug-ins that need to be tested (at the same time, you can also temporarily modify the list of test cases in the second small step above, and only execute your newly written cases).
+Considering that building wasm locally is time-consuming, we support building only the plug-ins that need to be tested (at the same time, you can also set `TEST_SHORTNAME=<ShortName of your case>` to only execute your newly written cases).
 
 ```bash
 PLUGIN_NAME=request-block make higress-wasmplugin-test
