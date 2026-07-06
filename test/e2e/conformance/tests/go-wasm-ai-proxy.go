@@ -339,6 +339,52 @@ data: [DONE]
 			},
 			{
 				Meta: http.AssertionMeta{
+					TestCaseName:  "gemini case 1: non-streaming request",
+					CompareTarget: http.CompareTargetResponse,
+				},
+				Request: http.AssertionRequest{
+					ActualRequest: http.Request{
+						Host:        "generativelanguage.googleapis.com",
+						Path:        "/v1/chat/completions",
+						Method:      "POST",
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"model":"gpt-3","messages":[{"role":"user","content":"你好，你是谁？"}],"stream":false}`),
+					},
+				},
+				Response: http.AssertionResponse{
+					ExpectedResponse: http.Response{
+						StatusCode:           200,
+						ContentType:          http.ContentTypeApplicationJson,
+						JsonBodyIgnoreFields: []string{"id", "created"},
+						Body:                 []byte(`{"id":"chatcmpl-llm-mock","choices":[{"index":0,"message":{"role":"assistant","content":"This is a mock response from Gemini provider. You said: 你好，你是谁？"},"finish_reason":"stop","logprobs":null}],"created":10,"model":"gemini-2.0-flash","object":"chat.completion","usage":{"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}`),
+					},
+				},
+			},
+			{
+				Meta: http.AssertionMeta{
+					TestCaseName:  "gemini case 2: streaming request",
+					CompareTarget: http.CompareTargetResponse,
+				},
+				Request: http.AssertionRequest{
+					ActualRequest: http.Request{
+						Host:        "generativelanguage.googleapis.com",
+						Path:        "/v1/chat/completions",
+						Method:      "POST",
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"model":"gpt-3","messages":[{"role":"user","content":"你好，你是谁？"}],"stream":true}`),
+					},
+				},
+				Response: http.AssertionResponse{
+					ExpectedResponse: http.Response{
+						StatusCode: 200,
+						Headers: map[string]string{
+							"Content-Type": "text/event-stream",
+						},
+					},
+				},
+			},
+			{
+				Meta: http.AssertionMeta{
 					TestCaseName:  "github case 1: non-streaming request",
 					CompareTarget: http.CompareTargetResponse,
 				},
