@@ -1025,7 +1025,7 @@ func doGetMappedModel(model string, modelMapping map[string]string) string {
 	}
 
 	if v, ok := modelMapping[model]; ok {
-		log.Debugf("model [%s] is mapped to [%s] explictly", model, v)
+		log.Debugf("model [%s] is mapped to [%s] explicitly", model, v)
 		return v
 	}
 
