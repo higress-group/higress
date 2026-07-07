@@ -16,7 +16,6 @@ package config
 
 import (
 	"errors"
-	"fmt"
 	"net/url"
 	"strings"
 
@@ -255,19 +254,22 @@ func (c *CorsConfig) Process(scheme string, host string, method string, headers 
 		// Get origin
 		if strings.ToLower(key) == strings.ToLower(HeaderOrigin) {
 			origin = strings.TrimSuffix(strings.TrimSpace(header[1]), "/")
+			httpCorsContext.AllowOrigin = origin
 		}
 		// Get control request method & headers
 		if strings.ToLower(key) == strings.ToLower(HeaderControlRequestMethod) {
 			controlRequestMethod = strings.TrimSpace(header[1])
+			httpCorsContext.AllowMethods = controlRequestMethod
 		}
 		if strings.ToLower(key) == strings.ToLower(HeaderControlRequestHeaders) {
 			controlRequestHeaders = strings.TrimSpace(header[1])
+			httpCorsContext.AllowHeaders = controlRequestHeaders
 		}
 	}
 
 	// Parse if request is CORS and pre-flight request.
 	isCorsRequest := c.isCorsRequest(scheme, host, origin)
-	isPreFlight := c.isPreFlight(origin, method, controlRequestMethod)
+	isPreFlight := c.isPreFlight(origin, method, controlRequestMethod, controlRequestHeaders)
 	httpCorsContext.IsCorsRequest = isCorsRequest
 	httpCorsContext.IsPreFlight = isPreFlight
 
@@ -277,46 +279,6 @@ func (c *CorsConfig) Process(scheme string, host string, method string, headers 
 		return httpCorsContext, nil
 	}
 
-	// Check origin
-	allowOrigin, originOk := c.checkOrigin(origin)
-	if !originOk {
-		// Reject: origin is not allowed
-		httpCorsContext.IsValid = false
-		httpCorsContext.ValidReason = fmt.Sprintf("origin:%s is not allowed", origin)
-		return httpCorsContext, nil
-	}
-
-	// Check method
-	requestMethod := method
-	if isPreFlight {
-		requestMethod = controlRequestMethod
-	}
-	allowMethods, methodOk := c.checkMethods(requestMethod)
-	if !methodOk {
-		// Reject: method is not allowed
-		httpCorsContext.IsValid = false
-		httpCorsContext.ValidReason = fmt.Sprintf("method:%s is not allowed", requestMethod)
-		return httpCorsContext, nil
-	}
-
-	// Check headers
-	allowHeaders, headerOK := c.checkHeaders(controlRequestHeaders)
-
-	if isPreFlight && !headerOK {
-		// Reject: headers are not allowed
-		httpCorsContext.IsValid = false
-		httpCorsContext.ValidReason = "Reject: headers are not allowed"
-		return httpCorsContext, nil
-	}
-
-	// Store result in httpCorsContext and return it.
-	httpCorsContext.AllowOrigin = allowOrigin
-	if isPreFlight {
-		httpCorsContext.AllowMethods = allowMethods
-	}
-	if isPreFlight && len(allowHeaders) > 0 {
-		httpCorsContext.AllowHeaders = allowHeaders
-	}
 	if isPreFlight && c.maxAge > 0 {
 		httpCorsContext.MaxAge = c.maxAge
 	}
@@ -328,85 +290,8 @@ func (c *CorsConfig) Process(scheme string, host string, method string, headers 
 	return httpCorsContext, nil
 }
 
-func (c *CorsConfig) checkOrigin(origin string) (string, bool) {
-	origin = strings.TrimSpace(origin)
-	if len(origin) == 0 {
-		return "", false
-	}
-
-	matchOrigin := strings.ToLower(origin)
-	// Check exact match
-	for _, allowOrigin := range c.allowOrigins {
-		if allowOrigin == defaultMatchAll {
-			return origin, true
-		}
-		if strings.ToLower(allowOrigin) == matchOrigin {
-			return origin, true
-		}
-	}
-
-	// Check pattern match
-	for _, allowOriginPattern := range c.allowOriginPatterns {
-		if allowOriginPattern.declaredPattern == defaultMatchAll || allowOriginPattern.pattern.MatchString(matchOrigin) {
-			return origin, true
-		}
-	}
-
-	return "", false
-}
-
-func (c *CorsConfig) checkHeaders(requestHeaders string) (string, bool) {
-	if len(c.allowHeaders) == 0 {
-		return "", false
-	}
-
-	if len(requestHeaders) == 0 {
-		return strings.Join(c.allowHeaders, ","), true
-	}
-
-	// Return all request headers when allowHeaders contains *
-	if c.allowHeaders[0] == defaultMatchAll {
-		return requestHeaders, true
-	}
-
-	checkHeaders := strings.Split(requestHeaders, ",")
-	// Each request header should be existed in allowHeaders configuration
-	for _, h := range checkHeaders {
-		isExist := false
-		for _, allowHeader := range c.allowHeaders {
-			if strings.ToLower(h) == strings.ToLower(allowHeader) {
-				isExist = true
-				break
-			}
-		}
-		if !isExist {
-			return "", false
-		}
-	}
-
-	return strings.Join(c.allowHeaders, ","), true
-}
-
-func (c *CorsConfig) checkMethods(requestMethod string) (string, bool) {
-	if len(requestMethod) == 0 {
-		return "", false
-	}
-
-	// Find method existed in allowMethods configuration
-	for _, method := range c.allowMethods {
-		if method == defaultMatchAll {
-			return defaultAllAllowMethods, true
-		}
-		if strings.ToLower(method) == strings.ToLower(requestMethod) {
-			return strings.Join(c.allowMethods, ","), true
-		}
-	}
-
-	return "", false
-}
-
-func (c *CorsConfig) isPreFlight(origin, method, controllerRequestMethod string) bool {
-	return len(origin) > 0 && strings.ToLower(method) == strings.ToLower(HttpMethodOptions) && len(controllerRequestMethod) > 0
+func (c *CorsConfig) isPreFlight(origin, method, controllerRequestMethod string, controllerRequestHeaders string) bool {
+	return len(origin) > 0 && strings.ToLower(method) == strings.ToLower(HttpMethodOptions) && len(controllerRequestMethod) > 0 && len(controllerRequestHeaders) > 0
 }
 
 func (c *CorsConfig) isCorsRequest(scheme, host, origin string) bool {
@@ -455,4 +340,35 @@ func (c *CorsConfig) getHostAndPort(scheme string, host string) (string, string)
 		port = protocolHttpsPort
 	}
 	return host, port
+}
+
+func (c *CorsConfig) GetAllowOrigins(ctx HttpCorsContext) (string, bool) {
+	for _, allowOriginPattern := range c.allowOriginPatterns {
+		if allowOriginPattern.declaredPattern == defaultMatchAll || allowOriginPattern.pattern.MatchString(ctx.AllowOrigin) {
+			return ctx.AllowOrigin, true
+		}
+	}
+	allowOrigins := strings.Join(c.allowOrigins, ",")
+	if allowOrigins == defaultMatchAll {
+		return ctx.AllowOrigin, true
+	}
+	return "", false
+}
+
+func (c *CorsConfig) GetAllowMethods(ctx HttpCorsContext) string {
+	allowMethods := strings.Join(c.allowMethods, ",")
+	if allowMethods == defaultMatchAll {
+		return ctx.AllowMethods
+	} else {
+		return allowMethods
+	}
+}
+
+func (c *CorsConfig) GetAllowHeaders(ctx HttpCorsContext) string {
+	allowHeaders := strings.Join(c.allowHeaders, ",")
+	if allowHeaders == defaultMatchAll {
+		return ctx.AllowHeaders
+	} else {
+		return allowHeaders
+	}
 }
