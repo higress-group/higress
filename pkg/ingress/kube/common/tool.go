@@ -389,70 +389,61 @@ func getSvcIpList(svcList []*v1.Service) []string {
 	return out
 }
 
-func SortLbIngressList(lbi []v1.LoadBalancerIngress) func(int, int) bool {
-	return func(i int, j int) bool {
-		return loadBalancerIngressAddress(lbi[i].IP, lbi[i].Hostname) <
-			loadBalancerIngressAddress(lbi[j].IP, lbi[j].Hostname)
+func buildLoadBalancerIngressList[T any](svcList []*v1.Service, build func(ip, hostname string) T, less func([]T) func(int, int) bool) []T {
+	svcIpList := getSvcIpList(svcList)
+	lbi := make([]T, 0, len(svcIpList))
+	for _, ep := range svcIpList {
+		if net.ParseIP(ep) != nil {
+			lbi = append(lbi, build(ep, ""))
+		} else {
+			lbi = append(lbi, build("", ep))
+		}
 	}
+
+	sort.SliceStable(lbi, less(lbi))
+	return lbi
+}
+
+func sortLoadBalancerIngressList[T any](lbi []T, address func(T) string) func(int, int) bool {
+	return func(i int, j int) bool {
+		return address(lbi[i]) < address(lbi[j])
+	}
+}
+
+func SortLbIngressList(lbi []v1.LoadBalancerIngress) func(int, int) bool {
+	return sortLoadBalancerIngressList(lbi, func(item v1.LoadBalancerIngress) string {
+		return loadBalancerIngressAddress(item.IP, item.Hostname)
+	})
 }
 
 func GetLbStatusList(svcList []*v1.Service) []v1.LoadBalancerIngress {
-	svcIpList := getSvcIpList(svcList)
-	lbi := make([]v1.LoadBalancerIngress, 0, len(svcIpList))
-	for _, ep := range svcIpList {
-		if net.ParseIP(ep) != nil {
-			lbi = append(lbi, v1.LoadBalancerIngress{IP: ep})
-		} else {
-			lbi = append(lbi, v1.LoadBalancerIngress{Hostname: ep})
-		}
-	}
-
-	sort.SliceStable(lbi, SortLbIngressList(lbi))
-	return lbi
+	return buildLoadBalancerIngressList(svcList, func(ip, hostname string) v1.LoadBalancerIngress {
+		return v1.LoadBalancerIngress{IP: ip, Hostname: hostname}
+	}, SortLbIngressList)
 }
 
 func SortLbIngressListV1(lbi []networkingv1.IngressLoadBalancerIngress) func(int, int) bool {
-	return func(i int, j int) bool {
-		return loadBalancerIngressAddress(lbi[i].IP, lbi[i].Hostname) <
-			loadBalancerIngressAddress(lbi[j].IP, lbi[j].Hostname)
-	}
+	return sortLoadBalancerIngressList(lbi, func(item networkingv1.IngressLoadBalancerIngress) string {
+		return loadBalancerIngressAddress(item.IP, item.Hostname)
+	})
 }
 
 func GetLbStatusListV1(svcList []*v1.Service) []networkingv1.IngressLoadBalancerIngress {
-	svcIpList := getSvcIpList(svcList)
-	lbi := make([]networkingv1.IngressLoadBalancerIngress, 0, len(svcIpList))
-	for _, ep := range svcIpList {
-		if net.ParseIP(ep) != nil {
-			lbi = append(lbi, networkingv1.IngressLoadBalancerIngress{IP: ep})
-		} else {
-			lbi = append(lbi, networkingv1.IngressLoadBalancerIngress{Hostname: ep})
-		}
-	}
-
-	sort.SliceStable(lbi, SortLbIngressListV1(lbi))
-	return lbi
+	return buildLoadBalancerIngressList(svcList, func(ip, hostname string) networkingv1.IngressLoadBalancerIngress {
+		return networkingv1.IngressLoadBalancerIngress{IP: ip, Hostname: hostname}
+	}, SortLbIngressListV1)
 }
 
 func SortLbIngressListV1Beta1(lbi []networkingv1beta1.IngressLoadBalancerIngress) func(int, int) bool {
-	return func(i int, j int) bool {
-		return loadBalancerIngressAddress(lbi[i].IP, lbi[i].Hostname) <
-			loadBalancerIngressAddress(lbi[j].IP, lbi[j].Hostname)
-	}
+	return sortLoadBalancerIngressList(lbi, func(item networkingv1beta1.IngressLoadBalancerIngress) string {
+		return loadBalancerIngressAddress(item.IP, item.Hostname)
+	})
 }
 
 func GetLbStatusListV1Beta1(svcList []*v1.Service) []networkingv1beta1.IngressLoadBalancerIngress {
-	svcIpList := getSvcIpList(svcList)
-	lbi := make([]networkingv1beta1.IngressLoadBalancerIngress, 0, len(svcIpList))
-	for _, ep := range svcIpList {
-		if net.ParseIP(ep) != nil {
-			lbi = append(lbi, networkingv1beta1.IngressLoadBalancerIngress{IP: ep})
-		} else {
-			lbi = append(lbi, networkingv1beta1.IngressLoadBalancerIngress{Hostname: ep})
-		}
-	}
-
-	sort.SliceStable(lbi, SortLbIngressListV1Beta1(lbi))
-	return lbi
+	return buildLoadBalancerIngressList(svcList, func(ip, hostname string) networkingv1beta1.IngressLoadBalancerIngress {
+		return networkingv1beta1.IngressLoadBalancerIngress{IP: ip, Hostname: hostname}
+	}, SortLbIngressListV1Beta1)
 }
 
 func loadBalancerIngressAddress(ip, hostname string) string {
