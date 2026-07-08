@@ -51,6 +51,7 @@ const (
 	ApiNameRetrieveBatch                        ApiName = "openai/v1/retrievebatch"
 	ApiNameCancelBatch                          ApiName = "openai/v1/cancelbatch"
 	ApiNameModels                               ApiName = "openai/v1/models"
+	ApiNameRetrieveModel                        ApiName = "openai/v1/retrievemodel"
 	ApiNameResponses                            ApiName = "openai/v1/responses"
 	ApiNameFineTuningJobs                       ApiName = "openai/v1/fine-tuningjobs"
 	ApiNameRetrieveFineTuningJob                ApiName = "openai/v1/retrievefine-tuningjob"
@@ -93,6 +94,7 @@ const (
 	PathOpenAIRetrieveBatch                        = "/v1/batches/{batch_id}"
 	PathOpenAICancelBatch                          = "/v1/batches/{batch_id}/cancel"
 	PathOpenAIModels                               = "/v1/models"
+	PathOpenAIRetrieveModel                        = "/v1/models/{model_id}"
 	PathOpenAIImageGeneration                      = "/v1/images/generations"
 	PathOpenAIImageEdit                            = "/v1/images/edits"
 	PathOpenAIImageVariation                       = "/v1/images/variations"
@@ -729,6 +731,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 			string(ApiNameAudioTranslation),
 			string(ApiNameRealtime),
 			string(ApiNameResponses),
+			string(ApiNameRetrieveModel),
 			string(ApiNameCohereV1Rerank),
 			string(ApiNameVideos),
 			string(ApiNameRetrieveVideo),
