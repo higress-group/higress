@@ -649,6 +649,10 @@ func (c *ProviderConfig) GetGlobalRandomToken() string {
 	count := len(apiTokens)
 	switch count {
 	case 0:
+		if len(unavailableApiTokens) == 0 {
+			log.Warn("all tokens are unavailable and no unavailable tokens recorded")
+			return ""
+		}
 		log.Warn("all tokens are unavailable, will use random one of the unavailable tokens")
 		return unavailableApiTokens[rand.Intn(len(unavailableApiTokens))]
 	case 1:
