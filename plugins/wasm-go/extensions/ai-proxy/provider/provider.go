@@ -52,6 +52,11 @@ const (
 	ApiNameCancelBatch                          ApiName = "openai/v1/cancelbatch"
 	ApiNameModels                               ApiName = "openai/v1/models"
 	ApiNameResponses                            ApiName = "openai/v1/responses"
+	ApiNameRetrieveResponse                     ApiName = "openai/v1/retrieveresponse"
+	ApiNameCancelResponse                       ApiName = "openai/v1/cancelresponse"
+	ApiNameCompactResponse                      ApiName = "openai/v1/compactresponse"
+	ApiNameListResponseInputItems               ApiName = "openai/v1/listresponseinputitems"
+	ApiNameResponseInputTokens                  ApiName = "openai/v1/responseinputtokens"
 	ApiNameFineTuningJobs                       ApiName = "openai/v1/fine-tuningjobs"
 	ApiNameRetrieveFineTuningJob                ApiName = "openai/v1/retrievefine-tuningjob"
 	ApiNameFineTuningJobEvents                  ApiName = "openai/v1/fine-tuningjobsevents"
@@ -101,6 +106,11 @@ const (
 	PathOpenAIAudioTranslations                    = "/v1/audio/translations"
 	PathOpenAIRealtime                             = "/v1/realtime"
 	PathOpenAIResponses                            = "/v1/responses"
+	PathOpenAIRetrieveResponse                     = "/v1/responses/{response_id}"
+	PathOpenAICancelResponse                       = "/v1/responses/{response_id}/cancel"
+	PathOpenAICompactResponse                      = "/v1/responses/compact"
+	PathOpenAIListResponseInputItems               = "/v1/responses/{response_id}/input_items"
+	PathOpenAIResponseInputTokens                  = "/v1/responses/input_tokens"
 	PathOpenAIFineTuningJobs                       = "/v1/fine_tuning/jobs"
 	PathOpenAIRetrieveFineTuningJob                = "/v1/fine_tuning/jobs/{fine_tuning_job_id}"
 	PathOpenAIFineTuningJobEvents                  = "/v1/fine_tuning/jobs/{fine_tuning_job_id}/events"
@@ -729,6 +739,11 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 			string(ApiNameAudioTranslation),
 			string(ApiNameRealtime),
 			string(ApiNameResponses),
+			string(ApiNameRetrieveResponse),
+			string(ApiNameCancelResponse),
+			string(ApiNameCompactResponse),
+			string(ApiNameListResponseInputItems),
+			string(ApiNameResponseInputTokens),
 			string(ApiNameCohereV1Rerank),
 			string(ApiNameVideos),
 			string(ApiNameRetrieveVideo),
@@ -858,6 +873,9 @@ func isStatefulAPI(apiName string) bool {
 	// These APIs maintain session state and should be routed to the same provider consistently
 	statefulAPIs := map[string]bool{
 		string(ApiNameResponses):                true, // Response API - uses previous_response_id
+		string(ApiNameRetrieveResponse):         true, // Response retrieval/delete - depends on response state
+		string(ApiNameCancelResponse):           true, // Response cancellation - depends on response state
+		string(ApiNameListResponseInputItems):   true, // Response input items - depends on response state
 		string(ApiNameFiles):                    true, // Files API - maintains file state
 		string(ApiNameRetrieveFile):             true, // File retrieval - depends on file upload
 		string(ApiNameRetrieveFileContent):      true, // File content - depends on file upload
@@ -1478,6 +1496,8 @@ func (c *ProviderConfig) needToProcessRequestBody(apiName ApiName) bool {
 		ApiNameAudioSpeech,
 		ApiNameFineTuningJobs,
 		ApiNameResponses,
+		ApiNameCompactResponse,
+		ApiNameResponseInputTokens,
 		ApiNameGeminiGenerateContent,
 		ApiNameGeminiStreamGenerateContent,
 		ApiNameAnthropicMessages,
