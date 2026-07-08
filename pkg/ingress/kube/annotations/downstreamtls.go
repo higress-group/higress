@@ -106,6 +106,9 @@ func (d downstreamTLS) ApplyGateway(gateway *networking.Gateway, config *Ingress
 	downstreamTLSConfig := config.DownstreamTLS
 	for _, server := range gateway.Servers {
 		if gatewaytool.IsTLSServer(server) {
+			if server.Tls != nil && server.Tls.Mode == networking.ServerTLSSettings_PASSTHROUGH {
+				continue
+			}
 			if downstreamTLSConfig.CASecretName.Name != "" {
 				serverCert := extraSecret(server.Tls.CredentialName)
 				if downstreamTLSConfig.CASecretName.Namespace != serverCert.Namespace ||

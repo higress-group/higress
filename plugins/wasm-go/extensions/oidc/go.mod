@@ -6,12 +6,19 @@ toolchain go1.24.4
 
 require (
 	github.com/higress-group/oauth2-proxy v1.0.1-0.20260605094027-396b01ca2ca4
-	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250611100342-5654e89a7a80
+	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250822030947-8345453fddd0
 	github.com/higress-group/wasm-go v1.0.2-0.20250911113549-cbf1cfcce774
 	github.com/tidwall/gjson v1.18.0
 )
 
-require github.com/tidwall/sjson v1.2.5 // indirect
+require (
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/stretchr/testify v1.10.0 // indirect
+	github.com/tetratelabs/wazero v1.7.2 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
 
 require (
 	github.com/benbjohnson/clock v1.3.5 // indirect

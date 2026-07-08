@@ -145,6 +145,41 @@ func (i *IngressDomainCache) Extract() model.IngressDomainCollection {
 	}
 }
 
+func SameConfig(left *config.Config, right *config.Config) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return GetClusterId(left.Annotations) == GetClusterId(right.Annotations) &&
+		left.Namespace == right.Namespace &&
+		left.Name == right.Name
+}
+
+func IsPassthroughTLSHostOwner(convertOptions *ConvertOptions, cfg *config.Config, host string) bool {
+	if convertOptions == nil || convertOptions.PassthroughTLSHostOwners == nil {
+		return true
+	}
+	return SameConfig(convertOptions.PassthroughTLSHostOwners[host], cfg)
+}
+
+func PassthroughTLSHostOwner(convertOptions *ConvertOptions, host string) *config.Config {
+	if convertOptions == nil || len(convertOptions.PassthroughTLSHostOwners) == 0 {
+		return nil
+	}
+	return convertOptions.PassthroughTLSHostOwners[host]
+}
+
+func HasPassthroughTLSHostOwner(convertOptions *ConvertOptions, cfg *config.Config) bool {
+	if convertOptions == nil || len(convertOptions.PassthroughTLSHostOwners) == 0 {
+		return false
+	}
+	for _, owner := range convertOptions.PassthroughTLSHostOwners {
+		if SameConfig(owner, cfg) {
+			return true
+		}
+	}
+	return false
+}
+
 type ConvertOptions struct {
 	HostWithRule2Ingress map[string]*config.Config
 
@@ -166,6 +201,9 @@ type ConvertOptions struct {
 	HTTPRoutes map[string][]*WrapperHTTPRoute
 
 	CanaryIngresses []*WrapperConfig
+
+	// Host to the first root-path ingress owner for hosts that have TLS passthrough enabled.
+	PassthroughTLSHostOwners map[string]*config.Config
 
 	Service2TrafficPolicy map[ServiceKey]*WrapperTrafficPolicy
 

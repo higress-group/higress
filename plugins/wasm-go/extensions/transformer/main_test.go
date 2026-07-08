@@ -424,6 +424,43 @@ func TestRequest_MapFromBody_DelaysHeaderTransform(t *testing.T) {
 	})
 }
 
+func TestRequest_MapFromBody_NoRequestBodyDoesNotPause(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(configJSON(map[string]any{
+			"reqRules": []map[string]any{
+				{
+					"operate":   "map",
+					"mapSource": "body",
+					"headers": []map[string]any{
+						{"fromKey": "user.id", "toKey": "X-User-Id"},
+					},
+				},
+				{
+					"operate": "add",
+					"headers": []map[string]any{
+						{"key": "X-Static", "value": "ok"},
+					},
+				},
+			},
+		}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"},
+			{":path", "/p"},
+			{":method", "POST"},
+			{"content-type", "application/json"},
+		}, test.WithEndOfStream(true))
+		require.Equal(t, types.ActionContinue, action, "request without body must not wait for body callback")
+
+		got := headersToMap(host.GetRequestHeaders())
+		require.Equal(t, []string{"ok"}, got["x-static"])
+		require.NotContains(t, got, "x-user-id")
+		host.CompleteHttp()
+	})
+}
+
 // --- regex template ---
 
 func TestRequest_Headers_AddWithHostPattern(t *testing.T) {

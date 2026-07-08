@@ -36,7 +36,9 @@ header:
     - 'pkg/ingress/kube/gateway/istio/testdata'
     - 'release-notes/**'
     - '.cursor/**'
-    - '.claude/**'    
+    - '.claude/**'
+    - '.agents/**'
+    - '.issue-spec/**'
 
   comment: on-failure
 dependency:

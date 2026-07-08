@@ -364,6 +364,8 @@ func getLoadBalancerIp(svc *v1.Service) []string {
 			hostName := strings.TrimSuffix(ingress.Hostname, SvcHostNameSuffix)
 			if net.ParseIP(hostName) != nil {
 				out = append(out, hostName)
+			} else {
+				out = append(out, ingress.Hostname)
 			}
 		}
 	}
@@ -389,7 +391,8 @@ func getSvcIpList(svcList []*v1.Service) []string {
 
 func SortLbIngressList(lbi []v1.LoadBalancerIngress) func(int, int) bool {
 	return func(i int, j int) bool {
-		return lbi[i].IP < lbi[j].IP
+		return loadBalancerIngressAddress(lbi[i].IP, lbi[i].Hostname) <
+			loadBalancerIngressAddress(lbi[j].IP, lbi[j].Hostname)
 	}
 }
 
@@ -397,7 +400,11 @@ func GetLbStatusList(svcList []*v1.Service) []v1.LoadBalancerIngress {
 	svcIpList := getSvcIpList(svcList)
 	lbi := make([]v1.LoadBalancerIngress, 0, len(svcIpList))
 	for _, ep := range svcIpList {
-		lbi = append(lbi, v1.LoadBalancerIngress{IP: ep})
+		if net.ParseIP(ep) != nil {
+			lbi = append(lbi, v1.LoadBalancerIngress{IP: ep})
+		} else {
+			lbi = append(lbi, v1.LoadBalancerIngress{Hostname: ep})
+		}
 	}
 
 	sort.SliceStable(lbi, SortLbIngressList(lbi))
@@ -406,7 +413,8 @@ func GetLbStatusList(svcList []*v1.Service) []v1.LoadBalancerIngress {
 
 func SortLbIngressListV1(lbi []networkingv1.IngressLoadBalancerIngress) func(int, int) bool {
 	return func(i int, j int) bool {
-		return lbi[i].IP < lbi[j].IP
+		return loadBalancerIngressAddress(lbi[i].IP, lbi[i].Hostname) <
+			loadBalancerIngressAddress(lbi[j].IP, lbi[j].Hostname)
 	}
 }
 
@@ -414,7 +422,11 @@ func GetLbStatusListV1(svcList []*v1.Service) []networkingv1.IngressLoadBalancer
 	svcIpList := getSvcIpList(svcList)
 	lbi := make([]networkingv1.IngressLoadBalancerIngress, 0, len(svcIpList))
 	for _, ep := range svcIpList {
-		lbi = append(lbi, networkingv1.IngressLoadBalancerIngress{IP: ep})
+		if net.ParseIP(ep) != nil {
+			lbi = append(lbi, networkingv1.IngressLoadBalancerIngress{IP: ep})
+		} else {
+			lbi = append(lbi, networkingv1.IngressLoadBalancerIngress{Hostname: ep})
+		}
 	}
 
 	sort.SliceStable(lbi, SortLbIngressListV1(lbi))
@@ -423,7 +435,8 @@ func GetLbStatusListV1(svcList []*v1.Service) []networkingv1.IngressLoadBalancer
 
 func SortLbIngressListV1Beta1(lbi []networkingv1beta1.IngressLoadBalancerIngress) func(int, int) bool {
 	return func(i int, j int) bool {
-		return lbi[i].IP < lbi[j].IP
+		return loadBalancerIngressAddress(lbi[i].IP, lbi[i].Hostname) <
+			loadBalancerIngressAddress(lbi[j].IP, lbi[j].Hostname)
 	}
 }
 
@@ -431,9 +444,20 @@ func GetLbStatusListV1Beta1(svcList []*v1.Service) []networkingv1beta1.IngressLo
 	svcIpList := getSvcIpList(svcList)
 	lbi := make([]networkingv1beta1.IngressLoadBalancerIngress, 0, len(svcIpList))
 	for _, ep := range svcIpList {
-		lbi = append(lbi, networkingv1beta1.IngressLoadBalancerIngress{IP: ep})
+		if net.ParseIP(ep) != nil {
+			lbi = append(lbi, networkingv1beta1.IngressLoadBalancerIngress{IP: ep})
+		} else {
+			lbi = append(lbi, networkingv1beta1.IngressLoadBalancerIngress{Hostname: ep})
+		}
 	}
 
 	sort.SliceStable(lbi, SortLbIngressListV1Beta1(lbi))
 	return lbi
+}
+
+func loadBalancerIngressAddress(ip, hostname string) string {
+	if ip != "" {
+		return ip
+	}
+	return hostname
 }
