@@ -226,6 +226,58 @@ func TestClaudeProvider_BuildClaudeTextGenRequest_StandardMode(t *testing.T) {
 		assert.Equal(t, "answer", blocks[2].Text)
 	})
 
+	t.Run("drops_generated_thinking_when_max_tokens_cannot_fit_minimum_budget", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:           "claude-sonnet-4-5-20250929",
+			MaxTokens:       400,
+			ReasoningEffort: "low",
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Hello"},
+			},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		assert.Equal(t, 400, claudeReq.MaxTokens)
+		assert.Nil(t, claudeReq.Thinking)
+	})
+
+	t.Run("clamps_generated_thinking_budget_below_max_tokens", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:           "claude-sonnet-4-5-20250929",
+			MaxTokens:       1200,
+			ReasoningEffort: "high",
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Hello"},
+			},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.Thinking)
+		assert.Equal(t, "enabled", claudeReq.Thinking.Type)
+		assert.Equal(t, 1199, claudeReq.Thinking.BudgetTokens)
+	})
+
+	t.Run("clamps_explicit_reasoning_max_tokens_below_max_tokens", func(t *testing.T) {
+		request := &chatCompletionRequest{
+			Model:     "claude-sonnet-4-5-20250929",
+			MaxTokens: 2000,
+			NonOpenAIStyleOptions: NonOpenAIStyleOptions{
+				ReasoningMaxTokens: 3000,
+			},
+			Messages: []chatMessage{
+				{Role: roleUser, Content: "Hello"},
+			},
+		}
+
+		claudeReq := provider.buildClaudeTextGenRequest(request)
+
+		require.NotNil(t, claudeReq.Thinking)
+		assert.Equal(t, "enabled", claudeReq.Thinking.Type)
+		assert.Equal(t, 1999, claudeReq.Thinking.BudgetTokens)
+	})
+
 	t.Run("maps_openai_function_tool_choice_to_claude_tool_choice", func(t *testing.T) {
 		request := &chatCompletionRequest{
 			Model:     "claude-sonnet-4-5-20250929",
