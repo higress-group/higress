@@ -391,6 +391,82 @@ spec:
                 port:
                   number: 3000
 ---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-azure
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "fake-azure.openai.azure.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-ollama
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "ollama.local"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-azure-req
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "fake-azure-req.openai.azure.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-ollama-req
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "ollama-req.local"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
 apiVersion: extensions.higress.io/v1alpha1
 kind: WasmPlugin
 metadata:
@@ -607,4 +683,46 @@ spec:
           type: openai
       ingress:
         - higress-conformance-ai-backend/wasmplugin-ai-proxy-openai
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          modelMapping:
+            "gpt-3": gpt-4o
+            "*": gpt-4o-mini
+          type: azure
+          azureServiceUrl: "https://fake-azure.openai.azure.com/openai/v1"
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-azure
+    - config:
+        provider:
+          type: ollama
+          ollamaServerHost: llm-mock-service.higress-conformance-ai-backend.svc.cluster.local
+          ollamaServerPort: 3000
+          modelMapping:
+            "gpt-3": llama3.2
+            "*": llama3.1
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-ollama
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          modelMapping:
+            "gpt-3": gpt-4o
+            "*": gpt-4o-mini
+          type: azure
+          azureServiceUrl: "https://fake-azure.openai.azure.com/openai/v1"
+      ingress:
+        - higress-conformance-infra/wasmplugin-ai-proxy-azure-req
+    - config:
+        provider:
+          type: ollama
+          ollamaServerHost: ollama-upstream.internal
+          ollamaServerPort: 11434
+          modelMapping:
+            "gpt-3": llama3.2
+            "*": llama3.1
+      ingress:
+        - higress-conformance-infra/wasmplugin-ai-proxy-ollama-req
   url: file:///opt/plugins/wasm-go/extensions/ai-proxy/plugin.wasm
