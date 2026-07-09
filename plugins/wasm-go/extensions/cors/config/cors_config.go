@@ -439,8 +439,8 @@ func containsMatchAll(values []string) bool {
 	return false
 }
 
-func (c *CorsConfig) isPreFlight(origin, method, controllerRequestMethod string) bool {
-	return len(origin) > 0 && strings.ToLower(method) == strings.ToLower(HttpMethodOptions) && len(controllerRequestMethod) > 0
+func (c *CorsConfig) isPreFlight(origin, method, controlRequestMethod string) bool {
+	return len(origin) > 0 && strings.ToLower(method) == strings.ToLower(HttpMethodOptions) && len(controlRequestMethod) > 0
 }
 
 func (c *CorsConfig) isCorsRequest(scheme, host, origin string) bool {
