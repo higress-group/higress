@@ -124,8 +124,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			// 由于需要调用Redis检查配额，应该返回HeaderStopAllIterationAndWatermark
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
-			// 模拟Redis调用响应（有足够配额）
-			resp := test.CreateRedisResp(1000)
+			// 模拟Redis调用响应（有足够配额）- Lua Eval 返回数组 {cVal}
+			resp := test.CreateRedisRespArray([]interface{}{1000})
 			host.CallOnRedisCall(0, resp)
 			action = host.GetHttpStreamAction()
 			require.Equal(t, types.ActionContinue, action)
@@ -150,8 +150,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			// legacy 路径同样 HeaderStopAllIterationAndWatermark
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
-			// 模拟 Redis 返回 0，触发 response.Integer() <= 0 拒绝分支
-			resp := test.CreateRedisResp(0)
+			// 模拟 Redis 返回数组 {0}，触发 <= 0 拒绝分支
+			resp := test.CreateRedisRespArray([]interface{}{0})
 			host.CallOnRedisCall(0, resp)
 
 			response := host.GetLocalResponse()
@@ -514,7 +514,7 @@ func TestOnHttpRequestHeaders_WithGroup_ConsumerExhausted(t *testing.T) {
 	})
 }
 
-// group 非空 + 两池都 ≤ 0 → 拒绝（ai-quota.noquota: group and consumer quota exhausted）
+// group 非空 + 两池都 ≤ 0 → 拒绝（ai-quota.noquota: group quota exhausted，按顺序先检查 group）
 func TestOnHttpRequestHeaders_WithGroup_BothExhausted(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
@@ -536,7 +536,7 @@ func TestOnHttpRequestHeaders_WithGroup_BothExhausted(t *testing.T) {
 		require.NotNil(t, resp)
 		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
 		require.Contains(t, string(resp.Data), "ai-quota.noquota")
-		require.Contains(t, string(resp.Data), "group and consumer quota exhausted")
+		require.Contains(t, string(resp.Data), "group quota exhausted")
 		host.CompleteHttp()
 	})
 }
