@@ -31,27 +31,50 @@ const (
 	// 例：prefix="chat_quota" targetName="team-a" → "{chat_quota}:team-a"
 	QuotaKeyFormat = "{%s}:%s"
 
-	// RequestPhaseQuotaReadScript 阶段 1 严格模式读
-	// **仅 group != "" 时调用**group == "" 走 plugin 端 Get，与老 ai-quota 一致。
-	// KEYS[1]=group_quota_key      KEYS[2]=consumer_quota_key
-	// ARGV=（无；脚本不读任何 ARGV）
-	// 返回: {group_remaining, consumer_remaining}
-	RequestPhaseQuotaReadScript = `
-local ng = tonumber(redis.call("GET", KEYS[1]) or "0")
-local nc = tonumber(redis.call("GET", KEYS[2]) or "0")
-return {ng, nc}
+	// LegacyRequestPhaseQuotaReadScript 阶段 1 单池原子读
+	// KEYS[1]=consumer_key
+	// 返回 consumer 的剩余配额值，或 nil（key 不存在 = 不限额）
+	LegacyRequestPhaseQuotaReadScript = `
+local cVal = redis.call("GET", KEYS[1])
+return {cVal}
 `
 
-	// ResponsePhaseQuotaDecrbyScript 阶段 2 原子 DECRBY
-	// **仅 group != "" 时调用**group == "" 走 plugin 端 DecrBy。
-	// KEYS[1]=group_quota_key      KEYS[2]=consumer_quota_key
-	// ARGV[1]=cost
-	// 返回: {group_remaining, consumer_remaining}（扣减后，可为负）
+	// LegacyResponsePhaseQuotaDecrbyScript 阶段 2 单池原子扣减
+	// KEYS[1]=consumer_key, ARGV[1]=cost
+	// 仅 key 存在时扣减，返回扣减后值或 nil
+	LegacyResponsePhaseQuotaDecrbyScript = `
+local cost = tonumber(ARGV[1])
+if redis.call("EXISTS", KEYS[1]) == 1 then
+	local nc = redis.call("DECRBY", KEYS[1], cost)
+	return {nc}
+end
+return {nil}
+`
+
+	// RequestPhaseQuotaReadScript 阶段 1 双池原子读
+	// **仅 group != "" 时调用**
+	// KEYS[1]=group_key, KEYS[2]=consumer_key
+	// 返回 {group_val, consumer_val}，nil 表示 key 不存在（不限额）
+	RequestPhaseQuotaReadScript = `
+local gVal = redis.call("GET", KEYS[1])
+local cVal = redis.call("GET", KEYS[2])
+return {gVal, cVal}
+`
+
+	// ResponsePhaseQuotaDecrbyScript 阶段 2 双池原子 DECRBY
+	// **仅 group != "" 时调用**
+	// KEYS[1]=group_key, KEYS[2]=consumer_key, ARGV[1]=cost
+	// 仅对存在的 key 执行 DECRBY，返回 {group_new, consumer_new}（可为 nil）
 	ResponsePhaseQuotaDecrbyScript = `
 local cost = tonumber(ARGV[1])
-local ng = redis.call("DECRBY", KEYS[1], cost)
-local nc = redis.call("DECRBY", KEYS[2], cost)
-return {ng, nc}
+local gVal, cVal = nil, nil
+if redis.call("EXISTS", KEYS[1]) == 1 then
+	gVal = redis.call("DECRBY", KEYS[1], cost)
+end
+if redis.call("EXISTS", KEYS[2]) == 1 then
+	cVal = redis.call("DECRBY", KEYS[2], cost)
+end
+return {gVal, cVal}
 `
 )
 
@@ -230,10 +253,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 		log.Debugf("request phase: group header found, reading group+consumer quota via Lua: consumer=%s, group=%s, consumerKey=%s, groupKey=%s",
 			consumer, group, consumerKey, groupKey)
 		_ = config.redisClient.Eval(RequestPhaseQuotaReadScript, 2, keys, nil, func(response resp.Value) {
-			// 三种 outcome：
-			//   1. response.Error() 非空 → Redis 故障，503 ai-quota.error（区别于配额耗尽 403）
-			//   2. arr 长度 != 2       → 协议/Lua 错，归 403
-			//   3. gRem 或 cRem ≤ 0   → 配额耗尽，403 ai-quota.noquota（body 区分耗尽池）
+			// 返回值：{gVal, cVal}，nil 表示 key 不存在（不限额）
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
@@ -243,49 +263,68 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 				denyNoQuota(noQuotaReasonGroupAndConsumer)
 				return
 			}
-			gRem := arr[0].Integer()
-			cRem := arr[1].Integer()
-			log.Debugf("request phase: group Lua read result, consumer=%s, group=%s, groupRem=%d, consumerRem=%d",
-				consumer, group, gRem, cRem)
-			if gRem <= 0 || cRem <= 0 {
-				denyNoQuota(noQuotaBodyReasonFromPools(gRem, cRem))
+
+			// 判断 nil（key 不存在）= 不限额
+			gNull := arr[0].IsNull()
+			cNull := arr[1].IsNull()
+
+			if gNull && cNull {
+				// group 和 consumer key 都不存在 → 都不限额，放行
+				log.Debugf("request phase: both quota keys absent, unlimited: group=%s, consumer=%s", group, consumer)
+				proxywasm.ResumeHttpRequest()
 				return
 			}
+
+			// 至少有一个 key 存在 → 检查对应配额
+			var gRem, cRem int
+			if !gNull {
+				gRem = arr[0].Integer()
+				if gRem <= 0 {
+					denyNoQuota(noQuotaReasonGroup)
+					return
+				}
+			}
+			if !cNull {
+				cRem = arr[1].Integer()
+				if cRem <= 0 {
+					denyNoQuota(noQuotaReasonConsumer)
+					return
+				}
+			}
+
+			log.Debugf("request phase: group Lua read result, consumer=%s, group=%s, groupRem=%d, consumerRem=%d",
+				consumer, group, gRem, cRem)
 			proxywasm.ResumeHttpRequest()
 		})
 		return types.HeaderStopAllIterationAndWatermark
 	}
 
-	// 老路径——单池 GET，行为与 ai-quota 升级前完全一致
-	log.Debugf("request phase: legacy single-pool Get, consumer=%s, consumerKey=%s", consumer, consumerKey)
-	_ = config.redisClient.Get(consumerKey, func(response resp.Value) {
-		isDenied := false
-		denyReason := ""
+	// 老路径——单池 Lua Eval，原子读 consumer quota
+	log.Debugf("request phase: legacy single-pool Lua read, consumer=%s, consumerKey=%s", consumer, consumerKey)
+	keys := []interface{}{consumerKey}
+	_ = config.redisClient.Eval(LegacyRequestPhaseQuotaReadScript, 1, keys, nil, func(response resp.Value) {
 		if err := response.Error(); err != nil {
-			isDenied = true
-			denyReason = fmt.Sprintf("redis error:%v", err)
+			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
+			return
 		}
-		if response.IsNull() {
-			isDenied = true
-			if denyReason == "" {
-				denyReason = "key not found"
-			}
+		arr := response.Array()
+		if len(arr) != 1 {
+			denyNoQuota(noQuotaReasonConsumer)
+			return
 		}
-		remaining := response.Integer()
+		// key 不存在 = 不限额，放行
+		if arr[0].IsNull() {
+			log.Debugf("request phase: consumer key absent, unlimited: consumer=%s", consumer)
+			proxywasm.ResumeHttpRequest()
+			return
+		}
+		remaining := arr[0].Integer()
 		if remaining <= 0 {
-			isDenied = true
-			if denyReason == "" {
-				denyReason = fmt.Sprintf("remaining=%d <= 0", remaining)
-			}
-		}
-		if isDenied {
-			log.Debugf("request phase: legacy Get denied, consumer=%s, consumerKey=%s, reason=%s",
-				consumer, consumerKey, denyReason)
+			log.Debugf("request phase: consumer quota exhausted, consumer=%s, remaining=%d", consumer, remaining)
 			util.SendResponse(http.StatusForbidden, "ai-quota.noquota", "text/plain", "Request denied by ai quota check, ai-quota.noquota: consumer quota exhausted")
 			return
 		}
-		log.Debugf("request phase: legacy Get allowed, consumer=%s, consumerKey=%s, remaining=%d",
-			consumer, consumerKey, remaining)
+		log.Debugf("request phase: consumer quota ok, consumer=%s, remaining=%d", consumer, remaining)
 		proxywasm.ResumeHttpRequest()
 	})
 	return types.HeaderStopAllIterationAndWatermark
@@ -350,12 +389,14 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 	totalToken := int(inputToken + outputToken)
 	consumerKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, consumer)
 
-	// - group == ""：走老 ai-quota 路径（单 DECRBY）
+	// - group == ""：走 Lua Eval，单池原子 DECRBY（仅 key 存在时扣减）
 	if group == "" {
-		log.Debugf("response phase: legacy single-pool DecrBy, consumer=%s, totalToken=%d, consumerKey=%s",
+		log.Debugf("response phase: legacy single-pool Lua DecrBy, consumer=%s, totalToken=%d, consumerKey=%s",
 			consumer, totalToken, consumerKey)
 		log.Debugf("update consumer:%s, totalToken:%d", consumer, totalToken)
-		config.redisClient.DecrBy(consumerKey, totalToken, nil)
+		keys := []interface{}{consumerKey}
+		args := []interface{}{totalToken}
+		_ = config.redisClient.Eval(LegacyResponsePhaseQuotaDecrbyScript, 1, keys, args, nil)
 		return data
 	}
 
