@@ -391,6 +391,101 @@ spec:
                 port:
                   number: 3000
 ---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-claude
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.anthropic.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-cohere
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.cohere.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-hunyuan
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "hunyuan.tencentcloudapi.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-deepl
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api-free.deepl.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-hunyuan-openai
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.hunyuan.cloud.tencent.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
 apiVersion: extensions.higress.io/v1alpha1
 kind: WasmPlugin
 metadata:
@@ -607,4 +702,50 @@ spec:
           type: openai
       ingress:
         - higress-conformance-ai-backend/wasmplugin-ai-proxy-openai
+    - config:
+        provider:
+          type: claude
+          apiTokens:
+            - fake_token
+          modelMapping:
+            "gpt-3": claude-3-5-sonnet-20241022
+            "*": claude-3-5-haiku-20241022
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-claude
+    - config:
+        provider:
+          type: cohere
+          apiTokens:
+            - fake_token
+          modelMapping:
+            "gpt-3": command-r
+            "*": command-r
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-cohere
+    - config:
+        provider:
+          type: hunyuan
+          hunyuanAuthId: "12345678-1234-1234-1234-123456789012"
+          hunyuanAuthKey: "abcdefghijklmnopqrstuvwxyz012345"
+          modelMapping:
+            "gpt-3": hunyuan-standard
+            "*": hunyuan-pro
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-hunyuan
+    - config:
+        provider:
+          type: deepl
+          apiTokens:
+            - fake_token
+          targetLang: "ZH"
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-deepl
+    - config:
+        provider:
+          # No hunyuanAuthId/Key -> the OpenAI-compatible endpoint (passthrough; modelMapping not applied).
+          type: hunyuan
+          apiTokens:
+            - fake_token
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-hunyuan-openai
   url: file:///opt/plugins/wasm-go/extensions/ai-proxy/plugin.wasm

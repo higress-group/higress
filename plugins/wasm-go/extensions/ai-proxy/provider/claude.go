@@ -411,11 +411,11 @@ func (c *claudeProvider) TransformResponseBody(ctx wrapper.HttpContext, apiName 
 }
 
 func (c *claudeProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name ApiName, chunk []byte, isLastChunk bool) ([]byte, error) {
-	if isLastChunk || len(chunk) == 0 {
-		return nil, nil
-	}
 	// only process the response from chat completion, skip other responses
 	if name != ApiNameChatCompletion {
+		if isLastChunk {
+			return nil, nil
+		}
 		return chunk, nil
 	}
 
@@ -441,6 +441,10 @@ func (c *claudeProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name A
 				c.appendResponse(responseBuilder, string(responseBody))
 			}
 		}
+	}
+	// Emit the OpenAI `data: [DONE]` terminator on the final chunk (Claude native has none).
+	if isLastChunk {
+		responseBuilder.WriteString(ssePrefix + streamEndDataValue + "\n\n")
 	}
 	modifiedResponseChunk := responseBuilder.String()
 	log.Debugf("modified response chunk: %s", modifiedResponseChunk)
@@ -971,7 +975,8 @@ func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, or
 
 	case "message_delta":
 		if origResponse.Usage != nil {
-			c.usage.CompletionTokens += origResponse.Usage.OutputTokens
+			// message_delta usage.output_tokens is cumulative, so overwrite (not accumulate).
+			c.usage.CompletionTokens = origResponse.Usage.OutputTokens
 			c.usage.TotalTokens = c.usage.PromptTokens + c.usage.CompletionTokens
 		}
 

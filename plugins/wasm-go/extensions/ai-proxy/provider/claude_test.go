@@ -465,6 +465,64 @@ func TestClaudeProvider_StreamToolCallArgumentDeltaIncludesFunctionType(t *testi
 	assert.Equal(t, `{"path":"/tmp/example"}`, response.Choices[0].Delta.ToolCalls[0].Function.Arguments)
 }
 
+// Claude native ends at message_stop with no [DONE]; the plugin appends the OpenAI terminator.
+func TestClaudeProvider_StreamingAppendsDoneOnLastChunk(t *testing.T) {
+	provider := &claudeProvider{}
+	ctx := newMockMultipartHttpContext()
+
+	// A non-final chunk carries no terminator.
+	delta := "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"
+	out, err := provider.OnStreamingResponseBody(ctx, ApiNameChatCompletion, []byte(delta), false)
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), "[DONE]")
+
+	// The final chunk appends the OpenAI stream terminator.
+	out, err = provider.OnStreamingResponseBody(ctx, ApiNameChatCompletion, []byte(""), true)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "data: [DONE]")
+}
+
+func TestClaudeProvider_StreamingEdgeCases(t *testing.T) {
+	provider := &claudeProvider{}
+	ctx := newMockMultipartHttpContext()
+
+	// A non-chat-completion response passes through untouched; its final chunk returns nil.
+	out, err := provider.OnStreamingResponseBody(ctx, ApiNameEmbeddings, []byte("raw"), false)
+	require.NoError(t, err)
+	assert.Equal(t, "raw", string(out))
+	out, err = provider.OnStreamingResponseBody(ctx, ApiNameEmbeddings, []byte("raw"), true)
+	require.NoError(t, err)
+	assert.Nil(t, out)
+
+	// A malformed data line is skipped (no panic), producing no output rather than failing the stream.
+	out, err = provider.OnStreamingResponseBody(ctx, ApiNameChatCompletion, []byte("data: {not json"), false)
+	require.NoError(t, err)
+	assert.Empty(t, string(out))
+}
+
+func TestClaudeProvider_StreamUsageIsCumulativeNotSummed(t *testing.T) {
+	provider := &claudeProvider{}
+	ctx := newMockMultipartHttpContext()
+
+	// message_start reports a small initial output_tokens.
+	provider.streamResponseClaude2OpenAI(ctx, &claudeTextGenStreamResponse{
+		Type:    "message_start",
+		Message: &claudeTextGenResponse{Usage: claudeTextGenUsage{InputTokens: 10, OutputTokens: 2}},
+	})
+	// message_delta reports the CUMULATIVE final output_tokens, not an increment.
+	stopReason := "end_turn"
+	provider.streamResponseClaude2OpenAI(ctx, &claudeTextGenStreamResponse{
+		Type:  "message_delta",
+		Delta: &claudeTextGenDelta{StopReason: &stopReason},
+		Usage: &claudeTextGenUsage{OutputTokens: 20},
+	})
+
+	assert.Equal(t, 10, provider.usage.PromptTokens)
+	// Must be the cumulative 20, not 2 (message_start) + 20 (message_delta) = 22.
+	assert.Equal(t, 20, provider.usage.CompletionTokens)
+	assert.Equal(t, 30, provider.usage.TotalTokens)
+}
+
 func TestClaudeProvider_BuildClaudeTextGenRequest_ClaudeCodeMode(t *testing.T) {
 	provider := &claudeProvider{
 		config: ProviderConfig{

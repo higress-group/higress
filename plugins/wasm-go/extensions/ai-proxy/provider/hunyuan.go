@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
-	"github.com/higress-group/wasm-go/pkg/log"
-	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 // hunyuanProvider is the provider for hunyuan AI service.
@@ -370,6 +370,11 @@ func (m *hunyuanProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name 
 	// 刷新剩余的不完整事件回到上下文缓冲区以便下次继续处理
 	ctx.SetContext(ctxKeyStreamingBody, newBufferedBody)
 
+	// Emit the OpenAI `data: [DONE]` terminator on the final chunk (Hunyuan native has none).
+	if isLastChunk {
+		outputBuffer = append(outputBuffer, []byte(ssePrefix+streamEndDataValue+"\n\n")...)
+	}
+
 	log.Debugf("=== modified response chunk: %s", string(outputBuffer))
 	return outputBuffer, nil
 }
@@ -380,6 +385,10 @@ func (m *hunyuanProvider) convertChunkFromHunyuanToOpenAI(ctx wrapper.HttpContex
 	if err := json.Unmarshal(hunyuanChunk, hunyuanFormattedChunk); err != nil {
 		return []byte(""), nil
 	}
+	// Guard the Choices[0] access below against choice-less frames (e.g. keep-alive).
+	if len(hunyuanFormattedChunk.Choices) == 0 {
+		return []byte(""), nil
+	}
 
 	openAIFormattedChunk := &chatCompletionResponse{
 		Id:                hunyuanFormattedChunk.Id,
@@ -387,18 +396,13 @@ func (m *hunyuanProvider) convertChunkFromHunyuanToOpenAI(ctx wrapper.HttpContex
 		Model:             ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
 		SystemFingerprint: "",
 		Object:            objectChatCompletionChunk,
-		Usage: &usage{
-			PromptTokens:     hunyuanFormattedChunk.Usage.PromptTokens,
-			CompletionTokens: hunyuanFormattedChunk.Usage.CompletionTokens,
-			TotalTokens:      hunyuanFormattedChunk.Usage.TotalTokens,
-		},
 	}
 	// tmpStr3, _ := json.Marshal(hunyuanFormattedChunk)
 	// log.Debugf("@@@ --- 源数据是：: %s", tmpStr3)
 
 	// 是否为最后一个chunk？
-	if hunyuanFormattedChunk.Choices[0].FinishReason == hunyuanStreamEndMark {
-		// log.Debugf("@@@ --- 最后chunk: ")
+	isFinal := hunyuanFormattedChunk.Choices[0].FinishReason == hunyuanStreamEndMark
+	if isFinal {
 		openAIFormattedChunk.Choices = append(openAIFormattedChunk.Choices, chatCompletionChoice{
 			FinishReason: util.Ptr(hunyuanFormattedChunk.Choices[0].FinishReason),
 		})
@@ -409,24 +413,33 @@ func (m *hunyuanProvider) convertChunkFromHunyuanToOpenAI(ctx wrapper.HttpContex
 			Content:   hunyuanFormattedChunk.Choices[0].Delta.Content,
 			ToolCalls: []toolCall{},
 		}
-
-		// tmpStr2, _ := json.Marshal(deltaMsg)
-		// log.Debugf("@@@ --- 中间chunk: choices.chatMsg 是: %s", tmpStr2)
-
 		openAIFormattedChunk.Choices = append(
 			openAIFormattedChunk.Choices,
 			chatCompletionChoice{Delta: &deltaMsg},
 		)
-		// tmpStr, _ := json.Marshal(openAIFormattedChunk.Choices)
-		// log.Debugf("@@@ --- 中间chunk: choices 是: %s", tmpStr)
 	}
 
-	// 返回的格式
-	openAIFormattedChunkBytes, _ := json.Marshal(openAIFormattedChunk)
 	var openAIChunk strings.Builder
-	openAIChunk.WriteString(ssePrefix)
-	openAIChunk.WriteString(string(openAIFormattedChunkBytes))
-	openAIChunk.WriteString("\n\n")
+	chunkBytes, _ := json.Marshal(openAIFormattedChunk)
+	openAIChunk.WriteString(ssePrefix + string(chunkBytes) + "\n\n")
+
+	// Usage goes in a separate choices:[] chunk on the final frame (OpenAI convention).
+	if isFinal {
+		usageChunk := &chatCompletionResponse{
+			Id:      hunyuanFormattedChunk.Id,
+			Created: time.Now().UnixMilli() / 1000,
+			Model:   ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
+			Object:  objectChatCompletionChunk,
+			Choices: []chatCompletionChoice{},
+			Usage: &usage{
+				PromptTokens:     hunyuanFormattedChunk.Usage.PromptTokens,
+				CompletionTokens: hunyuanFormattedChunk.Usage.CompletionTokens,
+				TotalTokens:      hunyuanFormattedChunk.Usage.TotalTokens,
+			},
+		}
+		usageBytes, _ := json.Marshal(usageChunk)
+		openAIChunk.WriteString(ssePrefix + string(usageBytes) + "\n\n")
+	}
 
 	return []byte(openAIChunk.String()), nil
 }

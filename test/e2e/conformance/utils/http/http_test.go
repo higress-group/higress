@@ -1101,3 +1101,64 @@ func TestCompareResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareSSEEventsWithIgnoreFields(t *testing.T) {
+	cases := []struct {
+		name         string
+		expected     string
+		actual       string
+		ignoreFields []string
+		wantErr      bool
+	}{
+		{
+			name:         "created differs but ignored, ends with DONE",
+			expected:     "data: {\"id\":\"x\",\"created\":10,\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+			actual:       "data: {\"id\":\"x\",\"created\":9999,\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+			ignoreFields: []string{"created"},
+			wantErr:      false,
+		},
+		{
+			name:         "content mismatch is caught",
+			expected:     "data: {\"created\":10,\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+			actual:       "data: {\"created\":11,\"choices\":[{\"delta\":{\"content\":\"bye\"}}]}\n\n",
+			ignoreFields: []string{"created"},
+			wantErr:      true,
+		},
+		{
+			name:         "event count mismatch is caught",
+			expected:     "data: {\"created\":10}\n\ndata: [DONE]\n\n",
+			actual:       "data: {\"created\":10}\n\n",
+			ignoreFields: []string{"created"},
+			wantErr:      true,
+		},
+		{
+			name:         "DONE vs non-DONE mismatch is caught",
+			expected:     "data: [DONE]\n\n",
+			actual:       "data: {\"created\":10}\n\n",
+			ignoreFields: []string{"created"},
+			wantErr:      true,
+		},
+		{
+			name:     "malformed expected event errors",
+			expected: "data: {not json\n\n",
+			actual:   "data: {\"a\":1}\n\n",
+			wantErr:  true,
+		},
+		{
+			name:     "malformed actual event errors",
+			expected: "data: {\"a\":1}\n\n",
+			actual:   "data: {not json\n\n",
+			wantErr:  true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := CompareSSEEventsWithIgnoreFields([]byte(c.expected), []byte(c.actual), c.ignoreFields)
+			if c.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

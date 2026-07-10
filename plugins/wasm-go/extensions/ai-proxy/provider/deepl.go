@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
-	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 // deeplProvider is the provider for DeepL service.
@@ -120,7 +120,8 @@ func (d *deeplProvider) TransformRequestBodyHeaders(ctx wrapper.HttpContext, api
 }
 
 func (d *deeplProvider) TransformResponseBody(ctx wrapper.HttpContext, apiName ApiName, body []byte) ([]byte, error) {
-	if apiName != ApiNameChatCompletion {
+	// Original-protocol responses pass through untouched.
+	if d.config.IsOriginal() || apiName != ApiNameChatCompletion {
 		return body, nil
 	}
 	deeplResponse := &deeplResponse{}

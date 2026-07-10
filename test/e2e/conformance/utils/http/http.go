@@ -612,8 +612,15 @@ func CompareResponse(cRes *roundtripper.CapturedResponse, expected Assertion) er
 
 			switch cTyp {
 			case ContentTypeTextPlain:
-			case ContentTypeTextEventStream:
 				if !bytes.Equal(expected.Response.ExpectedResponse.Body, cRes.Body) {
+					return fmt.Errorf("expected %s body to be %s, got %s", cTyp, string(expected.Response.ExpectedResponse.Body), string(cRes.Body))
+				}
+			case ContentTypeTextEventStream:
+				if len(expected.Response.ExpectedResponse.JsonBodyIgnoreFields) > 0 {
+					if err := CompareSSEEventsWithIgnoreFields(expected.Response.ExpectedResponse.Body, cRes.Body, expected.Response.ExpectedResponse.JsonBodyIgnoreFields); err != nil {
+						return err
+					}
+				} else if !bytes.Equal(expected.Response.ExpectedResponse.Body, cRes.Body) {
 					return fmt.Errorf("expected %s body to be %s, got %s", cTyp, string(expected.Response.ExpectedResponse.Body), string(cRes.Body))
 				}
 			case ContentTypeApplicationJson:
@@ -671,6 +678,57 @@ func CompareResponse(cRes *roundtripper.CapturedResponse, expected Assertion) er
 					return fmt.Errorf("expected %s header to not be set, got %s", name, val)
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// CompareSSEEventsWithIgnoreFields compares two SSE bodies event-by-event: `data: [DONE]` matches
+// literally, other frames compare as JSON with the given top-level fields ignored.
+func CompareSSEEventsWithIgnoreFields(expected, actual []byte, ignoreFields []string) error {
+	// parse returns each event's joined `data:` payload (CRLF normalized, comment/other lines skipped).
+	parse := func(b []byte) []string {
+		normalized := strings.ReplaceAll(strings.ReplaceAll(string(b), "\r\n", "\n"), "\r", "\n")
+		var events []string
+		for _, block := range strings.Split(normalized, "\n\n") {
+			var data []string
+			for _, line := range strings.Split(block, "\n") {
+				if line == "" || strings.HasPrefix(line, ":") {
+					continue
+				}
+				if strings.HasPrefix(line, "data:") {
+					data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+				}
+			}
+			if len(data) > 0 {
+				events = append(events, strings.Join(data, "\n"))
+			}
+		}
+		return events
+	}
+	eEvents := parse(expected)
+	cEvents := parse(actual)
+	if len(eEvents) != len(cEvents) {
+		return fmt.Errorf("expected %d SSE events, got %d (expected body: %s, actual body: %s)",
+			len(eEvents), len(cEvents), string(expected), string(actual))
+	}
+	for i := range eEvents {
+		if eEvents[i] == "[DONE]" || cEvents[i] == "[DONE]" {
+			if eEvents[i] != cEvents[i] {
+				return fmt.Errorf("SSE event %d mismatch: expected %q, got %q", i, eEvents[i], cEvents[i])
+			}
+			continue
+		}
+		eObj := make(map[string]interface{})
+		cObj := make(map[string]interface{})
+		if err := json.Unmarshal([]byte(eEvents[i]), &eObj); err != nil {
+			return fmt.Errorf("failed to unmarshal expected SSE event %d %q: %s", i, eEvents[i], err.Error())
+		}
+		if err := json.Unmarshal([]byte(cEvents[i]), &cObj); err != nil {
+			return fmt.Errorf("failed to unmarshal captured SSE event %d %q: %s", i, cEvents[i], err.Error())
+		}
+		if err := CompareJSONWithIgnoreFields(eObj, cObj, ignoreFields); err != nil {
+			return fmt.Errorf("SSE event %d mismatch: %s (expected %q, got %q)", i, err.Error(), eEvents[i], cEvents[i])
 		}
 	}
 	return nil
