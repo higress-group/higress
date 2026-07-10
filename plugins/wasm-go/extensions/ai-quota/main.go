@@ -92,6 +92,7 @@ const (
 	AdminModeRefresh AdminMode = "refresh"
 	AdminModeQuery   AdminMode = "query"
 	AdminModeDelta   AdminMode = "delta"
+	AdminModeDelete  AdminMode = "delete"
 	AdminModeNone    AdminMode = "none"
 )
 
@@ -230,6 +231,9 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 		// query quota
 		if adminMode == AdminModeQuery {
 			return queryQuota(context, config, consumer, path)
+		}
+		if adminMode == AdminModeDelete {
+			return deleteQuota(context, config, consumer, path)
 		}
 		if adminMode == AdminModeRefresh || adminMode == AdminModeDelta {
 			context.BufferRequestBody()
@@ -486,6 +490,9 @@ func getOperationMode(path string, adminPath string, pathSuffixes []string) (Cha
 	if strings.HasSuffix(path, fullAdminPath+"/delta") {
 		return ChatModeAdmin, AdminModeDelta
 	}
+	if strings.HasSuffix(path, fullAdminPath+"/delete") {
+		return ChatModeAdmin, AdminModeDelete
+	}
 	if strings.HasSuffix(path, fullAdminPath) {
 		return ChatModeAdmin, AdminModeQuery
 	}
@@ -553,13 +560,18 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 
 	err := config.redisClient.Get(fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName), func(response resp.Value) {
 		quota := 0
+		limited := false
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 			return
 		} else if response.IsNull() {
+			// key 不存在 = 不限额
 			quota = 0
+			limited = false
 		} else {
+			// key 存在 = 有限额
 			quota = response.Integer()
+			limited = true
 		}
 		result := make(map[string]any)
 		if isGroup {
@@ -568,8 +580,38 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 			result["consumer"] = targetName
 		}
 		result["quota"] = quota
+		result["limited"] = limited
 		body, _ := json.Marshal(result)
 		util.SendResponse(http.StatusOK, "ai-quota.queryquota", "application/json", string(body))
+	})
+	if err != nil {
+		util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
+		return types.ActionContinue
+	}
+	return types.ActionPause
+}
+
+func deleteQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer string, url *url.URL) types.Action {
+	// check consumer
+	if adminConsumer != config.AdminConsumer {
+		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check. Unauthorized admin consumer.")
+		return types.ActionContinue
+	}
+
+	values := firstValues(url.Query())
+	targetName, ok := resolveExclusiveTarget(values["consumer"], values["group"])
+	if !ok {
+		return denyInvalidTarget()
+	}
+
+	quotaKey := fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName)
+
+	err := config.redisClient.Del(quotaKey, func(response resp.Value) {
+		if err := response.Error(); err != nil {
+			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
+			return
+		}
+		util.SendResponse(http.StatusOK, "ai-quota.deletequota", "text/plain", "delete quota successful")
 	})
 	if err != nil {
 		util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
