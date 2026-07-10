@@ -280,22 +280,22 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 			}
 
 			// 至少有一个 key 存在 → 检查对应配额
-			var gRem, cRem int
+			var gRem, cRem int64
 			if !gNull {
-				gRem = arr[0].Integer()
-					log.Debugf("request phase: group=%s quota=%d", group, gRem)
-					if gRem <= 0 {
-						log.Debugf("request phase: group quota exhausted, group=%s, remaining=%d", group, gRem)
-						denyNoQuota(noQuotaReasonGroup)
+				gRem, _ = strconv.ParseInt(arr[0].String(), 10, 64)
+				log.Debugf("request phase: group=%s quota=%d", group, gRem)
+				if gRem <= 0 {
+					log.Debugf("request phase: group quota exhausted, group=%s, remaining=%d", group, gRem)
+					denyNoQuota(noQuotaReasonGroup)
 					return
 				}
 			}
 			if !cNull {
-				cRem = arr[1].Integer()
-					log.Debugf("request phase: consumer=%s quota=%d", consumer, cRem)
-					if cRem <= 0 {
-						log.Debugf("request phase: consumer quota exhausted, consumer=%s, remaining=%d", consumer, cRem)
-						denyNoQuota(noQuotaReasonConsumer)
+				cRem, _ = strconv.ParseInt(arr[1].String(), 10, 64)
+				log.Debugf("request phase: consumer=%s quota=%d", consumer, cRem)
+				if cRem <= 0 {
+					log.Debugf("request phase: consumer quota exhausted, consumer=%s, remaining=%d", consumer, cRem)
+					denyNoQuota(noQuotaReasonConsumer)
 					return
 				}
 			}
@@ -326,7 +326,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 			proxywasm.ResumeHttpRequest()
 			return
 		}
-		remaining := arr[0].Integer()
+		remaining, _ := strconv.ParseInt(arr[0].String(), 10, 64)
 		if remaining <= 0 {
 			log.Debugf("request phase: consumer quota exhausted, consumer=%s, remaining=%d", consumer, remaining)
 			util.SendResponse(http.StatusForbidden, "ai-quota.noquota", "text/plain", "Request denied by ai quota check, ai-quota.noquota: consumer quota exhausted")
@@ -519,7 +519,7 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 		return denyInvalidTarget()
 	}
 
-	quota, err := strconv.Atoi(values["quota"])
+	quota, err := strconv.ParseInt(values["quota"], 10, 64)
 	if err != nil {
 		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check, ai-quota.unauthorized: quota must be an integer.")
 		return types.ActionContinue
@@ -559,7 +559,7 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	isGroup := values["group"] != ""
 
 	err := config.redisClient.Get(fmt.Sprintf(QuotaKeyFormat, config.RedisKeyPrefix, targetName), func(response resp.Value) {
-		quota := 0
+		var quota int64
 		limited := false
 		if err := response.Error(); err != nil {
 			util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
@@ -570,7 +570,7 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 			limited = false
 		} else {
 			// key 存在 = 有限额
-			quota = response.Integer()
+			quota, _ = strconv.ParseInt(response.String(), 10, 64)
 			limited = true
 		}
 		result := make(map[string]any)
@@ -657,8 +657,8 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 			return types.ActionContinue
 		}
 	} else {
-		err := config.redisClient.DecrBy(quotaKey, 0-value, func(response resp.Value) {
-			log.Debugf("Redis Decr key = %s value = %d", quotaKey, 0-value)
+		err := config.redisClient.DecrBy(quotaKey, -value, func(response resp.Value) {
+			log.Debugf("Redis Decr key = %s value = %d", quotaKey, -value)
 			if err := response.Error(); err != nil {
 				util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
 				return
