@@ -378,6 +378,17 @@ global:
   o11y:
     enabled: false
     promtail:
+      # -- Inject the Promtail sidecar and write the gateway access log to a file,
+      # WITHOUT deploying the bundled Loki/Grafana/Prometheus. Independent of
+      # `global.o11y.enabled` (which additionally deploys the bundled o11y stack),
+      # so the gateway access log can be shipped to an externally-managed Loki.
+      enabled: false
+      # -- Promtail push target (full URL). Empty defaults to the bundled Loki
+      # service: http://higress-console-loki.<namespace>:3100/loki/api/v1/push
+      # NOTE: only the endpoint URL is configurable here — Loki authentication
+      # (basic/bearer) and multi-tenancy (X-Scope-OrgID) are not yet supported,
+      # i.e. this targets a single-tenant, unauthenticated Loki.
+      lokiUrl: ""
       image:
         repository: "" # Will use global.hub if not set
         tag: 2.9.4
