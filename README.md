@@ -187,13 +187,13 @@ If you are deploying on the cloud, it is recommended to use the [Enterprise Edit
 
 
 ### Higress UI Console
-    
+
 - **Rich Observability**
 
   Provides out-of-the-box observability. Grafana & Prometheus can be either the built-in ones or your own self-hosted instances
 
   ![](./docs/images/monitor.gif)
-    
+
 
 - **Plugin Extension Mechanism**
 
@@ -207,7 +207,7 @@ If you are deploying on the cloud, it is recommended to use the [Enterprise Edit
   K8s Service discovery is provided by default. Registries such as Nacos/ZooKeeper can be connected through configuration, and services can also be discovered based on static IPs or DNS
 
   ![](./docs/images/service-source.gif)
-    
+
 
 - **Domain and Certificate Management**
 
