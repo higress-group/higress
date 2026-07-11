@@ -24,6 +24,17 @@ var multiTokenOpenAIConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：多 API Token 的 vLLM provider（原生支持 Anthropic Messages 协议，用于测试 messages 亲和）
+var multiTokenVllmConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "vllm",
+			"apiTokens": []string{"sk-token-1", "sk-token-2", "sk-token-3"},
+		},
+	})
+	return data
+}()
+
 // 测试配置：单 API Token 配置
 var singleTokenOpenAIConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -140,6 +151,60 @@ func RunConsumerAffinityOnHttpRequestHeadersTests(t *testing.T) {
 				{":method", "POST"},
 				{"Content-Type", "application/json"},
 				{"x-mse-consumer", "consumer-finetuning"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			authValue, hasAuth := test.GetHeaderValue(requestHeaders, "Authorization")
+			require.True(t, hasAuth, "Authorization header should exist")
+			require.True(t, strings.Contains(authValue, "sk-token-"), "Authorization should contain one of the tokens")
+		})
+
+		// 测试 stateful API（anthropic messages）使用 consumer affinity，同一 consumer 跨请求命中同一 token
+		t.Run("stateful api anthropic messages with consumer header", func(t *testing.T) {
+			pick := func(consumer string) string {
+				host, status := test.NewTestHost(multiTokenVllmConfig)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				action := host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/v1/messages"},
+					{":method", "POST"},
+					{"Content-Type", "application/json"},
+					{"x-mse-consumer", consumer},
+				})
+
+				require.Equal(t, types.HeaderStopIteration, action)
+
+				requestHeaders := host.GetRequestHeaders()
+				require.NotNil(t, requestHeaders)
+
+				authValue, hasAuth := test.GetHeaderValue(requestHeaders, "Authorization")
+				require.True(t, hasAuth, "Authorization header should exist")
+				require.True(t, strings.Contains(authValue, "sk-token-"), "Authorization should contain one of the tokens")
+				return authValue
+			}
+
+			first := pick("consumer-anthropic")
+			second := pick("consumer-anthropic")
+			require.Equal(t, first, second, "same consumer should yield the same token across requests")
+		})
+
+		// 测试无 x-mse-consumer header 时 anthropic messages 正常工作（退化为随机选择）
+		t.Run("anthropic messages without consumer header works normally", func(t *testing.T) {
+			host, status := test.NewTestHost(multiTokenVllmConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
 			})
 
 			require.Equal(t, types.HeaderStopIteration, action)

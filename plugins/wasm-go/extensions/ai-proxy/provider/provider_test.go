@@ -80,6 +80,11 @@ func TestIsStatefulAPI(t *testing.T) {
 			apiName:  string(ApiNameResumeFineTuningJob),
 			expected: true,
 		},
+		{
+			name:     "anthropic_messages_api",
+			apiName:  string(ApiNameAnthropicMessages),
+			expected: true,
+		},
 		// Non-stateful APIs - should return false
 		{
 			name:     "chat_completion_api",
@@ -109,6 +114,11 @@ func TestIsStatefulAPI(t *testing.T) {
 		{
 			name:     "audio_speech_api",
 			apiName:  string(ApiNameAudioSpeech),
+			expected: false,
+		},
+		{
+			name:     "anthropic_count_tokens_api",
+			apiName:  string(ApiNameAnthropicCountTokens),
 			expected: false,
 		},
 		// Empty/unknown API - should return false
