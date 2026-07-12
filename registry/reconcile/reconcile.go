@@ -32,6 +32,7 @@ import (
 	"github.com/alibaba/higress/v2/pkg/kube"
 	. "github.com/alibaba/higress/v2/registry"
 	"github.com/alibaba/higress/v2/registry/consul"
+	"github.com/alibaba/higress/v2/registry/custom"
 	"github.com/alibaba/higress/v2/registry/direct"
 	"github.com/alibaba/higress/v2/registry/eureka"
 	"github.com/alibaba/higress/v2/registry/memory"
@@ -271,7 +272,13 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 			eureka.WithVport(registry.Vport),
 		)
 	default:
-		return nil, errors.New("unsupported registry type:" + registry.Type)
+		// Fall back to a Discoverer registered via RegisterDiscoverer so users
+		// can plug custom registration centers (e.g. xDS or HTTP watch based)
+		// into the standard reconcile pipeline.
+		if LookupDiscovererFactory(registry.Type) == nil {
+			return nil, errors.New("unsupported registry type:" + registry.Type)
+		}
+		watcher, err = custom.NewWatcher(r.Cache, registry, authOption)
 	}
 
 	if err != nil {
