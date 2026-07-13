@@ -8,3 +8,13 @@ data:
     {{- if .Values.redis.password }}
     requirepass {{ .Values.redis.password }}
     {{- end }}
+    {{- if .Values.redis.persistence.enabled }}
+    dir /data
+    appendonly yes
+    appendfsync everysec
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    {{- end }}
+    {{- if .Values.redis.extraConfig -}}
+    {{- .Values.redis.extraConfig | nindent 4 }}
+    {{- end }}

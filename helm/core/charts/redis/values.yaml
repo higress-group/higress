@@ -37,7 +37,8 @@ redis:
   # -- Affinity for Redis
   affinity: {}
   persistence:
-    # -- Enable persistence on Redis
+    # -- Enable persistence on Redis. When enabled, AOF persistence is turned on
+    # by default (appendonly yes, appendfsync everysec) and data is written to a PVC.
     enabled: false
     # -- If defined, storageClassName: <storageClass>
     # -- If undefined (the default) or set to null, no storageClassName spec is set, choosing the default provisioner
@@ -47,3 +48,10 @@ redis:
       - ReadWriteOnce
     # -- Persistent Volume size
     size: 1Gi
+  # -- Extra redis-stack.conf directives appended after the generated config
+  # (requirepass, and AOF defaults when persistence is enabled).
+  # Directives here take precedence over generated defaults (Redis applies the last value).
+  # Example:
+  #   maxmemory 512mb
+  #   maxmemory-policy allkeys-lru
+  extraConfig: ""

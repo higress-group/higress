@@ -303,6 +303,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | redis.redis.service.type | string | `"ClusterIP"` | Exporter service type |
 | redis.redis.tag | string | `"7.4.0-v3"` | Specify the tag |
 | redis.redis.tolerations | list | `[]` | Tolerations for Redis |
+| redis.redis.extraConfig | string | `""` | Extra redis-stack.conf directives appended after the generated config |
 | revision | string | `""` |  |
 | tracing.enable | bool | `false` |  |
 | tracing.sampling | int | `100` |  |
