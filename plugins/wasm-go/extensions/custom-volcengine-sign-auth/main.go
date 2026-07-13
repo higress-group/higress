@@ -230,10 +230,10 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config VolcengineSignAuthConfig,
 
 // 	// 添加签名请求头
 // 	// 打印所有签名头值用于调试
-// 	log.Infof("volcengine-sign-auth: [DEBUG] X-Date=%s", xDate)
-// 	log.Infof("volcengine-sign-auth: [DEBUG] X-Content-Sha256=%s", xContentSha256)
-// 	log.Infof("volcengine-sign-auth: [DEBUG] Authorization=%s", authorization)
-// 	log.Infof("volcengine-sign-auth: [DEBUG] Content-Type=%s", CONTENT_TYPE)
+	log.Infof("volcengine-sign-auth: [DEBUG] X-Date=%s", xDate)
+	log.Infof("volcengine-sign-auth: [DEBUG] X-Content-Sha256=%s", xContentSha256)
+	log.Infof("volcengine-sign-auth: [DEBUG] Authorization=%s", authorization)
+	log.Infof("volcengine-sign-auth: [DEBUG] Content-Type=%s", CONTENT_TYPE)
 
 	if err := proxywasm.AddHttpRequestHeader(HeaderXDate, xDate); err != nil {
 		log.Errorf("volcengine-sign-auth: failed to add %s header: %v", HeaderXDate, err)
@@ -263,15 +263,15 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config VolcengineSignAuthConfig,
 // generateAuthorization 生成火山引擎签名 v4 的 Authorization 头
 func (config *VolcengineSignAuthConfig) generateAuthorization(method, path, query, xDate, xContentSha256, host string) string {
 	// 打印输入参数
-// 	log.Infof("volcengine-sign-auth: [DEBUG] generateAuthorization inputs:")
-// 	log.Infof("volcengine-sign-auth: [DEBUG]   method=%s", method)
-// 	log.Infof("volcengine-sign-auth: [DEBUG]   path=%s", path)
-// 	log.Infof("volcengine-sign-auth: [DEBUG]   query=%s", query)
-// 	log.Infof("volcengine-sign-auth: [DEBUG]   xDate=%s", xDate)
-// 	log.Infof("volcengine-sign-auth: [DEBUG]   xContentSha256=%s", xContentSha256)
-// 	log.Infof("volcengine-sign-auth: [DEBUG]   host=%s", host)
-// 	log.Infof("volcengine-sign-auth: [DEBUG]   config.Region=%s", config.Region)
-// 	log.Infof("volcengine-sign-auth: [DEBUG]   config.Service=%s", config.Service)
+	log.Infof("volcengine-sign-auth: [DEBUG] generateAuthorization inputs:")
+	log.Infof("volcengine-sign-auth: [DEBUG]   method=%s", method)
+	log.Infof("volcengine-sign-auth: [DEBUG]   path=%s", path)
+	log.Infof("volcengine-sign-auth: [DEBUG]   query=%s", query)
+	log.Infof("volcengine-sign-auth: [DEBUG]   xDate=%s", xDate)
+	log.Infof("volcengine-sign-auth: [DEBUG]   xContentSha256=%s", xContentSha256)
+	log.Infof("volcengine-sign-auth: [DEBUG]   host=%s", host)
+	log.Infof("volcengine-sign-auth: [DEBUG]   config.Region=%s", config.Region)
+	log.Infof("volcengine-sign-auth: [DEBUG]   config.Service=%s", config.Service)
 
 	signedHeaders := "content-type;host;x-content-sha256;x-date"
 

@@ -309,6 +309,12 @@ func handleMultipartBody(ctx wrapper.HttpContext, config ModelRouterConfig, body
 		if formName == config.modelKey {
 			modelValue := string(partContent)
 
+			propertyKey := "wasm.requestModel"
+			existingModel, _ := proxywasm.GetProperty([]string{propertyKey})
+			if len(existingModel) == 0 {
+				_ = proxywasm.SetProperty([]string{propertyKey}, []byte(modelValue))
+			}
+
 			if config.modelToHeader != "" {
 				_ = proxywasm.ReplaceHttpRequestHeader(config.modelToHeader, modelValue)
 			}

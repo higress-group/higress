@@ -257,7 +257,8 @@ func shouldAccumulateChunk(data []byte) bool {
 	return bytes.Contains(data, []byte(`"usage"`)) ||
 		bytes.Contains(data, []byte(`"usageMetadata"`)) ||
 		bytes.Contains(data, []byte(`total_tokens`)) ||
-		bytes.Contains(data, []byte(`totalTokenCount`))
+		bytes.Contains(data, []byte(`totalTokenCount`)) ||
+		bytes.Contains(data, []byte(`"data"`))
 }
 
 // accumulateChunk accumulates a chunk for later usage parsing, with size limit
@@ -321,7 +322,7 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config TokenUsageReportConfig,
 			setUsageToContext(ctx, usage)
 			log.Debugf("ai-token-report: extracted usage via GetTokenUsage: total=%d", usage.TotalToken)
 			ctx.SetContext(CtxAccumulatedBody, nil) // Clean up
-		} else if len(data) > 0 && !endOfStream && shouldAccumulateChunk(data) {
+		} else if len(data) > 0 && shouldAccumulateChunk(data) {
 			accumulateChunk(ctx, data)
 		}
 	}
@@ -356,6 +357,8 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config TokenUsageReportConfig,
 				}
 			}
 		}
+
+        log.Debugf("onHttpStreamingBody bodyLen=%d", len(data))
 
 		// Report token usage
 		reportTokenUsageFromContext(ctx, config, data)
@@ -433,6 +436,8 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config TokenUsageReportConfig, 
 				usage.Model, usage.InputToken, usage.OutputToken, usage.TotalToken, usage.InputTokenDetails, usage.OutputTokenDetails)
 		}
 	}
+
+    log.Debugf("onHttpResponseBody bodyLen=%d", len(body))
 
 	// Report token usage
 	reportTokenUsageFromContext(ctx, config, body)
@@ -620,10 +625,30 @@ func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageRepor
 	outputTokens, _ := convertToUInt(outputTokenVal)
 
 	totalTokens, ok := convertToUInt(totalTokenVal)
-// 	if !ok {
-// 		log.Warnf("TotalToken conversion failed, skipping token usage report, model=%s", model)
-// 		return
-// 	}
+	if !ok {
+		// Some models (e.g., image generation) don't return token data in the response.
+		// Check if the response has a "data" field, which indicates a valid non-text response.
+		// For streaming, also check the accumulated body since responseBody may only be the last chunk.
+		log.Debugf("ai-token-report: totalTokenVal is nil/not-set, responseBody len=%d, checking for data field", len(responseBody))
+		hasData := false
+		if len(responseBody) > 0 {
+			hasData = gjson.GetBytes(responseBody, "data").Exists()
+			log.Debugf("ai-token-report: responseBody hasData=%v, sample: %s", hasData, truncateSample(string(responseBody), 200))
+		}
+		if !hasData {
+			if accBody := ctx.GetByteSliceContext(CtxAccumulatedBody, []byte{}); len(accBody) > 0 {
+				hasData = gjson.GetBytes(accBody, "data").Exists()
+				log.Debugf("ai-token-report: accBody len=%d, hasData=%v, sample: %s", len(accBody), hasData, truncateSample(string(accBody), 200))
+			}
+		}
+		if hasData {
+			log.Infof("ai-token-report: no token data but response contains data field, reporting with 0 tokens, model=%s", model)
+			totalTokens = 0
+		} else {
+			log.Debugf("ai-token-report: no token data and no data field in response, result not ready yet, model=%s", model)
+			return
+		}
+	}
 
 	// Get duration from context
 	durationVal := ctx.GetContext(LLMServiceDuration)
@@ -794,10 +819,10 @@ func parseUsageDirectly(data []byte) tokenusage.TokenUsage {
 		if braceIdx != -1 {
 			// Try to extract the usage object
 			usageStart := usageIdx + braceIdx
-			// Find matching closing brace (simplified - assumes no nested braces in usage)
-			usageEnd := strings.Index(dataStr[usageStart:], "}")
+			// Find matching closing brace by counting open/close (handles nested objects)
+			usageEnd := findMatchingBrace(dataStr, usageStart)
 			if usageEnd != -1 {
-				usageJSON := dataStr[usageStart : usageStart+usageEnd+1]
+				usageJSON := dataStr[usageStart : usageEnd+1]
 				usageParsed := gjson.Parse(usageJSON)
 				if totalTokens := usageParsed.Get("total_tokens"); totalTokens.Exists() {
 					usage.TotalToken = totalTokens.Int()
@@ -813,4 +838,30 @@ func parseUsageDirectly(data []byte) tokenusage.TokenUsage {
 
 	log.Debugf("ai-token-report: no usage found in data, length=%d", len(data))
 	return usage
+}
+
+// findMatchingBrace finds the matching closing brace for the opening brace at startIdx.
+// Uses brace counting to correctly handle nested objects.
+func findMatchingBrace(s string, startIdx int) int {
+	braceCount := 0
+	for i := startIdx; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			braceCount++
+		case '}':
+			braceCount--
+			if braceCount == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// truncateSample truncates a string to maxLen characters for debug logging.
+func truncateSample(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

@@ -189,6 +189,13 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config ConsumerGroupMappingCo
 
 
 	// 3. 保存原始 API Key 到新的 header
+	// 如果 X-Original-Api-Key 已经存在（例如 failback/retry 时请求头被重新处理），
+	// 说明之前已经保存过原始 key，不应覆写为当前的 Authorization 值（此时可能已被 ai-proxy 替换为渠道 apiToken）
+	existingKey, _ := proxywasm.GetHttpRequestHeader(OriginalApiKeyHeader)
+	if existingKey != "" {
+		log.Debugf("=== Consumer Group Mapping Plugin: %s already set, skipping overwrite ===", OriginalApiKeyHeader)
+		return types.ActionContinue
+	}
 	if err := proxywasm.ReplaceHttpRequestHeader(OriginalApiKeyHeader, apiKey); err != nil {
 		log.Errorf("=== Consumer Group Mapping Plugin: failed to set %s header: %v ===", OriginalApiKeyHeader, err)
 		return types.ActionContinue
