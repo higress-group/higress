@@ -63,5 +63,5 @@ spec:
       configDisable: false
       ingress:
         - ingress-cors-httpbin
-  url: oci://docker.io/2456868764/cors:1.0.0
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cors:2.0.1
   imagePullPolicy: Always
