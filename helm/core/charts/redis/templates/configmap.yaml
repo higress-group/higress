@@ -8,3 +8,20 @@ data:
     {{- if .Values.redis.password }}
     requirepass {{ .Values.redis.password }}
     {{- end }}
+    {{- if .Values.redis.persistence.enabled }}
+    dir /data
+    {{- if .Values.redis.aof.enabled }}
+    appendonly yes
+    appendfsync {{ .Values.redis.aof.fsync }}
+    auto-aof-rewrite-percentage {{ .Values.redis.aof.rewritePercentage }}
+    auto-aof-rewrite-min-size {{ .Values.redis.aof.rewriteMinSize }}
+    {{- end }}
+    {{- if .Values.redis.rdb.enabled }}
+    {{- range .Values.redis.rdb.save }}
+    save {{ . }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.redis.extraConfig -}}
+    {{- .Values.redis.extraConfig | nindent 4 }}
+    {{- end }}
