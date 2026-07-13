@@ -95,6 +95,7 @@ func setupControllerWithoutGatewayClasses(t *testing.T, objs ...runtime.Object) 
 			return false
 		},
 		controller.Options{KrtDebugger: krt.GlobalDebugHandler},
+		nil,
 		nil)
 	kc.RunAndWait(stop)
 	go controller.Run(stop)

@@ -18,6 +18,7 @@ Higress E2E 测试主要关注两个部分：
 Higress 提供了运行 Ingress API 一致性测试和 wasmplugin 测试的 make 目标，
 
 + API 测试: `make higress-conformance-test`
++ Gateway API 测试: `make higress-gateway-api-test`
 + WasmPlugin 测试: `make higress-wasmplugin-test`
     + 为测试构建所有 GO WasmPlugins: `make higress-wasmplugin-test`
     + 仅为一个 GO WasmPlugin 构建测试: `PLUGIN_NAME=request-block make higress-wasmplugin-test`
@@ -70,12 +71,6 @@ Higress 提供了运行 Ingress API 一致性测试和 wasmplugin 测试的 make
 
 ## Gateway API 一致性测试
 
-Gateway API 一致性测试基于 `kubernetes-sig/gateway-api` 提供的套件，我们可以重复使用它，并决定我们需要打开哪些 Gateway API 的一致性测试。
+执行 `make higress-gateway-api-test` 可运行上游 Gateway API v1.4.0 Conformance Suite。默认范围只包含 `GATEWAY-HTTP` Profile 的必选 Core 能力：`Gateway`、`HTTPRoute` 和 `ReferenceGrant`，不启用 Extended 能力。
 
-此 API 包含一系列广泛的功能和用例，并已得到广泛实现。
-这个大的功能集和各种实现的结合需要明确的一致性定义和测试，以确保在任何地方使用该 API 时都提供一致的体验。
-
-Gateway API 包括一组一致性测试。这些测试创建具有指定 GatewayClass 的一系列 Gateways 和 Routes，并测试实现是否符合 API 规范。
-
-每个发布版本都包含一组一致性测试，随着 API 的演进，这些测试将不断扩展。
-目前，一致性测试覆盖了标准通道中的大多数核心功能，以及一些扩展功能。
+Runner 直接引用上游 Suite 及其内嵌 manifests，Higress 不复制维护官方测试用例。只有调试单个上游用例时才设置 `GATEWAY_CONFORMANCE_RUN_TEST=<ShortName>`；默认 PR 流水线始终执行完整 Core Profile，并将官方报告保存为 CI artifact。

@@ -42,6 +42,10 @@ status:
     reason: Accepted
     status: "True"
     type: Accepted
+  supportedFeatures:
+  - name: Gateway
+  - name: HTTPRoute
+  - name: ReferenceGrant
 ---
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: Gateway

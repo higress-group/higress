@@ -790,6 +790,7 @@ func TestConvertResources(t *testing.T) {
 				AlwaysReady,
 				controller.Options{DomainSuffix: "domain.suffix", KrtDebugger: dbg},
 				nil,
+				nil,
 			)
 			sq := &TestStatusQueue{
 				state: map[status.Resource]any{},
@@ -943,6 +944,56 @@ func TestReportGatewayStatusAddressType(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReportGatewayStatusForDefaultCrossNamespaceService(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "higress-gateway",
+			Namespace: "higress-system",
+		},
+		Spec: corev1.ServiceSpec{
+			Type:      corev1.ServiceTypeClusterIP,
+			ClusterIP: "10.96.0.10",
+			Ports: []corev1.ServicePort{
+				{Name: "http", Port: 80, Protocol: corev1.ProtocolTCP},
+			},
+		},
+	}
+	stop := test.NewStop(t)
+	kc := kube.NewFakeClient(svc)
+	kc.RunAndWait(stop)
+	ctx := NewGatewayContext(nil, constants.DefaultClusterName, kc, "cluster.local")
+	gw := &k8sbeta.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "same-namespace",
+			Namespace:  "gateway-conformance-infra",
+			Generation: 1,
+		},
+	}
+	gs := &k8sbeta.GatewayStatus{}
+	servers := []*istio.Server{
+		{
+			Port: &istio.Port{Name: "http", Number: 80, Protocol: "HTTP"},
+		},
+	}
+
+	reportGatewayStatus(
+		&ctx,
+		gw,
+		gs,
+		[]string{"higress-gateway.higress-system.svc.cluster.local"},
+		servers,
+		0,
+		nil,
+	)
+
+	want := []k8s.GatewayStatusAddress{
+		{Type: ptr.Of(k8s.HostnameAddressType), Value: "higress-gateway.higress-system.svc.cluster.local"},
+	}
+	if !reflect.DeepEqual(want, gs.Addresses) {
+		t.Fatalf("expected Gateway addresses %v, got %v", want, gs.Addresses)
 	}
 }
 
@@ -1517,6 +1568,36 @@ func TestGatewayReferenceAllowedParentHostnameParsing(t *testing.T) {
 			}
 			if waypointError != nil {
 				t.Fatalf("expected no error, got %v", waypointError)
+			}
+		})
+	}
+}
+
+func TestRouteParentReferenceHostnameIntersection(t *testing.T) {
+	tests := []struct {
+		name         string
+		listenerHost string
+		routeHost    string
+		wantHost     string
+		wantMatch    bool
+	}{
+		{name: "empty listener", listenerHost: "", routeHost: "example.com", wantHost: "example.com", wantMatch: true},
+		{name: "empty route", listenerHost: "example.com", routeHost: "*", wantHost: "example.com", wantMatch: true},
+		{name: "exact match", listenerHost: "example.com", routeHost: "example.com", wantHost: "example.com", wantMatch: true},
+		{name: "exact listener and wildcard route", listenerHost: "foo.example.com", routeHost: "*.example.com", wantHost: "foo.example.com", wantMatch: true},
+		{name: "wildcard listener and exact route", listenerHost: "*.example.com", routeHost: "foo.example.com", wantHost: "foo.example.com", wantMatch: true},
+		{name: "narrower route wildcard", listenerHost: "*.example.com", routeHost: "*.foo.example.com", wantHost: "*.foo.example.com", wantMatch: true},
+		{name: "narrower listener wildcard", listenerHost: "*.foo.example.com", routeHost: "*.example.com", wantHost: "*.foo.example.com", wantMatch: true},
+		{name: "disjoint exact hosts", listenerHost: "foo.example.com", routeHost: "bar.example.com", wantMatch: false},
+		{name: "disjoint wildcard hosts", listenerHost: "*.example.com", routeHost: "*.example.net", wantMatch: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent := routeParentReference{Hostname: tt.listenerHost}
+			gotHost, gotMatch := parent.hostnameIntersection(tt.routeHost)
+			if gotHost != tt.wantHost || gotMatch != tt.wantMatch {
+				t.Fatalf("hostnameIntersection() = (%q, %v), want (%q, %v)", gotHost, gotMatch, tt.wantHost, tt.wantMatch)
 			}
 		})
 	}

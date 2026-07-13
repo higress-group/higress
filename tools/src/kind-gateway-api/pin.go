@@ -1,4 +1,4 @@
-// Copyright Istio Authors
+// Copyright (c) 2026 Alibaba Group Holding Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package istio
+//go:build pin
 
-import (
-	"sigs.k8s.io/gateway-api/pkg/features"
-)
+package ignore
 
-var SupportedFeatures = features.SetsToNamesSet(
-	features.GatewayCoreFeatures,
-	features.HTTPRouteCoreFeatures,
-	features.ReferenceGrantCoreFeatures,
-)
+import "sigs.k8s.io/kind"

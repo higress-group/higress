@@ -15,6 +15,8 @@
 package istio
 
 import (
+	"sort"
+
 	"github.com/hashicorp/go-multierror"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -116,5 +118,16 @@ func GetClassStatus(existing *k8sv1.GatewayClassStatus, gen int64) *k8sv1.Gatewa
 		Message: "Handled by Higress controller",
 		// End - Updated by Higress
 	})
+
+	supportedFeatures := SupportedFeatures.UnsortedList()
+	sort.Slice(supportedFeatures, func(i, j int) bool {
+		return supportedFeatures[i] < supportedFeatures[j]
+	})
+	existing.SupportedFeatures = make([]k8sv1.SupportedFeature, 0, len(supportedFeatures))
+	for _, feature := range supportedFeatures {
+		existing.SupportedFeatures = append(existing.SupportedFeatures, k8sv1.SupportedFeature{
+			Name: k8sv1.FeatureName(feature),
+		})
+	}
 	return existing
 }

@@ -163,22 +163,24 @@ func NewController(
 	waitForCRD func(class schema.GroupVersionResource, stop <-chan struct{}) bool,
 	options controller.Options,
 	xdsUpdater model.XDSUpdater,
+	defaultGatewaySelector map[string]string,
 ) *Controller {
 	stop := make(chan struct{})
 	opts := krt.NewOptionsBuilder(stop, "gateway", options.KrtDebugger)
 
 	tw := revisions.NewTagWatcher(kc, options.Revision)
 	c := &Controller{
-		client:         kc,
-		cluster:        options.ClusterID,
-		revision:       options.Revision,
-		status:         &status.StatusCollections{},
-		tagWatcher:     krt.NewRecomputeProtected(tw, false, opts.WithName("tagWatcher")...),
-		waitForCRD:     waitForCRD,
-		gatewayContext: krt.NewRecomputeProtected(atomic.NewPointer[GatewayContext](nil), false, opts.WithName("gatewayContext")...),
-		stop:           stop,
-		xdsUpdater:     xdsUpdater,
-		domainSuffix:   options.DomainSuffix,
+		client:                 kc,
+		cluster:                options.ClusterID,
+		revision:               options.Revision,
+		status:                 &status.StatusCollections{},
+		tagWatcher:             krt.NewRecomputeProtected(tw, false, opts.WithName("tagWatcher")...),
+		waitForCRD:             waitForCRD,
+		gatewayContext:         krt.NewRecomputeProtected(atomic.NewPointer[GatewayContext](nil), false, opts.WithName("gatewayContext")...),
+		stop:                   stop,
+		xdsUpdater:             xdsUpdater,
+		domainSuffix:           options.DomainSuffix,
+		DefaultGatewaySelector: defaultGatewaySelector,
 	}
 	tw.AddHandler(func(s sets.String) {
 		c.tagWatcher.TriggerRecomputation()

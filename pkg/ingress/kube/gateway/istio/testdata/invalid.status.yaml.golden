@@ -10,6 +10,10 @@ status:
     reason: Accepted
     status: "True"
     type: Accepted
+  supportedFeatures:
+  - name: Gateway
+  - name: HTTPRoute
+  - name: ReferenceGrant
 ---
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: Gateway
@@ -456,6 +460,9 @@ metadata:
   namespace: invalid-gateway-address
 spec: null
 status:
+  addresses:
+  - type: Hostname
+    value: higress-gateway.higress-system.svc.cluster.local
   conditions:
   - lastTransitionTime: fake
     message: Resource accepted
@@ -463,10 +470,9 @@ status:
     status: "True"
     type: Accepted
   - lastTransitionTime: fake
-    message: 'Failed to assign to any requested addresses: hostname "higress-gateway.higress-system.svc.cluster.local"
-      not found'
-    reason: Invalid
-    status: "False"
+    message: Resource programmed, assigned to service(s) higress-gateway.higress-system.svc.cluster.local:80
+    reason: Programmed
+    status: "True"
     type: Programmed
   listeners:
   - attachedRoutes: 0
