@@ -163,14 +163,14 @@ func (gc GatewayContext) GetService(hostname, namespace, kind string) *model.Ser
 		log.Warnf("Unsupported kind: expected 'Service', but got '%s'", kind)
 		return nil
 	}
-	serviceName, serviceNamespace := extractServiceNameAndNamespace(hostname, namespace)
+	serviceName := extractServiceName(hostname)
 
-	svc, err := gc.client.Kube().CoreV1().Services(serviceNamespace).Get(context.TODO(), serviceName, metav1.GetOptions{})
+	svc, err := gc.client.Kube().CoreV1().Services(namespace).Get(context.TODO(), serviceName, metav1.GetOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			return nil
 		}
-		log.Errorf("failed to get service (serviceName: %s, namespace: %s): %v", serviceName, serviceNamespace, err)
+		log.Errorf("failed to get service (serviceName: %s, namespace: %s): %v", serviceName, namespace, err)
 		return nil
 	}
 
@@ -178,15 +178,15 @@ func (gc GatewayContext) GetService(hostname, namespace, kind string) *model.Ser
 }
 
 func (gc GatewayContext) GetEndpoints(hostname, namespace string) *corev1.Endpoints {
-	serviceName, serviceNamespace := extractServiceNameAndNamespace(hostname, namespace)
+	serviceName := extractServiceName(hostname)
 
-	endpoints, err := gc.client.Kube().CoreV1().Endpoints(serviceNamespace).Get(context.TODO(), serviceName, metav1.GetOptions{})
+	endpoints, err := gc.client.Kube().CoreV1().Endpoints(namespace).Get(context.TODO(), serviceName, metav1.GetOptions{})
 
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			return nil
 		}
-		log.Errorf("failed to get endpoints (serviceName: %s, namespace: %s): %v", serviceName, serviceNamespace, err)
+		log.Errorf("failed to get endpoints (serviceName: %s, namespace: %s): %v", serviceName, namespace, err)
 		return nil
 	}
 
@@ -205,15 +205,12 @@ func checkServicePortExists(svc *model.Service, port int) bool {
 	return false
 }
 
-func extractServiceNameAndNamespace(hostName, defaultNamespace string) (string, string) {
+func extractServiceName(hostName string) string {
 	parts := strings.Split(hostName, ".")
 	if len(parts) >= 4 {
-		if parts[2] == "svc" {
-			return parts[0], parts[1]
-		}
-		return parts[0], defaultNamespace
+		return parts[0]
 	}
-	return "", defaultNamespace
+	return ""
 }
 
 // End - Updated by Higress

@@ -246,9 +246,11 @@ PR 回归和官方申报必须调用同一个 `make higress-gateway-api-test`，
 - 写入 `existing.SupportedFeatures`；
 - 增加单元测试验证默认类、定制类和稳定排序。
 
-### 5.4 `pkg/ingress/kube/gateway/istio/context.go`
+### 5.4 测试部署 namespace
 
-官方基础 Gateway 与 Higress 默认 gateway Service 位于不同 namespace。解析 `higress-gateway.higress-system.svc.cluster.local` 时必须使用 FQDN 中的 `higress-system` 查询 Service 和 Endpoints，不能继续使用 Gateway 自身的 namespace。增加回归单测，确保 ClusterIP Service 能为官方 Gateway 写入内部 hostname 地址。
+官方基础 Gateway 与同 namespace TLS Secret 固定创建在 `gateway-conformance-infra`。测试专用 Helm 安装也使用这个 namespace，使 Higress controller、pilot、gateway Pod、gateway Service、Gateway 与基础 Secret 位于同一信任边界。这样可以直接沿用 Higress 现有的同 namespace Service 发现和 Istio SDS 约束，不需要为了测试放宽跨 namespace 工作负载选择或证书访问逻辑。
+
+官方仍有少量 ReferenceGrant 用例刻意把 Secret 或 backend Service 放在 `gateway-conformance-web-backend`；这些资源不能搬迁，否则就不再是官方原始用例。它们的授权与状态仍由 `higress-core` 按 ReferenceGrant 处理。
 
 ### 5.5 `Makefile.core.mk`
 
@@ -260,6 +262,8 @@ GATEWAY_CONFORMANCE_PROFILE ?= GATEWAY-HTTP
 GATEWAY_CONFORMANCE_REPORT ?= out/gateway-api-conformance/report.yaml
 HIGRESS_CONFORMANCE_VERSION ?= $(shell git rev-parse HEAD)
 GATEWAY_CONFORMANCE_CONTACT ?= https://github.com/alibaba/higress/issues
+GATEWAY_API_TEST_NAMESPACE ?= gateway-conformance-infra
+GATEWAY_API_GATEWAY_SERVICE_TYPE ?= ClusterIP
 GATEWAY_API_KIND_NODE_TAG ?= v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
 ```
 
@@ -269,7 +273,7 @@ GATEWAY_API_KIND_NODE_TAG ?= v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a30
 
 - `create-gateway-api-cluster` / `delete-gateway-api-cluster`：使用独立的 kind v0.30.0 和固定 digest 的 Kubernetes v1.34.0 node；不改变现有 Ingress/Wasm 流程使用的 kind v0.17.0 / Kubernetes v1.25.3。
 - `install-gateway-api-crds`：安装并等待 v1.4.0 Standard CRD Established。
-- `install-dev-gateway-api`：沿用现有开发镜像安装参数，但将 gateway Service 设为 ClusterIP，使 Higress 能在无 LB controller 的 kind 中报告可用于官方 Suite 的内部 hostname；controller 使用当前提交构建的 `TAG`，pilot 和 gateway 分别使用仓库统一的 `ISTIO_LATEST_IMAGE_TAG`、`ENVOY_LATEST_IMAGE_TAG`。
+- `install-dev-gateway-api`：沿用现有开发镜像安装参数，将整套 Higress 安装到 `gateway-conformance-infra`；kind 默认把 gateway Service 设为 ClusterIP，ACK 验证可覆盖为 LoadBalancer。controller 使用当前提交构建的 `TAG`，pilot 和 gateway 分别使用仓库统一的 `ISTIO_LATEST_IMAGE_TAG`、`ENVOY_LATEST_IMAGE_TAG`。
 - `higress-gateway-api-test-prepare`：delete/create kind、安装 CRD、构建/加载当前提交的 Higress controller、加载仓库统一的 pilot/gateway 镜像、Helm install、等待 workloads 和 GatewayClass Accepted。Gateway API job 不维护自己的数据面 tag；若改动涉及 pilot，先构建并推送对应 submodule SHA 的 pilot 镜像，再统一更新 `ISTIO_LATEST_IMAGE_TAG`，让现有 e2e 与 Gateway API e2e 使用同一产物。
 - `run-higress-gateway-api-test`：执行完整官方 GATEWAY-HTTP Core 并生成报告；这是 PR 默认路径。
 - `higress-gateway-api-test-clean`：删除 kind。
@@ -310,8 +314,11 @@ go test -v ./test/gateway \
   --version="${HIGRESS_CONFORMANCE_VERSION}" \
   --contact="${GATEWAY_CONFORMANCE_CONTACT}" \
   --mode=default \
+  --cleanup-base-resources=false \
   --report-output=out/gateway-api-conformance/report.yaml
 ```
+
+必须关闭 Suite 自己的基础资源清理：Higress 与基础 Gateway 共用 `gateway-conformance-infra`，如果让 Suite 删除基础 namespace，会同时删除正在被测的 Higress。CI 在上传报告和诊断后直接删除整个临时 kind 集群，不会遗留资源。
 
 PR 默认命令和正式申报命令中都故意没有：
 
@@ -463,7 +470,7 @@ report PR 的验收不是“PR 已创建”，而是：
 
 ## 7. 2026-07-13 云集群实测结果
 
-使用用户提供的 ACK Kubernetes v1.36.1 集群，安装 Gateway API v1.4.0 Standard CRD，并部署当前分支构建的 Higress controller 与 pilot 后，直接运行本方案中的官方 runner。由于该集群的 LoadBalancer Service 没有可用后端节点，测试机到状态地址不可达；验证时仅用 `kubectl port-forward` 把 HTTP/HTTPS 入口转到 Higress gateway，runner 仍保留官方生成的 Host、SNI、协议和期望值。
+第一轮在用户提供的 ACK Kubernetes v1.36.1 集群上使用了 `higress-system` 与 `gateway-conformance-infra` 分离的部署。该轮用于暴露问题，但不是最终 CI 拓扑。最终方案将 Higress 整体安装到 `gateway-conformance-infra`，与官方基础 Gateway 和同 namespace TLS Secret 对齐；ACK 已安装的 Gateway API v1.5.1 CRD 不做集群级降级，运行 v1.4.0 Suite 时仅在这次环境验证中显式允许 CRD mismatch。正式 kind CI 仍安装完全匹配的 v1.4.0 Standard CRD，且不允许 mismatch。
 
 最终原始报告位于 `out/gateway-api-conformance/cloud-core-full-final.yaml`，结果为：
 
@@ -484,16 +491,16 @@ profiles:
 
 | 官方用例/阶段 | 原因 | 修复 | 验证 |
 | --- | --- | --- | --- |
-| Suite 基础 Gateway 地址 | 解析默认 gateway Service 的 FQDN 时错误使用 Gateway namespace，跨 namespace Service 查找失败 | 从 FQDN 提取真实 Service namespace，并优先使用 Higress 配置的 gateway selector | 基础 Gateways 全部进入 ready |
+| Suite 基础 Gateway 地址 | 第一轮把 gateway Service 放在 `higress-system`，而官方 Gateway 固定在 `gateway-conformance-infra`，触发了 Higress 现有同 namespace 假设 | 测试专用 Helm release 改到 `gateway-conformance-infra`；回滚跨 namespace FQDN、selector 优先级和初始化时序修改 | 待同 namespace ACK 全量验证 |
 | `GatewayClassObservedGenerationBump` | controller 只处理名为 `higress` 的 GatewayClass，忽略 controllerName 相同的其他 Class | 以 `spec.controllerName=higress.io/gateway-controller` 作为归属条件 | 单项与最终全量通过 |
-| `HTTPRouteCrossNamespace` | 默认共享 gateway selector 没有在内部 controller 建立前传入，导致跨 namespace Gateway 找不到工作负载 | 在构造内部 controller 时传入默认 selector | 单项与最终全量通过 |
-| `HTTPRouteHTTPSListener` | pilot 把 Gateway namespace 错误等同于共享 gateway Pod namespace；SDS 因此拒绝 Gateway 同 namespace 的合法 Secret；Higress fork 的 `ReferenceAllowed` 也错误地只接受 `Secret` 作为引用方 kind | 同 namespace 授权改为比较 Gateway 与 Secret namespace；恢复 `KubernetesGateway`/`XListenerSet` 作为引用方的通用 ReferenceGrant 分派并保留 nil 防护 | HTTPS 三个请求场景、pilot focused test 与最终全量通过 |
+| `HTTPRouteCrossNamespace` | 第一轮共享 gateway workload 与 Gateway 不同 namespace，工作负载关联失败 | 让 Higress gateway Service/Pod 与官方 Gateway 同 namespace；不修改生产 selector 行为 | 待同 namespace ACK 全量验证 |
+| `HTTPRouteHTTPSListener` | 第一轮 Gateway/Secret 虽同 namespace，但 gateway Pod 在 `higress-system`，被 Istio 现有 SDS 信任边界拒绝 | gateway Pod 与 Gateway/Secret 同 namespace；Istio submodule 和统一 pilot tag均回滚到原值 | 待同 namespace ACK 全量验证 |
 | `HTTPRouteHostnameIntersection` | VirtualService 使用原始 HTTPRoute hostname，没有收窄到 listener/route hostname 的有效交集 | 按 Gateway API hostname 子集规则生成交集并去重 | 全部 wildcard、精确与不相交子场景通过 |
 | `HTTPRouteServiceTypes` | backend 存在性依赖 Istio 服务目录；无 Endpoint 的 headless Service 未进入目录，被误报 `BackendNotFound` | 用 Kubernetes Service informer 校验 Gateway API Service 引用是否存在 | ClusterIP、headless、手工 EndpointSlice 三类请求全部通过 |
 
 环境问题与产品问题需要分开：ACK LoadBalancer 不可达只影响测试机连接路径，不是 Higress Core 功能失败；表中其余项目均是由官方 Core 用例暴露的实现问题，已用当前源码重新构建并验证。
 
-Higress 部署中只有 `higress-core` 监听 Gateway API；discovery 容器显式设置 `PILOT_ENABLE_GATEWAY_API=false`。Istio submodule 的改动位于转换后 Istio Gateway 的合并和 SDS 授权阶段，不会让 Pilot 再监听 Gateway API。当前 v1.4 Core 的跨 namespace Secret 用例验证 Gateway status，未覆盖跨 namespace TLS 数据面握手；higress-core 的 ReferenceGrant 校验结果目前也没有传给禁用 Gateway API controller 的 Pilot，因此不能据此宣称跨 namespace TLS 证书数据面已经完整支持。
+Higress 部署中只有 `higress-core` 监听 Gateway API；discovery 容器显式设置 `PILOT_ENABLE_GATEWAY_API=false`。因此本轮不修改 Istio submodule。v1.4 Core 的跨 namespace Secret + ReferenceGrant 用例只验证 Gateway listener status，不覆盖跨 namespace TLS 数据面握手；不能因为状态用例通过就宣称该数据面能力已经完整支持。
 
 本地 Apple Silicon 验证还发现统一的 gateway tag 当前是 `linux/amd64` 单架构镜像，在 arm64 kind 节点的模拟执行中 Envoy 会段错误。默认 GitHub Actions 和 ACK 验证环境均为 amd64；为保持与其他 e2e 完全相同的数据面产物，本方案不为 Gateway API job 单独替换 tag。arm64 本地执行需要等统一 gateway tag 提供 arm64 产物后再作为支持路径。
 

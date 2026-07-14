@@ -81,10 +81,6 @@ var AlwaysReady = func(class schema.GroupVersionResource, stop <-chan struct{}) 
 }
 
 func setupController(t *testing.T, objs ...runtime.Object) *Controller {
-	return setupControllerWithSelector(t, nil, objs...)
-}
-
-func setupControllerWithSelector(t *testing.T, defaultGatewaySelector map[string]string, objs ...runtime.Object) *Controller {
 	setGatewayClassNameForTest(t, "")
 	kc := kube.NewFakeClient(objs...)
 	setupClientCRDs(t, kc)
@@ -93,8 +89,7 @@ func setupControllerWithSelector(t *testing.T, defaultGatewaySelector map[string
 		kc,
 		AlwaysReady,
 		controller.Options{KrtDebugger: krt.GlobalDebugHandler},
-		nil,
-		defaultGatewaySelector)
+		nil)
 	kc.RunAndWait(stop)
 	go controller.Run(stop)
 	cg := core.NewConfigGenTest(t, core.TestOptions{})
@@ -113,7 +108,6 @@ func setupControllerWithGatewayClass(t *testing.T, gatewayClass string, objs ...
 		kc,
 		AlwaysReady,
 		controller.Options{KrtDebugger: krt.GlobalDebugHandler},
-		nil,
 		nil)
 	kc.RunAndWait(stop)
 	go controller.Run(stop)
@@ -214,26 +208,6 @@ func TestListGatewayResourceTypeWithAlternateGatewayClassName(t *testing.T) {
 	cfg := controller.List(gvk.Gateway, "ns1")
 	assert.Equal(t, len(cfg), 1)
 	assert.Equal(t, cfg[0].Name, "alternate-gw-"+constants.KubernetesGatewayName+"-default")
-}
-
-func TestDefaultGatewayUsesConfiguredSelector(t *testing.T) {
-	selector := map[string]string{"higress": "higress-system-higress-gateway"}
-	controller := setupControllerWithSelector(t, selector,
-		&k8sbeta.GatewayClass{
-			ObjectMeta: metav1.ObjectMeta{Name: "higress"},
-			Spec:       *gatewayClassSpec,
-		},
-		&k8sbeta.Gateway{
-			ObjectMeta: metav1.ObjectMeta{Name: "gwspec", Namespace: "ns1"},
-			Spec:       *gatewaySpec,
-		})
-
-	cfg := controller.List(gvk.Gateway, "ns1")
-	assert.Equal(t, len(cfg), 1)
-	assert.Equal(t, cfg[0].Spec.(*networking.Gateway).Selector, selector)
-	if _, found := cfg[0].Annotations["internal.istio.io/gateway-service"]; found {
-		t.Fatal("default gateway should use the configured selector instead of a service annotation")
-	}
 }
 
 func TestListGatewayResourceTypeWithCustomGatewayClass(t *testing.T) {

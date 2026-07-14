@@ -174,10 +174,10 @@ func ListenerSetCollection(
 
 				// Start - Updated by Higress
 				var selector map[string]string
-				if useDefaultService && len(defaultGatewaySelector) != 0 {
-					selector = defaultGatewaySelector
-				} else if len(gatewayServices) != 0 {
+				if len(gatewayServices) != 0 {
 					meta[model.InternalGatewayServiceAnnotation] = strings.Join(gatewayServices, ",")
+				} else if useDefaultService {
+					selector = defaultGatewaySelector
 				} else {
 					// Protective programming. This shouldn't happen.
 					continue
@@ -319,10 +319,10 @@ func GatewayCollection(
 			meta[constants.InternalServiceAccount] = serviceAccountName
 			// Start - Updated by Higress
 			var selector map[string]string
-			if useDefaultService && len(defaultGatewaySelector) != 0 {
-				selector = defaultGatewaySelector
-			} else if len(gatewayServices) != 0 {
+			if len(gatewayServices) != 0 {
 				meta[model.InternalGatewayServiceAnnotation] = strings.Join(gatewayServices, ",")
+			} else if useDefaultService {
+				selector = defaultGatewaySelector
 			} else {
 				// Protective programming. This shouldn't happen.
 				continue

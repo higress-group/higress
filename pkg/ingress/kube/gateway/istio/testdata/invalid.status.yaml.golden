@@ -460,9 +460,6 @@ metadata:
   namespace: invalid-gateway-address
 spec: null
 status:
-  addresses:
-  - type: Hostname
-    value: higress-gateway.higress-system.svc.cluster.local
   conditions:
   - lastTransitionTime: fake
     message: Resource accepted
@@ -470,9 +467,10 @@ status:
     status: "True"
     type: Accepted
   - lastTransitionTime: fake
-    message: Resource programmed, assigned to service(s) higress-gateway.higress-system.svc.cluster.local:80
-    reason: Programmed
-    status: "True"
+    message: 'Failed to assign to any requested addresses: hostname "higress-gateway.higress-system.svc.cluster.local"
+      not found'
+    reason: Invalid
+    status: "False"
     type: Programmed
   listeners:
   - attachedRoutes: 0
