@@ -1064,10 +1064,14 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 			return nil, nil, &ConfigError{Reason: InvalidDestination, Message: "service name invalid; the name of the Service must be used, not the hostname."}
 		}
 		hostname = fmt.Sprintf("%s.%s.svc.%s", to.Name, namespace, ctx.DomainSuffix)
-		key := namespace + "/" + string(to.Name)
-		svc := ptr.Flatten(krt.FetchOne(ctx.Krt, ctx.Services, krt.FilterKey(key)))
-		if svc == nil {
-			invalidBackendErr = &ConfigError{Reason: InvalidDestinationNotFound, Message: fmt.Sprintf("backend(%s) not found", hostname)}
+		// Keep Higress service resolution as the primary lookup so its service naming and
+		// plugin binding semantics remain unchanged. The informer is only a fallback for
+		// Kubernetes Services that exist but are not available through GatewayContext yet.
+		if ctx.LookupHostname(hostname, namespace, "Service") == nil {
+			key := namespace + "/" + string(to.Name)
+			if svc := ptr.Flatten(krt.FetchOne(ctx.Krt, ctx.Services, krt.FilterKey(key))); svc == nil {
+				invalidBackendErr = &ConfigError{Reason: InvalidDestinationNotFound, Message: fmt.Sprintf("backend(%s) not found", hostname)}
+			}
 		}
 	case config.GroupVersionKind{Group: gvk.ServiceEntry.Group, Kind: "Hostname"}:
 		if to.Namespace != nil {
