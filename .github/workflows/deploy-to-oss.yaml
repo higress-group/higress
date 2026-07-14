@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
       # Step 2
       - name: Download Helm Charts Index
-        uses: go-choppy/ossutil-github-action@master
+        uses: go-choppy/ossutil-github-action@7fe73c7342e740bdfb6954f8ca3486dd714fde94 # master (2022-05-26)
         with:
           ossArgs: 'cp oss://higress-ai/helm-charts/index.yaml ./artifact/'
           accessKey: ${{ secrets.ACCESS_KEYID }}
@@ -46,7 +46,7 @@ jobs:
             sed -i 's/higress\.io/higress\.cn/g' ./artifact/cn-index.yaml
       # Step 5
       - name: Upload to OSS
-        uses: go-choppy/ossutil-github-action@master
+        uses: go-choppy/ossutil-github-action@7fe73c7342e740bdfb6954f8ca3486dd714fde94 # master (2022-05-26)
         with:
           ossArgs: 'cp -r -u ./artifact/ oss://higress-ai/helm-charts/'
           accessKey: ${{ secrets.ACCESS_KEYID }}

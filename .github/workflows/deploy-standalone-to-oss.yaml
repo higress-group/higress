@@ -29,7 +29,7 @@ jobs:
           echo "Version=$VERSION"
       # Step 3
       - name: Upload to OSS
-        uses: go-choppy/ossutil-github-action@master
+        uses: go-choppy/ossutil-github-action@7fe73c7342e740bdfb6954f8ca3486dd714fde94 # master (2022-05-26)
         with:
           ossArgs: 'cp -r -u ./artifact/ oss://higress-ai/standalone/'
           accessKey: ${{ secrets.ACCESS_KEYID }}
