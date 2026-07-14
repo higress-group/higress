@@ -27,8 +27,7 @@
 | --- | --- | --- | --- | --- |
 | `origin/main` 基线 | `154782660cabb5ae8d313e6348efe747bb5e9d16` | `de2c9628294f51b13c4a70b3a862b4372890797a` | `481184afc44176eb23d64e0011dc3ea1ae6a410c` | 28 通过、5 失败 |
 | v2.2.3 完整基线 | `v2.2.3`，Git tag commit `39ec41aab6eb1d40499bed2847085696de0ebb96` | `de2c9628294f51b13c4a70b3a862b4372890797a` | `fcc50202f47e27f6b8391a4bd9bbc0a9127d89d7` | 28 通过、5 失败 |
-| 修复 core + v2.2.3 数据面 | `7d3e4fb8ae946c7bcdf687d51405231de4b4e697` | v2.2.3 原始 tag | v2.2.3 原始 tag | 33 通过、0 失败 |
-| 修复后的当前完整组合 | `7d3e4fb8ae946c7bcdf687d51405231de4b4e697` | 当前仓库统一 tag | 当前仓库统一 tag | 33 通过、0 失败 |
+| 保留 LookupHostname 的修复 core + v2.2.3 数据面 | `a8365b7bb6980d4b75b2db878eebcb89a0f1ccc7` | v2.2.3 原始 tag | v2.2.3 原始 tag | 33 通过、0 失败 |
 
 `v2.2.3` 与 `origin/main` 的三个相关生产代码文件没有差异，两个基线也复现了完全相同的失败集合。v2.2.3 的较早 gateway 镜像没有增加额外失败。
 
@@ -38,7 +37,7 @@
 | --- | --- |
 | `out/gateway-api-conformance/ack-same-namespace-origin-main-report.yaml` | `40d643857073e64fc51d769fe30efd8c4dfacc9745c0b3f0b5a3481632aa4908` |
 | `out/gateway-api-conformance/ack-v2.2.3-baseline-report.yaml` | `c3f61a97037eb87431afec96bcc233016f979fee9f0808eec6a1a4e6e7fb62d9` |
-| `out/gateway-api-conformance/ack-fixed-core-v2.2.3-data-plane-report.yaml` | `2607809c8f058e51932ec74a0b5560df08cea2c2d5d8c5178a0ebf97ccac3137` |
+| `out/gateway-api-conformance/ack-preserve-lookup-v2.2.3-data-plane-report.yaml` | `9d81ee1b4b9e2c8e608b6ad331324d92c40146851a3a114b993007eac4fe5293` |
 | `out/gateway-api-conformance/ack-same-namespace-final-head-report.yaml` | `ab59aa6f15590cf0784b66a7ccce4cfad541d84468f499cdee5e1c15b811623b` |
 
 ## 4. 五个失败用例及根因
