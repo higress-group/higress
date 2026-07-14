@@ -23,6 +23,7 @@ export GOPROXY ?= https://proxy.golang.org,direct
 
 GATEWAY_API_VERSION ?= v1.4.0
 GATEWAY_CONFORMANCE_PROFILE ?= GATEWAY-HTTP
+GATEWAY_CONFORMANCE_SUPPORTED_FEATURES ?= Gateway,HTTPRoute,ReferenceGrant
 GATEWAY_CONFORMANCE_REPORT ?= out/gateway-api-conformance/report.yaml
 GATEWAY_CONFORMANCE_CONTACT ?= https://github.com/alibaba/higress/issues
 GATEWAY_CONFORMANCE_RUN_TEST ?=
@@ -308,16 +309,16 @@ kube-load-gateway-api-images: $(tools/kind-gateway-api)
 	KIND=$(tools/kind-gateway-api) tools/hack/kind-load-image.sh higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/pilot $(ISTIO_LATEST_IMAGE_TAG)
 	KIND=$(tools/kind-gateway-api) tools/hack/kind-load-image.sh higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway $(ENVOY_LATEST_IMAGE_TAG)
 
-# higress-gateway-api-test-prepare prepares a kind cluster for Gateway API tests.
-.PHONY: higress-gateway-api-test-prepare
-higress-gateway-api-test-prepare: delete-gateway-api-cluster create-gateway-api-cluster install-gateway-api-crds docker-build kube-load-gateway-api-images install-dev-gateway-api
+# gateway-conformance-test-prepare prepares a kind cluster for Gateway API tests.
+.PHONY: gateway-conformance-test-prepare
+gateway-conformance-test-prepare: delete-gateway-api-cluster create-gateway-api-cluster install-gateway-api-crds docker-build kube-load-gateway-api-images install-dev-gateway-api
 	kubectl wait --timeout=10m -n $(GATEWAY_API_TEST_NAMESPACE) deployment/higress-controller --for=condition=Available
 	kubectl wait --timeout=10m -n $(GATEWAY_API_TEST_NAMESPACE) deployment/higress-gateway --for=condition=Available
 	kubectl wait --timeout=10m gatewayclass/higress --for=condition=Accepted
 
-# run-higress-gateway-api-test runs the upstream Gateway API Conformance Suite.
-.PHONY: run-higress-gateway-api-test
-run-higress-gateway-api-test:
+# run-gateway-conformance-test runs the upstream Gateway API Conformance Suite.
+.PHONY: run-gateway-conformance-test
+run-gateway-conformance-test:
 	mkdir -p $(dir $(GATEWAY_CONFORMANCE_REPORT))
 	HIGRESS_GATEWAY_API_TEST_DIAL_LOCALHOST=$(GATEWAY_API_DIAL_LOCALHOST) \
 	HIGRESS_GATEWAY_API_TEST_LOCAL_HTTP_PORT=$(GATEWAY_API_LOCAL_HTTP_PORT) \
@@ -325,6 +326,7 @@ run-higress-gateway-api-test:
 		-run '^TestGatewayAPIConformance$$' \
 		-args \
 		--gateway-class=higress \
+		--supported-features=$(GATEWAY_CONFORMANCE_SUPPORTED_FEATURES) \
 		--conformance-profiles=$(GATEWAY_CONFORMANCE_PROFILE) \
 		--organization=alibaba \
 		--project=higress \
@@ -337,13 +339,13 @@ run-higress-gateway-api-test:
 		$(if $(GATEWAY_CONFORMANCE_RUN_TEST),--run-test=$(GATEWAY_CONFORMANCE_RUN_TEST),) \
 		--report-output=$(abspath $(GATEWAY_CONFORMANCE_REPORT))
 
-# higress-gateway-api-test runs Gateway API tests as a standard Higress integration test.
-.PHONY: higress-gateway-api-test
-higress-gateway-api-test: higress-gateway-api-test-prepare run-higress-gateway-api-test
+# gateway-conformance-test runs Gateway API tests as a standard Higress integration test.
+.PHONY: gateway-conformance-test
+gateway-conformance-test: gateway-conformance-test-prepare run-gateway-conformance-test
 
-# higress-gateway-api-test-clean deletes the Gateway API test cluster.
-.PHONY: higress-gateway-api-test-clean
-higress-gateway-api-test-clean: delete-gateway-api-cluster
+# gateway-conformance-test-clean deletes the Gateway API test cluster.
+.PHONY: gateway-conformance-test-clean
+gateway-conformance-test-clean: delete-gateway-api-cluster
 
 # higress-conformance-test-prepare prepares the environment for higress conformance tests.
 .PHONY: higress-conformance-test-prepare

@@ -18,7 +18,7 @@ Higress e2e tests are mainly focusing on two parts for now:
 Higress provides make target to run ingress api conformance tests and wasmplugin tests,
 
 + API Tests: `make higress-conformance-test`
-+ Gateway API Tests: `make higress-gateway-api-test`
++ Gateway API Tests: `make gateway-conformance-test`
 + WasmPlugin Tests: `make higress-wasmplugin-test`
     + Build all Go WasmPlugins for testing: `make higress-wasmplugin-test`
     + Build tests for a specific Go WasmPlugin only: `PLUGIN_NAME=request-block make higress-wasmplugin-test`
@@ -72,6 +72,6 @@ The test environment reusability is primarily achieved through the following tar
 
 ## Gateway APIs Conformance Tests
 
-Run `make higress-gateway-api-test` to execute the upstream Gateway API v1.4.0 Conformance Suite. The default scope is the required `GATEWAY-HTTP` Core profile (`Gateway`, `HTTPRoute`, and `ReferenceGrant`); Extended features are not enabled.
+Run `make gateway-conformance-test` to execute the upstream Gateway API v1.4.0 Conformance Suite. The default scope is the required `GATEWAY-HTTP` Core profile (`Gateway`, `HTTPRoute`, and `ReferenceGrant`); Extended features are not enabled.
 
 The runner imports the upstream suite and its embedded manifests directly, so Higress does not maintain copies of official test cases. Set `GATEWAY_CONFORMANCE_RUN_TEST=<ShortName>` only when debugging one upstream test. The default PR workflow always runs the complete Core profile and stores the generated report as a CI artifact.

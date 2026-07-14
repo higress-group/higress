@@ -10,8 +10,4 @@ status:
     reason: Accepted
     status: "True"
     type: Accepted
-  supportedFeatures:
-  - name: Gateway
-  - name: HTTPRoute
-  - name: ReferenceGrant
 ---

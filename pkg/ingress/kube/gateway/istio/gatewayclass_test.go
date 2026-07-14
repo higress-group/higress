@@ -16,12 +16,10 @@ package istio
 
 import (
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gateway "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	"github.com/alibaba/higress/v2/pkg/config/constants"
@@ -30,18 +28,6 @@ import (
 	"istio.io/istio/pkg/test"
 	"istio.io/istio/pkg/test/util/retry"
 )
-
-func TestGetClassStatusSupportedFeatures(t *testing.T) {
-	status := GetClassStatus(nil, 1)
-	want := []gatewayv1.SupportedFeature{
-		{Name: "Gateway"},
-		{Name: "HTTPRoute"},
-		{Name: "ReferenceGrant"},
-	}
-	if !reflect.DeepEqual(status.SupportedFeatures, want) {
-		t.Fatalf("expected supported features %v, got %v", want, status.SupportedFeatures)
-	}
-}
 
 func TestClassController(t *testing.T) {
 	setGatewayClassNameForTest(t, "")

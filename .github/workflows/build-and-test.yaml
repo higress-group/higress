@@ -90,13 +90,16 @@ jobs:
           name: higress
           path: out/
 
-  higress-gateway-api-test:
+  gateway-conformance-test:
     runs-on: ubuntu-22.04
     needs: [build]
     env:
       GATEWAY_API_TEST_NAMESPACE: gateway-conformance-infra
+      HIGRESS_TEST_IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HIGRESS_TEST_IMAGE_TAG }}
 
       - name: Disable containerd image store
         run: |
@@ -136,8 +139,9 @@ jobs:
 
       - name: Run Higress Gateway API Tests
         run: |-
-          GOPROXY="https://proxy.golang.org,direct" make higress-gateway-api-test \
-            HIGRESS_CONFORMANCE_VERSION=${{ github.event.pull_request.head.sha || github.sha }}
+          GOPROXY="https://proxy.golang.org,direct" make gateway-conformance-test \
+            TAG="${HIGRESS_TEST_IMAGE_TAG}" \
+            HIGRESS_CONFORMANCE_VERSION="${HIGRESS_TEST_IMAGE_TAG}"
 
       - name: Collect Gateway API Test Diagnostics
         if: always()
@@ -153,13 +157,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: higress-gateway-api-test
+          name: gateway-conformance-test
           path: out/gateway-api-conformance/
           if-no-files-found: warn
 
       - name: Clean Gateway API Test Environment
         if: always()
-        run: make higress-gateway-api-test-clean
+        run: make gateway-conformance-test-clean
 
   higress-conformance-test:
     runs-on: ubuntu-22.04
@@ -217,6 +221,6 @@ jobs:
 
   publish:
     runs-on: ubuntu-22.04
-    needs: [higress-conformance-test, higress-gateway-api-test]
+    needs: [higress-conformance-test, gateway-conformance-test]
     steps:
       - uses: actions/checkout@v4

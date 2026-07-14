@@ -18,8 +18,4 @@ import (
 	"sigs.k8s.io/gateway-api/pkg/features"
 )
 
-var SupportedFeatures = features.SetsToNamesSet(
-	features.GatewayCoreFeatures,
-	features.HTTPRouteCoreFeatures,
-	features.ReferenceGrantCoreFeatures,
-)
+var SupportedFeatures = features.AllFeatures
