@@ -19,7 +19,16 @@ type HigressOpsConfig struct {
 	envoyAdminURL string
 	namespace     string
 	istiodToken   string
+	username      string
+	password      string
 	description   string
+}
+
+// GetBasicAuthCredentials implements common.BasicAuthProvider. The higress-ops
+// server exposes Istio/Envoy debug interfaces, so it always requires callers to
+// present HTTP Basic credentials.
+func (c *HigressOpsConfig) GetBasicAuthCredentials() (string, string) {
+	return c.username, c.password
 }
 
 func (c *HigressOpsConfig) ParseConfig(config map[string]interface{}) error {
@@ -40,6 +49,20 @@ func (c *HigressOpsConfig) ParseConfig(config map[string]interface{}) error {
 	} else {
 		c.namespace = "higress-system"
 	}
+
+	// Basic auth credentials are mandatory: the higress-ops server exposes
+	// Istio/Envoy debug interfaces and must not be reachable unauthenticated.
+	username, ok := config["username"].(string)
+	if !ok || username == "" {
+		return errors.New("missing username: higress-ops requires basic auth credentials (username and password)")
+	}
+	c.username = username
+
+	password, ok := config["password"].(string)
+	if !ok || password == "" {
+		return errors.New("missing password: higress-ops requires basic auth credentials (username and password)")
+	}
+	c.password = password
 
 	// Optional: Istiod authentication token (required for cross-pod access)
 	if istiodToken, ok := config["istiodToken"].(string); ok {
