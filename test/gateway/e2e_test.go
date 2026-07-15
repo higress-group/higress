@@ -97,11 +97,11 @@ func (d *localGatewayDialer) forward(namespace, service, remotePort string) (str
 		return forward.port, nil
 	}
 
-	targetPort, err := serviceTargetPort(namespace, service, remotePort)
+	resource, targetPort, err := servicePortForwardTarget(namespace, service, remotePort)
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.Command("kubectl", "-n", namespace, "port-forward", "--address=127.0.0.1", "service/"+service, ":"+targetPort)
+	cmd := exec.Command("kubectl", "-n", namespace, "port-forward", "--address=127.0.0.1", resource, ":"+targetPort)
 	output, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -111,8 +111,12 @@ func (d *localGatewayDialer) forward(namespace, service, remotePort string) (str
 		return "", err
 	}
 	scanner := bufio.NewScanner(output)
+	var commandOutput strings.Builder
 	for scanner.Scan() {
-		match := forwardingAddress.FindStringSubmatch(scanner.Text())
+		line := scanner.Text()
+		commandOutput.WriteString(line)
+		commandOutput.WriteByte('\n')
+		match := forwardingAddress.FindStringSubmatch(line)
 		if len(match) != 2 {
 			continue
 		}
@@ -123,26 +127,45 @@ func (d *localGatewayDialer) forward(namespace, service, remotePort string) (str
 		}()
 		return match[1], nil
 	}
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
 	if err := scanner.Err(); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		return "", err
 	}
-	return "", fmt.Errorf("kubectl port-forward for service %s/%s exited before becoming ready", namespace, service)
+	if err := cmd.Wait(); err != nil {
+		return "", fmt.Errorf("kubectl port-forward for service %s/%s exited before becoming ready: %w: %s", namespace, service, err, strings.TrimSpace(commandOutput.String()))
+	}
+	return "", fmt.Errorf("kubectl port-forward for service %s/%s exited before becoming ready: %s", namespace, service, strings.TrimSpace(commandOutput.String()))
 }
 
-func serviceTargetPort(namespace, service, port string) (string, error) {
+func servicePortForwardTarget(namespace, service, port string) (string, string, error) {
 	output, err := exec.Command("kubectl", "-n", namespace, "get", "service", service, "-o", "json").Output()
 	if err != nil {
-		return "", fmt.Errorf("get service %s/%s: %w", namespace, service, err)
+		return "", "", fmt.Errorf("get service %s/%s: %w", namespace, service, err)
 	}
-	return serviceTargetPortFromJSON(output, port)
+	targetPort, useEndpointPod, err := serviceTargetPortFromJSON(output, port)
+	if err != nil {
+		return "", "", err
+	}
+	if !useEndpointPod {
+		return "service/" + service, targetPort, nil
+	}
+
+	output, err = exec.Command("kubectl", "-n", namespace, "get", "endpointslice", "-l", "kubernetes.io/service-name="+service, "-o", "json").Output()
+	if err != nil {
+		return "", "", fmt.Errorf("get EndpointSlices for service %s/%s: %w", namespace, service, err)
+	}
+	pod, err := endpointSlicePodFromJSON(output)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve endpoint pod for service %s/%s: %w", namespace, service, err)
+	}
+	return "pod/" + pod, targetPort, nil
 }
 
-func serviceTargetPortFromJSON(data []byte, port string) (string, error) {
+func serviceTargetPortFromJSON(data []byte, port string) (string, bool, error) {
 	requestedPort, err := strconv.ParseInt(port, 10, 32)
 	if err != nil {
-		return "", fmt.Errorf("parse service port %q: %w", port, err)
+		return "", false, fmt.Errorf("parse service port %q: %w", port, err)
 	}
 
 	var service struct {
@@ -154,7 +177,7 @@ func serviceTargetPortFromJSON(data []byte, port string) (string, error) {
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(data, &service); err != nil {
-		return "", fmt.Errorf("decode service: %w", err)
+		return "", false, fmt.Errorf("decode service: %w", err)
 	}
 
 	for _, servicePort := range service.Spec.Ports {
@@ -162,16 +185,49 @@ func serviceTargetPortFromJSON(data []byte, port string) (string, error) {
 			continue
 		}
 		if len(servicePort.TargetPort) == 0 || string(servicePort.TargetPort) == "null" {
-			return port, nil
+			return port, false, nil
 		}
 		var targetPortNumber int32
 		if err := json.Unmarshal(servicePort.TargetPort, &targetPortNumber); err == nil && targetPortNumber > 0 {
-			return strconv.Itoa(int(targetPortNumber)), nil
+			return strconv.Itoa(int(targetPortNumber)), true, nil
 		}
-		return "", fmt.Errorf("service port %d does not have a numeric targetPort", servicePort.Port)
+		return "", false, fmt.Errorf("service port %d does not have a numeric targetPort", servicePort.Port)
 	}
 
-	return "", fmt.Errorf("service does not expose port %s", port)
+	return "", false, fmt.Errorf("service does not expose port %s", port)
+}
+
+func endpointSlicePodFromJSON(data []byte) (string, error) {
+	var endpointSlices struct {
+		Items []struct {
+			Endpoints []struct {
+				Conditions struct {
+					Ready *bool `json:"ready"`
+				} `json:"conditions"`
+				TargetRef struct {
+					Kind string `json:"kind"`
+					Name string `json:"name"`
+				} `json:"targetRef"`
+			} `json:"endpoints"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &endpointSlices); err != nil {
+		return "", fmt.Errorf("decode EndpointSlices: %w", err)
+	}
+
+	for _, endpointSlice := range endpointSlices.Items {
+		for _, endpoint := range endpointSlice.Endpoints {
+			if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
+				continue
+			}
+			if endpoint.TargetRef.Kind != "Pod" || endpoint.TargetRef.Name == "" {
+				continue
+			}
+			return endpoint.TargetRef.Name, nil
+		}
+	}
+
+	return "", fmt.Errorf("no ready Pod endpoint found")
 }
 
 func (d *localGatewayDialer) close() {
@@ -185,16 +241,18 @@ func (d *localGatewayDialer) close() {
 
 func TestServiceTargetPortFromJSON(t *testing.T) {
 	tests := []struct {
-		name string
-		port string
-		json string
-		want string
+		name           string
+		port           string
+		json           string
+		want           string
+		useEndpointPod bool
 	}{
 		{
-			name: "numeric target port",
-			port: "80",
-			json: `{"spec":{"ports":[{"port":80,"targetPort":30080}]}}`,
-			want: "30080",
+			name:           "numeric target port",
+			port:           "80",
+			json:           `{"spec":{"ports":[{"port":80,"targetPort":30080}]}}`,
+			want:           "30080",
+			useEndpointPod: true,
 		},
 		{
 			name: "default target port",
@@ -206,13 +264,33 @@ func TestServiceTargetPortFromJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := serviceTargetPortFromJSON([]byte(tt.json), tt.port)
+			got, useEndpointPod, err := serviceTargetPortFromJSON([]byte(tt.json), tt.port)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got != tt.want {
 				t.Fatalf("serviceTargetPortFromJSON() = %q, want %q", got, tt.want)
 			}
+			if useEndpointPod != tt.useEndpointPod {
+				t.Fatalf("serviceTargetPortFromJSON() useEndpointPod = %t, want %t", useEndpointPod, tt.useEndpointPod)
+			}
 		})
+	}
+}
+
+func TestEndpointSlicePodFromJSON(t *testing.T) {
+	pod, err := endpointSlicePodFromJSON([]byte(`{
+  "items": [
+    {"endpoints": [
+      {"conditions": {"ready": false}, "targetRef": {"kind": "Pod", "name": "not-ready"}},
+      {"conditions": {"ready": true}, "targetRef": {"kind": "Pod", "name": "gateway-123"}}
+    ]}
+  ]
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pod != "gateway-123" {
+		t.Fatalf("endpointSlicePodFromJSON() = %q, want gateway-123", pod)
 	}
 }
