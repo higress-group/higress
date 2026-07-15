@@ -5,6 +5,8 @@ metadata:
 spec:
   controllerName: higress.io/gateway-controller
 ---
+# parametersRef with an unsupported group/kind must set Accepted=False with
+# reason InvalidParameters (Gateway API conformance test GatewayInvalidParametersRef).
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: Gateway
 metadata:
@@ -17,6 +19,44 @@ spec:
       group: invalid.io
       kind: InvalidParameters
       name: invalid
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+---
+# parametersRef pointing at a ConfigMap that does not exist must also set
+# Accepted=False with reason InvalidParameters.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: missing-parameters-configmap
+  namespace: higress-system
+spec:
+  gatewayClassName: higress
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: does-not-exist
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+---
+# parametersRef pointing at the pre-provisioned valid-parameters ConfigMap is
+# valid; Accepted stays True.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: valid-parameters-configmap
+  namespace: higress-system
+spec:
+  gatewayClassName: higress
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: valid-parameters
   listeners:
   - name: http
     port: 80

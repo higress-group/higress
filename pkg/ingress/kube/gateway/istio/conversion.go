@@ -1729,7 +1729,8 @@ func reportGatewayStatus(
 	// Setup initial conditions to the success state. If we encounter errors, we will update this.
 	// We have two status
 	// Accepted: is the configuration valid. This reflects the validity of the Gateway's listeners:
-	// report ListenersNotValid whenever any listener is invalid, and reject the Gateway only when none are valid.
+	// we report the ListenersNotValid reason whenever any listener is invalid, and only reject the
+	// Gateway (Accepted=False) when none of its listeners are valid.
 	// Programmed: is the data plane "ready" (note: eventually consistent)
 	gatewayConditions := map[string]*condition{
 		string(k8s.GatewayConditionAccepted): {
@@ -1744,6 +1745,9 @@ func reportGatewayStatus(
 	if gatewayErr != nil {
 		gatewayConditions[string(k8s.GatewayConditionAccepted)].error = gatewayErr
 	} else if totalListeners := len(obj.Spec.Listeners); totalListeners > 0 && validListeners < totalListeners {
+		// One or more listeners are invalid. A Gateway stays Accepted=True as long
+		// as at least one of its listeners is valid; it is only rejected when none are valid. In both
+		// cases we surface the ListenersNotValid reason.
 		accepted := gatewayConditions[string(k8s.GatewayConditionAccepted)]
 		if validListeners == 0 {
 			accepted.error = &ConfigError{

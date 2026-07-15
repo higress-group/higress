@@ -578,6 +578,15 @@ D2lWusoe2/nEqfDVVWGWlyJ7yOmqaVm/iNUN9B2N2g==
 		},
 		&corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
+				Name:      "valid-parameters",
+				Namespace: "higress-system",
+			},
+			Data: map[string]string{
+				"deployment": "spec:\n  replicas: 2\n",
+			},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      "malformed",
 				Namespace: "default",
 			},

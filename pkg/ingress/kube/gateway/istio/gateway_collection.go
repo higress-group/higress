@@ -420,12 +420,14 @@ func validateParametersRef(ctx krt.HandlerContext, gw *gateway.Gateway, configMa
 		return nil
 	}
 	params := gw.Spec.Infrastructure.ParametersRef
+	// Validate that the ParametersRef group/kind is of a ConfigMap.
 	if string(params.Kind) != gvk.ConfigMap.Kind || string(params.Group) != gvk.ConfigMap.Group {
 		return &ConfigError{
 			Reason:  string(gatewayv1.GatewayReasonInvalidParameters),
 			Message: fmt.Sprintf("Unsupported parametersRef group/kind %s/%s, only ConfigMap is supported", params.Group, params.Kind),
 		}
 	}
+	// Validate ParametersRef exists.
 	cm := ptr.Flatten(krt.FetchOne(ctx, configMaps, krt.FilterKey(gw.Namespace+"/"+params.Name)))
 	if cm == nil {
 		return &ConfigError{
