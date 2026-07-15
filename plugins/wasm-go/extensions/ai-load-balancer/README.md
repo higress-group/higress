@@ -239,6 +239,95 @@ lb_config:
   - outbound|80||test-2.static
 ```
 
+## 路由配置
+
+`cluster_metrics` 负责选择 Envoy cluster，并把 cluster 名称写入 `cluster_header`（默认值：`x-higress-target-cluster`）。插件本身不会替换路由；需要通过 HTTP route 的 `cluster_header` 配置 `EnvoyFilter`，使 Envoy 使用被选中的 cluster。
+
+下面的示例假设 `default` 命名空间中已有两个 Kubernetes Service。Ingress 的默认后端是 `llm-a`，插件可以在 `llm-a` 与 `llm-b` 之间选择。请将 `<version>` 替换为与网关匹配的已发布 `ai-load-balancer` 插件版本。
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: llm-gateway
+  namespace: default
+spec:
+  ingressClassName: higress
+  rules:
+    - host: llm.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: llm-a
+                port:
+                  number: 8080
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-load-balancer
+  namespace: higress-system
+spec:
+  priority: 400
+  matchRules:
+    - ingress:
+        - default/llm-gateway
+      config:
+        lb_type: cluster
+        lb_policy: cluster_metrics
+        lb_config:
+          mode: LeastBusy
+          rate_limit: 0.6
+          service_list:
+            - outbound|8080||llm-a.default.svc.cluster.local
+            - outbound|8080||llm-b.default.svc.cluster.local
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-load-balancer:<version>
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ai-load-balancer-cluster-header
+  namespace: higress-system
+spec:
+  configPatches:
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          name: "higress-rds-80.*"
+          vhost:
+            name: "*:80"
+      patch:
+        operation: MERGE
+        value:
+          route:
+            cluster_header: x-higress-target-cluster
+```
+
+HTTPS listener 的插件与 service 配置无需修改；只需把 `EnvoyFilter` 中的 `higress-rds-80.*` 替换为 `higress-rds-443.*`，并把 `*:80` 替换为 `*:443`。
+
+### 确认生成的 cluster 名称
+
+`service_list` 必须与网关配置中的 Envoy cluster 名称完全一致；service 名称、命名空间、端口和服务发现类型都会影响结果。应用配置前，先在网关中检查：
+
+```bash
+kubectl -n higress-system exec <gateway-pod> -- \
+  curl -s http://127.0.0.1:15000/config_dump | \
+  grep -o 'outbound|[0-9]*||[^\"]*llm-[ab][^\"]*'
+```
+
+### 排障
+
+| 现象 | 检查项 |
+| --- | --- |
+| `route_not_found` | 确认 `EnvoyFilter` 匹配了 Ingress 实际使用的 listener 端口和 virtual host。 |
+| 请求仍然走 Ingress 默认后端 | 确认插件匹配该 Ingress，优先级高于依赖最终路由的 filter，并且插件写入的 `cluster_header` 与 `EnvoyFilter` 读取的一致。 |
+| 选中的服务不可达 | 从 `config_dump` 复制完整 cluster 名称；不要自行猜测端口、命名空间或 `.dns`/`.static` 后缀。 |
+| HTTPS 配置未生效 | 使用 `higress-rds-443.*` 与 `*:443`，并通过 `config_dump` 确认实际 listener 与 vhost 名称。 |
+
 # Cluster Hash（一致性 Hash 路由）
 
 ## 功能说明

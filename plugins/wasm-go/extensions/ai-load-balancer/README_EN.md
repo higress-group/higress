@@ -241,6 +241,106 @@ lb_config:
   - outbound|80||test-2.static
 ```
 
+## Routing setup
+
+`cluster_metrics` selects an Envoy cluster and writes its name to
+`cluster_header` (default: `x-higress-target-cluster`). It does **not** replace
+the route by itself. Configure an `EnvoyFilter` with the HTTP route
+`cluster_header` field so Envoy uses the selected cluster.
+
+The following example assumes that two Kubernetes Services already exist in the
+`default` namespace. The Ingress default backend is `llm-a`; the plug-in may
+select either `llm-a` or `llm-b`. Replace `<version>` with the released
+`ai-load-balancer` plug-in version that matches the gateway.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: llm-gateway
+  namespace: default
+spec:
+  ingressClassName: higress
+  rules:
+    - host: llm.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: llm-a
+                port:
+                  number: 8080
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-load-balancer
+  namespace: higress-system
+spec:
+  priority: 400
+  matchRules:
+    - ingress:
+        - default/llm-gateway
+      config:
+        lb_type: cluster
+        lb_policy: cluster_metrics
+        lb_config:
+          mode: LeastBusy
+          rate_limit: 0.6
+          service_list:
+            - outbound|8080||llm-a.default.svc.cluster.local
+            - outbound|8080||llm-b.default.svc.cluster.local
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-load-balancer:<version>
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ai-load-balancer-cluster-header
+  namespace: higress-system
+spec:
+  configPatches:
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          name: "higress-rds-80.*"
+          vhost:
+            name: "*:80"
+      patch:
+        operation: MERGE
+        value:
+          route:
+            cluster_header: x-higress-target-cluster
+```
+
+For an HTTPS listener, keep the same plug-in and service configuration, and
+replace only `higress-rds-80.*` with `higress-rds-443.*` and `*:80` with
+`*:443` in the `EnvoyFilter`.
+
+### Verify the generated cluster names
+
+The values in `service_list` must exactly match the Envoy cluster names in the
+gateway configuration; service name, namespace, port, and service-discovery
+type are all significant. Inspect the running gateway before applying the
+configuration:
+
+```bash
+kubectl -n higress-system exec <gateway-pod> -- \
+  curl -s http://127.0.0.1:15000/config_dump | \
+  grep -o 'outbound|[0-9]*||[^\"]*llm-[ab][^\"]*'
+```
+
+### Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| `route_not_found` | Confirm the `EnvoyFilter` matches the listener port and virtual host used by the Ingress. |
+| Request still uses the Ingress default backend | Confirm the plug-in matches the Ingress, has a higher priority than filters that depend on the final route, and writes the same `cluster_header` that the `EnvoyFilter` reads. |
+| Selected service cannot be reached | Copy the exact cluster name from `config_dump`; do not infer its port, namespace, or `.dns`/`.static` suffix. |
+| HTTPS configuration has no effect | Use `higress-rds-443.*` and `*:443`, then inspect `config_dump` to confirm the actual listener and vhost names. |
+
 # Cluster Hash
 
 ## Introduction

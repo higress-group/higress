@@ -1,0 +1,77 @@
+# Copyright (c) 2022 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The Ingress has v1 as its configured backend. The ai-load-balancer plug-in
+# selects v2, and the EnvoyFilter consumes its cluster header to override the
+# configured backend route.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-load-balancer-cluster-metrics
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: ai-load-balancer.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-load-balancer-cluster-metrics
+  namespace: higress-system
+spec:
+  priority: 400
+  matchRules:
+    - ingress:
+        - higress-conformance-infra/ai-load-balancer-cluster-metrics
+      config:
+        lb_type: cluster
+        lb_policy: cluster_metrics
+        lb_config:
+          mode: LeastBusy
+          # A single candidate makes the test deterministic. The Ingress itself
+          # still points to infra-backend-v1, so a v2 response proves that the
+          # plugin header and EnvoyFilter route override are both active.
+          service_list:
+            - outbound|8080||infra-backend-v2.higress-conformance-infra.svc.cluster.local
+  url: file:///opt/plugins/wasm-go/extensions/ai-load-balancer/plugin.wasm
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ai-load-balancer-cluster-header
+  namespace: higress-system
+spec:
+  configPatches:
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          name: "higress-rds-80.*"
+          vhost:
+            name: "*:80"
+      patch:
+        operation: MERGE
+        value:
+          route:
+            cluster_header: x-higress-target-cluster
