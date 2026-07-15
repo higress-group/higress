@@ -464,6 +464,17 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 	if origRequest.ClaudeOutputConfig != nil {
 		claudeRequest.OutputConfig = origRequest.ClaudeOutputConfig
 	}
+	// Map the standard OpenAI "thinking" field (e.g. sent by langchain
+	// via extra_body.thinking.budget_tokens). Previously this field was
+	// never mapped onto the Claude thinking config, and its budget was
+	// tagged singular "budget_token" so it was silently dropped and
+	// then overwritten by reasoning_effort.
+	if origRequest.Thinking != nil && origRequest.Thinking.Type != "" && origRequest.Thinking.Type != "disabled" {
+		claudeRequest.Thinking = &claudeThinkingConfig{
+			Type:         origRequest.Thinking.Type,
+			BudgetTokens: origRequest.Thinking.BudgetToken + origRequest.Thinking.BudgetTokens,
+		}
+	}
 	if origRequest.ClaudeThinking != nil {
 		claudeRequest.Thinking = origRequest.ClaudeThinking
 	}
@@ -474,16 +485,15 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 		if origRequest.ReasoningMaxTokens > 0 {
 			budgetTokens = origRequest.ReasoningMaxTokens
 		} else {
-			// Convert reasoning_effort to budget_tokens
 			switch origRequest.ReasoningEffort {
 			case "low":
-				budgetTokens = 1024 // Minimum required by Claude
+				budgetTokens = 1024
 			case "medium":
 				budgetTokens = 8192
 			case "high":
 				budgetTokens = 16384
 			default:
-				budgetTokens = 8192 // Default to medium
+				budgetTokens = 8192
 			}
 		}
 		// Ensure minimum budget_tokens requirement
@@ -494,6 +504,13 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 			Type:         "enabled",
 			BudgetTokens: budgetTokens,
 		}
+	}
+
+	// Clamp budget_tokens to be strictly below max_tokens. Claude requires
+	// max_tokens > thinking.budget_tokens, otherwise it returns HTTP 400
+	// "max_tokens must be greater than thinking.budget_tokens".
+	if claudeRequest.Thinking != nil {
+		clampThinkingBudget(claudeRequest.Thinking, claudeRequest.MaxTokens)
 	}
 
 	// Track if system message exists in original request
@@ -1075,4 +1092,18 @@ func (c *claudeProvider) GetApiName(path string) ApiName {
 		return ApiNameEmbeddings
 	}
 	return ""
+}
+
+// clampThinkingBudget ensures thinking.budget_tokens is strictly below maxTokens.
+// Claude requires max_tokens > thinking.budget_tokens, otherwise it returns
+// HTTP 400 "max_tokens must be greater than thinking.budget_tokens".
+func clampThinkingBudget(thinking *claudeThinkingConfig, maxTokens int) {
+	if thinking == nil || maxTokens <= 0 {
+		return
+	}
+	if thinking.BudgetTokens >= maxTokens {
+		if clamped := maxTokens - 1; clamped >= 1024 {
+			thinking.BudgetTokens = clamped
+		}
+	}
 }

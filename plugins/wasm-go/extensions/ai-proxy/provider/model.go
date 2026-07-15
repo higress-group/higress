@@ -36,8 +36,11 @@ type NonOpenAIStyleOptions struct {
 }
 
 type thinkingParam struct {
-	Type        string `json:"type,omitempty"`
-	BudgetToken int    `json:"budget_token,omitempty"`
+	Type string `json:"type,omitempty"`
+	// Accept both the singular "budget_token" and the plural
+	// "budget_tokens" (used by standard OpenAI SDKs such as langchain).
+	BudgetToken  int `json:"budget_token,omitempty"`
+	BudgetTokens int `json:"budget_tokens,omitempty"`
 }
 
 type chatCompletionRequest struct {
