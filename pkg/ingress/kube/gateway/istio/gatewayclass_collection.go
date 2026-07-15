@@ -38,8 +38,7 @@ func GatewayClassesCollection(
 	krt.Collection[GatewayClass],
 ) {
 	return krt.NewStatusCollection(gatewayClasses, func(ctx krt.HandlerContext, obj *gateway.GatewayClass) (*gateway.GatewayClassStatus, *GatewayClass) {
-		if gatewayv1.ObjectName(obj.Name) != gatewayv1.ObjectName(gatewayClassName) ||
-			obj.Spec.ControllerName != managedGatewayController {
+		if obj.Spec.ControllerName != managedGatewayController {
 			return nil, nil
 		}
 		if _, known := classInfos[obj.Spec.ControllerName]; !known {

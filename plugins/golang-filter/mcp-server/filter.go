@@ -31,6 +31,19 @@ func (f *filter) DecodeHeaders(header api.RequestHeaderMap, endStream bool) api.
 
 	for _, server := range f.config.servers {
 		if common.MatchDomainWithMatchers(f.host, server.HostMatchers) && strings.HasPrefix(f.path, server.BaseServer.GetMessageEndpoint()) {
+			// Enforce HTTP Basic auth for servers that require it, before any
+			// further processing of the request.
+			if server.AuthUsername != "" {
+				authHeader, _ := header.Get("authorization")
+				if !common.CheckBasicAuth(authHeader, server.AuthUsername, server.AuthPassword) {
+					f.callbacks.DecoderFilterCallbacks().SendLocalReply(
+						http.StatusUnauthorized,
+						"Unauthorized",
+						map[string][]string{"WWW-Authenticate": {`Basic realm="MCP Server"`}},
+						0, "")
+					return api.LocalReply
+				}
+			}
 			if url.Method != http.MethodPost {
 				f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusMethodNotAllowed, "Method not allowed", nil, 0, "")
 				return api.LocalReply

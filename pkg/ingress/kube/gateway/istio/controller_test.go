@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -31,6 +32,7 @@ import (
 	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/networking/core"
 	"istio.io/istio/pilot/pkg/serviceregistry/kube/controller"
+	"istio.io/istio/pilot/pkg/status"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/schema/gvk"
@@ -190,6 +192,90 @@ func TestListGatewayResourceType(t *testing.T) {
 		assert.Equal(t, c.Namespace, "ns1")
 		assert.Equal(t, c.Spec, any(expectedgw))
 	}
+}
+
+func TestListGatewayResourceTypeWithAlternateGatewayClassName(t *testing.T) {
+	alternateGateway := gatewaySpec.DeepCopy()
+	alternateGateway.GatewayClassName = "alternate"
+	controller := setupController(t,
+		&k8sbeta.GatewayClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "alternate"},
+			Spec:       *gatewayClassSpec,
+		},
+		&k8sbeta.Gateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "alternate-gw", Namespace: "ns1"},
+			Spec:       *alternateGateway,
+		})
+
+	cfg := controller.List(gvk.Gateway, "ns1")
+	assert.Equal(t, len(cfg), 1)
+	assert.Equal(t, cfg[0].Name, "alternate-gw-"+constants.KubernetesGatewayName+"-default")
+}
+
+func TestHTTPRouteBackendServiceLifecycle(t *testing.T) {
+	backendPort := k8s.PortNumber(80)
+	route := httpRouteSpec.DeepCopy()
+	route.Rules = []k8s.HTTPRouteRule{{
+		BackendRefs: []k8s.HTTPBackendRef{{
+			BackendRef: k8s.BackendRef{
+				BackendObjectReference: k8s.BackendObjectReference{
+					Name: "backend",
+					Port: &backendPort,
+				},
+			},
+		}},
+	}}
+	controller := setupController(t,
+		&k8sbeta.GatewayClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "higress"},
+			Spec:       *gatewayClassSpec,
+		},
+		&k8sbeta.Gateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "gwspec", Namespace: "ns1"},
+			Spec:       *gatewaySpec,
+		},
+		&k8sbeta.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "http-route", Namespace: "ns1"},
+			Spec:       *route,
+		},
+	)
+
+	statusQueue := &TestStatusQueue{state: map[status.Resource]any{}}
+	setAndWait(t, controller, statusQueue)
+	resolvedRefs := func() string {
+		for _, rawStatus := range statusQueue.Statuses() {
+			routeStatus, ok := rawStatus.(*k8s.HTTPRouteStatus)
+			if !ok {
+				continue
+			}
+			for _, parent := range routeStatus.Parents {
+				for _, condition := range parent.Conditions {
+					if condition.Type == string(k8s.RouteConditionResolvedRefs) {
+						return string(condition.Status) + "/" + condition.Reason
+					}
+				}
+			}
+		}
+		return ""
+	}
+	assert.EventuallyEqual(t, resolvedRefs, "False/BackendNotFound")
+
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: "ns1"},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{
+			Name: "http",
+			Port: int32(backendPort),
+		}}},
+	}
+	if _, err := controller.client.Kube().CoreV1().Services("ns1").Create(t.Context(), service, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	assert.EventuallyEqual(t, resolvedRefs, "True/ResolvedRefs")
+
+	if err := controller.client.Kube().CoreV1().Services("ns1").Delete(t.Context(), service.Name, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	assert.EventuallyEqual(t, resolvedRefs, "False/BackendNotFound")
 }
 
 func TestListGatewayResourceTypeWithCustomGatewayClass(t *testing.T) {

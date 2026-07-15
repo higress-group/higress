@@ -20,6 +20,7 @@ set -euo pipefail
 CLUSTER_NAME=${CLUSTER_NAME:-"higress"}
 METALLB_VERSION=${METALLB_VERSION:-"v0.13.7"}
 KIND_NODE_TAG=${KIND_NODE_TAG:-"v1.25.3"}
+KIND=${KIND:-"tools/bin/kind"}
 PROJECT_DIR=$(pwd)
 
 echo ${KIND_NODE_TAG}
@@ -67,7 +68,7 @@ EOF
 
 ## Create kind cluster.
 if [[ -z "${KIND_NODE_TAG}" ]]; then
-  tools/bin/kind create cluster --name "${CLUSTER_NAME}" --config=tools/hack/cluster.conf
+  "${KIND}" create cluster --name "${CLUSTER_NAME}" --config=tools/hack/cluster.conf
 else
-  tools/bin/kind create cluster --image "kindest/node:${KIND_NODE_TAG}" --name "${CLUSTER_NAME}" --config=tools/hack/cluster.conf
+  "${KIND}" create cluster --image "kindest/node:${KIND_NODE_TAG}" --name "${CLUSTER_NAME}" --config=tools/hack/cluster.conf
 fi
