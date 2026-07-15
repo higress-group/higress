@@ -17,11 +17,13 @@ package gateway
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -95,7 +97,11 @@ func (d *localGatewayDialer) forward(namespace, service, remotePort string) (str
 		return forward.port, nil
 	}
 
-	cmd := exec.Command("kubectl", "-n", namespace, "port-forward", "--address=127.0.0.1", "service/"+service, ":"+remotePort)
+	targetPort, err := serviceTargetPort(namespace, service, remotePort)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command("kubectl", "-n", namespace, "port-forward", "--address=127.0.0.1", "service/"+service, ":"+targetPort)
 	output, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -125,11 +131,88 @@ func (d *localGatewayDialer) forward(namespace, service, remotePort string) (str
 	return "", fmt.Errorf("kubectl port-forward for service %s/%s exited before becoming ready", namespace, service)
 }
 
+func serviceTargetPort(namespace, service, port string) (string, error) {
+	output, err := exec.Command("kubectl", "-n", namespace, "get", "service", service, "-o", "json").Output()
+	if err != nil {
+		return "", fmt.Errorf("get service %s/%s: %w", namespace, service, err)
+	}
+	return serviceTargetPortFromJSON(output, port)
+}
+
+func serviceTargetPortFromJSON(data []byte, port string) (string, error) {
+	requestedPort, err := strconv.ParseInt(port, 10, 32)
+	if err != nil {
+		return "", fmt.Errorf("parse service port %q: %w", port, err)
+	}
+
+	var service struct {
+		Spec struct {
+			Ports []struct {
+				Port       int32           `json:"port"`
+				TargetPort json.RawMessage `json:"targetPort"`
+			} `json:"ports"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(data, &service); err != nil {
+		return "", fmt.Errorf("decode service: %w", err)
+	}
+
+	for _, servicePort := range service.Spec.Ports {
+		if servicePort.Port != int32(requestedPort) {
+			continue
+		}
+		if len(servicePort.TargetPort) == 0 || string(servicePort.TargetPort) == "null" {
+			return port, nil
+		}
+		var targetPortNumber int32
+		if err := json.Unmarshal(servicePort.TargetPort, &targetPortNumber); err == nil && targetPortNumber > 0 {
+			return strconv.Itoa(int(targetPortNumber)), nil
+		}
+		return "", fmt.Errorf("service port %d does not have a numeric targetPort", servicePort.Port)
+	}
+
+	return "", fmt.Errorf("service does not expose port %s", port)
+}
+
 func (d *localGatewayDialer) close() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, forward := range d.forwards {
 		_ = forward.cmd.Process.Kill()
 		_ = forward.cmd.Wait()
+	}
+}
+
+func TestServiceTargetPortFromJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		port string
+		json string
+		want string
+	}{
+		{
+			name: "numeric target port",
+			port: "80",
+			json: `{"spec":{"ports":[{"port":80,"targetPort":30080}]}}`,
+			want: "30080",
+		},
+		{
+			name: "default target port",
+			port: "8080",
+			json: `{"spec":{"ports":[{"port":8080}]}}`,
+			want: "8080",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := serviceTargetPortFromJSON([]byte(tt.json), tt.port)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("serviceTargetPortFromJSON() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
