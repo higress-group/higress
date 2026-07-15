@@ -1,0 +1,50 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: GatewayClass
+metadata:
+  name: higress
+spec:
+  controllerName: higress.io/gateway-controller
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: invalid-parameters-ref
+  namespace: higress-system
+spec:
+  gatewayClassName: higress
+  infrastructure:
+    parametersRef:
+      group: invalid.io
+      kind: InvalidParameters
+      name: invalid
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: only-unsupported-protocol
+  namespace: higress-system
+spec:
+  gatewayClassName: higress
+  listeners:
+  - name: invalid
+    port: 1111
+    protocol: INVALID
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: mixed-protocols
+  namespace: higress-system
+spec:
+  gatewayClassName: higress
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+  - name: invalid
+    port: 1111
+    protocol: INVALID

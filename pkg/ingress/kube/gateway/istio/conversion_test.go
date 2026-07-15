@@ -687,6 +687,7 @@ func TestConvertResources(t *testing.T) {
 		{name: "mismatch"},
 		{name: "weighted"},
 		{name: "zero"},
+		{name: "gateway-v1.6"},
 		//{name: "mesh"},
 		{
 			name: "invalid",
@@ -925,7 +926,7 @@ func TestReportGatewayStatusAddressType(t *testing.T) {
 				},
 			}
 
-			reportGatewayStatus(&ctx, gw, gs, []string{"higress-gateway.higress-system.svc.cluster.local"}, servers, 0, nil)
+			reportGatewayStatus(&ctx, gw, gs, []string{"higress-gateway.higress-system.svc.cluster.local"}, servers, 0, nil, 1)
 
 			if len(gs.Addresses) != len(tt.want) {
 				t.Fatalf("expected %d addresses, got %d: %#v", len(tt.want), len(gs.Addresses), gs.Addresses)

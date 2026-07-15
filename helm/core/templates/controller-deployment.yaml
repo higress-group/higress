@@ -82,6 +82,8 @@ spec:
             value: {{ include "gateway.name" . }}
           - name: PILOT_ENABLE_GATEWAY_API
             value: "{{ .Values.global.enableGatewayAPI }}"
+          - name: HIGRESS_ENABLE_GATEWAY_API_MANAGED_SERVICE
+            value: "{{ .Values.global.enableGatewayAPIManagedService }}"
           - name: PILOT_ENABLE_ALPHA_GATEWAY_API
             value: "{{ .Values.global.enableAlphaGatewayAPI }}"
           {{- if .Values.global.enableInferenceExtension }}

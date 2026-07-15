@@ -105,7 +105,8 @@ type Controller struct {
 
 	domainSuffix string // the domain suffix to use for generated resources
 
-	shadowServiceReconciler controllers.Queue
+	shadowServiceReconciler         controllers.Queue
+	managedGatewayServiceReconciler controllers.Queue
 
 	// Start - Added by Higress
 	DefaultGatewaySelector map[string]string
@@ -164,21 +165,34 @@ func NewController(
 	options controller.Options,
 	xdsUpdater model.XDSUpdater,
 ) *Controller {
+	return NewControllerWithDefaultGatewaySelector(kc, waitForCRD, options, xdsUpdater, nil)
+}
+
+// NewControllerWithDefaultGatewaySelector constructs a Gateway API controller whose generated
+// Istio Gateways bind to the supplied shared data-plane workload selector.
+func NewControllerWithDefaultGatewaySelector(
+	kc kube.Client,
+	waitForCRD func(class schema.GroupVersionResource, stop <-chan struct{}) bool,
+	options controller.Options,
+	xdsUpdater model.XDSUpdater,
+	defaultGatewaySelector map[string]string,
+) *Controller {
 	stop := make(chan struct{})
 	opts := krt.NewOptionsBuilder(stop, "gateway", options.KrtDebugger)
 
 	tw := revisions.NewTagWatcher(kc, options.Revision)
 	c := &Controller{
-		client:         kc,
-		cluster:        options.ClusterID,
-		revision:       options.Revision,
-		status:         &status.StatusCollections{},
-		tagWatcher:     krt.NewRecomputeProtected(tw, false, opts.WithName("tagWatcher")...),
-		waitForCRD:     waitForCRD,
-		gatewayContext: krt.NewRecomputeProtected(atomic.NewPointer[GatewayContext](nil), false, opts.WithName("gatewayContext")...),
-		stop:           stop,
-		xdsUpdater:     xdsUpdater,
-		domainSuffix:   options.DomainSuffix,
+		client:                 kc,
+		cluster:                options.ClusterID,
+		revision:               options.Revision,
+		status:                 &status.StatusCollections{},
+		tagWatcher:             krt.NewRecomputeProtected(tw, false, opts.WithName("tagWatcher")...),
+		waitForCRD:             waitForCRD,
+		gatewayContext:         krt.NewRecomputeProtected(atomic.NewPointer[GatewayContext](nil), false, opts.WithName("gatewayContext")...),
+		stop:                   stop,
+		xdsUpdater:             xdsUpdater,
+		domainSuffix:           options.DomainSuffix,
+		DefaultGatewaySelector: defaultGatewaySelector,
 	}
 	tw.AddHandler(func(s sets.String) {
 		c.tagWatcher.TriggerRecomputation()
@@ -267,6 +281,7 @@ func NewController(
 		ListenerSets,
 		GatewayClasses,
 		inputs.Namespaces,
+		inputs.Services,
 		ReferenceGrants,
 		inputs.ConfigMaps,
 		inputs.Secrets,
@@ -292,6 +307,11 @@ func NewController(
 	c.shadowServiceReconciler = controllers.NewQueue("inference pool shadow service reconciler",
 		controllers.WithReconciler(c.reconcileShadowService(svcClient, InferencePools, inputs.Services)),
 		controllers.WithMaxAttempts(5))
+	if enableManagedGatewayService {
+		c.managedGatewayServiceReconciler = controllers.NewQueue("managed gateway service reconciler",
+			controllers.WithReconciler(c.reconcileManagedGatewayService(inputs.Gateways, inputs.Services)),
+			controllers.WithMaxAttempts(5))
+	}
 
 	if features.EnableGatewayAPIInferenceExtension {
 		status.RegisterStatus(c.status, InferencePoolStatus, GetStatus)
@@ -454,6 +474,31 @@ func NewController(
 				obj.Namespace, obj.Name)
 		}),
 	)
+	if enableManagedGatewayService {
+		handlers = append(handlers,
+			inputs.Gateways.Register(func(e krt.Event[*gateway.Gateway]) {
+				obj := e.Latest()
+				c.managedGatewayServiceReconciler.Add(types.NamespacedName{
+					Namespace: obj.Namespace,
+					Name:      obj.Name,
+				})
+			}),
+			inputs.Services.Register(func(e krt.Event[*corev1.Service]) {
+				for _, obj := range e.Items() {
+					if obj.Labels[managedGatewayServiceLabel] != "true" {
+						continue
+					}
+					gatewayNamespace := obj.Labels[managedGatewayNamespaceLabel]
+					gatewayName := obj.Annotations[managedGatewayNameAnnotation]
+					if gatewayNamespace == "" || gatewayName == "" {
+						continue
+					}
+					c.managedGatewayServiceReconciler.Add(types.NamespacedName{Namespace: gatewayNamespace, Name: gatewayName})
+					return
+				}
+			}),
+		)
+	}
 	c.handlers = handlers
 
 	return c
@@ -573,6 +618,9 @@ func (c *Controller) Run(stop <-chan struct{}) {
 	tw := c.tagWatcher.AccessUnprotected()
 	go tw.Run(stop)
 	go c.shadowServiceReconciler.Run(stop)
+	if enableManagedGatewayService {
+		go c.managedGatewayServiceReconciler.Run(stop)
+	}
 	go func() {
 		kube.WaitForCacheSync("gateway tag watcher", stop, tw.HasSynced)
 		c.tagWatcher.MarkSynced()

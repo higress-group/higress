@@ -36,6 +36,8 @@ import (
 	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/revisions"
 	"istio.io/istio/pkg/slices"
+
+	higressconfig "github.com/alibaba/higress/v2/pkg/config"
 )
 
 type Gateway struct {
@@ -240,6 +242,7 @@ func GatewayCollection(
 	listenerSets krt.Collection[ListenerSet],
 	gatewayClasses krt.Collection[GatewayClass],
 	namespaces krt.Collection[*corev1.Namespace],
+	services krt.Collection[*corev1.Service],
 	grants ReferenceGrants,
 	configMaps krt.Collection[*corev1.ConfigMap],
 	secrets krt.Collection[*corev1.Secret],
@@ -282,16 +285,25 @@ func GatewayCollection(
 			return status, nil
 		}
 		servers := []*istio.Server{}
+		statusServers := []*istio.Server{}
 
 		// Start - Updated by Higress
 		// Extract the addresses. A gateway will bind to a specific Service
 		gatewayServices, useDefaultService, err := extractGatewayServices(domainSuffix, obj, classInfo)
+		statusGatewayServices := gatewayServices
+		if enableManagedGatewayService && useDefaultService {
+			statusGatewayServices = []string{managedGatewayServiceHostname(domainSuffix, obj.Namespace, obj.Name)}
+		}
 		if len(gatewayServices) == 0 && !useDefaultService && err != nil {
 			// Short circuit if its a hard failure
-			reportGatewayStatus(context, obj, status, gatewayServices, servers, 0, err)
+			reportGatewayStatus(context, obj, status, gatewayServices, servers, 0, err, 0)
 			return status, nil
 		}
 		// End - Updated by Higress
+
+		if err == nil {
+			err = validateParametersRef(ctx, obj, configMaps)
+		}
 
 		// See: https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api/#manual-deployment
 		// If we set and address of type hostname, then we have no idea what service accounts the gateway workloads will use.
@@ -304,10 +316,22 @@ func GatewayCollection(
 			)
 		}
 
+		validListeners := 0
 		for i, l := range kgw.Listeners {
 			server, updatedStatus, programmed := buildListener(ctx, configMaps, secrets, grants, namespaces, obj, status.Listeners, kgw, l, i, controllerName, nil)
 			status.Listeners = updatedStatus
+			if programmed {
+				validListeners++
+			}
 
+			statusServers = append(statusServers, server.DeepCopy())
+			if enableManagedGatewayService && UseDefaultService(&kgw) {
+				service := ptr.Flatten(krt.FetchOne(ctx, services, krt.FilterKey(
+					higressconfig.PodNamespace+"/"+managedGatewayServiceName(obj.Namespace, obj.Name))))
+				if targetPort, found := managedGatewayTargetPort(service, l.Port); found {
+					server.Port.Number = targetPort
+				}
+			}
 			servers = append(servers, server)
 			if controllerName == constants.ManagedGatewayMeshController || controllerName == constants.ManagedGatewayEastWestController {
 				// Waypoint and ambient e/w don't actually convert the routes to VirtualServices
@@ -319,7 +343,9 @@ func GatewayCollection(
 			meta[constants.InternalServiceAccount] = serviceAccountName
 			// Start - Updated by Higress
 			var selector map[string]string
-			if len(gatewayServices) != 0 {
+			if enableManagedGatewayService && useDefaultService {
+				selector = defaultGatewaySelector
+			} else if len(gatewayServices) != 0 {
 				meta[model.InternalGatewayServiceAnnotation] = strings.Join(gatewayServices, ",")
 			} else if useDefaultService {
 				selector = defaultGatewaySelector
@@ -382,11 +408,32 @@ func GatewayCollection(
 			})
 		}
 
-		reportGatewayStatus(context, obj, status, gatewayServices, servers, len(listenersFromSets), err)
+		reportGatewayStatus(context, obj, status, statusGatewayServices, statusServers, len(listenersFromSets), err, validListeners)
 		return status, result
 	}, opts.WithName("KubernetesGateway")...)
 
 	return statusCol, gw
+}
+
+func validateParametersRef(ctx krt.HandlerContext, gw *gateway.Gateway, configMaps krt.Collection[*corev1.ConfigMap]) *ConfigError {
+	if gw.Spec.Infrastructure == nil || gw.Spec.Infrastructure.ParametersRef == nil {
+		return nil
+	}
+	params := gw.Spec.Infrastructure.ParametersRef
+	if string(params.Kind) != gvk.ConfigMap.Kind || string(params.Group) != gvk.ConfigMap.Group {
+		return &ConfigError{
+			Reason:  string(gatewayv1.GatewayReasonInvalidParameters),
+			Message: fmt.Sprintf("Unsupported parametersRef group/kind %s/%s, only ConfigMap is supported", params.Group, params.Kind),
+		}
+	}
+	cm := ptr.Flatten(krt.FetchOne(ctx, configMaps, krt.FilterKey(gw.Namespace+"/"+params.Name)))
+	if cm == nil {
+		return &ConfigError{
+			Reason:  string(gatewayv1.GatewayReasonInvalidParameters),
+			Message: fmt.Sprintf("parametersRef ConfigMap %s/%s does not exist", gw.Namespace, params.Name),
+		}
+	}
+	return nil
 }
 
 // FinalGatewayStatusCollection finalizes a Gateway status. There is a circular logic between Gateways and Routes to determine

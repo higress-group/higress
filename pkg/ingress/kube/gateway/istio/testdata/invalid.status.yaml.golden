@@ -74,9 +74,9 @@ status:
     value: higress-gateway.higress-system.svc.domain.suffix
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: Resource programmed, assigned to service(s) higress-gateway.higress-system.svc.domain.suffix:34000
@@ -123,9 +123,9 @@ spec: null
 status:
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: 'Failed to assign to any requested addresses: no instances found for
@@ -176,9 +176,9 @@ status:
     value: higress-gateway.higress-system.svc.domain.suffix
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: Resource programmed, assigned to service(s) higress-gateway.higress-system.svc.domain.suffix:34001
@@ -274,9 +274,9 @@ spec: null
 status:
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: 'Failed to assign to any requested addresses: no instances found for
@@ -368,9 +368,9 @@ spec: null
 status:
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: 'Failed to assign to any requested addresses: no instances found for
@@ -413,9 +413,9 @@ spec: null
 status:
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: 'Failed to assign to any requested addresses: no instances found for

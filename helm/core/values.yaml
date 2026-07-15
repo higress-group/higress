@@ -54,6 +54,8 @@ global:
   enableIstioAPI: true
   # -- If true, Higress Controller will monitor Gateway API resources as well
   enableGatewayAPI: true
+  # -- If true, create an isolated Service and listener port for each managed Gateway.
+  enableGatewayAPIManagedService: true
   # -- If true, Higress Controller will monitor Gateway API resources that have not reached v1 yet
   enableAlphaGatewayAPI: false
   # -- If true, enable Gateway API Inference Extension support

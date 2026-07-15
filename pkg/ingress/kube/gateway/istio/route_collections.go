@@ -118,6 +118,9 @@ func HTTPRouteCollection(
 			routeKey := parent.InternalName
 			vsHosts := hostnameToStringList(route.Hostnames)
 			routes := gwResult.routes
+			if enableManagedGatewayService && parent.ParentPort != 0 {
+				routes = setRequestRedirectPort(routes, parent.ParentPort)
+			}
 			if parent.IsMesh() {
 				routes = meshResult.routes
 				// for mesh routes, build one VS per namespace/port->host

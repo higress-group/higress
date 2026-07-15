@@ -364,6 +364,21 @@ func augmentPortMatch(routes []*istio.HTTPRoute, port k8s.PortNumber) []*istio.H
 	return res
 }
 
+func setRequestRedirectPort(routes []*istio.HTTPRoute, port k8s.PortNumber) []*istio.HTTPRoute {
+	res := make([]*istio.HTTPRoute, 0, len(routes))
+	for _, r := range routes {
+		r = r.DeepCopy()
+		if r.Redirect != nil {
+			if derive, ok := r.Redirect.RedirectPort.(*istio.HTTPRedirect_DerivePort); ok &&
+				derive.DerivePort == istio.HTTPRedirect_FROM_REQUEST_PORT {
+				r.Redirect.RedirectPort = &istio.HTTPRedirect_Port{Port: uint32(port)}
+			}
+		}
+		res = append(res, r)
+	}
+	return res
+}
+
 func augmentTCPPortMatch(routes []*istio.TCPRoute, port k8s.PortNumber) []*istio.TCPRoute {
 	res := make([]*istio.TCPRoute, 0, len(routes))
 	for _, r := range routes {
@@ -742,6 +757,7 @@ func extractParentReferenceInfo(ctx RouteContext, parents RouteParents, obj cont
 				BannedHostnames:   bannedHostnames.Copy().Delete(pr.OriginalHostname),
 				ParentKey:         ir,
 				ParentSection:     pr.SectionName,
+				ParentPort:        pr.Port,
 				WaypointError:     waypointError,
 			}
 			parentRefs = append(parentRefs, rpi)
@@ -1584,6 +1600,7 @@ type routeParentReference struct {
 	BannedHostnames sets.Set[string]
 	ParentKey       parentKey
 	ParentSection   k8s.SectionName
+	ParentPort      k8s.PortNumber
 	// WaypointError, if present, indicates why the reference does not have valid configuration for generating a Waypoint
 	WaypointError *WaypointError
 }
@@ -1704,14 +1721,15 @@ func reportGatewayStatus(
 	servers []*istio.Server,
 	listenerSetCount int,
 	gatewayErr *ConfigError,
+	validListeners int,
 ) {
 	// TODO: we lose address if servers is empty due to an error
 	internal, external, pending, warnings, allUsable := r.ResolveGatewayInstances(obj.Namespace, gatewayServices, servers)
 
 	// Setup initial conditions to the success state. If we encounter errors, we will update this.
 	// We have two status
-	// Accepted: is the configuration valid. We only have errors in listeners, and the status is not supposed to
-	// be tied to listeners, so this is always accepted
+	// Accepted: is the configuration valid. This reflects the validity of the Gateway's listeners:
+	// report ListenersNotValid whenever any listener is invalid, and reject the Gateway only when none are valid.
 	// Programmed: is the data plane "ready" (note: eventually consistent)
 	gatewayConditions := map[string]*condition{
 		string(k8s.GatewayConditionAccepted): {
@@ -1725,6 +1743,17 @@ func reportGatewayStatus(
 	}
 	if gatewayErr != nil {
 		gatewayConditions[string(k8s.GatewayConditionAccepted)].error = gatewayErr
+	} else if totalListeners := len(obj.Spec.Listeners); totalListeners > 0 && validListeners < totalListeners {
+		accepted := gatewayConditions[string(k8s.GatewayConditionAccepted)]
+		if validListeners == 0 {
+			accepted.error = &ConfigError{
+				Reason:  string(k8s.GatewayReasonListenersNotValid),
+				Message: "None of the Gateway's listeners are valid",
+			}
+		} else {
+			accepted.reason = string(k8s.GatewayReasonListenersNotValid)
+			accepted.message = "One or more of the Gateway's listeners are invalid"
+		}
 	}
 
 	// Not defined in upstream API

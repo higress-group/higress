@@ -21,7 +21,7 @@ GO ?= go
 
 export GOPROXY ?= https://proxy.golang.org,direct
 
-GATEWAY_API_VERSION ?= v1.4.0
+GATEWAY_API_VERSION ?= v1.6.0
 GATEWAY_CONFORMANCE_PROFILE ?= GATEWAY-HTTP
 GATEWAY_CONFORMANCE_SUPPORTED_FEATURES ?= Gateway,HTTPRoute,ReferenceGrant
 GATEWAY_CONFORMANCE_REPORT ?= out/gateway-api-conformance/report.yaml
@@ -290,7 +290,7 @@ install-gateway-api-crds:
 	kubectl wait --for=condition=Established crd/httproutes.gateway.networking.k8s.io --timeout=120s
 	kubectl wait --for=condition=Established crd/referencegrants.gateway.networking.k8s.io --timeout=120s
 
-# create-gateway-api-cluster creates the Kubernetes version used by Gateway API v1.4.0 tests.
+# create-gateway-api-cluster creates the Kubernetes version used by Gateway API v1.6.0 tests.
 .PHONY: create-gateway-api-cluster
 create-gateway-api-cluster: $(tools/kind-gateway-api)
 	KIND=$(tools/kind-gateway-api) KIND_NODE_TAG=$(GATEWAY_API_KIND_NODE_TAG) tools/hack/create-cluster.sh
@@ -320,9 +320,9 @@ gateway-conformance-test-prepare: delete-gateway-api-cluster create-gateway-api-
 .PHONY: run-gateway-conformance-test
 run-gateway-conformance-test:
 	mkdir -p $(dir $(GATEWAY_CONFORMANCE_REPORT))
-	HIGRESS_GATEWAY_API_TEST_DIAL_LOCALHOST=$(GATEWAY_API_DIAL_LOCALHOST) \
+	cd test/gateway && HIGRESS_GATEWAY_API_TEST_DIAL_LOCALHOST=$(GATEWAY_API_DIAL_LOCALHOST) \
 	HIGRESS_GATEWAY_API_TEST_LOCAL_HTTP_PORT=$(GATEWAY_API_LOCAL_HTTP_PORT) \
-	HIGRESS_GATEWAY_API_TEST_LOCAL_HTTPS_PORT=$(GATEWAY_API_LOCAL_HTTPS_PORT) go test -v ./test/gateway \
+	HIGRESS_GATEWAY_API_TEST_LOCAL_HTTPS_PORT=$(GATEWAY_API_LOCAL_HTTPS_PORT) $(GO) test -v . \
 		-run '^TestGatewayAPIConformance$$' \
 		-args \
 		--gateway-class=higress \
