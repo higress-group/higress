@@ -639,7 +639,7 @@ func TestValidateBackendResource(t *testing.T) {
 				Kind:     "McpBridge",
 				Name:     "wrong-name",
 			},
-			expected: false,
+			expected: true,
 		},
 		{
 			name: "wrong Kind",

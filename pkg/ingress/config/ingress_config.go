@@ -53,6 +53,7 @@ import (
 
 	higressext "github.com/alibaba/higress/v2/api/extensions/v1alpha1"
 	higressv1 "github.com/alibaba/higress/v2/api/networking/v1"
+	mcpbridgev1 "github.com/alibaba/higress/v2/client/pkg/apis/networking/v1"
 	extlisterv1 "github.com/alibaba/higress/v2/client/pkg/listers/extensions/v1alpha1"
 	netlisterv1 "github.com/alibaba/higress/v2/client/pkg/listers/networking/v1"
 	"github.com/alibaba/higress/v2/pkg/cert"
@@ -97,10 +98,6 @@ var (
 	}
 )
 
-const (
-	DefaultMcpbridgeName = "default"
-)
-
 type IngressConfig struct {
 	remoteIngressControllers map[cluster.ID]common.IngressController
 	remoteGatewayControllers map[cluster.ID]common.GatewayController
@@ -128,6 +125,9 @@ type IngressConfig struct {
 	mcpbridgeController mcpbridge.McpBridgeController
 
 	mcpbridgeLister netlisterv1.McpBridgeLister
+
+	mcpBridges     map[string]*mcpbridgev1.McpBridge
+	mcpBridgeMutex sync.RWMutex
 
 	wasmPluginController wasmplugin.WasmPluginController
 
@@ -203,6 +203,7 @@ func NewIngressConfig(localKubeClient kube.Client, xdsUpdater istiomodel.XDSUpda
 		namespace:                namespace,
 		wasmPlugins:              make(map[string]*extensions.WasmPlugin),
 		http2rpcs:                make(map[string]*higressv1.Http2Rpc),
+		mcpBridges:               make(map[string]*mcpbridgev1.McpBridge),
 		commonOptions:            options,
 	}
 
@@ -1339,8 +1340,8 @@ func (m *IngressConfig) DeleteWasmPlugin(clusterNamespacedName util.ClusterNames
 }
 
 func (m *IngressConfig) AddOrUpdateMcpBridge(clusterNamespacedName util.ClusterNamespacedName) {
-	// TODO: get resource name from config
-	if clusterNamespacedName.Name != DefaultMcpbridgeName || clusterNamespacedName.Namespace != m.namespace {
+	// Only process McpBridge resources in our namespace
+	if clusterNamespacedName.Namespace != m.namespace {
 		return
 	}
 	mcpbridge, err := m.mcpbridgeLister.McpBridges(clusterNamespacedName.Namespace).Get(clusterNamespacedName.Name)
@@ -1349,38 +1350,44 @@ func (m *IngressConfig) AddOrUpdateMcpBridge(clusterNamespacedName util.ClusterN
 			clusterNamespacedName.Namespace, clusterNamespacedName.Name)
 		return
 	}
+
+	// Store the McpBridge in our tracking map
+	m.mcpBridgeMutex.Lock()
+	m.mcpBridges[clusterNamespacedName.Name] = mcpbridge
+	m.mcpBridgeMutex.Unlock()
+
 	if m.RegistryReconciler == nil {
 		m.RegistryReconciler = reconcile.NewReconciler(func() {
 			seMetadata := config.Meta{
-				Name:             "mcpbridge-serviceentry",
+				Name:             "mcpbridges-serviceentry",
 				Namespace:        m.namespace,
 				GroupVersionKind: gvk.ServiceEntry,
 				// Set this label so that we do not compare configs and just push.
 				Labels: map[string]string{constants.AlwaysPushLabel: "true"},
 			}
 			drMetadata := config.Meta{
-				Name:             "mcpbridge-destinationrule",
+				Name:             "mcpbridges-destinationrule",
 				Namespace:        m.namespace,
 				GroupVersionKind: gvk.DestinationRule,
 				// Set this label so that we do not compare configs and just push.
 				Labels: map[string]string{constants.AlwaysPushLabel: "true"},
 			}
 			vsMetadata := config.Meta{
-				Name:             "mcpbridge-virtualservice",
+				Name:             "mcpbridges-virtualservice",
 				Namespace:        m.namespace,
 				GroupVersionKind: gvk.VirtualService,
 				// Set this label so that we do not compare configs and just push.
 				Labels: map[string]string{constants.AlwaysPushLabel: "true"},
 			}
 			wasmMetadata := config.Meta{
-				Name:             "mcpbridge-wasmplugin",
+				Name:             "mcpbridges-wasmplugin",
 				Namespace:        m.namespace,
 				GroupVersionKind: gvk.WasmPlugin,
 				// Set this label so that we do not compare configs and just push.
 				Labels: map[string]string{constants.AlwaysPushLabel: "true"},
 			}
 			efMetadata := config.Meta{
-				Name:             "mcpbridge-envoyfilter",
+				Name:             "mcpbridges-envoyfilter",
 				Namespace:        m.namespace,
 				GroupVersionKind: gvk.EnvoyFilter,
 				// Set this label so that we do not compare configs and just push.
@@ -1410,8 +1417,10 @@ func (m *IngressConfig) AddOrUpdateMcpBridge(clusterNamespacedName util.ClusterN
 		}, m.localKubeClient, m.namespace, m.clusterId.String())
 		m.configmapMgr.RegisterMcpServerProvider(m.RegistryReconciler)
 	}
-	reconciler := m.RegistryReconciler
-	err = reconciler.Reconcile(mcpbridge)
+
+	// Aggregate all McpBridge resources and reconcile
+	aggregated := m.aggregateAllMcpBridges()
+	err = m.RegistryReconciler.Reconcile(aggregated)
 	if err != nil {
 		IngressLog.Errorf("Mcpbridge reconcile failed, err:%v", err)
 		return
@@ -1420,14 +1429,52 @@ func (m *IngressConfig) AddOrUpdateMcpBridge(clusterNamespacedName util.ClusterN
 }
 
 func (m *IngressConfig) DeleteMcpBridge(clusterNamespacedName util.ClusterNamespacedName) {
-	// TODO: get resource name from config
-	if clusterNamespacedName.Name != "default" || clusterNamespacedName.Namespace != m.namespace {
+	// Only process McpBridge resources in our namespace
+	if clusterNamespacedName.Namespace != m.namespace {
 		return
 	}
+
+	// Remove the McpBridge from our tracking map
+	m.mcpBridgeMutex.Lock()
+	delete(m.mcpBridges, clusterNamespacedName.Name)
+	isEmpty := len(m.mcpBridges) == 0
+	m.mcpBridgeMutex.Unlock()
+
 	if m.RegistryReconciler != nil {
-		go m.RegistryReconciler.Reconcile(nil)
-		m.RegistryReconciler = nil
+		if isEmpty {
+			// No more McpBridges, clean up the reconciler
+			go m.RegistryReconciler.Reconcile(nil)
+			m.RegistryReconciler = nil
+		} else {
+			// Re-aggregate remaining McpBridges and reconcile
+			aggregated := m.aggregateAllMcpBridges()
+			go m.RegistryReconciler.Reconcile(aggregated)
+		}
 	}
+}
+
+// aggregateAllMcpBridges combines all McpBridge resources into a single virtual McpBridge
+// for processing by the reconciler, with registry names prefixed by McpBridge name
+func (m *IngressConfig) aggregateAllMcpBridges() *mcpbridgev1.McpBridge {
+	m.mcpBridgeMutex.RLock()
+	defer m.mcpBridgeMutex.RUnlock()
+
+	aggregated := &mcpbridgev1.McpBridge{
+		Spec: higressv1.McpBridge{
+			Registries: make([]*higressv1.RegistryConfig, 0),
+		},
+	}
+
+	for mcpBridgeName, mcpBridge := range m.mcpBridges {
+		for _, registry := range mcpBridge.Spec.Registries {
+			// Clone registry and prefix name with McpBridge name to avoid conflicts
+			prefixedRegistry := *registry
+			prefixedRegistry.Name = mcpBridgeName + "-" + registry.Name
+			aggregated.Spec.Registries = append(aggregated.Spec.Registries, &prefixedRegistry)
+		}
+	}
+
+	return aggregated
 }
 
 func (m *IngressConfig) AddOrUpdateHttp2Rpc(clusterNamespacedName util.ClusterNamespacedName) {
