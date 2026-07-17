@@ -14,6 +14,11 @@
 
 package registry
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 const (
 	JsonGoTemplateType = "json-go-template"
 
@@ -77,7 +82,43 @@ type ToolArgs struct {
 	Enum        []interface{} `json:"enum,omitempty"`
 	Items       interface{}   `json:"items,omitempty"`
 	Properties  interface{}   `json:"properties,omitempty"`
-	Position    string        `json:"position,omitempty"`
+	// ObjectRequired lists the required nested properties when Type is "object".
+	// In raw JSON Schema this is the object schema's own "required" array, which
+	// conflicts with the boolean "required" of this DSL, so it is stored under a
+	// dedicated key.
+	ObjectRequired []string `json:"objectRequired,omitempty"`
+	Position       string   `json:"position,omitempty"`
+}
+
+// UnmarshalJSON accepts both meanings of the "required" key: the boolean of
+// this DSL (argument is required), and the string array of raw JSON Schema
+// object schemas (required nested properties), which lands in ObjectRequired.
+// Without this, tools imported from Nacos whose inputSchema contains an
+// object-typed parameter with a "required" array would fail to parse and the
+// whole parameter would be dropped.
+func (a *ToolArgs) UnmarshalJSON(data []byte) error {
+	type toolArgsAlias ToolArgs
+	tmp := &struct {
+		Required json.RawMessage `json:"required,omitempty"`
+		*toolArgsAlias
+	}{toolArgsAlias: (*toolArgsAlias)(a)}
+	if err := json.Unmarshal(data, tmp); err != nil {
+		return err
+	}
+	if len(tmp.Required) == 0 {
+		return nil
+	}
+	var requiredBool bool
+	if err := json.Unmarshal(tmp.Required, &requiredBool); err == nil {
+		a.Required = requiredBool
+		return nil
+	}
+	var requiredList []string
+	if err := json.Unmarshal(tmp.Required, &requiredList); err == nil {
+		a.ObjectRequired = requiredList
+		return nil
+	}
+	return fmt.Errorf("invalid \"required\" value %s: expect boolean or string array", string(tmp.Required))
 }
 
 type RequestTemplate struct {

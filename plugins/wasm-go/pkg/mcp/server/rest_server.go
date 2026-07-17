@@ -50,9 +50,43 @@ type RestToolArg struct {
 	Items interface{} `json:"items,omitempty"`
 	// For object type
 	Properties interface{} `json:"properties,omitempty"`
+	// For object type: required nested properties (the object schema's own
+	// "required" array in raw JSON Schema, renamed to avoid the conflict with
+	// the boolean "required" above)
+	ObjectRequired []string `json:"objectRequired,omitempty"`
 	// Position specifies where the argument should be placed in the request
 	// Valid values: query, path, header, cookie, body
 	Position string `json:"position,omitempty"`
+}
+
+// UnmarshalJSON accepts both meanings of the "required" key: the boolean of
+// this DSL (argument is required), and the string array of raw JSON Schema
+// object schemas (required nested properties), which lands in ObjectRequired.
+// This keeps configs that paste raw JSON Schema object parameters working
+// instead of failing the whole tool config parse.
+func (a *RestToolArg) UnmarshalJSON(data []byte) error {
+	type restToolArgAlias RestToolArg
+	tmp := &struct {
+		Required json.RawMessage `json:"required,omitempty"`
+		*restToolArgAlias
+	}{restToolArgAlias: (*restToolArgAlias)(a)}
+	if err := json.Unmarshal(data, tmp); err != nil {
+		return err
+	}
+	if len(tmp.Required) == 0 {
+		return nil
+	}
+	var requiredBool bool
+	if err := json.Unmarshal(tmp.Required, &requiredBool); err == nil {
+		a.Required = requiredBool
+		return nil
+	}
+	var requiredList []string
+	if err := json.Unmarshal(tmp.Required, &requiredList); err == nil {
+		a.ObjectRequired = requiredList
+		return nil
+	}
+	return fmt.Errorf("invalid \"required\" value %s: expect boolean or string array", string(tmp.Required))
 }
 
 // RestToolHeader represents an HTTP header
@@ -986,6 +1020,11 @@ func (t *RestMCPTool) InputSchema() map[string]any {
 		// Add properties for object type
 		if argType == "object" && arg.Properties != nil {
 			argSchema["properties"] = arg.Properties
+		}
+
+		// Add required nested properties for object type
+		if argType == "object" && len(arg.ObjectRequired) > 0 {
+			argSchema["required"] = arg.ObjectRequired
 		}
 
 		properties[arg.Name] = argSchema

@@ -15,6 +15,7 @@
 package mcpserver
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -590,5 +591,50 @@ func Test_Watcher(t *testing.T) {
 				t.Errorf("dr is not equal, want %v\n, got %v", wantDr, dr)
 			}
 		})
+	}
+}
+
+// Regression test for https://github.com/higress-group/higress/issues/4004:
+// an object-typed inputSchema parameter whose sub-schema carries a JSON Schema
+// "required" array used to fail parseMcpArgs (array vs bool) and be dropped.
+func Test_ParseMcpArgs_ObjectWithNestedRequired(t *testing.T) {
+	rawSchema := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(`{
+		"type": "object",
+		"description": "paging parameters",
+		"properties": {
+			"pageNum": {"type": "integer", "description": "page number", "default": 1},
+			"pageSize": {"type": "integer", "description": "page size", "default": 10}
+		},
+		"required": ["pageNum", "pageSize"]
+	}`), &rawSchema); err != nil {
+		t.Fatal(err)
+	}
+
+	args, err := parseMcpArgs(rawSchema)
+	if err != nil {
+		t.Fatalf("parseMcpArgs should accept object schema with nested required array, got error: %v", err)
+	}
+	if args.Type != "object" {
+		t.Errorf("Type = %q, want %q", args.Type, "object")
+	}
+	if args.Properties == nil {
+		t.Error("Properties should be preserved")
+	}
+	if args.Required {
+		t.Error("nested required array must not mark the arg itself required")
+	}
+	if !reflect.DeepEqual(args.ObjectRequired, []string{"pageNum", "pageSize"}) {
+		t.Errorf("ObjectRequired = %v, want [pageNum pageSize]", args.ObjectRequired)
+	}
+
+	// boolean required keeps working
+	boolSchema := map[string]interface{}{"type": "string", "required": true}
+	args, err = parseMcpArgs(boolSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !args.Required {
+		t.Error("boolean required should be preserved")
 	}
 }
