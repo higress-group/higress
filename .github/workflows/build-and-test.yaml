@@ -7,7 +7,7 @@ on:
     branches: ["*"]
 
 env:
-  GO_VERSION: 1.24
+  GO_VERSION: 1.26
 jobs:
   lint:
     runs-on: ubuntu-22.04
@@ -147,7 +147,7 @@ jobs:
         if: always()
         run: |-
           mkdir -p out/gateway-api-conformance/diagnostics
-          kubectl get gatewayclass,gateway,httproute,referencegrant -A -o yaml > out/gateway-api-conformance/diagnostics/resources.yaml 2>&1 || true
+          kubectl get gatewayclass,gateway,httproute,grpcroute,tcproute,tlsroute,listenerset,referencegrant -A -o yaml > out/gateway-api-conformance/diagnostics/resources.yaml 2>&1 || true
           kubectl get events -A --sort-by=.lastTimestamp > out/gateway-api-conformance/diagnostics/events.txt 2>&1 || true
           kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-controller --all-containers > out/gateway-api-conformance/diagnostics/controller.log 2>&1 || true
           kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-gateway --all-containers > out/gateway-api-conformance/diagnostics/gateway.log 2>&1 || true
