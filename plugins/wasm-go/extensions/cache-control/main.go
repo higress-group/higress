@@ -74,7 +74,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config CacheControlConfig, l
 	if hit {
 		if config.expires == "max" {
 			proxywasm.AddHttpResponseHeader("Expires", "Thu, 31 Dec 2037 23:55:55 GMT")
-			proxywasm.AddHttpResponseHeader("Cache-Control", "maxAge=315360000")
+			proxywasm.AddHttpResponseHeader("Cache-Control", "max-age=315360000")
 		} else if config.expires == "epoch" {
 			proxywasm.AddHttpResponseHeader("Expires", "Thu, 01 Jan 1970 00:00:01 GMT")
 			proxywasm.AddHttpResponseHeader("Cache-Control", "no-cache")
@@ -83,7 +83,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config CacheControlConfig, l
 			currentTime := time.Now()
 			expireTime := currentTime.Add(time.Duration(maxAge) * time.Second)
 			proxywasm.AddHttpResponseHeader("Expires", expireTime.UTC().Format(http.TimeFormat))
-			proxywasm.AddHttpResponseHeader("Cache-Control", "maxAge="+strconv.FormatInt(maxAge, 10))
+			proxywasm.AddHttpResponseHeader("Cache-Control", "max-age="+strconv.FormatInt(maxAge, 10))
 		}
 	}
 	return types.ActionContinue
