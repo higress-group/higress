@@ -1522,6 +1522,36 @@ func TestGatewayReferenceAllowedParentHostnameParsing(t *testing.T) {
 	}
 }
 
+func TestRouteParentReferenceHostnameIntersection(t *testing.T) {
+	tests := []struct {
+		name         string
+		listenerHost string
+		routeHost    string
+		wantHost     string
+		wantMatch    bool
+	}{
+		{name: "empty listener", listenerHost: "", routeHost: "example.com", wantHost: "example.com", wantMatch: true},
+		{name: "empty route", listenerHost: "example.com", routeHost: "*", wantHost: "example.com", wantMatch: true},
+		{name: "exact match", listenerHost: "example.com", routeHost: "example.com", wantHost: "example.com", wantMatch: true},
+		{name: "exact listener and wildcard route", listenerHost: "foo.example.com", routeHost: "*.example.com", wantHost: "foo.example.com", wantMatch: true},
+		{name: "wildcard listener and exact route", listenerHost: "*.example.com", routeHost: "foo.example.com", wantHost: "foo.example.com", wantMatch: true},
+		{name: "narrower route wildcard", listenerHost: "*.example.com", routeHost: "*.foo.example.com", wantHost: "*.foo.example.com", wantMatch: true},
+		{name: "narrower listener wildcard", listenerHost: "*.foo.example.com", routeHost: "*.example.com", wantHost: "*.foo.example.com", wantMatch: true},
+		{name: "disjoint exact hosts", listenerHost: "foo.example.com", routeHost: "bar.example.com", wantMatch: false},
+		{name: "disjoint wildcard hosts", listenerHost: "*.example.com", routeHost: "*.example.net", wantMatch: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent := routeParentReference{Hostname: tt.listenerHost}
+			gotHost, gotMatch := parent.hostnameIntersection(tt.routeHost)
+			if gotHost != tt.wantHost || gotMatch != tt.wantMatch {
+				t.Fatalf("hostnameIntersection() = (%q, %v), want (%q, %v)", gotHost, gotMatch, tt.wantHost, tt.wantMatch)
+			}
+		})
+	}
+}
+
 func TestReferencePolicy(t *testing.T) {
 	validator := crdvalidation.NewIstioValidator(t)
 	type res struct {

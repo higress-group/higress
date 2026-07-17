@@ -24,10 +24,9 @@ import (
 )
 
 const (
-	defaultMatchAll        = "*"
-	defaultAllowMethods    = "GET, PUT, POST, DELETE, PATCH, OPTIONS"
-	defaultAllAllowMethods = "GET, PUT, POST, DELETE, PATCH, OPTIONS, HEAD, TRACE, CONNECT"
-	defaultAllowHeaders    = "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With," +
+	defaultMatchAll     = "*"
+	defaultAllowMethods = "GET, PUT, POST, DELETE, PATCH, OPTIONS"
+	defaultAllowHeaders = "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With," +
 		"If-Modified-Since,Cache-Control,Content-Type,Authorization"
 	defaultMaxAge     = 86400
 	protocolHttpName  = "http"
@@ -80,6 +79,7 @@ func newOriginPatternFromString(declaredPattern string) OriginPattern {
 			patternValue += ":(" + strings.ReplaceAll(portList, ",", "|") + ")"
 		}
 	}
+	patternValue = "^" + patternValue + "$"
 
 	return OriginPattern{
 		declaredPattern: declaredPattern,
@@ -143,7 +143,7 @@ type HttpCorsContext struct {
 }
 
 func (c *CorsConfig) GetVersion() string {
-	return "1.0.0"
+	return "2.0.1"
 }
 
 func (c *CorsConfig) FillDefaultValues() {
@@ -151,10 +151,10 @@ func (c *CorsConfig) FillDefaultValues() {
 		c.allowOrigins = []string{defaultMatchAll}
 	}
 	if len(c.allowHeaders) == 0 {
-		c.allowHeaders = []string{defaultAllowHeaders}
+		c.allowHeaders = splitCommaSeparatedValues(defaultAllowHeaders)
 	}
 	if len(c.allowMethods) == 0 {
-		c.allowMethods = strings.Split(defaultAllowMethods, "，")
+		c.allowMethods = splitCommaSeparatedValues(defaultAllowMethods)
 	}
 	if c.maxAge == 0 {
 		c.maxAge = defaultMaxAge
@@ -360,21 +360,29 @@ func (c *CorsConfig) checkHeaders(requestHeaders string) (string, bool) {
 		return "", false
 	}
 
+	allowHeaders := splitCommaSeparatedValues(strings.Join(c.allowHeaders, ","))
+	if len(allowHeaders) == 0 {
+		return "", false
+	}
+
+	// Return normalized request headers when allowHeaders contains *.
+	if containsMatchAll(allowHeaders) {
+		return strings.Join(splitCommaSeparatedValues(requestHeaders), ","), true
+	}
+
 	if len(requestHeaders) == 0 {
-		return strings.Join(c.allowHeaders, ","), true
+		return strings.Join(allowHeaders, ","), true
 	}
 
-	// Return all request headers when allowHeaders contains *
-	if c.allowHeaders[0] == defaultMatchAll {
-		return requestHeaders, true
+	checkHeaders := splitCommaSeparatedValues(requestHeaders)
+	if len(checkHeaders) == 0 {
+		return strings.Join(allowHeaders, ","), true
 	}
-
-	checkHeaders := strings.Split(requestHeaders, ",")
 	// Each request header should be existed in allowHeaders configuration
 	for _, h := range checkHeaders {
 		isExist := false
-		for _, allowHeader := range c.allowHeaders {
-			if strings.ToLower(h) == strings.ToLower(allowHeader) {
+		for _, allowHeader := range allowHeaders {
+			if strings.EqualFold(h, allowHeader) {
 				isExist = true
 				break
 			}
@@ -391,22 +399,48 @@ func (c *CorsConfig) checkMethods(requestMethod string) (string, bool) {
 	if len(requestMethod) == 0 {
 		return "", false
 	}
+	requestMethod = strings.TrimSpace(requestMethod)
+	if len(requestMethod) == 0 {
+		return "", false
+	}
 
 	// Find method existed in allowMethods configuration
-	for _, method := range c.allowMethods {
+	allowMethods := splitCommaSeparatedValues(strings.Join(c.allowMethods, ","))
+	for _, method := range allowMethods {
 		if method == defaultMatchAll {
-			return defaultAllAllowMethods, true
+			return requestMethod, true
 		}
-		if strings.ToLower(method) == strings.ToLower(requestMethod) {
-			return strings.Join(c.allowMethods, ","), true
+		if strings.EqualFold(method, requestMethod) {
+			return strings.Join(allowMethods, ","), true
 		}
 	}
 
 	return "", false
 }
 
-func (c *CorsConfig) isPreFlight(origin, method, controllerRequestMethod string) bool {
-	return len(origin) > 0 && strings.ToLower(method) == strings.ToLower(HttpMethodOptions) && len(controllerRequestMethod) > 0
+func splitCommaSeparatedValues(values string) []string {
+	parts := strings.Split(values, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if len(part) > 0 {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func containsMatchAll(values []string) bool {
+	for _, value := range values {
+		if value == defaultMatchAll {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *CorsConfig) isPreFlight(origin, method, controlRequestMethod string) bool {
+	return len(origin) > 0 && strings.ToLower(method) == strings.ToLower(HttpMethodOptions) && len(controlRequestMethod) > 0
 }
 
 func (c *CorsConfig) isCorsRequest(scheme, host, origin string) bool {
