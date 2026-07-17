@@ -56,6 +56,7 @@ Note:
 * When the transformation object is headers, `key` is case-insensitive. When headers are operated and are `rename` or `map`, `value` is also case-insensitive (as this field has a key meaning). However, `key` and `value` fields in querys and body are case-sensitive.
 * `value_type` is only effective for content type application/json for request/response bodies.
 * `host_pattern` and `path_pattern` support [RE2 syntax](https://pkg.go.dev/regexp/syntax), valid only for `replace`, `add`, `append` operations. In a transformation rule, only one of the two can be optionally filled. If both are filled, then `host_pattern` takes effect while `path_pattern` becomes ineffective.
+* When `host_pattern` or `path_pattern` is configured but the current request's hostname or path does not match the regular expression, the corresponding transformation item is skipped (not executed). This makes it possible to configure multiple transformation items for the same `key` with different matching patterns, so that different values take effect for different hostnames/paths.
 
 ## Transformation Operation Types
 | Operation Type | Key Field Meaning | Value Field Meaning | Description |

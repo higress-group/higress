@@ -199,12 +199,12 @@ func TestRequest_Headers_DedupeStrategies(t *testing.T) {
 		// for SPLIT_*, input has a single value containing commas.
 		want []string
 	}{
-		{"", []string{"a", "b", "a", "c"}, []string{"a"}},                                // default = RETAIN_FIRST
-		{"RETAIN_FIRST", []string{"a", "b", "a", "c"}, []string{"a"}},                    // explicit
-		{"RETAIN_LAST", []string{"a", "b", "a", "c"}, []string{"c"}},                     // last only
-		{"RETAIN_UNIQUE", []string{"a", "b", "a", "c"}, []string{"a", "b", "c"}},         // dedup preserving order
-		{"SPLIT_AND_RETAIN_FIRST", []string{"x,y,z"}, []string{"x"}},                     // split first value, keep first part
-		{"SPLIT_AND_RETAIN_LAST", []string{"x,y,z"}, []string{"z"}},                      // split first value, keep last part
+		{"", []string{"a", "b", "a", "c"}, []string{"a"}},                        // default = RETAIN_FIRST
+		{"RETAIN_FIRST", []string{"a", "b", "a", "c"}, []string{"a"}},            // explicit
+		{"RETAIN_LAST", []string{"a", "b", "a", "c"}, []string{"c"}},             // last only
+		{"RETAIN_UNIQUE", []string{"a", "b", "a", "c"}, []string{"a", "b", "c"}}, // dedup preserving order
+		{"SPLIT_AND_RETAIN_FIRST", []string{"x,y,z"}, []string{"x"}},             // split first value, keep first part
+		{"SPLIT_AND_RETAIN_LAST", []string{"x,y,z"}, []string{"z"}},              // split first value, keep last part
 	}
 	for _, tc := range tests {
 		t.Run(tc.strategy, func(t *testing.T) {
@@ -486,7 +486,7 @@ func TestRequest_Headers_AddWithHostPattern(t *testing.T) {
 	})
 }
 
-func TestRequest_Headers_AddWithPathPattern_NoMatchKeepsValue(t *testing.T) {
+func TestRequest_Headers_AddWithPathPattern_NoMatchSkipsAdd(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(configJSON(map[string]any{
 			"reqRules": []map[string]any{
@@ -498,14 +498,110 @@ func TestRequest_Headers_AddWithPathPattern_NoMatchKeepsValue(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		// path does NOT match the pattern → value is the literal "literal"
+		// path does NOT match the pattern → the add operation is skipped
 		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"},
 			{":path", "/static/css"},
 		}))
 
 		got := headersToMap(host.GetRequestHeaders())
-		require.Equal(t, []string{"literal"}, got["x-v"])
+		require.NotContains(t, got, "x-v")
+		host.CompleteHttp()
+	})
+}
+
+// Regression test for https://github.com/higress-group/higress/issues/4132:
+// two add entries for the SAME header key guarded by different path patterns
+// should each take effect only on requests matching their own pattern.
+func TestRequest_Headers_AddSameKeyDifferentPathPatterns(t *testing.T) {
+	cfg := configJSON(map[string]any{
+		"reqRules": []map[string]any{
+			{"operate": "add", "headers": []map[string]any{
+				{"key": "access-appId", "value": "ij2b6Nfg", "path_pattern": `^/test/.*`},
+				{"key": "access-appId", "value": "Y6JK5J7T", "path_pattern": `^/prod/.*`},
+			}},
+		},
+	})
+
+	cases := []struct {
+		name string
+		path string
+		want []string
+	}{
+		{"test path gets first value", "/test/api", []string{"ij2b6Nfg"}},
+		{"prod path gets second value", "/prod/api", []string{"Y6JK5J7T"}},
+		{"other path gets no header", "/other/api", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			test.RunTest(t, func(t *testing.T) {
+				host, status := test.NewTestHost(cfg)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "test.com"},
+					{":path", c.path},
+				}))
+
+				got := headersToMap(host.GetRequestHeaders())
+				if c.want == nil {
+					require.NotContains(t, got, "access-appid")
+				} else {
+					require.Equal(t, c.want, got["access-appid"])
+				}
+				host.CompleteHttp()
+			})
+		})
+	}
+}
+
+func TestRequest_Headers_ReplaceWithPathPattern_NoMatchSkipsReplace(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(configJSON(map[string]any{
+			"reqRules": []map[string]any{
+				{"operate": "replace", "headers": []map[string]any{
+					{"key": "X-Env", "newValue": "prod", "path_pattern": `^/prod/.*`},
+				}},
+			},
+		}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		// path does NOT match the pattern → the original value is preserved
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"},
+			{":path", "/test/api"},
+			{"x-env", "test"},
+		}))
+
+		got := headersToMap(host.GetRequestHeaders())
+		require.Equal(t, []string{"test"}, got["x-env"])
+		host.CompleteHttp()
+	})
+}
+
+func TestRequest_BodyJson_AddWithPathPattern_NoMatchSkipsAdd(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(configJSON(map[string]any{
+			"reqRules": []map[string]any{
+				{"operate": "add", "body": []map[string]any{
+					{"key": "appId", "value": "ij2b6Nfg", "path_pattern": `^/test/.*`},
+				}},
+			},
+		}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"},
+			{":path", "/prod/api"},
+			{"content-type", "application/json"},
+		}))
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{"a":1}`)))
+
+		// path does NOT match the pattern → body stays unchanged
+		require.JSONEq(t, `{"a":1}`, string(host.GetRequestBody()))
 		host.CompleteHttp()
 	})
 }

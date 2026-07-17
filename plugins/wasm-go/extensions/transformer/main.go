@@ -931,21 +931,29 @@ func (h kvHandler) handle(host, path string, kvs map[string][]string, mapSourceD
 			}
 		case ReplaceK:
 			// replace: 若指定 key 不存在，相当于添加操作；否则替换 value 为 newValue
+			// 若配置了 host_pattern/path_pattern 但当前请求不匹配，则跳过该转换项
 			for _, replace := range kvtOp.replaceKvtGroup {
 				key, newValue := replace.key, replace.newValue
 				if replace.reg != nil {
+					if !replace.reg.matches(host, path) {
+						continue
+					}
 					newValue = replace.reg.matchAndReplace(newValue, host, path)
 				}
 				kvs[key] = []string{newValue}
 			}
 		case AddK:
 			// add: 若指定 key 存在则无操作；否则添加 key:value
+			// 若配置了 host_pattern/path_pattern 但当前请求不匹配，则跳过该转换项
 			for _, add := range kvtOp.addKvtGroup {
 				key, value := add.key, add.value
 				if _, ok := kvs[key]; ok {
 					continue
 				}
 				if add.reg != nil {
+					if !add.reg.matches(host, path) {
+						continue
+					}
 					value = add.reg.matchAndReplace(value, host, path)
 				}
 				kvs[key] = []string{value}
@@ -953,9 +961,13 @@ func (h kvHandler) handle(host, path string, kvs map[string][]string, mapSourceD
 
 		case AppendK:
 			// append: 若指定 key 存在，则追加同名 kv；否则相当于添加操作
+			// 若配置了 host_pattern/path_pattern 但当前请求不匹配，则跳过该转换项
 			for _, append_ := range kvtOp.appendKvtGroup {
 				key, appendValue := append_.key, append_.appendValue
 				if append_.reg != nil {
+					if !append_.reg.matches(host, path) {
+						continue
+					}
 					appendValue = append_.reg.matchAndReplace(appendValue, host, path)
 				}
 				kvs[key] = append(kvs[key], appendValue)
@@ -1068,8 +1080,12 @@ func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map
 			}
 		case ReplaceK:
 			// replace: 若指定 key 不存在，则相当于添加操作；否则替换 value 为 newValue
+			// 若配置了 host_pattern/path_pattern 但当前请求不匹配，则跳过该转换项
 			for _, replace := range kvtOp.replaceKvtGroup {
 				key, newValue, valueType := replace.key, replace.newValue, replace.typ
+				if replace.reg != nil && !replace.reg.matches(host, path) {
+					continue
+				}
 				if valueType == "string" && replace.reg != nil {
 					newValue = replace.reg.matchAndReplace(newValue, host, path)
 				}
@@ -1083,8 +1099,12 @@ func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map
 			}
 		case AddK:
 			// add: 若指定 key 存在则无操作；否则添加 key:value
+			// 若配置了 host_pattern/path_pattern 但当前请求不匹配，则跳过该转换项
 			for _, add := range kvtOp.addKvtGroup {
 				key, value, valueType := add.key, add.value, add.typ
+				if add.reg != nil && !add.reg.matches(host, path) {
+					continue
+				}
 				if gjson.GetBytes(data, key).Exists() {
 					continue
 				}
@@ -1102,8 +1122,12 @@ func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map
 		case AppendK:
 			// append: 若指定 key 存在，则追加同名 kv；否则相当于添加操作
 			// 当原本的 value 为数组时，追加；当原本的 value 不为数组时，将原本的 value 和 appendValue 组成数组
+			// 若配置了 host_pattern/path_pattern 但当前请求不匹配，则跳过该转换项
 			for _, append_ := range kvtOp.appendKvtGroup {
 				key, appendValue, valueType := append_.key, append_.appendValue, append_.typ
+				if append_.reg != nil && !append_.reg.matches(host, path) {
+					continue
+				}
 				if valueType == "string" && append_.reg != nil {
 					appendValue = append_.reg.matchAndReplace(appendValue, host, path)
 				}
@@ -1474,6 +1498,18 @@ func newReg(hostPatten, pathPatten string) (r *reg, err error) {
 		return
 	}
 	return
+}
+
+// matches reports whether the configured pattern matches the current request.
+// newReg guarantees at most one of hostReg/pathReg is set.
+func (r reg) matches(host, path string) bool {
+	if r.hostReg != nil {
+		return r.hostReg.MatchString(host)
+	}
+	if r.pathReg != nil {
+		return r.pathReg.MatchString(path)
+	}
+	return true
 }
 
 func (r reg) matchAndReplace(value, host, path string) string {
