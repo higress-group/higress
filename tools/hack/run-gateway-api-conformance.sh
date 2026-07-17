@@ -38,7 +38,7 @@ esac
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH}" go test -c ./test/gateway -o "${WORK_DIR}/gateway-conformance.test"
+CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH}" go -C test/gateway test -c -o "${WORK_DIR}/gateway-conformance.test" .
 KIND_NODE_IMAGE="$(docker inspect "${KIND_NODE}" --format '{{.Config.Image}}')"
 docker build -q \
   --build-arg "KIND_NODE_IMAGE=${KIND_NODE_IMAGE}" \
