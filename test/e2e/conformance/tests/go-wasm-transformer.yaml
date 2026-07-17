@@ -11,7 +11,54 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: infra-transformer-echo
+  namespace: higress-conformance-infra
+  labels:
+    app: infra-transformer-echo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: infra-transformer-echo
+  template:
+    metadata:
+      labels:
+        app: infra-transformer-echo
+    spec:
+      containers:
+        - name: infra-transformer-echo
+          image: registry.cn-hangzhou.aliyuncs.com/ch3cho/echo-server:v20260404
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 10m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: infra-transformer-echo
+  namespace: higress-conformance-infra
+spec:
+  selector:
+    app: infra-transformer-echo
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 3000
+  type: ClusterIP
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -417,6 +464,26 @@ spec:
             backend:
               service:
                 name: infra-backend-v1
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+  name: wasmplugin-transform-request-body-multipart-formdata-file
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "foo19.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-transformer-echo
                 port:
                   number: 8080
 ---
@@ -891,4 +958,15 @@ spec:
                 strategy: SPLIT_AND_RETAIN_FIRST
               - key: X-split-dedupe-last
                 strategy: SPLIT_AND_RETAIN_LAST
+
+    - ingress:
+        - wasmplugin-transform-request-body-multipart-formdata-file
+      configDisable: false
+      config:
+        reqRules:
+          - operate: add
+            body:
+              - key: X-process
+                value: wasm
+
   url: file:///opt/plugins/wasm-go/extensions/transformer/plugin.wasm

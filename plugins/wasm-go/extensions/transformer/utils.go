@@ -16,10 +16,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
+	"net/textproto"
 	"net/url"
 	"sort"
 	"strconv"
@@ -136,14 +139,27 @@ func parseBody(contentType string, body []byte) (interface{}, error) {
 			}
 			formName := p.FormName()
 			fileName := p.FileName()
-			if formName == "" || fileName != "" {
+			contentType := p.Header.Get("Content-Type") // 获取文件的 MIME 类型
+
+			if formName == "" {
 				continue
 			}
 			formValue, err := io.ReadAll(p)
 			if err != nil {
 				return nil, err
 			}
-			ret[formName] = append(ret[formName], string(formValue))
+
+			if fileName == "" {
+				ret[formName] = append(ret[formName], string(formValue))
+			} else {
+				// 文件字段：记录文件名和 base64 内容
+				ret[formName+".filename"] = append(ret[formName+".filename"], fileName)
+				ret[formName+".content-type"] = append(ret[formName+".content-type"], contentType) // 保存 MIME 类型
+				encoded := base64.StdEncoding.EncodeToString(formValue)
+				ret[formName+".content"] = append(ret[formName+".content"], encoded)
+				ret[formName] = append(ret[formName], "")
+			}
+
 		}
 		return ret, nil
 
@@ -188,10 +204,56 @@ func constructBody(contentType string, body interface{}) ([]byte, error) {
 		if err = w.SetBoundary(params["boundary"]); err != nil {
 			return nil, err
 		}
+
+		// 先处理文件字段（因为需要 .filename 和 .content）
+		processed := make(map[string]bool) // 避免重复处理
+
 		for k, vs := range bd {
-			for _, v := range vs {
-				if err = w.WriteField(k, v); err != nil {
-					return nil, err
+			if strings.HasSuffix(k, ".filename") || strings.HasSuffix(k, ".content") || strings.HasSuffix(k, ".content-type") {
+				continue
+			}
+
+			// 判断是否是文件字段
+			filenames, hasFilename := bd[k+".filename"]
+			contents, hasContent := bd[k+".content"]
+
+			if hasFilename && hasContent {
+				// 是文件字段
+				processed[k] = true
+				for i := 0; i < len(filenames) && i < len(contents); i++ {
+					filename := filenames[i]
+					content64 := contents[i]
+					// 获取对应的 MIME 类型
+					var contentType string
+					if contentTypes, exists := bd[k+".content-type"]; exists && i < len(contentTypes) {
+						contentType = contentTypes[i]
+					} else {
+						contentType = "application/octet-stream" // 默认值
+					}
+					content, err := base64.StdEncoding.DecodeString(content64)
+					if err != nil {
+						return nil, errors.Wrap(err, "decode base64 content failed")
+					}
+
+					// 创建带 Content-Type 的表单文件
+					h := make(textproto.MIMEHeader)
+					h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, k, filename))
+					h.Set("Content-Type", contentType)
+
+					fw, err := w.CreatePart(h)
+					if err != nil {
+						return nil, err
+					}
+					_, err = fw.Write(content)
+					if err != nil {
+						return nil, err
+					}
+				}
+			} else {
+				for _, v := range vs {
+					if err = w.WriteField(k, v); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
