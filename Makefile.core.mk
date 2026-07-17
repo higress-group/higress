@@ -31,6 +31,7 @@ GATEWAY_CONFORMANCE_ALLOW_CRDS_MISMATCH ?= false
 GATEWAY_API_TEST_NAMESPACE ?= gateway-conformance-infra
 GATEWAY_API_GATEWAY_SERVICE_TYPE ?= ClusterIP
 GATEWAY_API_KIND_NODE_TAG ?= v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
+GATEWAY_API_PILOT_IMAGE_TAG ?= $(TAG)-gateway-api-pilot
 HIGRESS_CONFORMANCE_VERSION ?= $(shell git rev-parse HEAD)
 
 TARGET_ARCH ?= amd64
@@ -224,7 +225,7 @@ install-dev: pre-install
 	helm install higress helm/core -n higress-system --create-namespace --set 'controller.tag=$(TAG)' --set 'gateway.replicas=1' --set 'pilot.tag=$(ISTIO_LATEST_IMAGE_TAG)' --set 'gateway.tag=$(ENVOY_LATEST_IMAGE_TAG)' --set 'global.local=true'
 
 install-dev-gateway-api: pre-install
-	helm install higress helm/core -n $(GATEWAY_API_TEST_NAMESPACE) --create-namespace --set 'controller.tag=$(TAG)' --set 'gateway.replicas=1' --set 'pilot.tag=$(ISTIO_LATEST_IMAGE_TAG)' --set 'gateway.tag=$(ENVOY_LATEST_IMAGE_TAG)' --set 'global.local=true' --set 'global.enableGatewayAPIDeploymentController=true' --set 'gateway.service.type=$(GATEWAY_API_GATEWAY_SERVICE_TYPE)'
+	helm install higress helm/core -n $(GATEWAY_API_TEST_NAMESPACE) --create-namespace --set 'controller.tag=$(TAG)' --set 'gateway.replicas=1' --set 'pilot.tag=$(GATEWAY_API_PILOT_IMAGE_TAG)' --set 'gateway.tag=$(ENVOY_LATEST_IMAGE_TAG)' --set 'global.local=true' --set 'global.enableGatewayAPIDeploymentController=true' --set 'gateway.service.type=$(GATEWAY_API_GATEWAY_SERVICE_TYPE)'
 
 install-dev-wasmplugin: build-wasmplugins pre-install
 	helm install higress helm/core -n higress-system --create-namespace --set 'controller.tag=$(TAG)' --set 'gateway.replicas=1' --set 'pilot.tag=$(ISTIO_LATEST_IMAGE_TAG)' --set 'gateway.tag=$(ENVOY_LATEST_IMAGE_TAG)' --set 'global.local=true'  --set 'global.volumeWasmPlugins=true' --set 'global.onlyPushRouteCluster=false'
@@ -307,14 +308,18 @@ delete-gateway-api-cluster: $(tools/kind-gateway-api)
 .PHONY: kube-load-gateway-api-images
 kube-load-gateway-api-images: $(tools/kind-gateway-api)
 	KIND=$(tools/kind-gateway-api) tools/hack/kind-load-image.sh higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/higress $(TAG)
-	tools/hack/docker-pull-image.sh higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/pilot $(ISTIO_LATEST_IMAGE_TAG)
 	tools/hack/docker-pull-image.sh higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway $(ENVOY_LATEST_IMAGE_TAG)
-	KIND=$(tools/kind-gateway-api) tools/hack/kind-load-image.sh higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/pilot $(ISTIO_LATEST_IMAGE_TAG)
+	KIND=$(tools/kind-gateway-api) tools/hack/kind-load-image.sh higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/pilot $(GATEWAY_API_PILOT_IMAGE_TAG)
 	KIND=$(tools/kind-gateway-api) tools/hack/kind-load-image.sh higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway $(ENVOY_LATEST_IMAGE_TAG)
+
+# build-gateway-api-pilot builds the Pilot image from the checked-out Istio submodule.
+.PHONY: build-gateway-api-pilot
+build-gateway-api-pilot: prebuild
+	TARGET_ARCH=$(TARGET_ARCH) DOCKER_TARGETS="docker.pilot" IMG_URL="$(HUB)/pilot:$(GATEWAY_API_PILOT_IMAGE_TAG)" ./tools/hack/build-istio-image.sh docker
 
 # gateway-conformance-test-prepare prepares a kind cluster for Gateway API tests.
 .PHONY: gateway-conformance-test-prepare
-gateway-conformance-test-prepare: delete-gateway-api-cluster create-gateway-api-cluster install-gateway-api-crds docker-build kube-load-gateway-api-images install-dev-gateway-api
+gateway-conformance-test-prepare: delete-gateway-api-cluster create-gateway-api-cluster install-gateway-api-crds docker-build build-gateway-api-pilot kube-load-gateway-api-images install-dev-gateway-api
 	kubectl wait --timeout=10m -n $(GATEWAY_API_TEST_NAMESPACE) deployment/higress-controller --for=condition=Available
 	kubectl wait --timeout=10m -n $(GATEWAY_API_TEST_NAMESPACE) deployment/higress-gateway --for=condition=Available
 	kubectl wait --timeout=10m gatewayclass/higress --for=condition=Accepted
