@@ -82,8 +82,10 @@ spec:
             value: {{ include "gateway.name" . }}
           - name: PILOT_ENABLE_GATEWAY_API
             value: "{{ .Values.global.enableGatewayAPI }}"
-          - name: HIGRESS_ENABLE_GATEWAY_API_MANAGED_SERVICE
-            value: "{{ .Values.global.enableGatewayAPIManagedService }}"
+          - name: PILOT_ENABLE_GATEWAY_API_DEPLOYMENT_CONTROLLER
+            value: "{{ .Values.global.enableGatewayAPIDeploymentController }}"
+          - name: HIGRESS_ENABLE_GATEWAY_API_DEPLOYMENT_CONTROLLER
+            value: "{{ .Values.global.enableGatewayAPIDeploymentController }}"
           - name: PILOT_ENABLE_ALPHA_GATEWAY_API
             value: "{{ .Values.global.enableAlphaGatewayAPI }}"
           {{- if .Values.global.enableInferenceExtension }}
@@ -229,7 +231,7 @@ spec:
           - name: PRIORITIZED_LEADER_ELECTION
             value: "false"
           - name: INJECT_ENABLED
-            value: "false"
+            value: "{{ .Values.global.enableGatewayAPIDeploymentController }}"
           {{- if .Values.pilot.env }}
           {{- range $key, $val := .Values.pilot.env }}
           - name: {{ $key }}
@@ -262,7 +264,9 @@ spec:
           - name: PILOT_ENABLE_GATEWAY_API_STATUS
             value: "false"
           - name: PILOT_ENABLE_GATEWAY_API_DEPLOYMENT_CONTROLLER
-            value: "false"
+            value: "{{ .Values.global.enableGatewayAPIDeploymentController }}"
+          - name: HIGRESS_ENABLE_GATEWAY_API_DEPLOYMENT_CONTROLLER
+            value: "{{ .Values.global.enableGatewayAPIDeploymentController }}"
           - name: CUSTOM_CA_CERT_NAME
             value: "higress-ca-root-cert"
           {{- if not (or .Values.global.local .Values.global.kind) }}

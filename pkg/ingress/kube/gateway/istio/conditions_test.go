@@ -19,7 +19,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8s "sigs.k8s.io/gateway-api/apis/v1beta1"
+	k8s "sigs.k8s.io/gateway-api/apis/v1"
 
 	higressconstants "github.com/alibaba/higress/v2/pkg/config/constants"
 	"istio.io/istio/pkg/config"
@@ -147,5 +147,36 @@ func TestCreateRouteStatusWithCustomController(t *testing.T) {
 	}
 	if got[1].ControllerName != customController {
 		t.Fatalf("expected custom controller status %q, got %+v", customController, got)
+	}
+}
+
+func TestRequestsUnsupportedTLSRouteTermination(t *testing.T) {
+	terminate := k8s.TLSModeTerminate
+	passthrough := k8s.TLSModePassthrough
+	tlsRoute := k8s.RouteGroupKind{Kind: "TLSRoute"}
+	tcpRoute := k8s.RouteGroupKind{Kind: "TCPRoute"}
+	tests := []struct {
+		name string
+		mode k8s.TLSModeType
+		kind k8s.RouteGroupKind
+		want bool
+	}{
+		{name: "terminate TLSRoute", mode: terminate, kind: tlsRoute, want: true},
+		{name: "terminate TCPRoute", mode: terminate, kind: tcpRoute, want: false},
+		{name: "passthrough TLSRoute", mode: passthrough, kind: tlsRoute, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			listener := k8s.Listener{
+				Protocol: k8s.TLSProtocolType,
+				TLS:      &k8s.ListenerTLSConfig{Mode: &tt.mode},
+				AllowedRoutes: &k8s.AllowedRoutes{
+					Kinds: []k8s.RouteGroupKind{tt.kind},
+				},
+			}
+			if got := requestsUnsupportedTLSRouteTermination(listener); got != tt.want {
+				t.Fatalf("requestsUnsupportedTLSRouteTermination() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

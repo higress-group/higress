@@ -21,9 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	inferencev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gatewayalpha "sigs.k8s.io/gateway-api/apis/v1alpha2"
-	gateway "sigs.k8s.io/gateway-api/apis/v1beta1"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
+	gatewaybeta "sigs.k8s.io/gateway-api/apis/v1beta1"
 	gatewayx "sigs.k8s.io/gateway-api/apisx/v1alpha1"
 
 	networkingclient "istio.io/client-go/pkg/apis/networking/v1"
@@ -105,8 +104,7 @@ type Controller struct {
 
 	domainSuffix string // the domain suffix to use for generated resources
 
-	shadowServiceReconciler         controllers.Queue
-	managedGatewayServiceReconciler controllers.Queue
+	shadowServiceReconciler controllers.Queue
 
 	// Start - Added by Higress
 	DefaultGatewaySelector map[string]string
@@ -146,13 +144,13 @@ type Inputs struct {
 	GatewayClasses       krt.Collection[*gateway.GatewayClass]
 	Gateways             krt.Collection[*gateway.Gateway]
 	HTTPRoutes           krt.Collection[*gateway.HTTPRoute]
-	GRPCRoutes           krt.Collection[*gatewayv1.GRPCRoute]
-	TCPRoutes            krt.Collection[*gatewayalpha.TCPRoute]
-	TLSRoutes            krt.Collection[*gatewayalpha.TLSRoute]
-	ListenerSets         krt.Collection[*gatewayx.XListenerSet]
-	ReferenceGrants      krt.Collection[*gateway.ReferenceGrant]
+	GRPCRoutes           krt.Collection[*gateway.GRPCRoute]
+	TCPRoutes            krt.Collection[*gateway.TCPRoute]
+	TLSRoutes            krt.Collection[*gateway.TLSRoute]
+	ListenerSets         krt.Collection[*gateway.ListenerSet]
+	ReferenceGrants      krt.Collection[*gatewaybeta.ReferenceGrant]
 	BackendTrafficPolicy krt.Collection[*gatewayx.XBackendTrafficPolicy]
-	BackendTLSPolicies   krt.Collection[*gatewayv1.BackendTLSPolicy]
+	BackendTLSPolicies   krt.Collection[*gateway.BackendTLSPolicy]
 	ServiceEntries       krt.Collection[*networkingclient.ServiceEntry]
 	InferencePools       krt.Collection[*inferencev1.InferencePool]
 }
@@ -169,7 +167,7 @@ func NewController(
 }
 
 // NewControllerWithDefaultGatewaySelector constructs a Gateway API controller whose generated
-// Istio Gateways bind to the supplied shared data-plane workload selector.
+// Istio Gateways bind to the supplied data-plane workload selector.
 func NewControllerWithDefaultGatewaySelector(
 	kc kube.Client,
 	waitForCRD func(class schema.GroupVersionResource, stop <-chan struct{}) bool,
@@ -217,23 +215,20 @@ func NewControllerWithDefaultGatewaySelector(
 		GatewayClasses:     buildClient[*gateway.GatewayClass](c, kc, gvr.GatewayClass, opts, "informer/GatewayClasses"),
 		Gateways:           buildClient[*gateway.Gateway](c, kc, gvr.KubernetesGateway, opts, "informer/Gateways"),
 		HTTPRoutes:         buildClient[*gateway.HTTPRoute](c, kc, gvr.HTTPRoute, opts, "informer/HTTPRoutes"),
-		GRPCRoutes:         buildClient[*gatewayv1.GRPCRoute](c, kc, gvr.GRPCRoute, opts, "informer/GRPCRoutes"),
-		BackendTLSPolicies: buildClient[*gatewayv1.BackendTLSPolicy](c, kc, gvr.BackendTLSPolicy, opts, "informer/BackendTLSPolicies"),
+		GRPCRoutes:         buildClient[*gateway.GRPCRoute](c, kc, gvr.GRPCRoute, opts, "informer/GRPCRoutes"),
+		BackendTLSPolicies: buildClient[*gateway.BackendTLSPolicy](c, kc, gvr.BackendTLSPolicy, opts, "informer/BackendTLSPolicies"),
+		TCPRoutes:          buildClient[*gateway.TCPRoute](c, kc, gvr.TCPRoute, opts, "informer/TCPRoutes"),
+		TLSRoutes:          buildClient[*gateway.TLSRoute](c, kc, gvr.TLSRoute, opts, "informer/TLSRoutes"),
+		ListenerSets:       buildClient[*gateway.ListenerSet](c, kc, gvr.ListenerSet, opts, "informer/ListenerSet"),
 
-		ReferenceGrants: buildClient[*gateway.ReferenceGrant](c, kc, gvr.ReferenceGrant, opts, "informer/ReferenceGrants"),
+		ReferenceGrants: buildClient[*gatewaybeta.ReferenceGrant](c, kc, gvr.ReferenceGrant, opts, "informer/ReferenceGrants"),
 		ServiceEntries:  buildClient[*networkingclient.ServiceEntry](c, kc, gvr.ServiceEntry, opts, "informer/ServiceEntries"),
 	}
 	if features.EnableAlphaGatewayAPI {
-		inputs.TCPRoutes = buildClient[*gatewayalpha.TCPRoute](c, kc, gvr.TCPRoute, opts, "informer/TCPRoutes")
-		inputs.TLSRoutes = buildClient[*gatewayalpha.TLSRoute](c, kc, gvr.TLSRoute, opts, "informer/TLSRoutes")
 		inputs.BackendTrafficPolicy = buildClient[*gatewayx.XBackendTrafficPolicy](c, kc, gvr.XBackendTrafficPolicy, opts, "informer/XBackendTrafficPolicy")
-		inputs.ListenerSets = buildClient[*gatewayx.XListenerSet](c, kc, gvr.XListenerSet, opts, "informer/XListenerSet")
 	} else {
 		// If disabled, still build a collection but make it always empty
-		inputs.TCPRoutes = krt.NewStaticCollection[*gatewayalpha.TCPRoute](nil, nil, opts.WithName("disable/TCPRoutes")...)
-		inputs.TLSRoutes = krt.NewStaticCollection[*gatewayalpha.TLSRoute](nil, nil, opts.WithName("disable/TLSRoutes")...)
 		inputs.BackendTrafficPolicy = krt.NewStaticCollection[*gatewayx.XBackendTrafficPolicy](nil, nil, opts.WithName("disable/XBackendTrafficPolicy")...)
-		inputs.ListenerSets = krt.NewStaticCollection[*gatewayx.XListenerSet](nil, nil, opts.WithName("disable/XListenerSet")...)
 	}
 
 	if features.EnableGatewayAPIInferenceExtension {
@@ -281,7 +276,6 @@ func NewControllerWithDefaultGatewaySelector(
 		ListenerSets,
 		GatewayClasses,
 		inputs.Namespaces,
-		inputs.Services,
 		ReferenceGrants,
 		inputs.ConfigMaps,
 		inputs.Secrets,
@@ -307,11 +301,6 @@ func NewControllerWithDefaultGatewaySelector(
 	c.shadowServiceReconciler = controllers.NewQueue("inference pool shadow service reconciler",
 		controllers.WithReconciler(c.reconcileShadowService(svcClient, InferencePools, inputs.Services)),
 		controllers.WithMaxAttempts(5))
-	if enableManagedGatewayService {
-		c.managedGatewayServiceReconciler = controllers.NewQueue("managed gateway service reconciler",
-			controllers.WithReconciler(c.reconcileManagedGatewayService(inputs.Gateways, inputs.Services)),
-			controllers.WithMaxAttempts(5))
-	}
 
 	if features.EnableGatewayAPIInferenceExtension {
 		status.RegisterStatus(c.status, InferencePoolStatus, GetStatus)
@@ -474,31 +463,6 @@ func NewControllerWithDefaultGatewaySelector(
 				obj.Namespace, obj.Name)
 		}),
 	)
-	if enableManagedGatewayService {
-		handlers = append(handlers,
-			inputs.Gateways.Register(func(e krt.Event[*gateway.Gateway]) {
-				obj := e.Latest()
-				c.managedGatewayServiceReconciler.Add(types.NamespacedName{
-					Namespace: obj.Namespace,
-					Name:      obj.Name,
-				})
-			}),
-			inputs.Services.Register(func(e krt.Event[*corev1.Service]) {
-				for _, obj := range e.Items() {
-					if obj.Labels[managedGatewayServiceLabel] != "true" {
-						continue
-					}
-					gatewayNamespace := obj.Labels[managedGatewayNamespaceLabel]
-					gatewayName := obj.Annotations[managedGatewayNameAnnotation]
-					if gatewayNamespace == "" || gatewayName == "" {
-						continue
-					}
-					c.managedGatewayServiceReconciler.Add(types.NamespacedName{Namespace: gatewayNamespace, Name: gatewayName})
-					return
-				}
-			}),
-		)
-	}
 	c.handlers = handlers
 
 	return c
@@ -618,9 +582,6 @@ func (c *Controller) Run(stop <-chan struct{}) {
 	tw := c.tagWatcher.AccessUnprotected()
 	go tw.Run(stop)
 	go c.shadowServiceReconciler.Run(stop)
-	if enableManagedGatewayService {
-		go c.managedGatewayServiceReconciler.Run(stop)
-	}
 	go func() {
 		kube.WaitForCacheSync("gateway tag watcher", stop, tw.HasSynced)
 		c.tagWatcher.MarkSynced()

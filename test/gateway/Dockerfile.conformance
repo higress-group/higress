@@ -1,0 +1,6 @@
+ARG KIND_NODE_IMAGE
+FROM ${KIND_NODE_IMAGE}
+
+COPY gateway-conformance.test /gateway-conformance.test
+
+ENTRYPOINT ["/gateway-conformance.test"]

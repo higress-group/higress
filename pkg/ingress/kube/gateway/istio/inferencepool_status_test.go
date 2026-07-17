@@ -28,8 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	inferencev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gateway "sigs.k8s.io/gateway-api/apis/v1beta1"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/status"
@@ -64,7 +63,7 @@ func TestInferencePoolStatusReconciliation(t *testing.T) {
 				NewGateway("main-gateway", InNamespace(DefaultTestNS), WithGatewayClass("higress")),
 				NewHTTPRoute("test-route", InNamespace(DefaultTestNS),
 					WithParentRefAndStatus("main-gateway", DefaultTestNS, IstioController),
-					WithRouteParentCondition(string(gatewayv1.RouteConditionAccepted), metav1.ConditionTrue, "Accepted", "Accepted"),
+					WithRouteParentCondition(string(gateway.RouteConditionAccepted), metav1.ConditionTrue, "Accepted", "Accepted"),
 					WithBackendRef("test-pool", DefaultTestNS)),
 			},
 			targetPool: NewInferencePool("test-pool", InNamespace(DefaultTestNS)),
@@ -334,7 +333,7 @@ func TestInferencePoolStatusReconciliation(t *testing.T) {
 				NewGateway("main-gateway", InNamespace(DefaultTestNS), WithGatewayClass("higress")),
 				NewHTTPRoute("test-route", InNamespace(DefaultTestNS),
 					WithParentRefAndStatus("main-gateway", DefaultTestNS, IstioController),
-					WithRouteParentCondition(string(gatewayv1.RouteConditionAccepted), metav1.ConditionFalse, "GatewayNotReady", "Gateway not ready"),
+					WithRouteParentCondition(string(gateway.RouteConditionAccepted), metav1.ConditionFalse, "GatewayNotReady", "Gateway not ready"),
 					WithBackendRef("test-pool", DefaultTestNS)),
 			},
 			targetPool: NewInferencePool("test-pool", InNamespace(DefaultTestNS)),

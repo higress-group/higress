@@ -39,6 +39,7 @@ const localHTTPSPortEnv = "HIGRESS_GATEWAY_API_TEST_LOCAL_HTTPS_PORT"
 type localPortForward struct {
 	cmd  *exec.Cmd
 	port string
+	done <-chan struct{}
 }
 
 type localGatewayDialer struct {
@@ -94,7 +95,12 @@ func (d *localGatewayDialer) forward(namespace, service, remotePort string) (str
 	defer d.mu.Unlock()
 	key := namespace + "/" + service + ":" + remotePort
 	if forward, found := d.forwards[key]; found {
-		return forward.port, nil
+		select {
+		case <-forward.done:
+			delete(d.forwards, key)
+		default:
+			return forward.port, nil
+		}
 	}
 
 	resource, targetPort, err := servicePortForwardTarget(namespace, service, remotePort)
@@ -120,10 +126,13 @@ func (d *localGatewayDialer) forward(namespace, service, remotePort string) (str
 		if len(match) != 2 {
 			continue
 		}
-		d.forwards[key] = localPortForward{cmd: cmd, port: match[1]}
+		done := make(chan struct{})
+		d.forwards[key] = localPortForward{cmd: cmd, port: match[1], done: done}
 		go func() {
 			for scanner.Scan() {
 			}
+			_ = cmd.Wait()
+			close(done)
 		}()
 		return match[1], nil
 	}
@@ -235,7 +244,7 @@ func (d *localGatewayDialer) close() {
 	defer d.mu.Unlock()
 	for _, forward := range d.forwards {
 		_ = forward.cmd.Process.Kill()
-		_ = forward.cmd.Wait()
+		<-forward.done
 	}
 }
 
