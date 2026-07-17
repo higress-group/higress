@@ -79,6 +79,7 @@ if [[ -n "${RUN_TEST}" ]]; then
 fi
 
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   --network "container:${KIND_NODE}" \
   -e KUBECONFIG=/kubeconfig \
   -e HIGRESS_GATEWAY_API_TEST_DIAL_LOCALHOST=true \

@@ -96,6 +96,8 @@ jobs:
     env:
       GATEWAY_API_TEST_NAMESPACE: gateway-conformance-infra
       HIGRESS_TEST_IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
+      GATEWAY_CONFORMANCE_RUN_TEST: HTTPRouteCrossNamespace
+      GATEWAY_CONFORMANCE_CLEANUP_TEST_RESOURCES: "false"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -147,10 +149,15 @@ jobs:
         if: always()
         run: |-
           mkdir -p out/gateway-api-conformance/diagnostics
-          kubectl get gatewayclass,gateway,httproute,grpcroute,tcproute,tlsroute,listenerset,referencegrant -A -o yaml > out/gateway-api-conformance/diagnostics/resources.yaml 2>&1 || true
+          kubectl get gatewayclass,gateway,httproute,grpcroute,tcproute,tlsroute,listenerset,referencegrant,deployment,service,pod,endpointslice -A -o yaml > out/gateway-api-conformance/diagnostics/resources.yaml 2>&1 || true
           kubectl get events -A --sort-by=.lastTimestamp > out/gateway-api-conformance/diagnostics/events.txt 2>&1 || true
           kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-controller --all-containers > out/gateway-api-conformance/diagnostics/controller.log 2>&1 || true
           kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-gateway --all-containers > out/gateway-api-conformance/diagnostics/gateway.log 2>&1 || true
+          while read -r namespace pod; do
+            name="${namespace}_${pod}"
+            kubectl logs -n "${namespace}" "${pod}" -c higress-gateway > "out/gateway-api-conformance/diagnostics/${name}.log" 2>&1 || true
+            kubectl exec -n "${namespace}" "${pod}" -c higress-gateway -- pilot-agent request GET config_dump > "out/gateway-api-conformance/diagnostics/${name}-config-dump.json" 2>&1 || true
+          done < <(kubectl get pod -A -l gateway.higress.io/managed=true -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}')
           tools/bin/kind-gateway-api export logs out/gateway-api-conformance/diagnostics/kind --name higress || true
 
       - name: Upload Gateway API Test Results
