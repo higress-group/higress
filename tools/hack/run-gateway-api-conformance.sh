@@ -14,8 +14,12 @@ RUN_TEST="${GATEWAY_CONFORMANCE_RUN_TEST:-}"
 TEST_PARALLEL="${GATEWAY_CONFORMANCE_PARALLEL:-1}"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-higress}"
 CONFORMANCE_IMAGE="${HIGRESS_CONFORMANCE_TEST_IMAGE:-higress-gateway-conformance:v1.6-local}"
+KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/config}"
 
-: "${KUBECONFIG:?KUBECONFIG must point to the target Kubernetes cluster}"
+if [[ ! -r "${KUBECONFIG}" ]]; then
+  echo "KUBECONFIG does not point to a readable Kubernetes config: ${KUBECONFIG}" >&2
+  exit 1
+fi
 
 mkdir -p "$(dirname "${REPORT}")"
 REPORT_DIR="$(cd "$(dirname "${REPORT}")" && pwd)"
