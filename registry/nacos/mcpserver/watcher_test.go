@@ -23,6 +23,7 @@ import (
 
 	apiv1 "github.com/alibaba/higress/v2/api/networking/v1"
 	common2 "github.com/alibaba/higress/v2/pkg/ingress/kube/common"
+	"github.com/alibaba/higress/v2/pkg/ingress/kube/mcpserver"
 	provider "github.com/alibaba/higress/v2/registry"
 	"github.com/alibaba/higress/v2/registry/memory"
 	"github.com/nacos-group/nacos-sdk-go/v2/model"
@@ -590,5 +591,127 @@ func Test_Watcher(t *testing.T) {
 				t.Errorf("dr is not equal, want %v\n, got %v", wantDr, dr)
 			}
 		})
+	}
+}
+
+func Test_GetExportPath(t *testing.T) {
+	testCases := []struct {
+		name   string
+		server *provider.McpServer
+		want   string
+	}{
+		{"nil server", nil, ""},
+		{"nil remote server config", &provider.McpServer{}, ""},
+		{"empty export path", &provider.McpServer{RemoteServerConfig: &provider.RemoteServerConfig{ExportPath: ""}}, ""},
+		{"root export path", &provider.McpServer{RemoteServerConfig: &provider.RemoteServerConfig{ExportPath: "/"}}, ""},
+		{"normal export path", &provider.McpServer{RemoteServerConfig: &provider.RemoteServerConfig{ExportPath: "/a/b/mcp"}}, "/a/b/mcp"},
+		{"no leading slash", &provider.McpServer{RemoteServerConfig: &provider.RemoteServerConfig{ExportPath: "a/b/mcp"}}, "/a/b/mcp"},
+		{"trailing slash", &provider.McpServer{RemoteServerConfig: &provider.RemoteServerConfig{ExportPath: "/a/b/mcp/"}}, "/a/b/mcp"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := getExportPath(tc.server); got != tc.want {
+				t.Errorf("getExportPath() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func Test_BuildVirtualServiceForMcpServer_ExportPath(t *testing.T) {
+	tw := newTestWatcher(memory.NewCache(),
+		WithMcpExportDomains([]string{"mcp.com"}),
+		WithMcpBaseUrl("/mcp-servers/"))
+	w := &tw.watcher
+
+	exportPath := "/9/260bd0ed-10d8-4a8f-9b65-332cd1331fa1/mcp"
+	server := &provider.McpServer{
+		Name:     "moji222",
+		Protocol: provider.McpStreamableProtocol,
+		RemoteServerConfig: &provider.RemoteServerConfig{
+			ExportPath: exportPath,
+		},
+	}
+
+	cfg := w.buildVirtualServiceForMcpServer(server, "mock-data-id", "svc.public.nacos", nil)
+	vs := cfg.Spec.(*v1alpha3.VirtualService)
+
+	if len(vs.Http) != 2 {
+		t.Fatalf("expect 2 http routes (exact + prefix), got %d", len(vs.Http))
+	}
+
+	exactRoute, prefixRoute := vs.Http[0], vs.Http[1]
+	if got := exactRoute.Match[0].Uri.GetExact(); got != "/mcp-servers/moji222" {
+		t.Errorf("exact match = %q, want %q", got, "/mcp-servers/moji222")
+	}
+	if exactRoute.Rewrite == nil || exactRoute.Rewrite.Uri != exportPath {
+		t.Errorf("exact route rewrite = %v, want uri %q", exactRoute.Rewrite, exportPath)
+	}
+	if got := prefixRoute.Match[0].Uri.GetPrefix(); got != "/mcp-servers/moji222/" {
+		t.Errorf("prefix match = %q, want %q", got, "/mcp-servers/moji222/")
+	}
+	if prefixRoute.Rewrite == nil || prefixRoute.Rewrite.Uri != exportPath+"/" {
+		t.Errorf("prefix route rewrite = %v, want uri %q", prefixRoute.Rewrite, exportPath+"/")
+	}
+
+	// dns service should get the authority rewrite on every route
+	se := &v1alpha3.ServiceEntry{
+		Resolution: v1alpha3.ServiceEntry_DNS,
+		Endpoints:  []*v1alpha3.WorkloadEntry{{Address: "example.com"}},
+	}
+	cfg = w.buildVirtualServiceForMcpServer(server, "mock-data-id", "svc.public.nacos", se)
+	vs = cfg.Spec.(*v1alpha3.VirtualService)
+	for i, route := range vs.Http {
+		if route.Rewrite == nil || route.Rewrite.Authority != "example.com" {
+			t.Errorf("route[%d] authority rewrite = %v, want %q", i, route.Rewrite, "example.com")
+		}
+	}
+
+	// without export path the original single-route "/" rewrite is preserved
+	server.RemoteServerConfig.ExportPath = ""
+	cfg = w.buildVirtualServiceForMcpServer(server, "mock-data-id", "svc.public.nacos", nil)
+	vs = cfg.Spec.(*v1alpha3.VirtualService)
+	if len(vs.Http) != 1 {
+		t.Fatalf("expect 1 http route without export path, got %d", len(vs.Http))
+	}
+	if vs.Http[0].Rewrite == nil || vs.Http[0].Rewrite.Uri != "/" {
+		t.Errorf("rewrite = %v, want uri %q", vs.Http[0].Rewrite, "/")
+	}
+	if len(vs.Http[0].Match) != 2 {
+		t.Errorf("expect 2 matches on single route, got %d", len(vs.Http[0].Match))
+	}
+}
+
+func Test_BuildMcpServerForMcpServer_ExportPath(t *testing.T) {
+	tw := newTestWatcher(memory.NewCache(),
+		WithMcpExportDomains([]string{"mcp.com"}),
+		WithMcpBaseUrl("/mcp-servers/"))
+	w := &tw.watcher
+
+	server := &provider.McpServer{
+		Name:     "moji222",
+		Protocol: provider.McpSSEProtocol,
+		RemoteServerConfig: &provider.RemoteServerConfig{
+			ExportPath: "/a/b/mcp",
+		},
+	}
+
+	vsCfg := w.buildVirtualServiceForMcpServer(server, "mock-data-id", "svc.public.nacos", nil)
+	vs := vsCfg.Spec.(*v1alpha3.VirtualService)
+	cfg := w.buildMcpServerForMcpServer(vs, "mock-data-id", server)
+	mcpSrv := cfg.Spec.(*mcpserver.McpServer)
+	if !mcpSrv.EnablePathRewrite {
+		t.Error("EnablePathRewrite should be true for sse protocol")
+	}
+	if mcpSrv.PathRewritePrefix != "/a/b/mcp" {
+		t.Errorf("PathRewritePrefix = %q, want %q", mcpSrv.PathRewritePrefix, "/a/b/mcp")
+	}
+
+	server.RemoteServerConfig.ExportPath = ""
+	vsCfg = w.buildVirtualServiceForMcpServer(server, "mock-data-id", "svc.public.nacos", nil)
+	vs = vsCfg.Spec.(*v1alpha3.VirtualService)
+	cfg = w.buildMcpServerForMcpServer(vs, "mock-data-id", server)
+	mcpSrv = cfg.Spec.(*mcpserver.McpServer)
+	if mcpSrv.PathRewritePrefix != "/" {
+		t.Errorf("PathRewritePrefix = %q, want %q", mcpSrv.PathRewritePrefix, "/")
 	}
 }
