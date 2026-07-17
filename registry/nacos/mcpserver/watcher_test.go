@@ -15,6 +15,7 @@
 package mcpserver
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -590,5 +591,64 @@ func Test_Watcher(t *testing.T) {
 				t.Errorf("dr is not equal, want %v\n, got %v", wantDr, dr)
 			}
 		})
+	}
+}
+
+// Regression test for https://github.com/higress-group/higress/issues/3946:
+// outputSchema configured in the json-go-template of a Nacos HTTP-TO-MCP tool
+// must be propagated to the generated tool config so tools/list can expose it.
+func Test_GetOutputSchemaFromToolMeta(t *testing.T) {
+	toolsMetaJSON := `{
+		"enabled": true,
+		"templates": {
+			"json-go-template": {
+				"requestTemplate": {
+					"method": "POST",
+					"url": "/api/invoke"
+				},
+				"responseTemplate": {
+					"body": "{{.}}"
+				},
+				"outputSchema": {
+					"type": "object",
+					"properties": {
+						"temperature": {"type": "number", "description": "temperature in Celsius"},
+						"condition": {"type": "string", "description": "weather condition"}
+					},
+					"required": ["temperature", "condition"]
+				}
+			}
+		}
+	}`
+	toolsMeta := &provider.ToolsMeta{}
+	if err := json.Unmarshal([]byte(toolsMetaJSON), toolsMeta); err != nil {
+		t.Fatal(err)
+	}
+
+	outputSchema, err := getOutputSchemaFromToolMeta(toolsMeta)
+	if err != nil {
+		t.Fatalf("getOutputSchemaFromToolMeta error: %v", err)
+	}
+	if outputSchema == nil {
+		t.Fatal("outputSchema should be extracted from the json-go-template")
+	}
+	if outputSchema["type"] != "object" {
+		t.Errorf("outputSchema type = %v, want object", outputSchema["type"])
+	}
+	properties, ok := outputSchema["properties"].(map[string]interface{})
+	if !ok || properties["temperature"] == nil || properties["condition"] == nil {
+		t.Errorf("outputSchema properties lost: %v", outputSchema["properties"])
+	}
+
+	// nil meta and template without outputSchema stay nil without error
+	if schema, err := getOutputSchemaFromToolMeta(nil); err != nil || schema != nil {
+		t.Errorf("nil toolMeta: schema=%v err=%v, want nil,nil", schema, err)
+	}
+	noSchemaMeta := &provider.ToolsMeta{}
+	if err := json.Unmarshal([]byte(`{"enabled":true,"templates":{"json-go-template":{"requestTemplate":{"method":"GET","url":"/x"}}}}`), noSchemaMeta); err != nil {
+		t.Fatal(err)
+	}
+	if schema, err := getOutputSchemaFromToolMeta(noSchemaMeta); err != nil || schema != nil {
+		t.Errorf("no outputSchema: schema=%v err=%v, want nil,nil", schema, err)
 	}
 }
