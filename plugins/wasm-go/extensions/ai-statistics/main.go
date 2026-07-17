@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -821,6 +822,13 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, dat
 		ctx.SetUserAttribute(ChatID, chatID.String())
 	}
 
+	// Track streaming errors across chunks — SSE failures often appear as
+	// data: {"error":{...}} before data: [DONE], so the last chunk alone is
+	// insufficient for error detection.
+	if !ctx.GetBoolContext("hasStreamError", false) && isErrorResponse(data) {
+		ctx.SetContext("hasStreamError", true)
+	}
+
 	// Get requestStartTime from http context
 	requestStartTime, ok := ctx.GetContext(StatisticsRequestStartTime).(int64)
 	if !ok {
@@ -1344,12 +1352,17 @@ func setSpanAttribute(key string, value interface{}) {
 
 // isErrorResponse checks whether the LLM response indicates an error.
 // Detects errors by:
-// 1. Response body contains non-null "error" field at root level (OpenAI/Anthropic format)
-// 2. HTTP status code >= 400 as fallback when body is empty
+// 1. Response body contains non-null "error" field at root level (OpenAI/Anthropic format).
+//    Handles both raw JSON and SSE "data: " prefixed chunks.
+// 2. HTTP status code >= 400 as fallback when body is empty.
 func isErrorResponse(body []byte) bool {
-	// Check if error object exists in body and is not null/empty
 	if len(body) > 0 {
-		errorVal := gjson.GetBytes(body, "error")
+		// Strip SSE "data: " prefix if present so gjson can parse the JSON payload.
+		jsonBody := body
+		if trimmed := bytes.TrimSpace(body); bytes.HasPrefix(trimmed, []byte("data: ")) {
+			jsonBody = trimmed[len("data: "):]
+		}
+		errorVal := gjson.GetBytes(jsonBody, "error")
 		if errorVal.Exists() && errorVal.Value() != nil {
 			// Reject empty string error values (false positive prevention)
 			if errorVal.Type == gjson.String && errorVal.String() == "" {
@@ -1361,9 +1374,7 @@ func isErrorResponse(body []byte) bool {
 	// Fallback: check HTTP status code for errors with empty body (connection reset, timeout, etc.)
 	if len(body) == 0 {
 		if statusCode, err := proxywasm.GetHttpResponseHeader(":status"); err == nil {
-			code := 0
-			fmt.Sscanf(statusCode, "%d", &code)
-			if code >= 400 {
+			if code, err := strconv.Atoi(statusCode); err == nil && code >= 400 {
 				return true
 			}
 		}
@@ -1394,9 +1405,16 @@ func writeMetric(ctx wrapper.HttpContext, config AIStatisticsConfig, body []byte
 			modelStr = ms
 		}
 	}
+	// Fallback to request model for error responses where usage info is unavailable
+	if modelStr == "-" {
+		if rm, ok := ctx.GetContext(tokenusage.CtxKeyRequestModel).(string); ok && rm != "" {
+			modelStr = rm
+		}
+	}
 
 	// Count failure before usage check, so error responses without usage info are still counted
-	if isErrorResponse(body) {
+	// For streaming, also check the hasStreamError flag set during onHttpStreamingBody
+	if isErrorResponse(body) || ctx.GetBoolContext("hasStreamError", false) {
 		config.incrementCounter(generateMetricName(route, cluster, modelStr, consumer, LLMFailureCount), 1)
 	}
 
