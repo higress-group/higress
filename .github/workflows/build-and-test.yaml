@@ -96,8 +96,6 @@ jobs:
     env:
       GATEWAY_API_TEST_NAMESPACE: gateway-conformance-infra
       HIGRESS_TEST_IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
-      GATEWAY_CONFORMANCE_RUN_TEST: HTTPRouteMultipleGateways
-      GATEWAY_CONFORMANCE_CLEANUP_TEST_RESOURCES: "false"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -153,15 +151,6 @@ jobs:
           kubectl get events -A --sort-by=.lastTimestamp > out/gateway-api-conformance/diagnostics/events.txt 2>&1 || true
           kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-controller --all-containers > out/gateway-api-conformance/diagnostics/controller.log 2>&1 || true
           kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-gateway --all-containers > out/gateway-api-conformance/diagnostics/gateway.log 2>&1 || true
-          kubectl port-forward -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-controller 18080:8080 > out/gateway-api-conformance/diagnostics/controller-port-forward.log 2>&1 &
-          port_forward_pid=$!
-          for attempt in $(seq 1 20); do
-            if curl --fail --silent --show-error http://127.0.0.1:18080/debug/configz > out/gateway-api-conformance/diagnostics/controller-configz.json; then
-              break
-            fi
-            sleep 1
-          done
-          kill "${port_forward_pid}" 2>/dev/null || true
           while read -r namespace pod; do
             name="${namespace}_${pod}"
             kubectl logs -n "${namespace}" "${pod}" -c higress-gateway > "out/gateway-api-conformance/diagnostics/${name}.log" 2>&1 || true
