@@ -782,3 +782,267 @@ func TestStopReasonBedrock2OpenAI_AllKnownReasons(t *testing.T) {
 	assert.Equal(t, finishReasonToolCall, stopReasonBedrock2OpenAI("tool_use"))
 	assert.Equal(t, "custom_reason", stopReasonBedrock2OpenAI("custom_reason"))
 }
+
+// ==================== P1-1: SigV4 SignedHeaders consistency tests ====================
+
+// TestGenerateSignatureWithService_ReturnsSignedHeaders verifies that
+// generateSignatureWithService returns the actual signed headers used in the
+// canonical request, ensuring the Authorization header's SignedHeaders field
+// is always consistent with the signature computation.
+func TestGenerateSignatureWithService_ReturnsSignedHeaders(t *testing.T) {
+	p := &bedrockProvider{config: ProviderConfig{
+		awsAccessKey:  "AKIAIOSFODNN7EXAMPLE",
+		awsSecretKey:  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		awsRegion:     "us-east-1",
+		awsSessionToken: "", // No session token
+	}}
+
+	t.Run("without session token returns base signed headers", func(t *testing.T) {
+		_, signedHeaders := p.generateSignatureWithService(
+			"/model/claude-3/converse", "20240101T120000Z", "20240101", []byte{}, awsServiceBedrock,
+		)
+		assert.Equal(t, "host;x-amz-date", signedHeaders)
+	})
+
+	t.Run("with session token includes x-amz-security-token", func(t *testing.T) {
+		pWithSTS := &bedrockProvider{config: ProviderConfig{
+			awsAccessKey:    "AKIAIOSFODNN7EXAMPLE",
+			awsSecretKey:    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+			awsRegion:       "us-east-1",
+			awsSessionToken: "IQoJb3JpZ2luX2VjEGEaCXVzLWVhc3QtMSJHMEUCIQCVp...",
+		}}
+		_, signedHeaders := pWithSTS.generateSignatureWithService(
+			"/model/claude-3/converse", "20240101T120000Z", "20240101", []byte{}, awsServiceBedrock,
+		)
+		assert.Equal(t, "host;x-amz-date;x-amz-security-token", signedHeaders)
+	})
+
+	t.Run("signature differs with and without session token", func(t *testing.T) {
+		sigNoSTS, _ := p.generateSignatureWithService(
+			"/model/claude-3/converse", "20240101T120000Z", "20240101", []byte{}, awsServiceBedrock,
+		)
+		pWithSTS := &bedrockProvider{config: ProviderConfig{
+			awsAccessKey:    "AKIAIOSFODNN7EXAMPLE",
+			awsSecretKey:    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+			awsRegion:       "us-east-1",
+			awsSessionToken: "IQoJb3JpZ2luX2VjEGEaCXVzLWVhc3QtMSJHMEUCIQCVp...",
+		}}
+		sigWithSTS, _ := pWithSTS.generateSignatureWithService(
+			"/model/claude-3/converse", "20240101T120000Z", "20240101", []byte{}, awsServiceBedrock,
+		)
+		assert.NotEqual(t, sigNoSTS, sigWithSTS, "signatures must differ when session token changes the canonical request")
+	})
+}
+
+// ==================== P1-2: EventStream checksum failure terminates stream ====================
+
+// TestExtractAmazonEventStreamEvents_ChecksumFailureStopsStream verifies that
+// a corrupted frame (CRC mismatch) terminates the stream without attempting
+// byte-by-byte resynchronization, per the Amazon EventStream specification.
+func TestExtractAmazonEventStreamEvents_ChecksumFailureStopsStream(t *testing.T) {
+	// Build a valid message first
+	validPayload, _ := json.Marshal(map[string]interface{}{"role": "assistant"})
+	validMsg := buildEventStreamMessage(map[string]string{":event-type": "message-start"}, validPayload)
+
+	// Build a corrupted message (flip last byte to break CRC)
+	corruptedMsg := buildEventStreamMessage(map[string]string{":event-type": "content-block-delta"}, []byte("delta"))
+	corruptedMsg[len(corruptedMsg)-1] ^= 0xFF
+
+	// Concatenate: valid + corrupted
+	body := append(validMsg, corruptedMsg...)
+
+	// Use a simple mock context that supports GetContext/SetContext
+	ctx := newMapCtx()
+	events := extractAmazonEventStreamEvents(ctx, body)
+
+	// Should get exactly 1 event (the valid one), then stop at the corrupted frame
+	require.Len(t, events, 1, "should stop after checksum failure, not resync")
+}
+
+// TestExtractAmazonEventStreamEvents_NoReplayOnPartialFrame verifies that
+// partially consumed data is not replayed on the next call — committedPos
+// correctly tracks the read position.
+func TestExtractAmazonEventStreamEvents_NoReplayOnPartialFrame(t *testing.T) {
+	// Build a message-start event with the correct Bedrock JSON structure
+	startPayload, _ := json.Marshal(map[string]interface{}{
+		"role": "assistant",
+	})
+	msg1 := buildEventStreamMessage(map[string]string{":event-type": "message-start"}, startPayload)
+
+	// Second message: content-block-delta with text delta
+	deltaPayload, _ := json.Marshal(map[string]interface{}{
+		"contentBlockIndex": 0,
+		"delta": map[string]interface{}{
+			"text": "hello",
+		},
+	})
+	msg2 := buildEventStreamMessage(map[string]string{":event-type": "content-block-delta"}, deltaPayload)
+
+	// Split msg2: first 8 bytes (partial prelude)
+	partialMsg2 := msg2[:8]
+	chunk1 := append(msg1, partialMsg2...)
+
+	ctx := newMapCtx()
+	events1 := extractAmazonEventStreamEvents(ctx, chunk1)
+	require.Len(t, events1, 1, "first chunk should yield one complete event")
+	assert.NotNil(t, events1[0].Role, "first event should have a role")
+
+	// Second chunk: the remainder of msg2
+	chunk2 := msg2[8:]
+	events2 := extractAmazonEventStreamEvents(ctx, chunk2)
+	require.Len(t, events2, 1, "second chunk should yield the reassembled event")
+
+	// Verify the second event has the expected text delta
+	require.NotNil(t, events2[0].Delta, "second event should have a delta")
+	require.NotNil(t, events2[0].Delta.Text, "second event delta should have text")
+	assert.Equal(t, "hello", *events2[0].Delta.Text)
+}
+
+// ==================== P1-3: Stream exception detection tests ====================
+
+// TestAmazonMessageHeader tests the amazonMessageHeader helper function.
+func TestAmazonMessageHeader(t *testing.T) {
+	t.Run("header found", func(t *testing.T) {
+		hs := headers{
+			{Name: ":message-type", Value: StringValue("exception")},
+			{Name: ":exception-type", Value: StringValue("ThrottlingException")},
+		}
+		val, ok := amazonMessageHeader(hs, ":message-type")
+		assert.True(t, ok)
+		assert.Equal(t, "exception", val)
+
+		excType, ok := amazonMessageHeader(hs, ":exception-type")
+		assert.True(t, ok)
+		assert.Equal(t, "ThrottlingException", excType)
+	})
+
+	t.Run("header not found", func(t *testing.T) {
+		hs := headers{
+			{Name: ":event-type", Value: StringValue("content-block-delta")},
+		}
+		_, ok := amazonMessageHeader(hs, ":message-type")
+		assert.False(t, ok)
+	})
+}
+
+// TestExtractExceptionMessage tests the extractExceptionMessage helper function.
+func TestExtractExceptionMessage(t *testing.T) {
+	t.Run("JSON payload with message field", func(t *testing.T) {
+		payload, _ := json.Marshal(map[string]string{"message": "Rate exceeded"})
+		result := extractExceptionMessage(payload)
+		assert.Equal(t, "Rate exceeded", result)
+	})
+
+	t.Run("JSON payload without message field", func(t *testing.T) {
+		payload, _ := json.Marshal(map[string]string{"error": "something"})
+		result := extractExceptionMessage(payload)
+		assert.Equal(t, `{"error":"something"}`, result)
+	})
+
+	t.Run("non-JSON payload", func(t *testing.T) {
+		payload := []byte("raw error text")
+		result := extractExceptionMessage(payload)
+		assert.Equal(t, "raw error text", result)
+	})
+}
+
+// TestExtractAmazonEventStreamEvents_ExceptionFrame verifies that an
+// exception frame (with :message-type=exception) is detected and
+// represented as a StreamException event, and that processing stops
+// after the exception (no subsequent events are returned).
+func TestExtractAmazonEventStreamEvents_ExceptionFrame(t *testing.T) {
+	// Build a valid event first
+	validPayload, _ := json.Marshal(map[string]interface{}{"role": "assistant"})
+	validMsg := buildEventStreamMessage(map[string]string{":event-type": "message-start"}, validPayload)
+
+	// Build an exception frame
+	excPayload, _ := json.Marshal(map[string]string{"message": "Rate exceeded"})
+	excMsg := buildEventStreamMessage(map[string]string{
+		":message-type":   "exception",
+		":exception-type": "ThrottlingException",
+	}, excPayload)
+
+	// Build another valid event after the exception (should NOT be processed)
+	trailingPayload, _ := json.Marshal(map[string]interface{}{"text": "should not appear"})
+	trailingMsg := buildEventStreamMessage(map[string]string{":event-type": "content-block-delta"}, trailingPayload)
+
+	body := append(append(validMsg, excMsg...), trailingMsg...)
+
+	ctx := newMapCtx()
+	events := extractAmazonEventStreamEvents(ctx, body)
+
+	// Should get 2 events: the valid one + the exception
+	require.Len(t, events, 2)
+	assert.Nil(t, events[0].StreamException, "first event should be a normal event")
+	require.NotNil(t, events[1].StreamException, "second event should be a stream exception")
+	assert.Equal(t, "ThrottlingException", events[1].StreamException.Type)
+	assert.Equal(t, "Rate exceeded", events[1].StreamException.Message)
+}
+
+// ==================== P1-5: Claude document tool result mapping tests ====================
+
+// TestClaudeDocumentBlockToBedrock tests the claudeDocumentBlockToBedrock function.
+func TestClaudeDocumentBlockToBedrock(t *testing.T) {
+	t.Run("valid PDF document", func(t *testing.T) {
+		item := claudeChatMessageContent{
+			Type: "document",
+			Name: "report.pdf",
+			Source: &claudeChatMessageContentSource{
+				Type:      "base64",
+				MediaType: "application/pdf",
+				Data:      "base64pdfdata",
+			},
+		}
+		result := claudeDocumentBlockToBedrock(item)
+		require.NotNil(t, result)
+		assert.Equal(t, "pdf", result.Format)
+		assert.Equal(t, "report.pdf", result.Name)
+		assert.Equal(t, "base64pdfdata", result.Source.Bytes)
+	})
+
+	t.Run("document without name defaults to 'document'", func(t *testing.T) {
+		item := claudeChatMessageContent{
+			Type: "document",
+			Source: &claudeChatMessageContentSource{
+				Type:      "base64",
+				MediaType: "text/csv",
+				Data:      "base64csvdata",
+			},
+		}
+		result := claudeDocumentBlockToBedrock(item)
+		require.NotNil(t, result)
+		assert.Equal(t, "csv", result.Format)
+		assert.Equal(t, "document", result.Name)
+	})
+
+	t.Run("nil source returns nil", func(t *testing.T) {
+		item := claudeChatMessageContent{Type: "document"}
+		result := claudeDocumentBlockToBedrock(item)
+		assert.Nil(t, result)
+	})
+
+	t.Run("non-base64 source returns nil", func(t *testing.T) {
+		item := claudeChatMessageContent{
+			Type: "document",
+			Source: &claudeChatMessageContentSource{
+				Type: "url",
+			},
+		}
+		result := claudeDocumentBlockToBedrock(item)
+		assert.Nil(t, result)
+	})
+
+	t.Run("empty media type returns nil", func(t *testing.T) {
+		item := claudeChatMessageContent{
+			Type: "document",
+			Source: &claudeChatMessageContentSource{
+				Type:      "base64",
+				MediaType: "",
+				Data:      "data",
+			},
+		}
+		result := claudeDocumentBlockToBedrock(item)
+		assert.Nil(t, result)
+	})
+}
+

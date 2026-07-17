@@ -311,6 +311,42 @@ func TestExtractCanonicalQueryString(t *testing.T) {
 			path:     "/",
 			expected: "",
 		},
+		// P1-4: URI encoding test cases per AWS SigV4 specification
+		{
+			name:     "query parameter with unencoded space as plus",
+			path:     "/model/claude-3/converse?filter=my+value",
+			expected: "filter=my%2Bvalue",
+		},
+		{
+			name:     "query parameter with special characters URI-encoded",
+			path:     "/model/claude-3/converse?key=a/b/c",
+			expected: "key=a%2Fb%2Fc",
+		},
+		{
+			name:     "query parameter without value gets trailing equals",
+			path:     "/model/claude-3/converse?empty=",
+			expected: "empty=",
+		},
+		{
+			name:     "query parameter with no equals sign",
+			path:     "/model/claude-3/converse?flag",
+			expected: "flag=",
+		},
+		{
+			name:     "multiple parameters with special chars sorted after encoding",
+			path:     "/model/claude-3/converse?z=1&a=hello+world&b=foo/bar",
+			expected: "a=hello%2Bworld&b=foo%2Fbar&z=1",
+		},
+		{
+			name:     "duplicate parameter keys preserved after encoding",
+			path:     "/model/claude-3/converse?key=val1&key=val2",
+			expected: "key=val1&key=val2",
+		},
+		{
+			name:     "already percent-encoded value is double-encoded",
+			path:     "/model/claude-3/converse?q=hello%20world",
+			expected: "q=hello%2520world",
+		},
 	}
 
 	for _, tt := range tests {

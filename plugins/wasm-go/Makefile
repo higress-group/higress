@@ -80,7 +80,7 @@ local-build-tinygo:
 local-build-go-native:
 	cd extensions/${PLUGIN_NAME}; \
 	if [ -f prepare.sh ]; then sh ./prepare.sh; fi; \
-	GOOS=wasip1 GOARCH=wasm go build -ldflags="-s -w" -o ./main.wasm .
+	GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -ldflags="-s -w" -o ./main.wasm .
 
 	@echo ""
 	@echo "wasm (Go Native): extensions/${PLUGIN_NAME}/main.wasm"
