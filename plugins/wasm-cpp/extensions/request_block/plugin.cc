@@ -168,7 +168,7 @@ bool PluginRootContext::parsePluginConfig(const json& configuration,
     LOG_WARN("failed to parse configuration for block_bodys.");
     return false;
   }
-  // compatiable
+  // compatible
   if (!JsonArrayIterate(
           configuration, "block_bodies", [&](const json& item) -> bool {
             auto body = JsonValueAs<std::string>(item);

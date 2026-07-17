@@ -27,7 +27,6 @@ import (
 	gw "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayx "sigs.k8s.io/gateway-api/apisx/v1alpha1"
 
-	higressconstants "github.com/alibaba/higress/v2/pkg/config/constants"
 	networking "istio.io/api/networking/v1alpha3"
 	networkingclient "istio.io/client-go/pkg/apis/networking/v1"
 	kubesecrets "istio.io/istio/pilot/pkg/credentials/kube"
@@ -425,7 +424,7 @@ func BackendTLSPolicyCollection(
 				Kind:  ptr.Of(gw.Kind(gvk.KubernetesGateway.Kind)),
 				Name:  gw.ObjectName(g.Name),
 			}
-			ancestorStatus = append(ancestorStatus, setAncestorStatus(pr, status, i.Generation, conds, gw.GatewayController(higressconstants.ManagedGatewayController)))
+			ancestorStatus = append(ancestorStatus, setAncestorStatus(pr, status, i.Generation, conds, gw.GatewayController(managedGatewayController)))
 		}
 		status.Ancestors = mergeAncestors(status.Ancestors, ancestorStatus)
 		return status, res
@@ -635,14 +634,16 @@ func parentRefEqual(a, b gw.ParentReference) bool {
 		ptr.Equal(a.Port, b.Port)
 }
 
-var outControllers = sets.New(gw.GatewayController(higressconstants.ManagedGatewayController), constants.ManagedGatewayMeshController)
+func isOutController(controller gw.GatewayController) bool {
+	return controller == managedGatewayController || controller == constants.ManagedGatewayMeshController
+}
 
 // mergeAncestors merges an existing ancestor with in incoming one. We preserve order, prune stale references set by our controller,
 // and add any new references from our controller.
 func mergeAncestors(existing []gw.PolicyAncestorStatus, incoming []gw.PolicyAncestorStatus) []gw.PolicyAncestorStatus {
 	n := 0
 	for _, x := range existing {
-		if !outControllers.Contains(x.ControllerName) {
+		if !isOutController(x.ControllerName) {
 			// Keep it as-is
 			existing[n] = x
 			n++

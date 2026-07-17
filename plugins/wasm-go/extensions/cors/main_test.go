@@ -243,8 +243,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"origin", "http://invalid.com"},
 			})
 
-			// 无效的 CORS 请求应该返回 ActionPause
-			require.Equal(t, types.ActionPause, action)
+			// 无效的实际 CORS 请求应该继续转发，由浏览器根据响应头执行 CORS 结果
+			require.Equal(t, types.ActionContinue, action)
 
 			host.CompleteHttp()
 		})

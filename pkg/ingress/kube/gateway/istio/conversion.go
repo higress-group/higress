@@ -23,6 +23,7 @@ import (
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/util"
 	"istio.io/istio/pilot/pkg/credentials"
 	"net"
+	"net/netip"
 	"path"
 	inferencev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	"sort"
@@ -1063,12 +1064,12 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 			return nil, nil, &ConfigError{Reason: InvalidDestination, Message: "service name invalid; the name of the Service must be used, not the hostname."}
 		}
 		hostname = fmt.Sprintf("%s.%s.svc.%s", to.Name, namespace, ctx.DomainSuffix)
-		// Start - Updated by Higress
-		//key := namespace + "/" + string(to.Name)
-		//svc := ptr.Flatten(krt.FetchOne(ctx.Krt, ctx.Services, krt.FilterKey(key)))
-		svc := ctx.LookupHostname(hostname, namespace, "Service")
-		// End - Updated by Higress
-		if svc == nil {
+		// Keep Higress service resolution as the primary lookup so its service naming and
+		// plugin binding semantics remain unchanged. Always fetch from the informer to
+		// retain the dependency needed to recompute the Route when the Service is deleted.
+		key := namespace + "/" + string(to.Name)
+		kubeSvc := ptr.Flatten(krt.FetchOne(ctx.Krt, ctx.Services, krt.FilterKey(key)))
+		if ctx.LookupHostname(hostname, namespace, "Service") == nil && kubeSvc == nil {
 			invalidBackendErr = &ConfigError{Reason: InvalidDestinationNotFound, Message: fmt.Sprintf("backend(%s) not found", hostname)}
 		}
 	case config.GroupVersionKind{Group: gvk.ServiceEntry.Group, Kind: "Hostname"}:
@@ -1591,6 +1592,21 @@ func (r routeParentReference) IsMesh() bool {
 	return r.InternalName == "mesh"
 }
 
+func (r routeParentReference) hostnameIntersection(rawRouteHost string) (string, bool) {
+	routeHost := host.Name(rawRouteHost)
+	listenerHost := host.Name(r.Hostname)
+	if len(listenerHost) == 0 || listenerHost == "*" {
+		return rawRouteHost, true
+	}
+	if routeHost.SubsetOf(listenerHost) {
+		return rawRouteHost, true
+	}
+	if listenerHost.SubsetOf(routeHost) {
+		return r.Hostname, true
+	}
+	return "", false
+}
+
 func (r routeParentReference) hostnameAllowedByIsolation(rawRouteHost string) bool {
 	routeHost := host.Name(rawRouteHost)
 	ourListener := host.Name(r.Hostname)
@@ -1735,9 +1751,7 @@ func reportGatewayStatus(
 	setProgrammedCondition(gatewayConditions, internal, gatewayServices, warnings, allUsable)
 
 	addressesToReport := external
-	addrType := k8s.IPAddressType
 	if len(addressesToReport) == 0 {
-		addrType = k8s.HostnameAddressType
 		for _, hostport := range internal {
 			svchost, _, _ := net.SplitHostPort(hostport)
 			if !slices.Contains(pending, svchost) && !slices.Contains(addressesToReport, svchost) {
@@ -1745,12 +1759,21 @@ func reportGatewayStatus(
 			}
 		}
 	}
-	gs.Addresses = make([]k8s.GatewayStatusAddress, 0, len(addressesToReport))
-	for _, addr := range addressesToReport {
-		gs.Addresses = append(gs.Addresses, k8s.GatewayStatusAddress{
-			Value: addr,
-			Type:  &addrType,
-		})
+	// Do not report an address until we are ready. But once we are ready, never remove the address.
+	if len(addressesToReport) > 0 {
+		gs.Addresses = make([]k8s.GatewayStatusAddress, 0, len(addressesToReport))
+		for _, addr := range addressesToReport {
+			var addrType k8s.AddressType
+			if _, err := netip.ParseAddr(addr); err == nil {
+				addrType = k8s.IPAddressType
+			} else {
+				addrType = k8s.HostnameAddressType
+			}
+			gs.Addresses = append(gs.Addresses, k8s.GatewayStatusAddress{
+				Value: addr,
+				Type:  &addrType,
+			})
+		}
 	}
 	// Prune listeners that have been removed
 	haveListeners := getListenerNames(&obj.Spec)

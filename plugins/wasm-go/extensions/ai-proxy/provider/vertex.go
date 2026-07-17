@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
+	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -47,6 +48,7 @@ const (
 	contextOpenAICompatibleMarker      = "isOpenAICompatibleRequest"
 	contextVertexRawMarker             = "isVertexRawRequest"
 	contextVertexStreamDoneMarker      = "vertexStreamDoneSent"
+	contextVertexStreamToolCallIDs     = "vertexStreamToolCallIDs"
 	vertexAnthropicVersion             = "vertex-2023-10-16"
 	vertexImageVariationDefaultPrompt  = "Create variations of the provided image."
 )
@@ -871,7 +873,10 @@ func (v *vertexProvider) buildChatCompletionResponse(ctx wrapper.HttpContext, re
 				args, _ := json.Marshal(part.FunctionCall.Args)
 				choice.Message.ToolCalls = []toolCall{
 					{
-						Type: "function",
+						Id:               newOpenAIToolCallID(),
+						Type:             "function",
+						ThoughtSignature: part.ThoughtSignature,
+						ExtraContent:     buildGoogleThoughtSignatureExtraContent(part.ThoughtSignature),
 						Function: functionCall{
 							Name:      part.FunctionCall.Name,
 							Arguments: string(args),
@@ -979,7 +984,10 @@ func (v *vertexProvider) buildChatCompletionStreamResponse(ctx wrapper.HttpConte
 			choice.Delta = &chatMessage{
 				ToolCalls: []toolCall{
 					{
-						Type: "function",
+						Id:               getVertexStreamToolCallID(ctx, 0),
+						Type:             "function",
+						ThoughtSignature: part.ThoughtSignature,
+						ExtraContent:     buildGoogleThoughtSignatureExtraContent(part.ThoughtSignature),
 						Function: functionCall{
 							Name:      part.FunctionCall.Name,
 							Arguments: string(args),
@@ -1019,6 +1027,24 @@ func (v *vertexProvider) buildChatCompletionStreamResponse(ctx wrapper.HttpConte
 		},
 	}
 	return &streamResponse
+}
+
+func newOpenAIToolCallID() string {
+	return fmt.Sprintf("call_%s", uuid.New().String())
+}
+
+func getVertexStreamToolCallID(ctx wrapper.HttpContext, index int) string {
+	toolCallIDs, _ := ctx.GetContext(contextVertexStreamToolCallIDs).(map[int]string)
+	if toolCallIDs == nil {
+		toolCallIDs = make(map[int]string)
+		ctx.SetContext(contextVertexStreamToolCallIDs, toolCallIDs)
+	}
+	if id := toolCallIDs[index]; id != "" {
+		return id
+	}
+	id := newOpenAIToolCallID()
+	toolCallIDs[index] = id
+	return id
 }
 
 func (v *vertexProvider) appendResponse(responseBuilder *strings.Builder, responseBody string) {
@@ -1143,6 +1169,7 @@ func (v *vertexProvider) buildVertexChatRequest(request *chatCompletionRequest) 
 					Name: lastFunctionName,
 					Args: args,
 				},
+				ThoughtSignature: message.ToolCalls[0].getThoughtSignature(),
 			})
 		} else {
 			for _, part := range message.ParseContent() {
@@ -1359,6 +1386,7 @@ type vertexPart struct {
 	FunctionCall     *vertexFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *vertexFunctionResponse `json:"functionResponse,omitempty"`
 	Thounght         *bool                   `json:"thought,omitempty"`
+	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
 }
 
 type blob struct {

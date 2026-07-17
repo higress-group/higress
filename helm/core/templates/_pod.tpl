@@ -20,11 +20,6 @@ template:
       {{- end }}
       {{- include "gateway.selectorLabels" . | nindent 6 }}
   spec:
-    {{- if .Values.gateway.imagePullPolicy }}
-    imagePullPolicy: {{ .Values.gateway.imagePullPolicy }}
-    {{- else if .Values.global.imagePullPolicy }}
-    imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-    {{- end }}
     {{- with .Values.gateway.imagePullSecrets }}
     imagePullSecrets:
       {{- toYaml . | nindent 6 }}
@@ -45,6 +40,11 @@ template:
     containers:
       - name: higress-gateway
         image: "{{ .Values.gateway.hub | default .Values.global.hub }}/higress/{{ .Values.gateway.image | default "gateway" }}:{{ .Values.gateway.tag | default .Chart.AppVersion }}"
+        {{- if .Values.gateway.imagePullPolicy }}
+        imagePullPolicy: {{ .Values.gateway.imagePullPolicy }}
+        {{- else if .Values.global.imagePullPolicy }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        {{- end }}
         args:
           - proxy
           - router
@@ -211,7 +211,9 @@ template:
         {{- $config := $o11y.promtail }}
       - name: promtail
         image: {{ $config.image.repository | default (printf "%s/higress/promtail" .Values.global.hub) }}:{{ $config.image.tag }}
-        imagePullPolicy: IfNotPresent
+        {{- if .Values.global.imagePullPolicy }}
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        {{- end }}
         args:
           - -config.file=/etc/promtail/promtail.yaml
         env:

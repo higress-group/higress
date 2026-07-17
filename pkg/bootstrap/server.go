@@ -110,6 +110,7 @@ type ServerArgs struct {
 	// 2. When the ingress class is set empty, the higress controller will watch all ingress
 	// resources in the k8s cluster.
 	IngressClass         string
+	GatewayClass         string
 	EnableStatus         bool
 	WatchNamespace       string
 	GrpcKeepAliveOptions *keepalive.Options
@@ -222,6 +223,7 @@ func (s *Server) initConfigController() error {
 		Enable:               true,
 		ClusterId:            s.RegistryOptions.KubeOptions.ClusterID,
 		IngressClass:         s.IngressClass,
+		GatewayClass:         s.GatewayClass,
 		WatchNamespace:       s.WatchNamespace,
 		EnableStatus:         s.EnableStatus,
 		SystemNamespace:      higressconfig.PodNamespace,

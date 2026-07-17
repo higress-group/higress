@@ -1,0 +1,4 @@
+interface:
+  display_name: "Higress Envoy Gateway"
+  short_description: "Update Envoy packages and gateway tag"
+  default_prompt: "Use $higress-update-envoy-gateway to update Higress Makefile Envoy dependencies and build a gateway image for e2e validation."

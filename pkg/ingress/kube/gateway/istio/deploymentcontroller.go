@@ -48,15 +48,33 @@ type classInfo struct {
 	addressType gateway.AddressType
 }
 
-var classInfos = getClassInfos()
+var (
+	gatewayClassName         = gateway.ObjectName(higressconstants.DefaultGatewayClass)
+	managedGatewayController = gateway.GatewayController(higressconstants.ManagedGatewayController)
+	classInfos               = getClassInfos()
+	builtinClasses           = getBuiltinClasses()
+)
 
-var builtinClasses = getBuiltinClasses()
+// SetGatewayClassName configures the single GatewayClassName this process owns.
+func SetGatewayClassName(gatewayClass string) {
+	if gatewayClass == "" {
+		gatewayClass = higressconstants.DefaultGatewayClass
+	}
+	gatewayClassName = gateway.ObjectName(gatewayClass)
+	if gatewayClass == higressconstants.DefaultGatewayClass {
+		managedGatewayController = gateway.GatewayController(higressconstants.ManagedGatewayController)
+	} else {
+		managedGatewayController = gateway.GatewayController(higressconstants.ManagedGatewayController + "-" + gatewayClass)
+	}
+	classInfos = getClassInfos()
+	builtinClasses = getBuiltinClasses()
+}
 
 func getBuiltinClasses() map[gateway.ObjectName]gateway.GatewayController {
 	res := map[gateway.ObjectName]gateway.GatewayController{
 		// Start - Updated by Higress
 		//gateway.ObjectName(features.GatewayAPIDefaultGatewayClass): gateway.GatewayController(features.ManagedGatewayController),
-		higressconstants.DefaultGatewayClass: higressconstants.ManagedGatewayController,
+		gatewayClassName: managedGatewayController,
 		// End - Updated by Higress
 	}
 	// Start - Commented by Higress
@@ -80,8 +98,8 @@ func getBuiltinClasses() map[gateway.ObjectName]gateway.GatewayController {
 func getClassInfos() map[gateway.GatewayController]classInfo {
 	// Start - Updated by Higress
 	m := map[gateway.GatewayController]classInfo{
-		gateway.GatewayController(higressconstants.ManagedGatewayController): {
-			controller:         higressconstants.ManagedGatewayController,
+		managedGatewayController: {
+			controller:         string(managedGatewayController),
 			description:        "The default Higress GatewayClass",
 			templates:          "kube-gateway",
 			defaultServiceType: corev1.ServiceTypeLoadBalancer,
