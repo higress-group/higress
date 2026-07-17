@@ -1,8 +1,8 @@
 module github.com/alibaba/higress/plugins/golang-filter
 
-go 1.22
+go 1.23
 
-replace github.com/envoyproxy/envoy => github.com/higress-group/envoy v0.0.0-20250430151331-2c556780b65c
+replace github.com/envoyproxy/envoy => github.com/higress-group/envoy v0.0.0-20260707144248-4491e6783b3d
 
 replace github.com/mark3labs/mcp-go => github.com/higress-group/mcp-go v0.0.0-20250428145706-792ce64b4b30
 
@@ -17,7 +17,7 @@ require (
 	github.com/openai/openai-go/v2 v2.7.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/stretchr/testify v1.9.0
-	google.golang.org/protobuf v1.36.5
+	google.golang.org/protobuf v1.36.10
 	gorm.io/driver/clickhouse v0.6.1
 	gorm.io/driver/mysql v1.5.7
 	gorm.io/driver/postgres v1.5.11
@@ -53,6 +53,7 @@ require (
 	github.com/cockroachdb/errors v1.9.1 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20211118104740-dabe8e521a4f // indirect
 	github.com/cockroachdb/redact v1.1.3 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/deckarep/golang-set v1.7.1 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect

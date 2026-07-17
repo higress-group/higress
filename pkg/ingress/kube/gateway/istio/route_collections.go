@@ -148,7 +148,12 @@ func HTTPRouteCollection(
 			}
 			// Create one VS per hostname with a single hostname.
 			// This ensures we can treat each hostname independently, as the spec requires
-			for _, h := range vsHosts {
+			processedHosts := sets.New[string]()
+			for _, routeHost := range vsHosts {
+				h, ok := parent.hostnameIntersection(routeHost)
+				if !ok || processedHosts.InsertContains(h) {
+					continue
+				}
 				if !parent.hostnameAllowedByIsolation(h) {
 					// TODO: standardize a status message for this upstream and report
 					continue
