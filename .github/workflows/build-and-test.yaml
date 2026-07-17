@@ -96,8 +96,6 @@ jobs:
     env:
       GATEWAY_API_TEST_NAMESPACE: gateway-conformance-infra
       HIGRESS_TEST_IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
-      GATEWAY_CONFORMANCE_RUN_TEST: HTTPRouteCrossNamespace
-      GATEWAY_CONFORMANCE_CLEANUP_TEST_RESOURCES: "false"
     steps:
       - uses: actions/checkout@v4
         with:
