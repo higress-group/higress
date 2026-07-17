@@ -2340,3 +2340,49 @@ func TestFailureCountMetric(t *testing.T) {
 		})
 	})
 }
+
+func TestStreamingFailureCountMetric(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("sse error in middle chunk before done", func(t *testing.T) {
+			host, status := test.NewTestHost(streamingBodyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.SetRouteName("api-v1")
+			host.SetClusterName("cluster-1")
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"x-mse-consumer", "user1"},
+			})
+
+			requestBody := []byte(`{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}`)
+			host.CallOnHttpRequestBody(requestBody)
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+
+			// Simulate SSE stream: error appears in middle chunk, last chunk is [DONE]
+			chunk1 := []byte(`data: {"choices":[{"delta":{"content":"Hello"}}]}`)
+			host.CallOnHttpStreamingResponseBody(chunk1, false)
+
+			chunk2 := []byte(`data: {"error":{"type":"api_error","message":"Something went wrong"}}`)
+			host.CallOnHttpStreamingResponseBody(chunk2, false)
+
+			chunk3 := []byte(`data: [DONE]`)
+			host.CallOnHttpStreamingResponseBody(chunk3, true)
+
+			host.CompleteHttp()
+
+			// Verify llm_failure_count is incremented despite [DONE] being the last chunk
+			failureMetric := "route.api-v1.upstream.cluster-1.model.gpt-4.consumer.user1.metric.llm_failure_count"
+			failureValue, err := host.GetCounterMetric(failureMetric)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), failureValue)
+		})
+	})
+}

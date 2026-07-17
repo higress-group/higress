@@ -882,8 +882,13 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, dat
 		debugLogAiLog(ctx)
 		_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 
-		// Write metrics
-		writeMetric(ctx, config, data)
+		// Write metrics — prefer the accumulated buffer for error detection
+		// so that errors split across multiple SSE chunks are not missed.
+		bodyForMetric := data
+		if config.shouldBufferStreamingBody && len(streamingBodyBuffer) > 0 {
+			bodyForMetric = streamingBodyBuffer
+		}
+		writeMetric(ctx, config, bodyForMetric)
 	}
 	return data
 }
@@ -1353,23 +1358,31 @@ func setSpanAttribute(key string, value interface{}) {
 // isErrorResponse checks whether the LLM response indicates an error.
 // Detects errors by:
 // 1. Response body contains non-null "error" field at root level (OpenAI/Anthropic format).
-//    Handles both raw JSON and SSE "data: " prefixed chunks.
+//    Handles both raw JSON and SSE "data: " prefixed chunks, including multi-event
+//    streaming buffers.
 // 2. HTTP status code >= 400 as fallback when body is empty.
+//
+// Note: some providers (e.g. Anthropic streaming responses) emit {"error":""}
+// even on success; an empty-string error is treated as not-an-error to avoid
+// false positives.
 func isErrorResponse(body []byte) bool {
 	if len(body) > 0 {
-		// Strip SSE "data: " prefix if present so gjson can parse the JSON payload.
-		jsonBody := body
-		if trimmed := bytes.TrimSpace(body); bytes.HasPrefix(trimmed, []byte("data: ")) {
-			jsonBody = trimmed[len("data: "):]
-		}
-		errorVal := gjson.GetBytes(jsonBody, "error")
-		if errorVal.Exists() && errorVal.Value() != nil {
-			// Reject empty string error values (false positive prevention)
-			if errorVal.Type == gjson.String && errorVal.String() == "" {
-				return false
+		// SSE chunks are prefixed with "data: "; accumulated buffers contain
+		// multiple SSE events separated by \n\n. Split and check each event.
+		trimmed := bytes.TrimSpace(body)
+		if bytes.HasPrefix(trimmed, []byte("data: ")) {
+			for _, event := range bytes.Split(trimmed, []byte("\n\n")) {
+				jsonBody := bytes.TrimSpace(event)
+				if bytes.HasPrefix(jsonBody, []byte("data: ")) {
+					jsonBody = jsonBody[len("data: "):]
+				}
+				if hasErrorField(jsonBody) {
+					return true
+				}
 			}
-			return true
+			return false
 		}
+		return hasErrorField(body)
 	}
 	// Fallback: check HTTP status code for errors with empty body (connection reset, timeout, etc.)
 	if len(body) == 0 {
@@ -1378,6 +1391,18 @@ func isErrorResponse(body []byte) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// hasErrorField checks whether a JSON body contains a non-null, non-empty-string "error" field.
+func hasErrorField(jsonBody []byte) bool {
+	errorVal := gjson.GetBytes(jsonBody, "error")
+	if errorVal.Exists() && errorVal.Value() != nil {
+		if errorVal.Type == gjson.String && errorVal.String() == "" {
+			return false
+		}
+		return true
 	}
 	return false
 }
@@ -1412,8 +1437,11 @@ func writeMetric(ctx wrapper.HttpContext, config AIStatisticsConfig, body []byte
 		}
 	}
 
-	// Count failure before usage check, so error responses without usage info are still counted
-	// For streaming, also check the hasStreamError flag set during onHttpStreamingBody
+	// Count failure before usage check, so error responses without usage info are still counted.
+	// For streaming, also check the hasStreamError flag set during onHttpStreamingBody.
+	// llm_failure_count is intentionally incremented regardless of disableOpenaiUsage,
+	// because error responses carry no usage info and operators still need the failure
+	// signal even when usage tracking is off.
 	if isErrorResponse(body) || ctx.GetBoolContext("hasStreamError", false) {
 		config.incrementCounter(generateMetricName(route, cluster, modelStr, consumer, LLMFailureCount), 1)
 	}
