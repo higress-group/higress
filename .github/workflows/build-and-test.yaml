@@ -92,7 +92,7 @@ jobs:
 
   gateway-conformance-test:
     runs-on: ubuntu-22.04
-    needs: [build]
+    needs: [lint]
     env:
       GATEWAY_API_TEST_NAMESPACE: gateway-conformance-infra
       HIGRESS_TEST_IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
