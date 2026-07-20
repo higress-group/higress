@@ -129,8 +129,8 @@ func findCookie(cookie string, key string) string {
 
 	for _, pair := range pairs {
 		pair = strings.TrimSpace(pair)
-		kv := strings.Split(pair, "=")
-		if kv[0] == key {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 2 && kv[0] == key {
 			value = kv[1]
 			break
 		}

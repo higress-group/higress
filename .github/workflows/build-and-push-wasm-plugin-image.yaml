@@ -104,11 +104,6 @@ jobs:
           push_command=${push_command#\"}
           push_command=${push_command%\"} # 删除PUSH_COMMAND中的双引号，确保oras push正常解析
 
-          target_image="${{ env.IMAGE_REGISTRY_SERVICE }}/${{ env.IMAGE_REPOSITORY}}/${{ env.PLUGIN_NAME }}:${{ env.VERSION }}"
-          target_image_latest="${{ env.IMAGE_REGISTRY_SERVICE }}/${{ env.IMAGE_REPOSITORY}}/${{ env.PLUGIN_NAME }}:latest"
-          echo "TargetImage=${target_image}"
-          echo "TargetImageLatest=${target_image_latest}"
-
           cd ${{ github.workspace }}/plugins/wasm-${PLUGIN_TYPE}/extensions/${PLUGIN_NAME}
           if [ -f ./.buildrc ]; then
             echo 'Found .buildrc file, sourcing it...'
@@ -116,6 +111,21 @@ jobs:
           else
             echo '.buildrc file not found'
           fi
+
+          # Resolve custom image short name from .buildrc, fallback to plugin directory name.
+          # .buildrc may define IMAGE_NAME=xxx to override the output image tag.
+          IMAGE_NAME=${IMAGE_NAME:-$PLUGIN_NAME}
+          if ! [[ "$IMAGE_NAME" =~ ^[a-z0-9._-]+$ ]]; then
+            echo "::error::Invalid IMAGE_NAME '$IMAGE_NAME' in .buildrc — must match [a-z0-9._-]+"
+            exit 1
+          fi
+          echo "IMAGE_NAME=${IMAGE_NAME}"
+
+          target_image="${{ env.IMAGE_REGISTRY_SERVICE }}/${{ env.IMAGE_REPOSITORY}}/${IMAGE_NAME}:${{ env.VERSION }}"
+          target_image_latest="${{ env.IMAGE_REGISTRY_SERVICE }}/${{ env.IMAGE_REPOSITORY}}/${IMAGE_NAME}:latest"
+          echo "TargetImage=${target_image}"
+          echo "TargetImageLatest=${target_image_latest}"
+
           echo "EXTRA_TAGS=${EXTRA_TAGS}"
           if [ "${PLUGIN_TYPE}" == "go" ]; then
           command="

@@ -93,8 +93,77 @@ jobs:
   gateway-conformance-test:
     runs-on: ubuntu-22.04
     needs: [build]
+    env:
+      GATEWAY_API_TEST_NAMESPACE: gateway-conformance-infra
+      HIGRESS_TEST_IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HIGRESS_TEST_IMAGE_TAG }}
+
+      - name: Disable containerd image store
+        run: |
+          sudo bash -c 'cat > /etc/docker/daemon.json << EOF
+          {
+            "features": {
+              "containerd-snapshotter": false
+            }
+          }
+          EOF'
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
+
+      - name: Free Up GitHub Actions Ubuntu Runner Disk Space 🔧
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: "Setup Go"
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Golang Caches
+        uses: actions/cache@v4
+        with:
+          path: |-
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-go
+
+      - name: Run Higress Gateway API Tests
+        run: |-
+          GOPROXY="https://proxy.golang.org,direct" make gateway-conformance-test \
+            TAG="${HIGRESS_TEST_IMAGE_TAG}" \
+            HIGRESS_CONFORMANCE_VERSION="${HIGRESS_TEST_IMAGE_TAG}"
+
+      - name: Collect Gateway API Test Diagnostics
+        if: always()
+        run: |-
+          mkdir -p out/gateway-api-conformance/diagnostics
+          kubectl get gatewayclass,gateway,httproute,referencegrant -A -o yaml > out/gateway-api-conformance/diagnostics/resources.yaml 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > out/gateway-api-conformance/diagnostics/events.txt 2>&1 || true
+          kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-controller --all-containers > out/gateway-api-conformance/diagnostics/controller.log 2>&1 || true
+          kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-gateway --all-containers > out/gateway-api-conformance/diagnostics/gateway.log 2>&1 || true
+          tools/bin/kind-gateway-api export logs out/gateway-api-conformance/diagnostics/kind --name higress || true
+
+      - name: Upload Gateway API Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-conformance-test
+          path: out/gateway-api-conformance/
+          if-no-files-found: warn
+
+      - name: Clean Gateway API Test Environment
+        if: always()
+        run: make gateway-conformance-test-clean
 
   higress-conformance-test:
     runs-on: ubuntu-22.04
