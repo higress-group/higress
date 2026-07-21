@@ -7,7 +7,7 @@
 | Assessment stage | Complete working draft, pending maintainer approval; updated 2026-07-21 |
 | Software | <https://github.com/higress-group/higress> |
 | Review state | Prepared from public project evidence; no independent security review or audit |
-| Evidence revision | [`higress-group/higress@762324c`](https://github.com/higress-group/higress/tree/762324c3767c620fef593504bcedf28f7969a954) |
+| Evidence branch | [`higress-group/higress@main`](https://github.com/higress-group/higress/tree/main) |
 | Assessment outline | [CNCF TAG Security Self-Assessment](https://tag-security.cncf.io/community/assessments/guide/self-assessment/) |
 | Intended TOC snapshot | `projects/higress/security-assessment/self-assessment.md` |
 | Security provider | No. Higress provides security features, but its primary function is API gateway traffic management. |
@@ -18,15 +18,14 @@
 
 | Document | Location |
 | --- | --- |
-| Vulnerability reporting and response | [`SECURITY.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/SECURITY.md) |
-| Architecture | [`docs/architecture.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/docs/architecture.md) |
-| Helm defaults | [`helm/core/values.yaml`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/helm/core/values.yaml) |
+| Vulnerability reporting and response | [`SECURITY.md`](https://github.com/higress-group/higress/blob/main/SECURITY.md) |
+| Architecture | [`docs/architecture.md`](https://github.com/higress-group/higress/blob/main/docs/architecture.md) |
+| Helm defaults | [`helm/core/values.yaml`](https://github.com/higress-group/higress/blob/main/helm/core/values.yaml) |
 | OpenSSF Best Practices | <https://www.bestpractices.dev/projects/12667> |
 
 This is the project-maintained working copy. For formal Due Diligence, a vetted
-snapshot must be archived at the path above in `cncf/toc`. Project-local
-relative links must be converted to versioned, absolute permalinks when that
-snapshot is prepared.
+snapshot must be archived at the path above in `cncf/toc`. The reviewer should
+freeze evidence links to the reviewed revision when that snapshot is archived.
 
 ## Overview
 
@@ -203,7 +202,7 @@ OCI, Prometheus/OpenTelemetry conventions, and optional service registries.
 
 ## Security Issue Resolution
 
-[`SECURITY.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/SECURITY.md)
+[`SECURITY.md`](https://github.com/higress-group/higress/blob/main/SECURITY.md)
 prohibits public vulnerability reports and
 directs reporters to two private channels. The Security Response Team is the
 current maintainer list. The documented targets are acknowledgement within

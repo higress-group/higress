@@ -7,8 +7,8 @@
 - **Template version:** CNCF General Technical Review v1.0
 - **Review state:** Project working draft; maintainer approval and CNCF Project
   Reviews verification pending
-- **Evidence revision:**
-  [`higress-group/higress@762324c`](https://github.com/higress-group/higress/tree/762324c3767c620fef593504bcedf28f7969a954)
+- **Evidence branch:**
+  [`higress-group/higress@main`](https://github.com/higress-group/higress/tree/main)
 - **Intended TOC snapshot:** `projects/higress/tech-review/YYYY-MM-DD.md`
 - **Description:** Higress is a cloud-native API gateway built on Envoy and
   Istio. It supports Kubernetes Ingress and Gateway API and is extensible with
@@ -22,8 +22,8 @@ gaps rather than treated as completed controls.
 
 This is the project-maintained working copy. For formal Due Diligence, a CNCF
 reviewer or associate verifies it and archives a dated snapshot in `cncf/toc`.
-Project-local relative links must be converted to versioned, absolute
-permalinks when that snapshot is prepared.
+The reviewer should freeze evidence links to the reviewed revision when that
+snapshot is archived.
 
 ## Project Self-Assessment Summary
 
@@ -51,11 +51,11 @@ that map to contributions and the maintainer ladder?**
 
 Feature scope is currently discussed through public GitHub issues and pull
 requests. Maintainers use lazy consensus, as documented in
-[`GOVERNANCE.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/GOVERNANCE.md),
+[`GOVERNANCE.md`](https://github.com/higress-group/higress/blob/main/GOVERNANCE.md),
 to accept project-direction changes.
 Contributors implement accepted work through pull requests and may be nominated
 as maintainers after sustained contribution under
-[`MAINTAINERS.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/MAINTAINERS.md).
+[`MAINTAINERS.md`](https://github.com/higress-group/higress/blob/main/MAINTAINERS.md).
 The project does not currently have a dedicated, maintained public roadmap or a
 multi-level contributor ladder; these are documented project-maturity gaps.
 
@@ -83,7 +83,7 @@ for an organization's PKI, security governance, and incident response.
 Organizations operating Kubernetes platforms, microservices, public or
 partner APIs, multi-provider AI platforms, or centralized platform-engineering
 services can benefit. Public examples are listed in
-[`ADOPTERS.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/ADOPTERS.md).
+[`ADOPTERS.md`](https://github.com/higress-group/higress/blob/main/ADOPTERS.md).
 
 **What end-user research has been completed?**
 
@@ -132,7 +132,7 @@ integrations are optional and selected by the adopter.
   end-to-end tests.
 
 The component architecture and data flow are documented in
-[`docs/architecture.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/docs/architecture.md).
+[`docs/architecture.md`](https://github.com/higress-group/higress/blob/main/docs/architecture.md).
 
 **What differs between proof-of-concept, development, test, and production?**
 
