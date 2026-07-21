@@ -179,7 +179,8 @@ requests run license header and dependency-license checks.
 
 Pull requests are publicly reviewed and run build/unit tests with Go race
 detection, Gateway API and Higress conformance tests, plugin tests, and license
-checks. CodeQL is scheduled weekly; it is not currently a pull-request gate.
+checks. CodeQL is configured to run on every push to `main` and on a daily
+schedule; it is not currently a pull-request gate.
 The configured `golangci-lint` execution is commented out because of existing
 findings. Release tags trigger image and CLI/CRD artifact builds. Dependency
 inputs are versioned, but release artifacts do not currently have a
@@ -251,12 +252,14 @@ aggregate vulnerability history or mean-time-to-remediation report.
 ### OpenSSF Best Practices
 
 The [Higress OpenSSF entry](https://www.bestpractices.dev/projects/12667) is at
-96% of the Passing badge as of this assessment. Seven criteria remain
-unanswered or unmet: compiler-warning enforcement, strict-warning enforcement,
-warning remediation, static-analysis remediation, static-analysis frequency,
-dynamic analysis, and enabling assertions or equivalent dynamic-analysis
-checks. Passing requires evidence and implementation for all seven, not merely
-updating the questionnaire.
+96% of the Passing badge as of this assessment. The repository now configures
+CodeQL on every push to `main` and daily, resolving the implementation gap
+behind the static-analysis-frequency answer once this change is merged and the
+badge record is updated. The remaining substantive gaps are compiler-warning
+enforcement and remediation, unresolved confirmed static-analysis findings,
+and project-level dynamic analysis with assertions or equivalent runtime
+checks. Passing requires evidence and implementation, not merely updating the
+questionnaire.
 
 ### Example Use Cases
 

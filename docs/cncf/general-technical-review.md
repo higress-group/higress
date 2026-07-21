@@ -30,9 +30,8 @@ snapshot is archived.
 Higress has substantive evidence for every Day 0 and Day 1 question, but this
 document does not assign the project an external technical-review rating. The
 strongest Day 1 gaps are the absence of an automated
-upgrade→downgrade→upgrade matrix, a normative release process and bounded
-supported-version/EOL policy, a published compatibility-review cadence, and
-complete release supply-chain attestations. Broad control-plane RBAC also
+upgrade→downgrade→upgrade matrix, a published compatibility-review cadence,
+and complete release supply-chain attestations. Broad control-plane RBAC also
 requires minimization and documented justification. These findings should be
 tracked during Due Diligence rather than hidden by marking the questionnaire
 complete.
@@ -49,7 +48,10 @@ scope complete.
 **How are roadmap scope and mid- to long-term features determined, and how does
 that map to contributions and the maintainer ladder?**
 
-Feature scope is currently discussed through public GitHub issues and pull
+Forward-looking goals and target versions are maintained in the public
+[`ROADMAP.md`](https://github.com/higress-group/higress/blob/main/ROADMAP.md),
+which links the version-controlled website roadmap. Feature scope and roadmap
+changes are discussed through public GitHub issues, discussions, and pull
 requests. Maintainers use lazy consensus, as documented in
 [`GOVERNANCE.md`](https://github.com/higress-group/higress/blob/main/GOVERNANCE.md),
 to accept project-direction changes.
@@ -57,9 +59,8 @@ Contributors implement accepted work through pull requests, may receive
 delegated path-review responsibility as code owners, and may be nominated as
 maintainers after sustained contribution under
 [`MAINTAINERS.md`](https://github.com/higress-group/higress/blob/main/MAINTAINERS.md).
-The project does not currently have a dedicated, maintained public roadmap,
-and objective progression expectations for the intermediate code-owner role
-remain a project-maturity gap.
+Objective progression expectations for the intermediate code-owner role remain
+a project-maturity gap.
 
 **Who are the target personas?**
 
@@ -225,10 +226,11 @@ Higress uses semantic version tags, including release-candidate suffixes when
 needed. A `v*.*.*` tag triggers workflows that build controller, pilot and
 gateway images, attach generated CRDs, build multi-platform `hgctl` archives,
 and generate release notes. Versions are recorded in `VERSION`, Helm chart
-metadata, dependency metadata, and `release-notes/`. The repository does not
-currently contain a single normative document defining release approval,
-rollback, security-release, and supported-version procedures; this is a
-documentation gap.
+metadata, dependency metadata, and `release-notes/`. The normative
+[`RELEASE.md`](https://github.com/higress-group/higress/blob/main/RELEASE.md)
+defines planning, two-person approval, validation, tagging, publishing,
+verification, rollback/correction, security releases, and supported-version
+changes.
 
 ### Installation
 
@@ -271,8 +273,9 @@ in ephemeral clusters and runs Gateway API and Higress conformance traffic.
 - **Explicit trust and boundaries:** Kubernetes administrators, xDS,
   certificate sources, plugins, registries, identity providers, and upstreams
   are separate trust boundaries described in the security self-assessment.
-- **Secure lifecycle:** public review, automated tests, license checks, weekly
-  CodeQL, private advisories, and coordinated disclosure are in place, with
+- **Secure lifecycle:** public review, automated tests, license checks, CodeQL
+  configured for daily and `main`-push analysis, private advisories, and
+  coordinated disclosure are in place, with
   SBOM/signing/dynamic-analysis gaps disclosed.
 
 Operators can loosen security by overriding pod/container security contexts,
@@ -285,11 +288,12 @@ threat model.
 maintained?**
 
 The project uses required review, build and unit tests with Go race detection,
-Gateway API/Higress conformance, plugin tests, license checks, weekly CodeQL,
-versioned dependencies, Private Security Advisories, and coordinated
-disclosure. Certificate handling, RBAC reconciliation, xDS generation and
-validation, parsers/routing, authentication and authorization plugins, plugin
-loading, and release artifacts are treated as security-critical boundaries.
+Gateway API/Higress conformance, plugin tests, license checks, CodeQL configured
+for daily and `main`-push analysis, versioned dependencies, Private Security
+Advisories, and coordinated disclosure. Certificate handling, RBAC
+reconciliation, xDS generation and validation, parsers/routing, authentication
+and authorization plugins, plugin loading, and release artifacts are treated
+as security-critical boundaries.
 
 **What privileges are required?**
 
@@ -394,8 +398,10 @@ and target versions in a non-production cluster.
 **How are deprecations and removals communicated?**
 
 They are communicated through GitHub releases, versioned release notes,
-documentation, and API/version changes. The project does not currently have a
-single documented minimum deprecation period, which is a process gap.
+documentation, and API/version changes. `RELEASE.md` requires migration and
+deprecation guidance in the release pull request and announcement. The project
+does not currently define a universal minimum deprecation period for all API
+types, which remains a process improvement.
 
 **How are alpha and beta capabilities used during rollout?**
 

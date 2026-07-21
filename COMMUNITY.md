@@ -50,9 +50,10 @@ non-sensitive decision and rationale must be recorded publicly.
 ## Community meetings
 
 Higress does not currently run a recurring public community meeting and does
-not yet have a CNCF calendar entry. Establishing an up-to-date public scheduler
-and a durable location for agendas and notes is tracked as an Incubation
-readiness item in [`docs/cncf/governance-review.md`](./docs/cncf/governance-review.md).
+not yet have a CNCF calendar entry. Establishing an up-to-date public meeting
+scheduler and/or CNCF calendar integration is tracked as an Incubation
+readiness item in
+[`docs/cncf/governance-review.md`](./docs/cncf/governance-review.md).
 
 When a recurring meeting is established, its schedule and joining information
 will be published here and on the CNCF calendar. Agendas, notes, recordings,

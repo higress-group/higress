@@ -8,8 +8,8 @@
 
 <div align="center">
 
-[![Build Status](https://github.com/alibaba/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/alibaba/higress/actions)
-[![license](https://img.shields.io/github/license/alibaba/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
+[![Build Status](https://github.com/higress-group/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/higress-group/higress/actions)
+[![license](https://img.shields.io/github/license/higress-group/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
 [![discord](https://img.shields.io/discord/1364956090566971515?color=5865F2&label=discord&labelColor=black&logo=discord&logoColor=white&style=flat-square)](https://discord.gg/tSbww9VDaM)
 [![CNCF Sandbox](https://img.shields.io/badge/CNCF-Sandbox-30638E?logo=linuxfoundation&logoColor=white)](https://www.cncf.io/projects/)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12667/badge)](https://www.bestpractices.dev/projects/12667)
@@ -21,6 +21,7 @@
 [**Official Site**](https://higress.ai/en/) &nbsp; |
 &nbsp; [**Docs**](https://higress.cn/en/docs/latest/overview/what-is-higress/) &nbsp; |
 &nbsp; [**Blog**](https://higress.cn/en/blog/) &nbsp; |
+&nbsp; [**Roadmap**](./ROADMAP.md) &nbsp; |
 &nbsp; [**MCP Server QuickStart**](https://higress.cn/en/ai/mcp-quick-start/) &nbsp; |
 &nbsp; [**Developer Guide**](https://higress.cn/en/docs/latest/dev/architecture/) &nbsp; |
 &nbsp; [**Wasm Plugin Hub**](https://higress.cn/en/plugin/) &nbsp; |
@@ -35,19 +36,19 @@ Higress is a cloud-native API gateway based on Istio and Envoy, which can be ext
 
 ### Core Use Cases
 
-Higress's AI gateway capabilities support all [mainstream model providers](https://github.com/alibaba/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider) both domestic and international. It also supports hosting MCP (Model Context Protocol) Servers through its plugin mechanism, enabling AI Agents to easily call various tools and services. With the [openapi-to-mcp tool](https://github.com/higress-group/openapi-to-mcpserver), you can quickly convert OpenAPI specifications into remote MCP servers for hosting. Higress provides unified management for both LLM API and MCP API.
+Higress's AI gateway capabilities support all [mainstream model providers](https://github.com/higress-group/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider) both domestic and international. It also supports hosting MCP (Model Context Protocol) Servers through its plugin mechanism, enabling AI Agents to easily call various tools and services. With the [openapi-to-mcp tool](https://github.com/higress-group/openapi-to-mcpserver), you can quickly convert OpenAPI specifications into remote MCP servers for hosting. Higress provides unified management for both LLM API and MCP API.
 
 **🌟 Try it now at [https://mcp.higress.ai/](https://mcp.higress.ai/)** to experience Higress-hosted Remote MCP Servers firsthand:
 
 ![Higress MCP Server Platform](https://img.alicdn.com/imgextra/i2/O1CN01nmVa0a1aChgpyyWOX_!!6000000003294-0-tps-3430-1742.jpg)
 
-### Enterprise Adoption
+### Production Adoption
 
-Higress was born within Alibaba to solve the issues of Tengine reload affecting long-connection services and insufficient load balancing capabilities for gRPC/Dubbo. Within Alibaba Cloud, Higress's AI gateway capabilities support core AI applications such as Tongyi Bailian model studio, machine learning PAI platform, and other critical AI services. Alibaba Cloud has built its cloud-native API gateway product based on Higress, providing 99.99% gateway high availability guarantee service capabilities for a large number of enterprise customers.
-
-You can click the button below to install the enterprise version of Higress:
-
-[![Deploy on AlibabaCloud](https://img.alicdn.com/imgextra/i1/O1CN01e6vwe71EWTHoZEcpK_!!6000000000359-55-tps-170-40.svg)](https://www.aliyun.com/product/api-gateway?spm=higress-github.topbar.0.0.0)
+Higress originated at Alibaba to address long-connection disruption during
+gateway reloads and improve gRPC/Dubbo load balancing. It is now developed as
+a vendor-neutral CNCF project and is used by organizations across multiple
+industries. Public adopters and their use cases are listed in
+[`ADOPTERS.md`](./ADOPTERS.md).
 
 
 ## Summary
@@ -77,8 +78,9 @@ Port descriptions:
 - Port 8080: Gateway HTTP protocol entry
 - Port 8443: Gateway HTTPS protocol entry
 
-> All Higress Docker images use Higress's own image repository and are not affected by Docker Hub rate limits.
-> In addition, the submission and updates of the images are protected by a security scanning mechanism (powered by Alibaba Cloud ACR), making them very secure for use in production environments.
+> Higress publishes project images through dedicated regional registry
+> endpoints. Operators may mirror the images to a registry they control and
+> configure the Helm `global.hub` value accordingly.
 >
 > If you experience a timeout when pulling image from `higress-registry.cn-hangzhou.cr.aliyuncs.com`, you can try replacing it with the following docker registry mirror source:
 >
@@ -99,9 +101,6 @@ Port descriptions:
 > - **Southeast Asia**: `higress-registry.ap-southeast-7.cr.aliyuncs.com`
 
 For other installation methods such as Helm deployment under K8s, please refer to the official [Quick Start documentation](https://higress.ai/en/docs/latest/user/quickstart/).
-
-If you are deploying on the cloud, it is recommended to use the [Enterprise Edition](https://www.aliyun.com/product/apigateway?spm=higress-github.topbar.0.0.0)
-
 
 ## Use Cases
 
@@ -202,7 +201,9 @@ participating in the community.
 Project governance, the maintainer roster, and the contribution model are
 described in [`GOVERNANCE.md`](./GOVERNANCE.md) and
 [`MAINTAINERS.md`](./MAINTAINERS.md). New contributors are encouraged to start
-with [`CONTRIBUTING_EN.md`](./CONTRIBUTING_EN.md).
+with [`CONTRIBUTING_EN.md`](./CONTRIBUTING_EN.md). Forward planning and release
+procedures are documented in [`ROADMAP.md`](./ROADMAP.md) and
+[`RELEASE.md`](./RELEASE.md).
 
 ### Security
 
@@ -228,7 +229,7 @@ Higress would not be possible without the valuable open-source work of projects 
 
 ### Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=alibaba/higress&type=Date)](https://star-history.com/#alibaba/higress&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=higress-group/higress&type=Date)](https://star-history.com/#higress-group/higress&Date)
 
 ---
 

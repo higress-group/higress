@@ -32,10 +32,9 @@ people affiliated with four organizations.
 
 The documentation and public evidence satisfy all Governance Review criteria
 except one Incubation-required item: Higress does not currently publish an
-up-to-date public meeting scheduler or CNCF calendar entry with a durable
-location for agendas and notes. The project should establish that real public
-meeting infrastructure before asserting that the Governance Review has no
-remaining Must-Fix item.
+up-to-date public meeting scheduler or integrate its meetings with the CNCF
+calendar. The project should establish that real public meeting infrastructure
+before asserting that the Governance Review has no remaining Must-Fix item.
 
 ### Executing the Assessment
 
@@ -60,8 +59,8 @@ It does not infer private processes or settings that are not publicly recorded.
 The following issues need to be resolved before the Higress Incubation
 application asserts completion of its Governance Review:
 
-1. Publish an up-to-date public meeting scheduler or CNCF calendar entry and a
-   discoverable location for agendas and notes.
+1. Publish an up-to-date public meeting scheduler and/or integrate the project
+   meetings with the CNCF calendar.
 
 ### Points of Excellence
 
@@ -259,8 +258,8 @@ channels and requires public decision records.
 **Public meeting scheduler/CNCF calendar — Incubating: Required — Not
 satisfied.**
 
-No current scheduler, CNCF calendar entry, agenda, or meeting-notes location is
-linked from the reviewed repository documents.
+No current public meeting scheduler or CNCF calendar integration is linked from
+the reviewed repository documents.
 
 **Contribution documentation — Incubating: Required — Satisfied.**
 
