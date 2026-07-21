@@ -189,12 +189,15 @@ required reviewer count, signed-commit requirement, organization-wide 2FA, or
 branch-protection configuration; those controls require separate repository-
 settings evidence.
 
-Ordinary project-team communication uses GitHub issues, pull requests, and
-Discord. Inbound users use the same public channels. Vulnerabilities use GitHub
-Private Security Advisories and the Alibaba Security Response Center as
-documented in `SECURITY.md`. Releases and the project website are outbound
-channels. A complete inventory distinguishing internal, inbound, and outbound
-channels is not currently published outside this assessment.
+Ordinary project-team communication uses GitHub issues, pull requests,
+discussions, mailing, localized community channels, and Discord. Inbound users
+use the same public channels. Vulnerabilities use GitHub Private Security
+Advisories as the primary vendor-neutral intake, with the Alibaba Security
+Response Center as an optional alternate, as documented in `SECURITY.md`.
+Releases, the project website, and the WeChat Official Account are outbound
+channels. [`COMMUNITY.md`](https://github.com/higress-group/higress/blob/main/COMMUNITY.md)
+is the authoritative inventory of public, subproject, and narrowly scoped
+non-public channels.
 
 Higress operates in the Kubernetes networking and cloud-native gateway
 ecosystem. It implements Ingress and Gateway API and builds on Envoy, Istio,
@@ -204,13 +207,14 @@ OCI, Prometheus/OpenTelemetry conventions, and optional service registries.
 
 [`SECURITY.md`](https://github.com/higress-group/higress/blob/main/SECURITY.md)
 prohibits public vulnerability reports and
-directs reporters to two private channels. The Security Response Team is the
-current maintainer list. The documented targets are acknowledgement within
-three business days and triage within 14 days, followed by private fix
+directs reporters to a primary vendor-neutral private channel and an optional
+alternate. The named Security Response Team is the current maintainer list.
+For each case it assigns a triage coordinator, fix lead, independent reviewer
+and release lead, and disclosure lead, with at least two unconflicted members.
+The policy documents conflicts and escalation. Its targets are acknowledgement
+within three business days and triage within 14 days, followed by private fix
 development, coordinated disclosure (typically within 90 days), a GitHub
-Security Advisory, and a CVE request where appropriate. The current policy does
-not assign a named incident commander, require a second reviewer, or document
-an escalation path when these targets are missed; those are governance gaps.
+Security Advisory, and a CVE request where appropriate.
 
 An operational security incident in an adopter environment remains the
 adopter's responsibility. The project handles defects in project code and

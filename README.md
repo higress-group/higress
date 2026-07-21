@@ -185,6 +185,10 @@ Join our Discord community! This is where you can connect with developers and ot
 
 [![discord](https://img.shields.io/discord/1364956090566971515?color=5865F2&label=discord&labelColor=black&logo=discord&logoColor=white&style=for-the-badge)](https://discord.gg/tSbww9VDaM)
 
+The complete inventory of public and private communication channels,
+subproject channels, meeting information, and contributor activity is in
+[`COMMUNITY.md`](./COMMUNITY.md).
+
 ### Code of Conduct
 
 The Higress community follows the
@@ -218,8 +222,8 @@ Higress would not be possible without the valuable open-source work of projects 
 
 ### Contributors
 
-<a href="https://github.com/alibaba/higress/graphs/contributors">
-  <img alt="contributors" src="https://contrib.rocks/image?repo=alibaba/higress"/>
+<a href="https://github.com/higress-group/higress/graphs/contributors">
+  <img alt="contributors" src="https://contrib.rocks/image?repo=higress-group/higress"/>
 </a>
 
 ### Star History

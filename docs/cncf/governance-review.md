@@ -21,21 +21,21 @@ snapshot is archived.
 
 ## Summary and Assessment
 
-**Status: Needs Work**
+**Status: Mostly Satisfactory**
 
 Higress has discoverable governance, maintainer, code-owner, contribution,
-security, and Code of Conduct documents. Decisions default to public lazy
-consensus, and the maintainer list includes seven people affiliated with four
-organizations.
+community, security, and Code of Conduct documents. The project defines
+project-wide maintainer responsibility, delegated code ownership, subproject
+scope, vendor-neutral decisions, maintainer lifecycle, communication channels,
+and security-response roles. The maintainer list includes seven publicly active
+people affiliated with four organizations.
 
-The review nevertheless finds several Incubation-required evidence gaps: the
-maintainer roster does not state responsibility domains; the relationship
-between `CODEOWNERS` and governance roles is not defined; the CNCF project
-subproject scope is ambiguous; all communication channels are not inventoried;
-there is no documented current public meeting scheduler; and evidence of
-maintainer activity and contributor recruitment is incomplete. These findings
-must be resolved before the project claims the Governance Review criterion is
-satisfied.
+The documentation and public evidence satisfy all Governance Review criteria
+except one Incubation-required item: Higress does not currently publish an
+up-to-date public meeting scheduler or CNCF calendar entry with a durable
+location for agendas and notes. The project should establish that real public
+meeting infrastructure before asserting that the Governance Review has no
+remaining Must-Fix item.
 
 ### Executing the Assessment
 
@@ -47,6 +47,7 @@ The self-assessment reviewed the following repository evidence as it exists on
 - [`CODEOWNERS`](https://github.com/higress-group/higress/blob/main/CODEOWNERS)
 - [`CONTRIBUTING_EN.md`](https://github.com/higress-group/higress/blob/main/CONTRIBUTING_EN.md)
 - [`CODE_OF_CONDUCT.md`](https://github.com/higress-group/higress/blob/main/CODE_OF_CONDUCT.md)
+- [`COMMUNITY.md`](https://github.com/higress-group/higress/blob/main/COMMUNITY.md)
 - [`SECURITY.md`](https://github.com/higress-group/higress/blob/main/SECURITY.md)
 - [`README.md`](https://github.com/higress-group/higress/blob/main/README.md)
 - Git history for the governance, maintainer, and ownership files
@@ -59,54 +60,36 @@ It does not infer private processes or settings that are not publicly recorded.
 The following issues need to be resolved before the Higress Incubation
 application asserts completion of its Governance Review:
 
-1. Add each maintainer's domain of responsibility to `MAINTAINERS.md` and
-   confirm the listed people are currently active.
-2. Define the authority and lifecycle of code owners and explain how
-   `CODEOWNERS` relates to project-wide maintainer authority.
-3. Define and list the repositories/subprojects in the CNCF Higress project
-   scope.
-4. Inventory all public and non-public communication channels and state the
-   limited purpose of each non-public channel.
-5. Publish an up-to-date public meeting scheduler or CNCF calendar entry and a
+1. Publish an up-to-date public meeting scheduler or CNCF calendar entry and a
    discoverable location for agendas and notes.
-6. Publish evidence of current maintainer activity, contributor activity, and
-   contributor recruitment rather than relying on the roster or raw commit
-   count alone.
-7. Name the Security Response Team membership and document role
-   responsibilities, report handling, conflicts, and escalation. The current
-   reference to all maintainers does not provide enough operational detail for
-   the Incubation application's security-role requirement.
 
 ### Points of Excellence
 
 - The maintainer roster is public and shows affiliation diversity across
-  Alibaba Cloud, Trip.com, XinYe Technology, and NVIDIA.
-- The project has a public contribution path, code-review ownership file,
-  vulnerability reporting process, and CNCF-aligned Code of Conduct.
-- Governance declares openness, fairness, community-first decision-making,
-  inclusivity, participation, public lazy consensus, and public voting when
-  consensus fails.
+  Alibaba Cloud, Trip.com, XinYe Technology, and NVIDIA, with linked public
+  activity evidence for every listed maintainer.
+- Governance distinguishes delegated code ownership from project-wide
+  maintainer authority and defines role and subproject lifecycle processes.
+- The project publishes an authoritative channel inventory and separates
+  public project decisions from narrowly scoped confidential reporting.
+- The named Security Response Team has defined incident roles, independent
+  review, conflict handling, and escalation.
+- Governance explicitly protects vendor-neutral direction through individual
+  seats, equal voting weight, and conflict disclosure.
 
 ### Areas for Improvement
 
 The following are non-blocking at Incubation but would improve long-term
 governance maturity:
 
-- Introduce a contributor ladder with intermediate roles and objective
-  progression expectations.
-- Complete the maintainer lifecycle with voluntary departure,
-  inactivity/removal, emeritus status, and return.
-- Explicitly document vendor-neutral project direction, employer-seat
-  neutrality, and conflict-of-interest handling.
-- Document how the project approves requests to CNCF and how function-based
-  teams are created, staffed, and retired.
-- Define how subprojects are added, removed, or archived and how their
-  leadership and maturity are recorded.
 - Record governance evolution and link decisions to issues or pull requests.
 - Publish examples demonstrating the maintainer lifecycle in practice.
-- Periodically audit maintainer activity and code-owner coverage across all
-  project repositories.
-- Track contributor growth and recruitment using public CNCF/DevStats metrics.
+- Add objective progression expectations for appointment to the code-owner
+  role.
+- Extend `CODEOWNERS` or equivalent ownership records to each active
+  subproject and periodically audit coverage.
+- Track contributor growth and recruitment trends using the linked CNCF
+  DevStats metrics, not only point-in-time activity.
 
 ---
 
@@ -118,12 +101,13 @@ self-assessment to accompany that application.
 
 ### Governance Summary
 
-Higress uses maintainer-led lazy consensus. When consensus cannot be reached,
-maintainers may vote publicly and a simple majority of votes cast decides. The
-governance document delegates role detail to the maintainer, code-owner, and
-contribution documents. Security reports are handled by the maintainers. The
-model is understandable at a high level, but role boundaries and lifecycle
-details are incomplete.
+Higress uses maintainer-led lazy consensus. Significant decisions are recorded
+in public issues or pull requests. When consensus cannot be reached,
+non-conflicted maintainers may vote publicly and a simple majority of votes
+cast decides. Governance defines contributor, code-owner, and maintainer
+authority; the maintainer and subproject lifecycles; vendor neutrality; and
+function-based teams. Confidential security work is handled by a named
+Security Response Team under a public mandate.
 
 ### Governance Evolution
 
@@ -143,42 +127,43 @@ security documents from its Community section.
 
 ### Accuracy and Clarity
 
-**Governance reflects actual activities — Incubating: Suggested — Partially
-satisfied.**
+**Governance reflects actual activities — Incubating: Suggested — Satisfied.**
 
 Public issue/PR collaboration and lazy consensus are consistent with the
-repository workflow. No election or recurring meeting is claimed. However,
-actual code-owner authority, security-team operation, and meeting practices are
-not fully documented.
+repository workflow. Code-owner authority, security-team operation, and the
+absence of a current recurring public meeting are documented without claiming
+unobserved processes.
 
-**Vendor-neutral direction — Incubating: Suggested — Not satisfied.**
+**Vendor-neutral direction — Incubating: Suggested — Satisfied.**
 
-The values say contributions are evaluated without regard to company
-affiliation, but governance does not explicitly prohibit employer seats,
-employer vetoes, vendor-favored defaults, or undisclosed conflicts of interest.
+Governance states that roles are held by individuals, prohibits guaranteed
+employer seats, vetoes, or preferred decision weight, requires material
+conflict disclosure, and evaluates contributions and integrations on community
+and technical merit.
 
 ### Decisions and Role Assignments
 
 **Leadership, contribution, CNCF, governance, and goal decisions — Incubating:
-Suggested — Partially satisfied.**
+Suggested — Satisfied.**
 
-Maintainer nomination and general lazy consensus/voting are documented.
-Contribution acceptance is described in the contribution guide and CODEOWNERS.
-Requests to CNCF, project-scope changes, and detailed governance-change notice
-or quorum requirements are not documented.
+Governance applies public lazy consensus and non-conflicted maintainer voting
+to leadership, contribution acceptance, goals, requests to CNCF, subproject
+scope, and governance changes. The contribution guide and `CODEOWNERS` provide
+the day-to-day change-review path.
 
-**Function-based teams — Incubating: Suggested — Not satisfied.**
+**Function-based teams — Incubating: Suggested — Satisfied.**
 
-`SECURITY.md` states that all maintainers handle security response, but does
-not define onboarding, removal, conflicts, escalation ownership, or a change
-process for that function.
+Governance defines the creation and retirement requirements for function-based
+teams. `SECURITY.md` names the Security Response Team and defines onboarding,
+offboarding, incident assignments, conflicts, independent review, and
+escalation.
 
 ### Maintainers and Maintainer Lifecycle
 
-**Complete lifecycle — Incubating: Suggested — Not satisfied.**
+**Complete lifecycle — Incubating: Suggested — Satisfied.**
 
-The project documents nomination and lazy-consensus acceptance. It does not
-document offboarding, inactivity, removal, emeritus status, or return.
+The project documents nomination, public activity review, voluntary departure,
+inactivity, removal, emeritus status, and return.
 
 **Lifecycle demonstrated — Incubating: Suggested — Not demonstrated.**
 
@@ -187,18 +172,18 @@ No public example of adding, replacing, or moving a maintainer to emeritus is
 linked.
 
 **Names, contact, responsibility, affiliation — Incubating: Required —
-Partially satisfied.**
+Satisfied.**
 
-Names, GitHub contacts, and affiliations are present. Responsibility domains
-are absent.
+The roster provides names, GitHub contacts, project-wide responsibility
+domains, and affiliations for all maintainers.
 
-**Appropriate number of active maintainers — Incubating: Required — Evidence
-incomplete.**
+**Appropriate number of active maintainers — Incubating: Required —
+Satisfied.**
 
-Seven maintainers are listed, which is plausible for the project scope, but the
-roster alone does not prove current review, release, and governance activity.
-The application should link recent evidence for each active maintainer or
-update the roster.
+Seven maintainers cover the project and its four subprojects. The roster
+defines active status and annual public review, and its 2026 review links
+public issue and pull-request activity for every listed maintainer during the
+preceding 12 months.
 
 **Maintainers from at least two organizations — Incubating: N/A, but met.**
 
@@ -207,11 +192,13 @@ The roster names four affiliations.
 ### Ownership
 
 **Code and documentation ownership matches governance roles — Incubating:
-Required — Evidence incomplete.**
+Required — Satisfied.**
 
-`CODEOWNERS` assigns directory review to maintainers and additional GitHub
-users. Governance does not define “code owner,” its authority, appointment, or
-removal, so the review cannot establish that the file matches documented roles.
+Governance defines code owners as delegated path reviewers, documents their
+authority and public appointment/removal process, and makes clear that code
+ownership neither grants project-wide governance authority nor limits a
+maintainer's project-wide responsibility. This matches `CODEOWNERS`, which
+includes maintainers and additional area reviewers.
 
 ### Code of Conduct
 
@@ -226,24 +213,30 @@ from the README and governance.
 
 ### Subprojects
 
-**All subprojects listed — Incubating: Required — Not satisfied.**
+**All subprojects listed — Incubating: Required — Satisfied.**
 
-The README labels `higress-console`, `higress-standalone`, `plugin-server`, and
-`wasm-go` as “Related Repositories,” but does not distinguish CNCF subprojects
-from integrations or independently governed related tools. No authoritative
-scope list exists in governance.
+Governance identifies the primary repository and lists `higress-console`,
+`higress-standalone`, `plugin-server`, and `wasm-go` as active subprojects. It
+also distinguishes upstream forks, integrations, examples, websites, and
+other organization repositories from the CNCF project scope.
 
-**Subproject lifecycle — Incubating: Suggested — Not satisfied.**
+**Subproject lifecycle — Incubating: Suggested — Satisfied.**
 
-Leadership, contribution, maturity status, and add/remove/archive processes are
-not documented for the related repositories.
+Governance applies the project-wide maintainer roster and public decision
+process to subprojects, records each repository's responsibility and status,
+and requires leadership, contribution, communication, and lifecycle details
+when a subproject is added, removed, transferred, or archived.
 
 ### Contributors and Community
 
 **Contributor ladder — Incubating: Suggested — Partially satisfied.**
 
-Contributor and maintainer paths exist, and CODEOWNERS implies an intermediate
-review role, but the role is not governed and no complete ladder is documented.
+Governance defines contributor, delegated code-owner, and project-wide
+maintainer roles. The contribution and maintainer documents define how
+contributors participate and how sustained contributors progress to
+maintainership; code-owner assignments are changed publicly through
+`CODEOWNERS`. Objective progression expectations for the intermediate
+code-owner role can be made more explicit.
 
 **Issue and change submission — Incubating: Required — Satisfied.**
 
@@ -255,13 +248,13 @@ Satisfied.**
 
 GitHub Issues, pull requests, and Discord are publicly documented.
 
-**All public/private channels documented — Incubating: Required — Not
-satisfied.**
+**All public/private channels documented — Incubating: Required — Satisfied.**
 
-The README documents Discord and GitHub contribution paths, and `SECURITY.md`
-documents two private vulnerability-reporting channels. There is no single
-inventory asserting completeness, covering subprojects, or explaining all
-non-public purposes.
+`COMMUNITY.md` is the authoritative inventory for project and subproject GitHub
+channels, Discord, mailing and localized community channels, documentation,
+and narrowly scoped private security and Code of Conduct reporting. It states
+that informal or employer-internal conversations are not project decision
+channels and requires public decision records.
 
 **Public meeting scheduler/CNCF calendar — Incubating: Required — Not
 satisfied.**
@@ -274,10 +267,9 @@ linked from the reviewed repository documents.
 The contribution guide covers issues, pull requests, branches, commits, tests,
 style, and AI-assisted contribution requirements.
 
-**Contributor activity and recruitment — Incubating: Required — Evidence
-incomplete.**
+**Contributor activity and recruitment — Incubating: Required — Satisfied.**
 
-The README displays the contributor graph and the repository has recent
-multi-author activity, but the Incubation application should provide public
-metrics demonstrating sustained contributor growth, review participation, and
-recruitment beyond raw commit counts.
+`COMMUNITY.md` links continuously updated GitHub contributor and repository
+activity, CNCF DevStats, active-maintainer evidence, `help wanted` and `good
+first issue` recruitment queues, the contribution path, and public mentoring
+channels.

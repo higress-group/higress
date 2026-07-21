@@ -53,11 +53,13 @@ Feature scope is currently discussed through public GitHub issues and pull
 requests. Maintainers use lazy consensus, as documented in
 [`GOVERNANCE.md`](https://github.com/higress-group/higress/blob/main/GOVERNANCE.md),
 to accept project-direction changes.
-Contributors implement accepted work through pull requests and may be nominated
-as maintainers after sustained contribution under
+Contributors implement accepted work through pull requests, may receive
+delegated path-review responsibility as code owners, and may be nominated as
+maintainers after sustained contribution under
 [`MAINTAINERS.md`](https://github.com/higress-group/higress/blob/main/MAINTAINERS.md).
-The project does not currently have a dedicated, maintained public roadmap or a
-multi-level contributor ladder; these are documented project-maturity gaps.
+The project does not currently have a dedicated, maintained public roadmap,
+and objective progression expectations for the intermediate code-owner role
+remain a project-maturity gap.
 
 **Who are the target personas?**
 
