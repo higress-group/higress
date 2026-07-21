@@ -6,6 +6,19 @@ Incubation application. It follows the current CNCF TOC
 A CNCF Project Reviews reviewer may amend the assessment and findings during
 the public review.
 
+- **Review state:** Project working draft; maintainer approval and CNCF Project
+  Reviews verification pending
+- **Evidence revision:**
+  [`higress-group/higress@762324c`](https://github.com/higress-group/higress/tree/762324c3767c620fef593504bcedf28f7969a954)
+- **Template verified:** 2026-07-21 against `cncf/toc` `main`
+- **Intended TOC snapshot:**
+  `projects/higress/governance-review/YYYY-MM-DD.md`
+
+This is the project-maintained working copy. CNCF reviewers may revise the
+status and findings before a dated snapshot is archived in `cncf/toc`.
+Project-local relative links must be converted to versioned, absolute
+permalinks for that archive.
+
 ## Summary and Assessment
 
 **Status: Needs Work**
@@ -19,7 +32,8 @@ The review nevertheless finds several Incubation-required evidence gaps: the
 maintainer roster does not state responsibility domains; the relationship
 between `CODEOWNERS` and governance roles is not defined; the CNCF project
 subproject scope is ambiguous; all communication channels are not inventoried;
-and there is no documented current public meeting scheduler. These findings
+there is no documented current public meeting scheduler; and evidence of
+maintainer activity and contributor recruitment is incomplete. These findings
 must be resolved before the project claims the Governance Review criterion is
 satisfied.
 
@@ -28,13 +42,13 @@ satisfied.
 The self-assessment reviewed the following repository evidence as it exists on
 2026-07-21:
 
-- [`GOVERNANCE.md`](../../GOVERNANCE.md)
-- [`MAINTAINERS.md`](../../MAINTAINERS.md)
-- [`CODEOWNERS`](../../CODEOWNERS)
-- [`CONTRIBUTING_EN.md`](../../CONTRIBUTING_EN.md)
-- [`CODE_OF_CONDUCT.md`](../../CODE_OF_CONDUCT.md)
-- [`SECURITY.md`](../../SECURITY.md)
-- [`README.md`](../../README.md)
+- [`GOVERNANCE.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/GOVERNANCE.md)
+- [`MAINTAINERS.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/MAINTAINERS.md)
+- [`CODEOWNERS`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/CODEOWNERS)
+- [`CONTRIBUTING_EN.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/CONTRIBUTING_EN.md)
+- [`CODE_OF_CONDUCT.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/CODE_OF_CONDUCT.md)
+- [`SECURITY.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/SECURITY.md)
+- [`README.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/README.md)
 - Git history for the governance, maintainer, and ownership files
 
 The review distinguishes documented policy from observed repository evidence.
@@ -49,18 +63,19 @@ application asserts completion of its Governance Review:
    confirm the listed people are currently active.
 2. Define the authority and lifecycle of code owners and explain how
    `CODEOWNERS` relates to project-wide maintainer authority.
-3. Document a complete maintainer lifecycle, including onboarding, voluntary
-   departure, inactivity/removal, emeritus status, and return.
-4. Explicitly document vendor-neutral project direction and conflict-of-
-   interest handling.
-5. Define the repositories/subprojects in the CNCF Higress project scope and
-   the process for adding, removing, or archiving a subproject.
-6. Inventory all public and non-public communication channels and state the
+3. Define and list the repositories/subprojects in the CNCF Higress project
+   scope.
+4. Inventory all public and non-public communication channels and state the
    limited purpose of each non-public channel.
-7. Publish an up-to-date public meeting scheduler or CNCF calendar entry and a
+5. Publish an up-to-date public meeting scheduler or CNCF calendar entry and a
    discoverable location for agendas and notes.
-8. Document how the project approves requests to CNCF and how function-based
-   teams such as the Security Response Team are assigned and removed.
+6. Publish evidence of current maintainer activity, contributor activity, and
+   contributor recruitment rather than relying on the roster or raw commit
+   count alone.
+7. Name the Security Response Team membership and document role
+   responsibilities, report handling, conflicts, and escalation. The current
+   reference to all maintainers does not provide enough operational detail for
+   the Incubation application's security-role requirement.
 
 ### Points of Excellence
 
@@ -79,6 +94,14 @@ governance maturity:
 
 - Introduce a contributor ladder with intermediate roles and objective
   progression expectations.
+- Complete the maintainer lifecycle with voluntary departure,
+  inactivity/removal, emeritus status, and return.
+- Explicitly document vendor-neutral project direction, employer-seat
+  neutrality, and conflict-of-interest handling.
+- Document how the project approves requests to CNCF and how function-based
+  teams are created, staffed, and retired.
+- Define how subprojects are added, removed, or archived and how their
+  leadership and maturity are recorded.
 - Record governance evolution and link decisions to issues or pull requests.
 - Publish examples demonstrating the maintainer lifecycle in practice.
 - Periodically audit maintainer activity and code-owner coverage across all

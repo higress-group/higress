@@ -4,8 +4,12 @@
 
 | | |
 | --- | --- |
-| Assessment stage | Complete project self-assessment, updated 2026-07-21 |
+| Assessment stage | Complete working draft, pending maintainer approval; updated 2026-07-21 |
 | Software | <https://github.com/higress-group/higress> |
+| Review state | Prepared from public project evidence; no independent security review or audit |
+| Evidence revision | [`higress-group/higress@762324c`](https://github.com/higress-group/higress/tree/762324c3767c620fef593504bcedf28f7969a954) |
+| Assessment outline | [CNCF TAG Security Self-Assessment](https://tag-security.cncf.io/community/assessments/guide/self-assessment/) |
+| Intended TOC snapshot | `projects/higress/security-assessment/self-assessment.md` |
 | Security provider | No. Higress provides security features, but its primary function is API gateway traffic management. |
 | Languages | Go, C++, Rust, AssemblyScript, shell, and Helm/YAML |
 | SBOM | Not generated for release artifacts. Go module files, Cargo lock data, and container build files provide dependency inputs. |
@@ -14,10 +18,15 @@
 
 | Document | Location |
 | --- | --- |
-| Vulnerability reporting and response | [`SECURITY.md`](../../SECURITY.md) |
-| Architecture | [`docs/architecture.md`](../architecture.md) |
-| Helm defaults | [`helm/core/values.yaml`](../../helm/core/values.yaml) |
+| Vulnerability reporting and response | [`SECURITY.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/SECURITY.md) |
+| Architecture | [`docs/architecture.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/docs/architecture.md) |
+| Helm defaults | [`helm/core/values.yaml`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/helm/core/values.yaml) |
 | OpenSSF Best Practices | <https://www.bestpractices.dev/projects/12667> |
+
+This is the project-maintained working copy. For formal Due Diligence, a vetted
+snapshot must be archived at the path above in `cncf/toc`. Project-local
+relative links must be converted to versioned, absolute permalinks when that
+snapshot is prepared.
 
 ## Overview
 
@@ -48,10 +57,43 @@ Ingress/Gateway API translation and an extensible plugin ecosystem. The
 control plane watches configuration and discovery sources and generates xDS;
 the data plane accepts untrusted network traffic and applies that configuration.
 
+### Architecture and Data Flow
+
+The security-relevant flow is:
+
+1. An authenticated Kubernetes user or automation writes Ingress, Gateway API,
+   Higress/Istio, Secret, and policy resources to the Kubernetes API.
+2. Higress controller and discovery components watch authorized resources,
+   optional service registries, and certificate sources, then translate the
+   desired state into xDS and SDS configuration.
+3. Gateway pilot agents and Envoy processes receive configuration and secret
+   material. Existing gateways may retain their last accepted configuration if
+   the control plane becomes unavailable.
+4. Untrusted clients connect to the gateway. Envoy and configured filters parse,
+   authenticate, authorize, transform, and route requests to upstream services
+   or explicitly configured AI/model providers.
+5. The gateway emits access logs, metrics, and traces to destinations selected
+   by the operator. Depending on configuration, those signals may include
+   sensitive request metadata.
+
+### Data Assets and Trust Boundaries
+
+| Asset or boundary | Security relevance |
+| --- | --- |
+| Kubernetes configuration and status | Unauthorized mutation can redirect traffic, weaken policy, load code, or disrupt availability. |
+| TLS keys, certificates, tokens, and upstream credentials | Disclosure or replacement can enable impersonation, traffic decryption, or unauthorized upstream access. |
+| Request/response bodies, AI prompts, and model outputs | May contain application secrets, personal data, proprietary data, or attacker-controlled content. |
+| xDS/SDS control-plane boundary | Integrity and availability determine what code, routes, clusters, policy, and secrets the data plane uses. |
+| Gateway process boundary | Native Go/C++ filters execute inside the proxy trust boundary; a defect can affect the full gateway process. |
+| Wasm plugin boundary | Wasm provides stronger isolation than a native filter, but plugins can still observe or modify traffic granted to them. |
+| External integration boundary | Registries, identity providers, certificate issuers, Redis, observability systems, OCI registries, and model providers have separate operators and trust. |
+| Source and release boundary | Compromise of source control, CI identities, dependencies, images, or plugin artifacts can affect every adopter. |
+
 ### Goals
 
-- Preserve authenticated configuration delivery between control and data
-  planes and reject invalid xDS updates.
+- Preserve the integrity and availability of configuration delivery between
+  control and data planes, reject invalid xDS updates, and make transport trust
+  assumptions explicit for operators.
 - Terminate and originate TLS as configured and distribute private key material
   through Kubernetes Secrets and SDS.
 - Isolate Wasm plugin execution from the gateway process to the extent provided
@@ -103,6 +145,30 @@ reviewers an initial view of security boundaries, practices, and known gaps.
 - External service registries, Redis, certificate issuers, identity providers,
   OCI registries, and AI/model providers.
 
+### Threat Model
+
+This project-authored model uses the actors, assets, flows, and boundaries above.
+Priority reflects generic impact for a shared production gateway; adopters must
+adjust it for their tenancy model and data classification.
+
+| ID | Priority | Threat scenario | Current mitigation and residual risk |
+| --- | --- | --- | --- |
+| HG-TM-01 | High | A principal with excessive Kubernetes permissions creates or changes routes, policies, Secrets, or plugins to hijack traffic or bypass controls. | Kubernetes authentication, RBAC, API validation, namespace scoping where configured, and review/GitOps practices reduce exposure. Cluster administrators remain trusted, and the controller currently has broad cluster-wide permissions. |
+| HG-TM-02 | High | A compromised controller, gateway ServiceAccount, or ClusterRoleBinding exposes TLS keys or upstream credentials. | Secrets are delivered through Kubernetes APIs and SDS rather than embedded in images. Gateway and controller roles are separate, but secret access and several controller rules remain broad and require minimization. |
+| HG-TM-03 | High | A malicious or compromised plugin/image executes code, exfiltrates traffic, or alters policy. | Plugin installation is explicit and Wasm supplies a sandbox boundary. Native filters share the gateway process; release/plugin artifacts lack project-wide signature, SBOM, and provenance guarantees. |
+| HG-TM-04 | High | Control-plane or xDS/SDS channel compromise injects malicious configuration or secret material, or prevents updates. | Envoy validates delivered resources and can retain last accepted configuration. Operators must protect control-plane identities, endpoints, network paths, and Kubernetes access; transport and deployment assumptions require a dedicated hardening guide. |
+| HG-TM-05 | High | Hostile downstream traffic exploits an Envoy/filter parser defect or exhausts connections, memory, CPU, sockets, or upstream capacity. | Envoy validation, resource limits, timeouts, rate-limit/circuit-breaker features, probes, and multiple replicas can limit impact. Safe values are deployment-specific and timely Envoy/Higress patching remains essential. |
+| HG-TM-06 | High | A tenant accidentally or deliberately attaches a route or policy to another tenant's gateway and exposes or disrupts traffic. | Kubernetes RBAC, namespace separation, Gateway API attachment controls, and review can restrict authors. Higress does not make a hostile multi-tenant cluster safe when administrators grant overlapping write privileges. |
+| HG-TM-07 | High | Requests, AI prompts, credentials, or responses are disclosed to an external registry, plugin, observability backend, identity service, or model provider. | Integrations require operator configuration and can be restricted through credentials and network policy. Operators remain responsible for egress allowlists, provider contracts, log redaction, residency, and data-retention controls. |
+| HG-TM-08 | Medium | Logs, metrics, traces, admin/debug endpoints, or configuration dumps expose credentials or sensitive request metadata. | Admin interfaces are not intended as public endpoints and telemetry is configurable. Access control, redaction, retention, and exposure are deployment responsibilities; unsafe logging or endpoint exposure remains possible. |
+| HG-TM-09 | High | Certificate expiration, issuer compromise, or unauthorized Secret replacement causes outage or impersonation. | SDS and automatic HTTPS support dynamic certificate updates and renewal. Operators must secure issuers, monitor expiry/renewal, test emergency rotation, and control Secret writers. |
+| HG-TM-10 | High | A source-control, dependency, GitHub Actions, registry, or maintainer-account compromise produces malicious release artifacts. | Public review, CI tests, license checks, CodeQL, pinned dependency/submodule inputs, and GitHub release workflows provide layers. Missing universal immutable action pinning, release SBOMs, signatures, provenance, and documented repository access controls leave material residual risk. |
+
+The model should be reviewed after material architecture, privilege, plugin,
+release-pipeline, or trust-boundary changes. The project does not yet enforce a
+review cadence or require a named security reviewer, which is itself a process
+gap.
+
 ## Project Compliance
 
 The open-source project does not claim PCI-DSS, SOC 2, ISO 27001, GDPR, or
@@ -137,7 +203,8 @@ OCI, Prometheus/OpenTelemetry conventions, and optional service registries.
 
 ## Security Issue Resolution
 
-[`SECURITY.md`](../../SECURITY.md) prohibits public vulnerability reports and
+[`SECURITY.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/SECURITY.md)
+prohibits public vulnerability reports and
 directs reporters to two private channels. The Security Response Team is the
 current maintainer list. The documented targets are acknowledgement within
 three business days and triage within 14 days, followed by private fix
@@ -166,8 +233,9 @@ Advisory and release information, and coordinate timing with the reporter.
   capability; legacy fallback adds `NET_BIND_SERVICE` and allows escalation.
 - No dedicated fuzzing/DAST program or automated upgrade/downgrade matrix is
   documented.
-- A complete threat model and independent security audit have not been
-  published.
+- This threat model is project-authored, has not been independently validated,
+  and is not yet backed by a published data-flow diagram with explicit trust
+  boundaries or an independent security audit.
 
 ### Known Issues Over Time
 

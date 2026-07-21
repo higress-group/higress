@@ -5,6 +5,11 @@
 - **Website:** <https://higress.ai/en/>
 - **Date updated:** 2026-07-21
 - **Template version:** CNCF General Technical Review v1.0
+- **Review state:** Project working draft; maintainer approval and CNCF Project
+  Reviews verification pending
+- **Evidence revision:**
+  [`higress-group/higress@762324c`](https://github.com/higress-group/higress/tree/762324c3767c620fef593504bcedf28f7969a954)
+- **Intended TOC snapshot:** `projects/higress/tech-review/YYYY-MM-DD.md`
 - **Description:** Higress is a cloud-native API gateway built on Envoy and
   Istio. It supports Kubernetes Ingress and Gateway API and is extensible with
   Wasm plugins and native Go filters.
@@ -15,6 +20,28 @@ review. It follows the current CNCF TOC
 Statements that are not yet backed by a project guarantee are identified as
 gaps rather than treated as completed controls.
 
+This is the project-maintained working copy. For formal Due Diligence, a CNCF
+reviewer or associate verifies it and archives a dated snapshot in `cncf/toc`.
+Project-local relative links must be converted to versioned, absolute
+permalinks when that snapshot is prepared.
+
+## Project Self-Assessment Summary
+
+Higress has substantive evidence for every Day 0 and Day 1 question, but this
+document does not assign the project an external technical-review rating. The
+strongest Day 1 gaps are the absence of an automated
+upgrade→downgrade→upgrade matrix, a normative release process and bounded
+supported-version/EOL policy, a published compatibility-review cadence, and
+complete release supply-chain attestations. Broad control-plane RBAC also
+requires minimization and documented justification. These findings should be
+tracked during Due Diligence rather than hidden by marking the questionnaire
+complete.
+
+Day 2 questions are not required for an Incubation application and are not
+answered in this snapshot. Operational evidence that already exists may be
+added during CNCF review, but it is not needed to make the Day 0 and Day 1
+scope complete.
+
 ## Day 0 — Planning Phase
 
 ### Scope
@@ -24,12 +51,13 @@ that map to contributions and the maintainer ladder?**
 
 Feature scope is currently discussed through public GitHub issues and pull
 requests. Maintainers use lazy consensus, as documented in
-[`GOVERNANCE.md`](../../GOVERNANCE.md), to accept project-direction changes.
+[`GOVERNANCE.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/GOVERNANCE.md),
+to accept project-direction changes.
 Contributors implement accepted work through pull requests and may be nominated
 as maintainers after sustained contribution under
-[`MAINTAINERS.md`](../../MAINTAINERS.md). The project does not currently have a
-dedicated, maintained public roadmap or a multi-level contributor ladder; these
-are documented project-maturity gaps.
+[`MAINTAINERS.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/MAINTAINERS.md).
+The project does not currently have a dedicated, maintained public roadmap or a
+multi-level contributor ladder; these are documented project-maturity gaps.
 
 **Who are the target personas?**
 
@@ -55,7 +83,7 @@ for an organization's PKI, security governance, and incident response.
 Organizations operating Kubernetes platforms, microservices, public or
 partner APIs, multi-provider AI platforms, or centralized platform-engineering
 services can benefit. Public examples are listed in
-[`ADOPTERS.md`](../../ADOPTERS.md).
+[`ADOPTERS.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/ADOPTERS.md).
 
 **What end-user research has been completed?**
 
@@ -104,7 +132,7 @@ integrations are optional and selected by the adopter.
   end-to-end tests.
 
 The component architecture and data flow are documented in
-[`docs/architecture.md`](../architecture.md).
+[`docs/architecture.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/docs/architecture.md).
 
 **What differs between proof-of-concept, development, test, and production?**
 
