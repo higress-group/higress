@@ -8,16 +8,16 @@ the public review.
 
 - **Review state:** Project working draft; maintainer approval and CNCF Project
   Reviews verification pending
-- **Evidence revision:**
-  [`higress-group/higress@762324c`](https://github.com/higress-group/higress/tree/762324c3767c620fef593504bcedf28f7969a954)
+- **Evidence branch:**
+  [`higress-group/higress@main`](https://github.com/higress-group/higress/tree/main)
 - **Template verified:** 2026-07-21 against `cncf/toc` `main`
 - **Intended TOC snapshot:**
   `projects/higress/governance-review/YYYY-MM-DD.md`
 
 This is the project-maintained working copy. CNCF reviewers may revise the
 status and findings before a dated snapshot is archived in `cncf/toc`.
-Project-local relative links must be converted to versioned, absolute
-permalinks for that archive.
+The reviewer should freeze evidence links to the reviewed revision when that
+snapshot is archived.
 
 ## Summary and Assessment
 
@@ -42,13 +42,13 @@ satisfied.
 The self-assessment reviewed the following repository evidence as it exists on
 2026-07-21:
 
-- [`GOVERNANCE.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/GOVERNANCE.md)
-- [`MAINTAINERS.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/MAINTAINERS.md)
-- [`CODEOWNERS`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/CODEOWNERS)
-- [`CONTRIBUTING_EN.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/CONTRIBUTING_EN.md)
-- [`CODE_OF_CONDUCT.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/CODE_OF_CONDUCT.md)
-- [`SECURITY.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/SECURITY.md)
-- [`README.md`](https://github.com/higress-group/higress/blob/762324c3767c620fef593504bcedf28f7969a954/README.md)
+- [`GOVERNANCE.md`](https://github.com/higress-group/higress/blob/main/GOVERNANCE.md)
+- [`MAINTAINERS.md`](https://github.com/higress-group/higress/blob/main/MAINTAINERS.md)
+- [`CODEOWNERS`](https://github.com/higress-group/higress/blob/main/CODEOWNERS)
+- [`CONTRIBUTING_EN.md`](https://github.com/higress-group/higress/blob/main/CONTRIBUTING_EN.md)
+- [`CODE_OF_CONDUCT.md`](https://github.com/higress-group/higress/blob/main/CODE_OF_CONDUCT.md)
+- [`SECURITY.md`](https://github.com/higress-group/higress/blob/main/SECURITY.md)
+- [`README.md`](https://github.com/higress-group/higress/blob/main/README.md)
 - Git history for the governance, maintainer, and ownership files
 
 The review distinguishes documented policy from observed repository evidence.
