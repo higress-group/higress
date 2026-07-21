@@ -184,10 +184,9 @@ include Ant Digital, Kuaishou, Trip.com, Vipshop, and Labring.
 - [x] The Security Self-Assessment is documented in
   [`security-self-assessment.md`](https://github.com/higress-group/higress/blob/main/docs/cncf/security-self-assessment.md).
 - [ ] **BLOCKED — OpenSSF Best Practices Passing badge.** The public entry is
-  currently 96%. Daily/main-push CodeQL is addressed by this preparation work,
-  but warning enforcement/remediation, confirmed CodeQL alert disposition, and
-  project-level dynamic analysis remain before the badge can be certified as
-  Passing.
+  currently 96%. Warning enforcement/remediation, static-analysis frequency,
+  confirmed CodeQL alert disposition, and project-level dynamic analysis remain
+  before the badge can be certified as Passing.
 
 ## Ecosystem
 
@@ -210,8 +209,8 @@ the following required items remain open:
 
 1. a real public meeting scheduler and/or CNCF calendar integration;
 2. enforced repository access-control evidence;
-3. OpenSSF Best Practices Passing, including alert disposition and dynamic
-   analysis;
+3. OpenSSF Best Practices Passing, including warning enforcement, analysis
+   frequency, alert disposition, and dynamic analysis;
 4. vendor-neutral resource/website remediation or an accepted migration plan;
 5. 5–7 adopter interview submissions and later TOC verification; and
 6. direct project point-of-contact emails confirmed for the issue.

@@ -273,9 +273,8 @@ in ephemeral clusters and runs Gateway API and Higress conformance traffic.
 - **Explicit trust and boundaries:** Kubernetes administrators, xDS,
   certificate sources, plugins, registries, identity providers, and upstreams
   are separate trust boundaries described in the security self-assessment.
-- **Secure lifecycle:** public review, automated tests, license checks, CodeQL
-  configured for daily and `main`-push analysis, private advisories, and
-  coordinated disclosure are in place, with
+- **Secure lifecycle:** public review, automated tests, license checks, weekly
+  CodeQL, private advisories, and coordinated disclosure are in place, with
   SBOM/signing/dynamic-analysis gaps disclosed.
 
 Operators can loosen security by overriding pod/container security contexts,
@@ -288,12 +287,11 @@ threat model.
 maintained?**
 
 The project uses required review, build and unit tests with Go race detection,
-Gateway API/Higress conformance, plugin tests, license checks, CodeQL configured
-for daily and `main`-push analysis, versioned dependencies, Private Security
-Advisories, and coordinated disclosure. Certificate handling, RBAC
-reconciliation, xDS generation and validation, parsers/routing, authentication
-and authorization plugins, plugin loading, and release artifacts are treated
-as security-critical boundaries.
+Gateway API/Higress conformance, plugin tests, license checks, weekly CodeQL,
+versioned dependencies, Private Security Advisories, and coordinated
+disclosure. Certificate handling, RBAC reconciliation, xDS generation and
+validation, parsers/routing, authentication and authorization plugins, plugin
+loading, and release artifacts are treated as security-critical boundaries.
 
 **What privileges are required?**
 
