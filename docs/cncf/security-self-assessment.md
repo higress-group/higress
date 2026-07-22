@@ -191,9 +191,10 @@ settings evidence.
 
 Ordinary project-team communication uses GitHub issues, pull requests,
 discussions, mailing, localized community channels, and Discord. Inbound users
-use the same public channels. Vulnerabilities use GitHub Private Security
-Advisories as the primary vendor-neutral intake, with the Alibaba Security
-Response Center as an optional alternate, as documented in `SECURITY.md`.
+use the same public channels. Every vulnerability report must be submitted to
+both GitHub Private Security Advisories and the Alibaba Security Response
+Center, as documented in `SECURITY.md`. The Security Response Team correlates
+the two private records.
 Releases, the project website, and the WeChat Official Account are outbound
 channels. [`COMMUNITY.md`](https://github.com/higress-group/higress/blob/main/COMMUNITY.md)
 is the authoritative inventory of public, subproject, and narrowly scoped
@@ -207,8 +208,9 @@ OCI, Prometheus/OpenTelemetry conventions, and optional service registries.
 
 [`SECURITY.md`](https://github.com/higress-group/higress/blob/main/SECURITY.md)
 prohibits public vulnerability reports and
-directs reporters to a primary vendor-neutral private channel and an optional
-alternate. The named Security Response Team is the current maintainer list.
+requires reporters to submit the same substantive report through both GitHub
+Private Security Advisories and the Alibaba Security Response Center. The named
+Security Response Team is the current maintainer list.
 For each case it assigns a triage coordinator, fix lead, independent reviewer
 and release lead, and disclosure lead, with at least two unconflicted members.
 The policy documents conflicts and escalation. Its targets are acknowledgement
@@ -239,6 +241,9 @@ Advisory and release information, and coordinate timing with the reporter.
 - This threat model is project-authored, has not been independently validated,
   and is not yet backed by a published data-flow diagram with explicit trust
   boundaries or an independent security audit.
+- Requiring every reporter to duplicate the report in the vendor-operated
+  Alibaba Security Response Center creates a vendor-neutrality concern that
+  requires CNCF review or a future neutral replacement plan.
 
 ### Known Issues Over Time
 

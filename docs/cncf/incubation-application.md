@@ -75,9 +75,11 @@ include Ant Digital, Kuaishou, Trip.com, Vipshop, and Labring.
   Governance and the primary README now document vendor-neutral direction and
   no longer promote a single commercial product, but release images remain
   hosted only on Alibaba Cloud registry domains, the historical Go module path
-  contains `github.com/alibaba`, and the website roadmap still includes a
-  single-vendor enterprise mapping. The application needs a maintainer/CNCF-
-  reviewed compatibility and infrastructure plan.
+  contains `github.com/alibaba`, the website roadmap still includes a
+  single-vendor enterprise mapping, and the security policy requires duplicate
+  submission to the vendor-operated Alibaba Security Response Center. The
+  application needs a maintainer/CNCF-reviewed compatibility and infrastructure
+  plan.
 - [x] Review and acknowledgement of Sandbox expectations and maturity-level
   requirements. Higress was accepted as a Sandbox project on 2026-03-15 and
   this application explicitly acknowledges the current requirements.
