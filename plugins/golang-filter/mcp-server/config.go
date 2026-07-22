@@ -24,6 +24,10 @@ const (
 type SSEServerWrapper struct {
 	BaseServer   *common.SSEServer
 	HostMatchers []common.HostMatcher // Pre-parsed host matchers for efficient matching
+	// AuthUsername/AuthPassword hold the HTTP Basic credentials required to
+	// reach this server. An empty AuthUsername means authentication is disabled.
+	AuthUsername string
+	AuthPassword string
 }
 
 type config struct {
@@ -110,12 +114,20 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 			return nil, fmt.Errorf("failed to initialize MCP Server: %w", err)
 		}
 
-		conf.servers = append(conf.servers, &SSEServerWrapper{
+		wrapper := &SSEServerWrapper{
 			BaseServer: common.NewSSEServer(serverInstance,
 				common.WithSSEEndpoint(fmt.Sprintf("%s%s", serverPath, mcp_session.GlobalSSEPathSuffix)),
 				common.WithMessageEndpoint(serverPath)),
 			HostMatchers: hostMatchers,
-		})
+		}
+
+		// Servers that require HTTP Basic auth expose their credentials via the
+		// BasicAuthProvider interface; the filter enforces them per request.
+		if authProvider, ok := server.(common.BasicAuthProvider); ok {
+			wrapper.AuthUsername, wrapper.AuthPassword = authProvider.GetBasicAuthCredentials()
+		}
+
+		conf.servers = append(conf.servers, wrapper)
 		api.LogDebug(fmt.Sprintf("Registered MCP Server: %s", serverType))
 	}
 

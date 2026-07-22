@@ -11,6 +11,10 @@
 ```bash
 # NOTE: 如果你想在构建插件的时候设置额外的构建参数 EXTRA_TAGS
 # 请更新 extensions/${PLUGIN_NAME} 插件目录对应的 .buildrc 文件
+# NOTE: 如果你想自定义最终推送的镜像短名（覆盖默认的插件目录名），
+# 可以在 .buildrc 中添加 IMAGE_NAME=<your-image-name>。
+# 镜像短名只能包含小写字母、数字、`.`、`_`、`-`，否则构建会失败。
+# 本设置仅影响推送的镜像 tag，不影响源码路径。
 $ PLUGIN_NAME=request-block make build
 ```
 

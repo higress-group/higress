@@ -353,6 +353,26 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body [
 	return result, nil
 }
 
+// computeClaudeInputTokens computes Claude-compatible input_tokens from OpenAI usage.
+//
+// In OpenAI's API, prompt_tokens includes cached_tokens (subset relationship).
+// In Claude's API, input_tokens should NOT include cache tokens.
+// We detect the OpenAI-standard semantics by checking if total_tokens == prompt_tokens + completion_tokens.
+// For providers like Bedrock where prompt_tokens does NOT include cache tokens
+// (total_tokens != prompt_tokens + completion_tokens), we return prompt_tokens as-is.
+func computeClaudeInputTokens(u *usage) int {
+	if u == nil {
+		return 0
+	}
+	promptTokens := u.PromptTokens
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
+		if u.TotalTokens > 0 && u.TotalTokens == promptTokens+u.CompletionTokens {
+			return promptTokens - u.PromptTokensDetails.CachedTokens
+		}
+	}
+	return promptTokens
+}
+
 // ConvertOpenAIResponseToClaude converts an OpenAI response back to Claude format
 func (c *ClaudeToOpenAIConverter) ConvertOpenAIResponseToClaude(ctx wrapper.HttpContext, body []byte) ([]byte, error) {
 	log.Debugf("[OpenAI->Claude] Original OpenAI response body: %s", string(body))
@@ -373,7 +393,7 @@ func (c *ClaudeToOpenAIConverter) ConvertOpenAIResponseToClaude(ctx wrapper.Http
 	// Only include usage if it's available
 	if openaiResponse.Usage != nil {
 		claudeResponse.Usage = claudeTextGenUsage{
-			InputTokens:  openaiResponse.Usage.PromptTokens,
+			InputTokens:  computeClaudeInputTokens(openaiResponse.Usage),
 			OutputTokens: openaiResponse.Usage.CompletionTokens,
 		}
 		if openaiResponse.Usage.PromptTokensDetails != nil {
@@ -582,7 +602,7 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 		// Only include usage if it's available
 		if openaiResponse.Usage != nil {
 			message.Usage = claudeTextGenUsage{
-				InputTokens:  openaiResponse.Usage.PromptTokens,
+				InputTokens:  computeClaudeInputTokens(openaiResponse.Usage),
 				OutputTokens: 0,
 			}
 		}
@@ -828,7 +848,7 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 			}
 			if openaiResponse.Usage != nil {
 				message.Usage = claudeTextGenUsage{
-					InputTokens:  openaiResponse.Usage.PromptTokens,
+					InputTokens:  computeClaudeInputTokens(openaiResponse.Usage),
 					OutputTokens: 0,
 				}
 			}
@@ -985,7 +1005,7 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 			openaiResponse.Usage.PromptTokens, openaiResponse.Usage.CompletionTokens)
 
 		usage := &claudeTextGenUsage{
-			InputTokens:  openaiResponse.Usage.PromptTokens,
+			InputTokens:  computeClaudeInputTokens(openaiResponse.Usage),
 			OutputTokens: openaiResponse.Usage.CompletionTokens,
 		}
 		if openaiResponse.Usage.PromptTokensDetails != nil {

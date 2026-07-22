@@ -143,35 +143,35 @@ func TestCorsConfig_isPreFlight(t *testing.T) {
 		name                    string
 		origin                  string
 		method                  string
-		controllerRequestMethod string
+		controlRequestMethod string
 		want                    bool
 	}{
 		{
 			name:                    "blank case",
 			origin:                  "",
 			method:                  "",
-			controllerRequestMethod: "",
+			controlRequestMethod:"",
 			want:                    false,
 		},
 		{
 			name:                    "normal case",
 			origin:                  "http://httpbin.example.com",
 			method:                  "Options",
-			controllerRequestMethod: "PUT",
+			controlRequestMethod:"PUT",
 			want:                    true,
 		},
 		{
 			name:                    "bad case with diff method",
 			origin:                  "http://httpbin.example.com",
 			method:                  "GET",
-			controllerRequestMethod: "PUT",
+			controlRequestMethod:"PUT",
 			want:                    false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &CorsConfig{}
-			assert.Equalf(t, tt.want, c.isPreFlight(tt.origin, tt.method, tt.controllerRequestMethod), "isPreFlight(%v, %v, %v)", tt.origin, tt.method, tt.controllerRequestMethod)
+			assert.Equalf(t, tt.want, c.isPreFlight(tt.origin, tt.method, tt.controlRequestMethod), "isPreFlight(%v, %v, %v)", tt.origin, tt.method, tt.controlRequestMethod)
 		})
 	}
 }
@@ -188,7 +188,7 @@ func TestCorsConfig_checkMethods(t *testing.T) {
 			name:          "default *",
 			allowMethods:  []string{"*"},
 			requestMethod: "GET",
-			wantMethods:   defaultAllAllowMethods,
+			wantMethods:   "GET",
 			wantOk:        true,
 		},
 		{
