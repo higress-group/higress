@@ -56,9 +56,13 @@ project-wide maintainer roster apply to it.
 | [`higress-group/plugin-server`](https://github.com/higress-group/plugin-server) | Plugin distribution service used by Higress | Active subproject |
 | [`higress-group/wasm-go`](https://github.com/higress-group/wasm-go) | Go SDK for Higress Wasm plugins | Active subproject |
 
-Forks of upstream dependencies, integrations, examples, experiments, websites,
-and other repositories in the `higress-group` organization are not Higress
-subprojects unless they are added to this table.
+Git submodules declared in [`.gitmodules`](./.gitmodules), including the
+Higress-hosted forks of Istio, Envoy, and their related API and client
+libraries, are pinned source dependencies used to build Higress; they are not
+separately governed Higress subprojects. Other upstream dependency forks,
+integrations, examples, experiments, websites, and repositories in the
+`higress-group` organization are also not Higress subprojects unless they are
+added to this table.
 
 A proposal to add, remove, transfer, or archive a subproject must be made in a
 public issue or pull request. It must identify the repository, purpose,
