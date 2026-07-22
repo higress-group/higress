@@ -9,6 +9,10 @@ The wasm-go plugin can be built quickly with the following command:
 ```bash
 # NOTE: if you want to set EXTRA_TAGS for the wasm plugin
 # please set them in the .buildrc file under extensions/${PLUGIN_NAME} directory
+# NOTE: to override the output image short name (default: plugin directory name),
+# add `IMAGE_NAME=<your-image-name>` to .buildrc.
+# The image name must contain only [a-z0-9._-], or the build will fail.
+# This affects the pushed image tag only, not the source code path.
 $ PLUGIN_NAME=request-block make build
 ```
 
