@@ -237,6 +237,9 @@ REST-to-MCP 功能使用 [GJSON Template](https://github.com/higress-group/gjson
 - **请求模板**：用于构造 HTTP 请求 URL、头部和正文
   - 使用 `.config.fieldName` 访问配置值
   - 使用 `.args.argName` 访问工具参数
+  - 使用 `.headers.header_name` 访问入站请求头。请求头名称会统一转换为小写；名称中包含特殊字符时使用 `gjson` 函数，例如 `{{gjson "headers.target-path"}}`。除非启用 `passthroughAuthHeader`，否则不会包含 `Authorization` 请求头；已被下游安全配置消费的凭证始终不会进入模板数据
+
+- **直接响应模板**：响应正文模板可访问与请求模板相同的 `.config`、`.args` 和 `.headers` 数据
 
 - **响应模板**：用于将 HTTP 响应转换为适合 AI 消费的格式
   - 使用 GJSON 路径语法访问 JSON 响应字段
