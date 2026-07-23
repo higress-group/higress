@@ -10,6 +10,7 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "Makefile.core.mk"
       - ".github/workflows/dynamic-analysis.yaml"
   schedule:
     - cron: "17 3 * * 1"
