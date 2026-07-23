@@ -143,6 +143,7 @@ type CompletionRequest struct {
 	Temperature      float64        `json:"temperature,omitempty"`
 	TopP             float64        `json:"top_p,omitempty"`
 	User             string         `json:"user,omitempty"`
+	ExtraBody        map[string]any `json:"extra_body",omitempty`
 }
 
 type streamOptions struct {
