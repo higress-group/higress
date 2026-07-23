@@ -857,6 +857,7 @@ func (c *ProviderConfig) GetRandomToken() string {
 func isStatefulAPI(apiName string) bool {
 	// These APIs maintain session state and should be routed to the same provider consistently
 	statefulAPIs := map[string]bool{
+		string(ApiNameAnthropicMessages):        true, // Anthropic Messages - prompt cache keyed per API key
 		string(ApiNameResponses):                true, // Response API - uses previous_response_id
 		string(ApiNameFiles):                    true, // Files API - maintains file state
 		string(ApiNameRetrieveFile):             true, // File retrieval - depends on file upload
