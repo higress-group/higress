@@ -1142,7 +1142,7 @@ func marshalOpenAIDenyData(content string, guardrailBody []byte, id string, crea
 		return nil, err
 	}
 
-	data := make([]byte, 0, len(firstFrame)+len(finalFrame)+32)
+	data := make([]byte, 0, len(firstFrame))
 	data = append(data, "data:"...)
 	data = append(data, firstFrame...)
 	data = append(data, "\n\ndata:"...)
