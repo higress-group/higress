@@ -507,6 +507,20 @@ func (w *watcher) processToolConfig(dataId, data string, credentials map[string]
 	return nil
 }
 
+// getExportPath returns the normalized upstream export path configured in
+// remoteServerConfig.exportPath, or "" if the export path is absent or root.
+// The result always has a leading "/" and never has a trailing "/".
+func getExportPath(server *provider.McpServer) string {
+	if server == nil || server.RemoteServerConfig == nil {
+		return ""
+	}
+	exportPath := strings.Trim(server.RemoteServerConfig.ExportPath, "/")
+	if exportPath == "" {
+		return ""
+	}
+	return "/" + exportPath
+}
+
 func (w *watcher) buildVirtualServiceForMcpServer(server *provider.McpServer, dataId, serviceName string, se *v1alpha3.ServiceEntry) *config.Config {
 	if server == nil {
 		return nil
@@ -532,6 +546,28 @@ func (w *watcher) buildVirtualServiceForMcpServer(server *provider.McpServer, da
 		mergePath = strings.TrimSuffix(w.McpServerBaseUrl, "/") + mergePath
 	}
 
+	exactMatch := &v1alpha3.HTTPMatchRequest{
+		Uri: &v1alpha3.StringMatch{
+			MatchType: &v1alpha3.StringMatch_Exact{
+				Exact: mergePath,
+			},
+		},
+	}
+	prefixMatch := &v1alpha3.HTTPMatchRequest{
+		Uri: &v1alpha3.StringMatch{
+			MatchType: &v1alpha3.StringMatch_Prefix{
+				Prefix: mergePath + "/",
+			},
+		},
+	}
+	newDestination := func() []*v1alpha3.HTTPRouteDestination {
+		return []*v1alpha3.HTTPRouteDestination{{
+			Destination: &v1alpha3.Destination{
+				Host: serviceName,
+			},
+		}}
+	}
+
 	vs := &v1alpha3.VirtualService{
 		Hosts:    hosts,
 		Gateways: gateways,
@@ -542,44 +578,55 @@ func (w *watcher) buildVirtualServiceForMcpServer(server *provider.McpServer, da
 			// Example:
 			// Assume mergePath=/mcp/test prefixRewrite=/ requestPath=/mcp/test/abc
 			// If we only use prefix match, the rewritten path will be //abc.
-			Match: []*v1alpha3.HTTPMatchRequest{
-				{
-					Uri: &v1alpha3.StringMatch{
-						MatchType: &v1alpha3.StringMatch_Exact{
-							Exact: mergePath,
-						},
-					},
-				},
-				{
-					Uri: &v1alpha3.StringMatch{
-						MatchType: &v1alpha3.StringMatch_Prefix{
-							Prefix: mergePath + "/",
-						},
-					},
-				},
-			},
-			Route: []*v1alpha3.HTTPRouteDestination{{
-				Destination: &v1alpha3.Destination{
-					Host: serviceName,
-				},
-			}},
+			Match: []*v1alpha3.HTTPMatchRequest{exactMatch, prefixMatch},
+			Route: newDestination(),
 		}},
 	}
 
 	// we should rewrite path for sse and streamble
 	if routeRewriteProtocols[server.Protocol] {
-		vs.Http[0].Rewrite = &v1alpha3.HTTPRewrite{
-			Uri: "/",
+		exportPath := getExportPath(server)
+		if exportPath == "" {
+			// "/" is the only rewrite URI that works for both the exact match
+			// (mergePath -> /) and the prefix match (mergePath + "/" + rest -> / + rest).
+			vs.Http[0].Rewrite = &v1alpha3.HTTPRewrite{
+				Uri: "/",
+			}
+		} else {
+			// With a non-root export path a single rewrite URI can no longer serve
+			// both matches: the prefix match strips mergePath + "/", so its rewrite
+			// needs a trailing "/" while the exact match must not have one.
+			// Split them into two routes, each with its own rewrite.
+			vs.Http = []*v1alpha3.HTTPRoute{
+				{
+					Name:  routeName,
+					Match: []*v1alpha3.HTTPMatchRequest{exactMatch},
+					Route: newDestination(),
+					Rewrite: &v1alpha3.HTTPRewrite{
+						Uri: exportPath,
+					},
+				},
+				{
+					Name:  routeName + "-prefix",
+					Match: []*v1alpha3.HTTPMatchRequest{prefixMatch},
+					Route: newDestination(),
+					Rewrite: &v1alpha3.HTTPRewrite{
+						Uri: exportPath + "/",
+					},
+				},
+			}
 		}
 	}
 	// we should rewrite host for dns service
 	if se != nil && se.Resolution == v1alpha3.ServiceEntry_DNS && len(se.Endpoints) > 0 {
-		if vs.Http[0].Rewrite == nil {
-			vs.Http[0].Rewrite = &v1alpha3.HTTPRewrite{
-				Authority: se.Endpoints[0].Address,
+		for _, httpRoute := range vs.Http {
+			if httpRoute.Rewrite == nil {
+				httpRoute.Rewrite = &v1alpha3.HTTPRewrite{
+					Authority: se.Endpoints[0].Address,
+				}
+			} else {
+				httpRoute.Rewrite.Authority = se.Endpoints[0].Address
 			}
-		} else {
-			vs.Http[0].Rewrite.Authority = se.Endpoints[0].Address
 		}
 	}
 
@@ -623,7 +670,11 @@ func (w *watcher) buildMcpServerForMcpServer(vs *v1alpha3.VirtualService, dataId
 	}
 	if mcpServerRewriteProtocols[protocol] {
 		mcpServer.EnablePathRewrite = true
-		mcpServer.PathRewritePrefix = "/"
+		if exportPath := getExportPath(server); exportPath != "" {
+			mcpServer.PathRewritePrefix = exportPath
+		} else {
+			mcpServer.PathRewritePrefix = "/"
+		}
 	}
 
 	mcpServerLog.Debugf("construct mcpserver %v", mcpServer)
