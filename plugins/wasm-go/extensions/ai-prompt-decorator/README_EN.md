@@ -144,7 +144,7 @@ If you need to include user geographic location information before and after the
 
 Example configuration for the geo-ip plugin:
 ```yaml
-ipProtocal: "ipv4"
+ipProtocol: "ipv4"
 ```
 
 An example configuration for the AI Prompt Decorator plugin is as follows:
