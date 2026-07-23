@@ -718,24 +718,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	c.capabilities = make(map[string]string)
 	for capability, pathJson := range json.Get("capabilities").Map() {
 		// 过滤掉不受支持的能力
-		switch capability {
-		case string(ApiNameChatCompletion),
-			string(ApiNameEmbeddings),
-			string(ApiNameImageGeneration),
-			string(ApiNameImageVariation),
-			string(ApiNameImageEdit),
-			string(ApiNameAudioSpeech),
-			string(ApiNameAudioTranscription),
-			string(ApiNameAudioTranslation),
-			string(ApiNameRealtime),
-			string(ApiNameResponses),
-			string(ApiNameCohereV1Rerank),
-			string(ApiNameVideos),
-			string(ApiNameRetrieveVideo),
-			string(ApiNameKlingImageToVideo),
-			string(ApiNameKlingRetrieveImageVideo),
-			string(ApiNameRetrieveVideoContent),
-			string(ApiNameVideoRemix):
+		if isConfigurableCapability(capability) {
 			c.capabilities[capability] = pathJson.String()
 		}
 	}
@@ -1176,6 +1159,57 @@ func (c *ProviderConfig) isSupportedAPI(apiName ApiName) bool {
 
 func (c *ProviderConfig) IsSupportedAPI(apiName ApiName) bool {
 	return c.isSupportedAPI(apiName)
+}
+
+func isConfigurableCapability(capability string) bool {
+	switch ApiName(capability) {
+	case ApiNameCompletion,
+		ApiNameChatCompletion,
+		ApiNameEmbeddings,
+		ApiNameImageGeneration,
+		ApiNameImageVariation,
+		ApiNameImageEdit,
+		ApiNameAudioSpeech,
+		ApiNameAudioTranscription,
+		ApiNameAudioTranslation,
+		ApiNameRealtime,
+		ApiNameModels,
+		ApiNameFiles,
+		ApiNameRetrieveFile,
+		ApiNameRetrieveFileContent,
+		ApiNameBatches,
+		ApiNameRetrieveBatch,
+		ApiNameCancelBatch,
+		ApiNameResponses,
+		ApiNameFineTuningJobs,
+		ApiNameRetrieveFineTuningJob,
+		ApiNameFineTuningJobEvents,
+		ApiNameFineTuningJobCheckpoints,
+		ApiNameCancelFineTuningJob,
+		ApiNameResumeFineTuningJob,
+		ApiNamePauseFineTuningJob,
+		ApiNameFineTuningCheckpointPermissions,
+		ApiNameDeleteFineTuningCheckpointPermission,
+		ApiNameVideos,
+		ApiNameRetrieveVideo,
+		ApiNameVideoRemix,
+		ApiNameRetrieveVideoContent,
+		ApiNameKlingImageToVideo,
+		ApiNameKlingRetrieveImageVideo,
+		ApiNameCohereV1Rerank,
+		ApiNameQwenAsyncAIGC,
+		ApiNameQwenAsyncTask,
+		ApiNameQwenV1Rerank,
+		ApiNameQwenV1Conversations,
+		ApiNameGeminiGenerateContent,
+		ApiNameGeminiStreamGenerateContent,
+		ApiNameAnthropicMessages,
+		ApiNameAnthropicCountTokens,
+		ApiNameAnthropicComplete,
+		ApiNameVertexRaw:
+		return true
+	}
+	return false
 }
 
 func (c *ProviderConfig) setDefaultCapabilities(capabilities map[string]string) {
