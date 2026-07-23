@@ -35,7 +35,7 @@ import (
 )
 
 type mockWatcher struct {
-	watcher
+	*watcher
 	mock.Mock
 }
 
@@ -59,7 +59,7 @@ func newTestWatcher(cache memory.Cache, opts ...WatcherOption) mockWatcher {
 		w.NacosNamespace = w.NacosNamespaceId
 	}
 
-	return mockWatcher{watcher: *w, Mock: mock.Mock{}}
+	return mockWatcher{watcher: w, Mock: mock.Mock{}}
 }
 
 func testCallback(msc *McpServerConfig) memory.Cache {

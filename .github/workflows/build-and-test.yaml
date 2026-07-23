@@ -13,12 +13,13 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-    # There are too many lint errors in current code bases
-    # uncomment when we decide what lint should be addressed or ignored.
-    # - run: make lint
+      - name: Run Go vet
+        run: GOPROXY="https://proxy.golang.org,direct" make lint.vet
 
   coverage-test:
     runs-on: ubuntu-22.04
