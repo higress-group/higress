@@ -26,8 +26,8 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/tidwall/sjson"
 
-	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
+	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
@@ -248,6 +248,35 @@ func executeTemplate(tmpl *template.Template, data []byte) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+func buildRequestTemplateData(serverConfig, arguments map[string]interface{}, requestHeaders [][2]string, includeAuthorization bool) ([]byte, error) {
+	var (
+		templateDataBytes []byte
+		err               error
+	)
+	templateDataBytes, err = sjson.SetBytes(templateDataBytes, "config", serverConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add server config to template data: %w", err)
+	}
+	templateDataBytes, err = sjson.SetBytes(templateDataBytes, "args", arguments)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add arguments to template data: %w", err)
+	}
+
+	headerMap := make(map[string]string, len(requestHeaders))
+	for _, header := range requestHeaders {
+		headerName := strings.ToLower(header[0])
+		if headerName == "authorization" && !includeAuthorization {
+			continue
+		}
+		headerMap[headerName] = header[1]
+	}
+	templateDataBytes, err = sjson.SetBytes(templateDataBytes, "headers", headerMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add request headers to template data: %w", err)
+	}
+	return templateDataBytes, nil
 }
 
 // RestMCPServer implements Server interface for REST-to-MCP conversion
@@ -566,12 +595,18 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 		}
 	}
 
-	var templateDataBytes []byte
 	// Get server config for template data if needed (but don't use for default security)
 	var serverConfig map[string]interface{}
 	restServer.GetConfig(&serverConfig)
-	templateDataBytes, _ = sjson.SetBytes(templateDataBytes, "config", serverConfig)
-	templateDataBytes, _ = sjson.SetBytes(templateDataBytes, "args", t.arguments)
+	requestHeaders, err := proxywasm.GetHttpRequestHeaders()
+	if err != nil {
+		log.Warnf("Failed to get request headers for tool %s template data: %v", t.name, err)
+	}
+	includeAuthorization := restServer.GetPassthroughAuthHeader()
+	templateDataBytes, err := buildRequestTemplateData(serverConfig, t.arguments, requestHeaders, includeAuthorization)
+	if err != nil {
+		return err
+	}
 
 	// Check if this is a direct response tool (no HTTP request needed)
 	if t.toolConfig.isDirectResponseTool {
