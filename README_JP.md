@@ -6,8 +6,8 @@
 </h1>
 <h4 align="center"> AIネイティブAPIゲートウェイ </h4>
 
-[![Build Status](https://github.com/alibaba/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/alibaba/higress/actions)
-[![license](https://img.shields.io/github/license/alibaba/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
+[![Build Status](https://github.com/higress-group/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/higress-group/higress/actions)
+[![license](https://img.shields.io/github/license/higress-group/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
 [![CNCF Sandbox](https://img.shields.io/badge/CNCF-Sandbox-30638E?logo=linuxfoundation&logoColor=white)](https://www.cncf.io/projects/)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12667/badge)](https://www.bestpractices.dev/projects/12667)
 
@@ -30,15 +30,19 @@ Higressは、IstioとEnvoyをベースにしたクラウドネイティブAPIゲ
 
 ### 主な使用シナリオ
 
-HigressのAIゲートウェイ機能は、国内外のすべての[主要モデルプロバイダー](https://github.com/alibaba/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider)をサポートし、vllm/ollamaなどに基づく自己構築DeepSeekモデルにも対応しています。また、プラグインメカニズムを通じてMCP（Model Context Protocol）サーバーをホストすることもでき、AI Agentが様々なツールやサービスを簡単に呼び出せるようにします。[openapi-to-mcpツール](https://github.com/higress-group/openapi-to-mcpserver)を使用すると、OpenAPI仕様を迅速にリモートMCPサーバーに変換してホスティングできます。HigressはLLM APIとMCP APIの統一管理を提供します。
+HigressのAIゲートウェイ機能は、国内外のすべての[主要モデルプロバイダー](https://github.com/higress-group/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider)をサポートし、vllm/ollamaなどに基づく自己構築DeepSeekモデルにも対応しています。また、プラグインメカニズムを通じてMCP（Model Context Protocol）サーバーをホストすることもでき、AI Agentが様々なツールやサービスを簡単に呼び出せるようにします。[openapi-to-mcpツール](https://github.com/higress-group/openapi-to-mcpserver)を使用すると、OpenAPI仕様を迅速にリモートMCPサーバーに変換してホスティングできます。HigressはLLM APIとMCP APIの統一管理を提供します。
 
 **🌟 今すぐ[https://mcp.higress.ai/](https://mcp.higress.ai/)で体験**してください。HigressがホストするリモートMCPサーバーを直接体験できます:
 
 ![Higress MCP Server Platform](https://img.alicdn.com/imgextra/i2/O1CN01nmVa0a1aChgpyyWOX_!!6000000003294-0-tps-3430-1742.jpg)
 
-### 企業での採用
+### 本番環境での採用
 
-Higressは、Tengineのリロードが長時間接続のビジネスに影響を与える問題や、gRPC/Dubboの負荷分散能力の不足を解決するために、Alibaba内部で誕生しました。Alibaba Cloud内では、HigressのAIゲートウェイ機能がTongyi Qianwen APP、Tongyi Bailian Model Studio、機械学習PAIプラットフォームなどの中核的なAIアプリケーションをサポートしています。また、国内の主要なAIGC企業（例：ZeroOne）やAI製品（例：FastGPT）にもサービスを提供しています。Alibaba Cloudは、Higressを基盤にクラウドネイティブAPIゲートウェイ製品を構築し、多くの企業顧客に99.99％のゲートウェイ高可用性保証サービスを提供しています。
+Higressは、ゲートウェイのリロードによる長時間接続への影響と
+gRPC/Dubboの負荷分散上の課題を解決するため、Alibabaで誕生しました。
+現在はベンダーニュートラルなCNCFプロジェクトとしてコミュニティにより
+開発され、複数業界の組織で利用されています。公開されている採用組織と
+ユースケースは[`ADOPTERS.md`](./ADOPTERS.md)を参照してください。
 
 
 ## 目次
@@ -232,13 +236,13 @@ WeChat公式アカウント：
 
 ### 貢献者
 
-<a href="https://github.com/alibaba/higress/graphs/contributors">
-  <img alt="contributors" src="https://contrib.rocks/image?repo=alibaba/higress"/>
+<a href="https://github.com/higress-group/higress/graphs/contributors">
+  <img alt="contributors" src="https://contrib.rocks/image?repo=higress-group/higress"/>
 </a>
 
 ### スターの歴史
 
-[![スターの歴史チャート](https://api.star-history.com/svg?repos=alibaba/higress&type=Date)](https://star-history.com/#alibaba/higress&Date)
+[![スターの歴史チャート](https://api.star-history.com/svg?repos=higress-group/higress&type=Date)](https://star-history.com/#higress-group/higress&Date)
 
 ---
 
