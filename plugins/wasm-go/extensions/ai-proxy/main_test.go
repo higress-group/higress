@@ -330,6 +330,7 @@ func TestVertex(t *testing.T) {
 	test.RunVertexExpressModeOnStreamingResponseBodyTests(t)
 	test.RunVertexOpenAICompatibleModeOnHttpRequestHeadersTests(t)
 	test.RunVertexOpenAICompatibleModeOnHttpRequestBodyTests(t)
+	test.RunVertexOpenAICompatibleModeOnHttpResponseBodyTests(t)
 	test.RunVertexExpressModeImageGenerationRequestBodyTests(t)
 	test.RunVertexExpressModeImageGenerationResponseBodyTests(t)
 	test.RunVertexExpressModeImageEditVariationRequestBodyTests(t)
