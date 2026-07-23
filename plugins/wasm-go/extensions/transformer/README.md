@@ -61,6 +61,7 @@ description: 请求响应转换插件配置参考
 * 当转换对象为 headers 时，` key` 不区分大小写；当为 headers 且为 `rename`, `map` 操作时，`value` 也不区分大小写（因为此时该字段具有 key 含义）；而 querys 和 body 的 `key`, `value` 字段均区分大小写
 * `value_type` 仅对 content-type 为 application/json 的请求/响应体有效
 * `host_pattern` 和 `path_pathern` 支持 [RE2 语法](https://pkg.go.dev/regexp/syntax)，仅对 `replace`, `add`, `append` 操作有效，且在一项转换规则中两者只能选填其一，若均填写，则 `host_pattern` 生效，而 `path_pattern` 失效
+* 当配置了 `host_pattern` 或 `path_pattern`，但当前请求的主机名或路径不匹配该正则时，对应的转换项将被跳过（不执行）。借助这一点，可以为同一个 `key` 配置多条带有不同匹配规则的转换项，使其在不同的主机名/路径下生效不同的值
 
 
 
