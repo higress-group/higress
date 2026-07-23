@@ -67,6 +67,41 @@ local-build:
 	@echo ""
 	@echo "wasm: extensions/${PLUGIN_NAME}/main.wasm"
 
+# local-build-tinygo: Build with TinyGo toolchain (default, backward compatible)
+local-build-tinygo:
+	cd extensions/${PLUGIN_NAME}; \
+	if [ -f prepare.sh ]; then sh ./prepare.sh; fi; \
+	tinygo build -o ./main.wasm -scheduler=none -target=wasi .
+
+	@echo ""
+	@echo "wasm (TinyGo): extensions/${PLUGIN_NAME}/main.wasm"
+
+# local-build-go-native: Build with Go 1.24+ native Wasm (wasip1)
+local-build-go-native:
+	cd extensions/${PLUGIN_NAME}; \
+	if [ -f prepare.sh ]; then sh ./prepare.sh; fi; \
+	GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -ldflags="-s -w" -o ./main.wasm .
+
+	@echo ""
+	@echo "wasm (Go Native): extensions/${PLUGIN_NAME}/main.wasm"
+
+# local-build-auto: Auto-detect toolchain and build
+# If TINYGO=true, use TinyGo; if GO_NATIVE=true, use Go native; otherwise auto-detect
+local-build-auto:
+	@if [ "$(TINYGO)" = "true" ]; then \
+		echo "Building with TinyGo (TINYGO=true)..."; \
+		$(MAKE) local-build-tinygo PLUGIN_NAME=${PLUGIN_NAME}; \
+	elif [ "$(GO_NATIVE)" = "true" ]; then \
+		echo "Building with Go native Wasm (GO_NATIVE=true)..."; \
+		$(MAKE) local-build-go-native PLUGIN_NAME=${PLUGIN_NAME}; \
+	elif command -v tinygo >/dev/null 2>&1 && [ -f extensions/${PLUGIN_NAME}/go.mod ]; then \
+		echo "TinyGo detected, building with TinyGo..."; \
+		$(MAKE) local-build-tinygo PLUGIN_NAME=${PLUGIN_NAME}; \
+	else \
+		echo "Building with Go native Wasm..."; \
+		$(MAKE) local-build-go-native PLUGIN_NAME=${PLUGIN_NAME}; \
+	fi
+
 local-run:
 	python3 .devcontainer/gen_config.py ${PLUGIN_NAME}
 	envoy -c extensions/${PLUGIN_NAME}/config.yaml --concurrency 0 --log-level info --component-log-level wasm:debug

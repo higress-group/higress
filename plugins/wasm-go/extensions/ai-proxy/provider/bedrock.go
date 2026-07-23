@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -108,14 +109,34 @@ func (b *bedrockProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name 
 		if isLastChunk {
 			return []byte(ssePrefix + "[DONE]\n\n"), nil
 		}
-		return chunk, fmt.Errorf("No events are extracted ")
+		// Incomplete frame: return empty to wait for more data; do NOT
+		// return raw binary which would leak Amazon EventStream bytes to SSE clients.
+		return nil, nil
 	}
 	var responseBuilder strings.Builder
 	for _, event := range events {
+		// Check for modeled stream exceptions via :message-type / :exception-type headers.
+		// These represent throttling, service-unavailable, validation, or internal errors
+		// from the Bedrock ConverseStream contract and must NOT be silently converted to
+		// a successful delta followed by [DONE].
+		if event.StreamException != nil {
+			log.Errorf("[onStreamingResponseBody] stream exception: type=%s message=%s",
+				event.StreamException.Type, event.StreamException.Message)
+			// Emit an error event and stop — do NOT append [DONE] after an exception.
+			errChunk := b.buildStreamErrorChunk(ctx, event.StreamException.Type, event.StreamException.Message)
+			responseBuilder.WriteString(string(errChunk))
+			return []byte(responseBuilder.String()), nil
+		}
+		// Handle content_filtered stop reason as a warning, not an error — the stream
+		// may still contain valid content up to this point.
+		if event.StopReason != nil && *event.StopReason == "content_filtered" {
+			log.Warnf("[onStreamingResponseBody] stream stopped due to content filtering")
+		}
 		outputEvent, err := b.convertEventFromBedrockToOpenAI(ctx, event)
 		if err != nil {
 			log.Errorf("[onStreamingResponseBody] failed to process streaming event: %v\n%s", err, chunk)
-			return chunk, err
+			// Continue processing remaining events instead of aborting entirely
+			continue
 		}
 		responseBuilder.WriteString(string(outputEvent))
 	}
@@ -123,6 +144,36 @@ func (b *bedrockProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name 
 		responseBuilder.WriteString(ssePrefix + "[DONE]\n\n")
 	}
 	return []byte(responseBuilder.String()), nil
+}
+
+// buildStreamErrorChunk creates an SSE error chunk from a Bedrock stream exception.
+// Unlike normal events, stream exceptions must NOT be followed by [DONE] because
+// they represent an abnormal termination of the stream.
+func (b *bedrockProvider) buildStreamErrorChunk(ctx wrapper.HttpContext, excType, excMessage string) []byte {
+	requestId := ctx.GetStringContext(requestIdHeader, "")
+	model := ctx.GetStringContext(ctxKeyFinalRequestModel, "")
+	// Build a minimal OpenAI-compatible error response as JSON
+	errObj := map[string]interface{}{
+		"id":      requestId,
+		"created": time.Now().UnixMilli() / 1000,
+		"model":   model,
+		"object":  objectChatCompletion,
+		"choices": []map[string]interface{}{{
+			"index":         0,
+			"delta":         map[string]interface{}{},
+			"finish_reason": "error",
+		}},
+		"error": map[string]string{
+			"type":    excType,
+			"message": excMessage,
+		},
+	}
+	errBytes, _ := json.Marshal(errObj)
+	var sb strings.Builder
+	sb.WriteString(ssePrefix)
+	sb.WriteString(string(errBytes))
+	sb.WriteString("\n\n")
+	return []byte(sb.String())
 }
 
 func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContext, bedrockEvent ConverseStreamEvent) ([]byte, error) {
@@ -248,6 +299,16 @@ type ConverseStreamEvent struct {
 	Usage             *tokenUsage                           `json:"usage,omitempty"`
 	Start             *contentBlockStart                    `json:"start,omitempty"`
 	ContentBlockStop  *contentBlockStop                     `json:"contentBlockStop,omitempty"`
+	StreamException   *bedrockStreamException               `json:"streamException,omitempty"`
+}
+
+// bedrockStreamException represents a modeled exception from the Bedrock
+// ConverseStream response contract (e.g., ThrottlingException,
+// ServiceUnavailableException, ModelStreamErrorException,
+// ValidationException, InternalServerErrorException).
+type bedrockStreamException struct {
+	Type    string `json:"type,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type contentBlockStop struct {
@@ -355,21 +416,40 @@ func extractAmazonEventStreamEvents(ctx wrapper.HttpContext, chunk []byte) []Con
 
 	r := bytes.NewReader(body)
 	var events []ConverseStreamEvent
-	var lastRead int64 = 0
-	messageBuffer := make([]byte, 1024)
-	defer func() {
-		log.Infof("extractAmazonEventStreamEvents: lastRead=%d, r.Size=%d", lastRead, r.Size())
-	}()
+	var committedPos int64 = 0
 
 	for {
-		msg, err := decodeMessage(r, messageBuffer)
+		msg, err := decodeMessage(r, make([]byte, 1024))
 		if err != nil {
 			if err == io.EOF {
+				// Incomplete frame: buffer remaining data for next chunk
 				break
 			}
-			log.Errorf("failed to decode message: %v", err)
+			// Per Amazon Event Stream specification, checksum failure terminates the stream.
+			// Do not attempt byte-by-byte resynchronization — it risks data corruption,
+			// replay, and quadratic CPU behavior on malformed input.
+			log.Errorf("failed to decode event stream message (pos %d): %v", committedPos, err)
 			break
 		}
+
+		// Check for modeled exceptions via :message-type header.
+		// Bedrock ConverseStream sends exception frames with :message-type=exception
+		// for throttling, service-unavailable, validation, and internal errors.
+		if messageType, ok := amazonMessageHeader(msg.Headers, ":message-type"); ok && messageType == "exception" {
+			excType, _ := amazonMessageHeader(msg.Headers, ":exception-type")
+			// The payload may contain a JSON body with a "message" field; try to extract it.
+			excMessage := extractExceptionMessage(msg.Payload)
+			events = append(events, ConverseStreamEvent{
+				StreamException: &bedrockStreamException{
+					Type:    excType,
+					Message: excMessage,
+				},
+			})
+			committedPos = r.Size() - int64(r.Len())
+			// An exception terminates the stream per the EventStream spec.
+			break
+		}
+
 		var event ConverseStreamEvent
 		if err = json.Unmarshal(msg.Payload, &event); err == nil {
 			if eventType, ok := amazonEventType(msg.Headers); ok && eventType == "contentBlockStop" {
@@ -377,14 +457,39 @@ func extractAmazonEventStreamEvents(ctx wrapper.HttpContext, chunk []byte) []Con
 			}
 			events = append(events, event)
 		}
-		lastRead = r.Size() - int64(r.Len())
+		committedPos = r.Size() - int64(r.Len())
 	}
-	if lastRead < int64(len(body)) {
-		ctx.SetContext(ctxKeyStreamingBody, body[lastRead:])
+
+	// Buffer uncommitted data for the next chunk (handles fragmented frames)
+	if committedPos < int64(len(body)) {
+		ctx.SetContext(ctxKeyStreamingBody, body[committedPos:])
 	} else {
 		ctx.SetContext(ctxKeyStreamingBody, nil)
 	}
 	return events
+}
+
+// amazonMessageHeader returns the value of a specific Amazon EventStream header by name.
+func amazonMessageHeader(hs headers, name string) (string, bool) {
+	for _, h := range hs {
+		if h.Name == name {
+			if val, ok := h.Value.Get().(string); ok {
+				return val, true
+			}
+		}
+	}
+	return "", false
+}
+
+// extractExceptionMessage attempts to extract the "message" field from an exception payload.
+func extractExceptionMessage(payload []byte) string {
+	var obj map[string]interface{}
+	if json.Unmarshal(payload, &obj) == nil {
+		if msg, ok := obj["message"].(string); ok {
+			return msg
+		}
+	}
+	return string(payload)
 }
 
 func amazonEventType(headers headers) (string, bool) {
@@ -1376,8 +1481,19 @@ type toolResultBlock struct {
 }
 
 type toolResultContentBlock struct {
-	Text  *string     `json:"text,omitempty"`
-	Image *imageBlock `json:"image,omitempty"`
+	Text     *string          `json:"text,omitempty"`
+	Image    *imageBlock      `json:"image,omitempty"`
+	Document *documentBlock   `json:"document,omitempty"`
+}
+
+type documentBlock struct {
+	Format string      `json:"format"`
+	Name   string      `json:"name"`
+	Source sourceBlock `json:"source"`
+}
+
+type sourceBlock struct {
+	Bytes string `json:"bytes,omitempty"`
 }
 
 type toolUseBlock struct {
@@ -1450,6 +1566,10 @@ type tokenUsage struct {
 func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMessageContent {
 	toolResultContent := &toolResultBlock{}
 	toolResultContent.ToolUseId = chatMessage.ToolCallId
+	// Set error status if the tool call result indicates an error
+	if chatMessage.IsToolResultError {
+		toolResultContent.Status = "error"
+	}
 	if text, ok := chatMessage.Content.(string); ok {
 		toolResultContent.Content = []toolResultContentBlock{
 			{
@@ -1459,10 +1579,39 @@ func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMe
 	} else if contentList, ok := chatMessage.Content.([]any); ok {
 		for _, contentItem := range contentList {
 			contentMap, ok := contentItem.(map[string]any)
-			if ok && contentMap["type"] == contentTypeText {
+			if !ok {
+				continue
+			}
+			contentType, _ := contentMap["type"].(string)
+			switch contentType {
+			case contentTypeText:
 				if text, ok := contentMap[contentTypeText].(string); ok {
 					toolResultContent.Content = append(toolResultContent.Content, toolResultContentBlock{
 						Text: util.Ptr(text),
+					})
+				}
+			case contentTypeImageUrl:
+				if imageUrl, ok := contentMap["image_url"].(map[string]any); ok {
+					if urlStr, ok := imageUrl["url"].(string); ok {
+						prefix, imageType, err := extractImageType(urlStr)
+						if err != nil {
+							log.Warnf("failed to extract image type from tool result: %v", err)
+							continue
+						}
+						base64WoPrefix, _ := strings.CutPrefix(urlStr, prefix)
+						toolResultContent.Content = append(toolResultContent.Content, toolResultContentBlock{
+							Image: &imageBlock{
+								Format: imageType,
+								Source: imageSource{Bytes: base64WoPrefix},
+							},
+						})
+					}
+				}
+			case contentTypeDocument:
+				docBlock := buildDocumentBlockFromContent(contentMap)
+				if docBlock != nil {
+					toolResultContent.Content = append(toolResultContent.Content, toolResultContentBlock{
+						Document: docBlock,
 					})
 				}
 			}
@@ -1472,6 +1621,22 @@ func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMe
 	}
 	return bedrockMessageContent{
 		ToolResult: toolResultContent,
+	}
+}
+
+// buildDocumentBlockFromContent creates a Bedrock document block from OpenAI-compatible content map
+func buildDocumentBlockFromContent(contentMap map[string]any) *documentBlock {
+	format, _ := contentMap["format"].(string)
+	name, _ := contentMap["name"].(string)
+	source, _ := contentMap["source"].(map[string]any)
+	if format == "" || name == "" || source == nil {
+		return nil
+	}
+	bytes, _ := source["bytes"].(string)
+	return &documentBlock{
+		Format: format,
+		Name:   name,
+		Source: sourceBlock{Bytes: bytes},
 	}
 }
 
@@ -1628,12 +1793,46 @@ func claudeToolResultBlockToBedrock(block claudeChatMessageContent) *toolResultB
 					Source: imageSource{Bytes: item.Source.Data},
 				}})
 			}
+		case "document":
+			docBlock := claudeDocumentBlockToBedrock(item)
+			if docBlock != nil {
+				result.Content = append(result.Content, toolResultContentBlock{Document: docBlock})
+			}
 		}
 	}
 	if len(result.Content) == 0 {
 		result.Content = []toolResultContentBlock{{Text: util.Ptr("")}}
 	}
 	return result
+}
+
+// claudeDocumentBlockToBedrock converts a Claude document content block to a Bedrock document block.
+// Claude document blocks have: type="document", source.type="base64", source.media_type, source.data,
+// and optionally a "title" field used as the document name.
+func claudeDocumentBlockToBedrock(item claudeChatMessageContent) *documentBlock {
+	if item.Source == nil || item.Source.Type != "base64" {
+		return nil
+	}
+	format := ""
+	if item.Source.MediaType != "" {
+		// e.g. "application/pdf" -> "pdf"
+		parts := strings.Split(item.Source.MediaType, "/")
+		if len(parts) >= 2 {
+			format = parts[len(parts)-1]
+		}
+	}
+	if format == "" {
+		return nil
+	}
+	name := item.Name
+	if name == "" {
+		name = "document"
+	}
+	return &documentBlock{
+		Format: format,
+		Name:   name,
+		Source: sourceBlock{Bytes: item.Source.Data},
+	}
 }
 
 func (b *bedrockProvider) setAuthHeaders(apiName ApiName, body []byte, headers http.Header) {
@@ -1651,25 +1850,40 @@ func (b *bedrockProvider) setAuthHeaders(apiName ApiName, body []byte, headers h
 	dateStamp := t.Format("20060102")
 	path := headers.Get(":path")
 	service := bedrockAWSService(apiName)
-	signature := b.generateSignatureWithService(path, amzDate, dateStamp, body, service)
+	signature, signedHeaders := b.generateSignatureWithService(path, amzDate, dateStamp, body, service)
 	headers.Set("X-Amz-Date", amzDate)
-	util.OverwriteRequestAuthorizationHeader(headers, fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s/%s/%s/aws4_request, SignedHeaders=%s, Signature=%s", accessKey, dateStamp, region, service, bedrockSignedHeaders, signature))
+	util.OverwriteRequestAuthorizationHeader(headers, fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s/%s/%s/aws4_request, SignedHeaders=%s, Signature=%s", accessKey, dateStamp, region, service, signedHeaders, signature))
+
+	// Set AWS STS Session Token if available (for assumed roles / temporary credentials)
+	if len(b.config.awsSessionToken) > 0 {
+		headers.Set("X-Amz-Security-Token", b.config.awsSessionToken)
+	}
 }
 
 func (b *bedrockProvider) generateSignature(path, amzDate, dateStamp string, body []byte) string {
-	return b.generateSignatureWithService(path, amzDate, dateStamp, body, awsServiceBedrock)
+	sig, _ := b.generateSignatureWithService(path, amzDate, dateStamp, body, awsServiceBedrock)
+	return sig
 }
 
-func (b *bedrockProvider) generateSignatureWithService(path, amzDate, dateStamp string, body []byte, service string) string {
+func (b *bedrockProvider) generateSignatureWithService(path, amzDate, dateStamp string, body []byte, service string) (string, string) {
 	canonicalURI := encodeSigV4Path(path)
+	canonicalQueryString := extractCanonicalQueryString(path)
 	hashedPayload := sha256Hex(body)
 	region := strings.TrimSpace(b.config.awsRegion)
 	secretKey := strings.TrimSpace(b.config.awsSecretKey)
 
 	endpoint := bedrockAWSEndpoint(service, region)
+	signedHeaders := bedrockSignedHeaders
 	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-date:%s\n", endpoint, amzDate)
-	canonicalRequest := fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s",
-		httpPostMethod, canonicalURI, canonicalHeaders, bedrockSignedHeaders, hashedPayload)
+
+	// Include x-amz-security-token in signed headers if session token is present
+	if len(b.config.awsSessionToken) > 0 {
+		signedHeaders = "host;x-amz-date;x-amz-security-token"
+		canonicalHeaders = fmt.Sprintf("host:%s\nx-amz-date:%s\nx-amz-security-token:%s\n", endpoint, amzDate, b.config.awsSessionToken)
+	}
+
+	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s",
+		httpPostMethod, canonicalURI, canonicalQueryString, canonicalHeaders, signedHeaders, hashedPayload)
 
 	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStamp, region, service)
 	hashedCanonReq := sha256Hex([]byte(canonicalRequest))
@@ -1678,7 +1892,38 @@ func (b *bedrockProvider) generateSignatureWithService(path, amzDate, dateStamp 
 
 	signingKey := getSignatureKey(secretKey, dateStamp, region, service)
 	signature := hmacHex(signingKey, stringToSign)
-	return signature
+	return signature, signedHeaders
+}
+
+// extractCanonicalQueryString extracts and sorts query parameters from the path
+// for SigV4 signing. Per AWS SigV4, each name and value must be URI-encoded
+// independently, and sorting occurs after encoding. Spaces are encoded as %20
+// (not +), and empty values are represented as "key=" (with trailing =).
+func extractCanonicalQueryString(path string) string {
+	queryIndex := strings.Index(path, "?")
+	if queryIndex < 0 {
+		return ""
+	}
+	queryString := path[queryIndex+1:]
+	if queryString == "" {
+		return ""
+	}
+	params := strings.Split(queryString, "&")
+	encoded := make([]string, 0, len(params))
+	for _, param := range params {
+		if param == "" {
+			continue
+		}
+		key, value, hasValue := strings.Cut(param, "=")
+		encodedKey := url.QueryEscape(key)
+		if hasValue {
+			encoded = append(encoded, encodedKey+"="+url.QueryEscape(value))
+		} else {
+			encoded = append(encoded, encodedKey+"=")
+		}
+	}
+	sort.Strings(encoded)
+	return strings.Join(encoded, "&")
 }
 
 func bedrockAWSService(apiName ApiName) string {
