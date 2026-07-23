@@ -15,8 +15,7 @@
 package istio
 
 import (
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gateway "sigs.k8s.io/gateway-api/apis/v1beta1"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 
 	"istio.io/istio/pkg/kube/krt"
 )
@@ -53,7 +52,7 @@ func GatewayClassesCollection(
 	}, opts.WithName("GatewayClasses")...)
 }
 
-func fetchClass(ctx krt.HandlerContext, gatewayClasses krt.Collection[GatewayClass], gc gatewayv1.ObjectName) *GatewayClass {
+func fetchClass(ctx krt.HandlerContext, gatewayClasses krt.Collection[GatewayClass], gc gateway.ObjectName) *GatewayClass {
 	class := krt.FetchOne(ctx, gatewayClasses, krt.FilterKey(string(gc)))
 	if class == nil {
 		if bc, f := builtinClasses[gc]; f {

@@ -18,4 +18,16 @@ import (
 	"sigs.k8s.io/gateway-api/pkg/features"
 )
 
-var SupportedFeatures = features.AllFeatures
+// Keep this list aligned with upstream Istio. These v1.6 features are present
+// in the SDK but are not implemented by the current data plane translation.
+var skippedExtendedFeatures = []features.Feature{
+	features.GatewayBackendClientCertificateFeature,
+	features.GatewayFrontendClientCertificateValidationFeature,
+	features.GatewayFrontendClientCertificateValidationInsecureFallbackFeature,
+	features.GatewayHTTPSListenerDetectMisdirectedRequestsFeature,
+	features.TLSRouteModeTerminateFeature,
+	features.TLSRouteModeMixedFeature,
+	features.UDPRouteFeature,
+}
+
+var SupportedFeatures = features.AllFeatures.Clone().Delete(skippedExtendedFeatures...)

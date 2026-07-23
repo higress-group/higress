@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8s "sigs.k8s.io/gateway-api/apis/v1"
-	k8sbeta "sigs.k8s.io/gateway-api/apis/v1beta1"
 	"sigs.k8s.io/gateway-api/pkg/consts"
 	"sigs.k8s.io/yaml"
 
@@ -76,6 +75,36 @@ var ports = []*model.Port{
 		Port:     34001,
 		Protocol: "TCP",
 	},
+}
+
+func TestExtractManagedGatewayService(t *testing.T) {
+	previous := enableGatewayAPIDeploymentController
+	enableGatewayAPIDeploymentController = true
+	t.Cleanup(func() {
+		enableGatewayAPIDeploymentController = previous
+	})
+
+	gw := &k8s.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "gateways"},
+		Spec: k8s.GatewaySpec{
+			GatewayClassName: "higress",
+		},
+	}
+	services, useDefault, err := extractGatewayServices("cluster.local", gw, classInfo{})
+	if err != nil {
+		t.Fatalf("extractGatewayServices() error = %v", err)
+	}
+	if useDefault {
+		t.Fatal("managed Gateway unexpectedly selected the shared gateway service")
+	}
+	if got, want := services, []string{"example-higress.gateways.svc.cluster.local"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("extractGatewayServices() = %v, want %v", got, want)
+	}
+	if got, want := managedGatewaySelector(gw.Name, &gw.Spec), map[string]string{
+		"gateway.networking.k8s.io/gateway-name": "example",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("managedGatewaySelector() = %v, want %v", got, want)
+	}
 }
 
 var services = []*model.Service{
@@ -738,6 +767,12 @@ func TestConvertResources(t *testing.T) {
 			),
 		},
 		{name: "mix-backend-policy"},
+		{
+			name: "gateway-invalid-parameters-ref",
+			validationIgnorer: crdvalidation.NewValidationIgnorer(
+				"higress-system/^valid-parameters$",
+			),
+		},
 		//{name: "listenerset"},
 		//{name: "listenerset-cross-namespace"},
 		//{name: "listenerset-invalid"},
@@ -897,15 +932,15 @@ func TestReportGatewayStatusAddressType(t *testing.T) {
 			kc := kube.NewFakeClient(svc)
 			kc.RunAndWait(stop)
 			ctx := NewGatewayContext(nil, constants.DefaultClusterName, kc, "cluster.local")
-			gw := &k8sbeta.Gateway{
+			gw := &k8s.Gateway{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "higress-gateway",
 					Namespace:  "higress-system",
 					Generation: 1,
 				},
-				Spec: k8sbeta.GatewaySpec{
+				Spec: k8s.GatewaySpec{
 					GatewayClassName: "higress",
-					Listeners: []k8sbeta.Listener{
+					Listeners: []k8s.Listener{
 						{
 							Name:     "http",
 							Port:     80,
@@ -914,7 +949,7 @@ func TestReportGatewayStatusAddressType(t *testing.T) {
 					},
 				},
 			}
-			gs := &k8sbeta.GatewayStatus{}
+			gs := &k8s.GatewayStatus{}
 			servers := []*istio.Server{
 				{
 					Port: &istio.Port{
@@ -925,7 +960,7 @@ func TestReportGatewayStatusAddressType(t *testing.T) {
 				},
 			}
 
-			reportGatewayStatus(&ctx, gw, gs, []string{"higress-gateway.higress-system.svc.cluster.local"}, servers, 0, nil)
+			reportGatewayStatus(&ctx, gw, gs, []string{"higress-gateway.higress-system.svc.cluster.local"}, servers, 0, nil, 1)
 
 			if len(gs.Addresses) != len(tt.want) {
 				t.Fatalf("expected %d addresses, got %d: %#v", len(tt.want), len(gs.Addresses), gs.Addresses)
@@ -950,7 +985,7 @@ func setupClientCRDs(t *testing.T, kc kube.CLIClient) {
 	for _, crd := range []schema.GroupVersionResource{
 		gvr.KubernetesGateway,
 		gvr.ReferenceGrant,
-		gvr.XListenerSet,
+		gvr.ListenerSet,
 		gvr.GatewayClass,
 		gvr.HTTPRoute,
 		gvr.GRPCRoute,

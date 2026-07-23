@@ -1,0 +1,204 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{.ServiceAccount | quote}}
+  namespace: {{.Namespace | quote}}
+  labels:
+    gateway.networking.k8s.io/gateway-name: {{.Name | quote}}
+  ownerReferences:
+  - apiVersion: gateway.networking.k8s.io/v1
+    kind: Gateway
+    name: {{.Name | quote}}
+    uid: {{.UID | quote}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.DeploymentName | quote}}
+  namespace: {{.Namespace | quote}}
+  labels:
+    gateway.networking.k8s.io/gateway-name: {{.Name | quote}}
+    gateway.higress.io/managed: "true"
+  ownerReferences:
+  - apiVersion: gateway.networking.k8s.io/v1
+    kind: Gateway
+    name: {{.Name | quote}}
+    uid: {{.UID | quote}}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: {{.Name | quote}}
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /stats/prometheus
+        prometheus.io/port: "15020"
+        prometheus.io/scrape: "true"
+        sidecar.istio.io/inject: "false"
+      labels:
+        gateway.networking.k8s.io/gateway-name: {{.Name | quote}}
+        gateway.higress.io/managed: "true"
+        sidecar.istio.io/inject: "false"
+    spec:
+      serviceAccountName: {{.ServiceAccount | quote}}
+      securityContext:
+        sysctls:
+        - name: net.ipv4.ip_unprivileged_port_start
+          value: "0"
+      containers:
+      - name: higress-gateway
+        image: {{.Values.gatewayImage | quote}}
+        imagePullPolicy: {{.Values.imagePullPolicy | quote}}
+        args:
+        - proxy
+        - router
+        - --domain
+        - $(POD_NAMESPACE).svc.{{.Values.clusterDomain}}
+        - --proxyLogLevel=warning
+        - --proxyComponentLogLevel=misc:error
+        - --log_output_level=default:info
+        - --serviceCluster={{.DeploymentName}}
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: INSTANCE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: SERVICE_ACCOUNT
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.serviceAccountName
+        - name: PROXY_XDS_VIA_AGENT
+          value: "true"
+        - name: ENABLE_INGRESS_GATEWAY_SDS
+          value: "false"
+        - name: JWT_POLICY
+          value: third-party-jwt
+        - name: ISTIO_META_HTTP10
+          value: "1"
+        - name: ISTIO_META_CLUSTER_ID
+          value: {{.Values.clusterID | quote}}
+        - name: ISTIO_META_WORKLOAD_NAME
+          value: {{.DeploymentName | quote}}
+        - name: INSTANCE_NAME
+          value: {{.DeploymentName | quote}}
+        - name: ISTIO_DELTA_XDS
+          value: "true"
+        - name: CA_ADDR
+          value: {{.Values.discoveryAddress | quote}}
+        - name: PROXY_CONFIG
+          value: |
+            {"discoveryAddress":{{.Values.discoveryAddress | quote}}}
+        ports:
+        - containerPort: 15020
+          name: istio-prom
+        - containerPort: 15090
+          name: http-envoy-prom
+        readinessProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /healthz/ready
+            port: 15021
+          initialDelaySeconds: 1
+          periodSeconds: 2
+          timeoutSeconds: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+          runAsGroup: 1337
+          runAsNonRoot: true
+          runAsUser: 1337
+        volumeMounts:
+        - mountPath: /var/run/secrets/workload-spiffe-uds
+          name: workload-socket
+        - mountPath: /var/run/secrets/credential-uds
+          name: credential-socket
+        - mountPath: /var/run/secrets/workload-spiffe-credentials
+          name: workload-certs
+        - mountPath: /var/run/secrets/tokens
+          name: istio-token
+          readOnly: true
+        - mountPath: /var/run/secrets/istio
+          name: higress-ca-root-cert
+        - mountPath: /var/lib/istio/data
+          name: istio-data
+        - mountPath: /etc/istio/pod
+          name: podinfo
+        - mountPath: /etc/istio/proxy
+          name: proxy-socket
+      volumes:
+      - emptyDir: {}
+        name: workload-socket
+      - emptyDir: {}
+        name: credential-socket
+      - emptyDir: {}
+        name: workload-certs
+      - name: istio-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              audience: istio-ca
+              expirationSeconds: 43200
+              path: istio-token
+      - configMap:
+          name: higress-ca-root-cert
+        name: higress-ca-root-cert
+      - emptyDir: {}
+        name: istio-data
+      - emptyDir: {}
+        name: proxy-socket
+      - downwardAPI:
+          items:
+          - fieldRef:
+              fieldPath: metadata.labels
+            path: labels
+          - fieldRef:
+              fieldPath: metadata.annotations
+            path: annotations
+        name: podinfo
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{.DeploymentName | quote}}
+  namespace: {{.Namespace | quote}}
+  labels:
+    gateway.networking.k8s.io/gateway-name: {{.Name | quote}}
+    gateway.higress.io/managed: "true"
+  ownerReferences:
+  - apiVersion: gateway.networking.k8s.io/v1
+    kind: Gateway
+    name: {{.Name | quote}}
+    uid: {{.UID | quote}}
+spec:
+  ipFamilyPolicy: PreferDualStack
+  ports:
+  {{- range $port := .Ports }}
+  - name: {{$port.Name | quote}}
+    port: {{$port.Port}}
+    protocol: TCP
+    appProtocol: {{$port.AppProtocol}}
+  {{- end }}
+  selector:
+    gateway.networking.k8s.io/gateway-name: {{.Name | quote}}
+  type: {{.ServiceType | quote}}

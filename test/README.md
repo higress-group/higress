@@ -72,6 +72,6 @@ The test environment reusability is primarily achieved through the following tar
 
 ## Gateway APIs Conformance Tests
 
-Run `make gateway-conformance-test` to execute the upstream Gateway API v1.4.0 Conformance Suite. The default scope is the required `GATEWAY-HTTP` Core profile (`Gateway`, `HTTPRoute`, and `ReferenceGrant`); Extended features are not enabled.
+Run `make gateway-conformance-test` to execute the upstream Gateway API v1.6.0 Conformance Suite. The default scope covers the required `GATEWAY-HTTP`, `GATEWAY-TLS`, `GATEWAY-GRPC`, and `GATEWAY-TCP` Core profiles with `Gateway`, `HTTPRoute`, `TLSRoute`, `GRPCRoute`, `TCPRoute`, and `ReferenceGrant`; unsupported Extended features are not enabled.
 
 The runner imports the upstream suite and its embedded manifests directly, so Higress does not maintain copies of official test cases. Set `GATEWAY_CONFORMANCE_RUN_TEST=<ShortName>` only when debugging one upstream test. The default PR workflow always runs the complete Core profile and stores the generated report as a CI artifact.

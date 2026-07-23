@@ -60,7 +60,7 @@ func ReferenceGrantsCollection(referenceGrants krt.Collection[*gateway.Reference
 			}
 			ref := normalizeReference(&from.Group, &from.Kind, config.GroupVersionKind{})
 			switch ref {
-			case gvk.KubernetesGateway, gvk.HTTPRoute, gvk.GRPCRoute, gvk.TLSRoute, gvk.TCPRoute, gvk.XListenerSet:
+			case gvk.KubernetesGateway, gvk.HTTPRoute, gvk.GRPCRoute, gvk.TLSRoute, gvk.TCPRoute, gvk.ListenerSet:
 				fromKey.Kind = ref
 			default:
 				// Not supported type. Not an error; may be for another controller

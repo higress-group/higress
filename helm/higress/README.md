@@ -169,6 +169,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.enableAlphaGatewayAPI | bool | `false` | If true, Higress Controller will monitor Gateway API resources that have not reached v1 yet |
 | global.enableDeltaXDS | bool | `true` | Whether to enable Istio delta xDS, default is false. |
 | global.enableGatewayAPI | bool | `true` | If true, Higress Controller will monitor Gateway API resources as well |
+| global.enableGatewayAPIDeploymentController | bool | `false` | If true, provision an isolated Deployment and Service for each managed Gateway API Gateway. This is opt-in to preserve the default shared Higress gateway deployment model. |
 | global.enableH3 | bool | `false` |  |
 | global.enableIPv6 | bool | `false` |  |
 | global.enableInferenceExtension | bool | `false` | If true, enable Gateway API Inference Extension support |

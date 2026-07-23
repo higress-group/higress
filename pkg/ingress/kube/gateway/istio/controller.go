@@ -21,9 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	inferencev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gatewayalpha "sigs.k8s.io/gateway-api/apis/v1alpha2"
-	gateway "sigs.k8s.io/gateway-api/apis/v1beta1"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
+	gatewaybeta "sigs.k8s.io/gateway-api/apis/v1beta1"
 	gatewayx "sigs.k8s.io/gateway-api/apisx/v1alpha1"
 
 	networkingclient "istio.io/client-go/pkg/apis/networking/v1"
@@ -145,13 +144,13 @@ type Inputs struct {
 	GatewayClasses       krt.Collection[*gateway.GatewayClass]
 	Gateways             krt.Collection[*gateway.Gateway]
 	HTTPRoutes           krt.Collection[*gateway.HTTPRoute]
-	GRPCRoutes           krt.Collection[*gatewayv1.GRPCRoute]
-	TCPRoutes            krt.Collection[*gatewayalpha.TCPRoute]
-	TLSRoutes            krt.Collection[*gatewayalpha.TLSRoute]
-	ListenerSets         krt.Collection[*gatewayx.XListenerSet]
-	ReferenceGrants      krt.Collection[*gateway.ReferenceGrant]
+	GRPCRoutes           krt.Collection[*gateway.GRPCRoute]
+	TCPRoutes            krt.Collection[*gateway.TCPRoute]
+	TLSRoutes            krt.Collection[*gateway.TLSRoute]
+	ListenerSets         krt.Collection[*gateway.ListenerSet]
+	ReferenceGrants      krt.Collection[*gatewaybeta.ReferenceGrant]
 	BackendTrafficPolicy krt.Collection[*gatewayx.XBackendTrafficPolicy]
-	BackendTLSPolicies   krt.Collection[*gatewayv1.BackendTLSPolicy]
+	BackendTLSPolicies   krt.Collection[*gateway.BackendTLSPolicy]
 	ServiceEntries       krt.Collection[*networkingclient.ServiceEntry]
 	InferencePools       krt.Collection[*inferencev1.InferencePool]
 }
@@ -164,21 +163,34 @@ func NewController(
 	options controller.Options,
 	xdsUpdater model.XDSUpdater,
 ) *Controller {
+	return NewControllerWithDefaultGatewaySelector(kc, waitForCRD, options, xdsUpdater, nil)
+}
+
+// NewControllerWithDefaultGatewaySelector constructs a Gateway API controller whose generated
+// Istio Gateways bind to the supplied data-plane workload selector.
+func NewControllerWithDefaultGatewaySelector(
+	kc kube.Client,
+	waitForCRD func(class schema.GroupVersionResource, stop <-chan struct{}) bool,
+	options controller.Options,
+	xdsUpdater model.XDSUpdater,
+	defaultGatewaySelector map[string]string,
+) *Controller {
 	stop := make(chan struct{})
 	opts := krt.NewOptionsBuilder(stop, "gateway", options.KrtDebugger)
 
 	tw := revisions.NewTagWatcher(kc, options.Revision)
 	c := &Controller{
-		client:         kc,
-		cluster:        options.ClusterID,
-		revision:       options.Revision,
-		status:         &status.StatusCollections{},
-		tagWatcher:     krt.NewRecomputeProtected(tw, false, opts.WithName("tagWatcher")...),
-		waitForCRD:     waitForCRD,
-		gatewayContext: krt.NewRecomputeProtected(atomic.NewPointer[GatewayContext](nil), false, opts.WithName("gatewayContext")...),
-		stop:           stop,
-		xdsUpdater:     xdsUpdater,
-		domainSuffix:   options.DomainSuffix,
+		client:                 kc,
+		cluster:                options.ClusterID,
+		revision:               options.Revision,
+		status:                 &status.StatusCollections{},
+		tagWatcher:             krt.NewRecomputeProtected(tw, false, opts.WithName("tagWatcher")...),
+		waitForCRD:             waitForCRD,
+		gatewayContext:         krt.NewRecomputeProtected(atomic.NewPointer[GatewayContext](nil), false, opts.WithName("gatewayContext")...),
+		stop:                   stop,
+		xdsUpdater:             xdsUpdater,
+		domainSuffix:           options.DomainSuffix,
+		DefaultGatewaySelector: defaultGatewaySelector,
 	}
 	tw.AddHandler(func(s sets.String) {
 		c.tagWatcher.TriggerRecomputation()
@@ -203,23 +215,20 @@ func NewController(
 		GatewayClasses:     buildClient[*gateway.GatewayClass](c, kc, gvr.GatewayClass, opts, "informer/GatewayClasses"),
 		Gateways:           buildClient[*gateway.Gateway](c, kc, gvr.KubernetesGateway, opts, "informer/Gateways"),
 		HTTPRoutes:         buildClient[*gateway.HTTPRoute](c, kc, gvr.HTTPRoute, opts, "informer/HTTPRoutes"),
-		GRPCRoutes:         buildClient[*gatewayv1.GRPCRoute](c, kc, gvr.GRPCRoute, opts, "informer/GRPCRoutes"),
-		BackendTLSPolicies: buildClient[*gatewayv1.BackendTLSPolicy](c, kc, gvr.BackendTLSPolicy, opts, "informer/BackendTLSPolicies"),
+		GRPCRoutes:         buildClient[*gateway.GRPCRoute](c, kc, gvr.GRPCRoute, opts, "informer/GRPCRoutes"),
+		BackendTLSPolicies: buildClient[*gateway.BackendTLSPolicy](c, kc, gvr.BackendTLSPolicy, opts, "informer/BackendTLSPolicies"),
+		TCPRoutes:          buildClient[*gateway.TCPRoute](c, kc, gvr.TCPRoute, opts, "informer/TCPRoutes"),
+		TLSRoutes:          buildClient[*gateway.TLSRoute](c, kc, gvr.TLSRoute, opts, "informer/TLSRoutes"),
+		ListenerSets:       buildClient[*gateway.ListenerSet](c, kc, gvr.ListenerSet, opts, "informer/ListenerSet"),
 
-		ReferenceGrants: buildClient[*gateway.ReferenceGrant](c, kc, gvr.ReferenceGrant, opts, "informer/ReferenceGrants"),
+		ReferenceGrants: buildClient[*gatewaybeta.ReferenceGrant](c, kc, gvr.ReferenceGrant, opts, "informer/ReferenceGrants"),
 		ServiceEntries:  buildClient[*networkingclient.ServiceEntry](c, kc, gvr.ServiceEntry, opts, "informer/ServiceEntries"),
 	}
 	if features.EnableAlphaGatewayAPI {
-		inputs.TCPRoutes = buildClient[*gatewayalpha.TCPRoute](c, kc, gvr.TCPRoute, opts, "informer/TCPRoutes")
-		inputs.TLSRoutes = buildClient[*gatewayalpha.TLSRoute](c, kc, gvr.TLSRoute, opts, "informer/TLSRoutes")
 		inputs.BackendTrafficPolicy = buildClient[*gatewayx.XBackendTrafficPolicy](c, kc, gvr.XBackendTrafficPolicy, opts, "informer/XBackendTrafficPolicy")
-		inputs.ListenerSets = buildClient[*gatewayx.XListenerSet](c, kc, gvr.XListenerSet, opts, "informer/XListenerSet")
 	} else {
 		// If disabled, still build a collection but make it always empty
-		inputs.TCPRoutes = krt.NewStaticCollection[*gatewayalpha.TCPRoute](nil, nil, opts.WithName("disable/TCPRoutes")...)
-		inputs.TLSRoutes = krt.NewStaticCollection[*gatewayalpha.TLSRoute](nil, nil, opts.WithName("disable/TLSRoutes")...)
 		inputs.BackendTrafficPolicy = krt.NewStaticCollection[*gatewayx.XBackendTrafficPolicy](nil, nil, opts.WithName("disable/XBackendTrafficPolicy")...)
-		inputs.ListenerSets = krt.NewStaticCollection[*gatewayx.XListenerSet](nil, nil, opts.WithName("disable/XListenerSet")...)
 	}
 
 	if features.EnableGatewayAPIInferenceExtension {

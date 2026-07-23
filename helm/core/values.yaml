@@ -54,6 +54,9 @@ global:
   enableIstioAPI: true
   # -- If true, Higress Controller will monitor Gateway API resources as well
   enableGatewayAPI: true
+  # -- If true, provision an isolated Deployment and Service for each managed Gateway API Gateway.
+  # This is opt-in to preserve the default shared Higress gateway deployment model.
+  enableGatewayAPIDeploymentController: false
   # -- If true, Higress Controller will monitor Gateway API resources that have not reached v1 yet
   enableAlphaGatewayAPI: false
   # -- If true, enable Gateway API Inference Extension support

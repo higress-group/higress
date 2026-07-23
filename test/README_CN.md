@@ -71,6 +71,6 @@ Higress 提供了运行 Ingress API 一致性测试和 wasmplugin 测试的 make
 
 ## Gateway API 一致性测试
 
-执行 `make gateway-conformance-test` 可运行上游 Gateway API v1.4.0 Conformance Suite。默认范围只包含 `GATEWAY-HTTP` Profile 的必选 Core 能力：`Gateway`、`HTTPRoute` 和 `ReferenceGrant`，不启用 Extended 能力。
+执行 `make gateway-conformance-test` 可运行上游 Gateway API v1.6.0 Conformance Suite。默认范围覆盖 `GATEWAY-HTTP`、`GATEWAY-TLS`、`GATEWAY-GRPC` 和 `GATEWAY-TCP` 四个 Profile 的必选 Core 能力：`Gateway`、`HTTPRoute`、`TLSRoute`、`GRPCRoute`、`TCPRoute` 和 `ReferenceGrant`；不启用尚未支持的 Extended 能力。
 
 Runner 直接引用上游 Suite 及其内嵌 manifests，Higress 不复制维护官方测试用例。只有调试单个上游用例时才设置 `GATEWAY_CONFORMANCE_RUN_TEST=<ShortName>`；默认 PR 流水线始终执行完整 Core Profile，并将官方报告保存为 CI artifact。
