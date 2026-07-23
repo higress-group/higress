@@ -53,7 +53,6 @@ help:
 	@echo ""
 	@echo "目录结构:"
 	@echo "  cmd/standalone/       - 独立模式入口"
-	@echo "  internal/standalone/  - 独立模式实现"
+	@echo "  standalone/           - 独立模式实现"
 	@echo "  integration/          - Higress MCP 框架集成"
 	@echo "  tools/                - 共享核心逻辑"
-
