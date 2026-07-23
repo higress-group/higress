@@ -25,11 +25,11 @@ build:
 	@echo "output wasm file: extensions/${PLUGIN_NAME}/plugin.wasm"
 
 build-image:
-	DOCKER_BUILDKIT=1 docker build --build-arg PLUGIN_NAME=${PLUGIN_NAME} \
+	DOCKER_BUILDKIT=1 docker build --platform=${PLATFORMS} --build-arg PLUGIN_NAME=${PLUGIN_NAME} \
 	                            --build-arg BUILDER=${BUILDER}  \
 	                            --build-arg GOPROXY=$(GOPROXY) \
 	                            -t ${IMG} \
-	                            .
+	                            . --push
 	@echo ""
 	@echo "image:            ${IMG}"
 
