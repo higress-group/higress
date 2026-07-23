@@ -90,6 +90,12 @@ default: build
 go.test.coverage: prebuild
 	go test ./cmd/... ./pkg/... -race -coverprofile=coverage.xml -covermode=atomic
 
+FUZZ_TIME ?= 30s
+.PHONY: dynamic-analysis
+dynamic-analysis: prebuild
+	go test ./pkg/ingress/kube/annotations -run=^$$ -fuzz=^FuzzRewriteAnnotation$$ -fuzztime=$(FUZZ_TIME)
+	go test ./pkg/ingress/kube/annotations -run=^$$ -fuzz=^FuzzHeaderControlAnnotation$$ -fuzztime=$(FUZZ_TIME)
+
 .PHONY: build
 build: prebuild $(OUT)
 	GOPROXY="$(GOPROXY)" GOOS=$(GOOS_LOCAL) GOARCH=$(GOARCH_LOCAL) LDFLAGS=$(RELEASE_LDFLAGS) tools/hack/gobuild.sh $(OUT)/ $(HIGRESS_BINARIES)

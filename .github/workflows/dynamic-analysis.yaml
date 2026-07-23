@@ -1,0 +1,55 @@
+name: "Dynamic Analysis"
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: ["*"]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile.core.mk"
+      - ".github/workflows/dynamic-analysis.yaml"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch: ~
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dynamic-analysis-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: 1.24
+  FUZZ_TIME: ${{ github.event_name == 'schedule' && '5m' || '30s' }}
+
+jobs:
+  fuzz:
+    name: fuzz ingress annotations
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run dynamic analysis
+        run: >-
+          GOPROXY="https://proxy.golang.org,direct"
+          make dynamic-analysis
+          FUZZ_TIME="${FUZZ_TIME}"
+
+      - name: Upload failing fuzz inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures
+          path: pkg/ingress/kube/annotations/testdata/fuzz/
+          if-no-files-found: ignore
