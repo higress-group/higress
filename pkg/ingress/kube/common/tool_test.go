@@ -29,6 +29,98 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestValidateRegexPath(t *testing.T) {
+	testCases := []struct {
+		name     string
+		pathType PathType
+		path     string
+		wantErr  bool
+	}{
+		{
+			name:     "ordinary prefix regex",
+			pathType: PrefixRegex,
+			path:     "/healthy/[0-9]+",
+		},
+		{
+			name:     "Envoy byte escape is not rejected by Go syntax",
+			pathType: PrefixRegex,
+			path:     `/bytes/\C+`,
+		},
+		{
+			name:     "adjacent wildcard operators",
+			pathType: PrefixRegex,
+			path:     "/hospital/**",
+			wantErr:  true,
+		},
+		{
+			name:     "adjacent wildcard operators in full-path regex",
+			pathType: FullPathRegex,
+			path:     "/hospital/**",
+			wantErr:  true,
+		},
+		{
+			name:     "escaped wildcard followed by operator",
+			pathType: PrefixRegex,
+			path:     `/literal/\**`,
+		},
+		{
+			name:     "adjacent wildcards in character class",
+			pathType: PrefixRegex,
+			path:     `/literal/[**]`,
+		},
+		{
+			name:     "adjacent wildcards in negated character class",
+			pathType: PrefixRegex,
+			path:     `/literal/[^**]`,
+		},
+		{
+			name:     "adjacent wildcards after POSIX character class",
+			pathType: PrefixRegex,
+			path:     `/literal/[[:alpha:]]**`,
+			wantErr:  true,
+		},
+		{
+			name:     "adjacent wildcards beside POSIX class remain in character class",
+			pathType: PrefixRegex,
+			path:     `/literal/[[:alpha:]**]`,
+		},
+		{
+			name:     "adjacent wildcards in quoted literal",
+			pathType: PrefixRegex,
+			path:     `/literal/\Q**\E`,
+		},
+		{
+			name:     "adjacent wildcards after quoted literal",
+			pathType: PrefixRegex,
+			path:     `/literal/\Q**\E**`,
+			wantErr:  true,
+		},
+		{
+			name:     "escaped backslash before adjacent operators",
+			pathType: PrefixRegex,
+			path:     `/literal/\\**`,
+			wantErr:  true,
+		},
+		{
+			name:     "non-regex path is ignored",
+			pathType: Prefix,
+			path:     "/hospital/**",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := ValidateRegexPath(testCase.pathType, testCase.path)
+			if testCase.wantErr && err == nil {
+				t.Fatal("ValidateRegexPath() error = nil, want an error")
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("ValidateRegexPath() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestConstructRouteName(t *testing.T) {
 	testCases := []struct {
 		input  *WrapperHTTPRoute

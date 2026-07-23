@@ -37,6 +37,8 @@ const (
 	DuplicatedTls Event = "duplicated-tls"
 
 	PortNameResolveError Event = "port-name-resolve-error"
+
+	InvalidPathRegex Event = "invalid-path-regex"
 )
 
 var (
