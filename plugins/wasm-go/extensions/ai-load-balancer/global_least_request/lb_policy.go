@@ -97,14 +97,25 @@ return {current_target, new_count, host_details}`
 )
 
 type GlobalLeastRequestLoadBalancer struct {
-	redisClient     wrapper.RedisClient
-	maxRequestCount int64
-	cleanInterval   int64 // seconds
-	enableDetailLog bool
+	redisClient             wrapper.RedisClient
+	maxRequestCount         int64
+	cleanInterval           int64 // seconds
+	enableDetailLog         bool
+	getRouteName            func() (string, error)
+	getClusterName          func() (string, error)
+	getUpstreamHosts        func() ([][2]string, error)
+	setUpstreamOverrideHost func([]byte) error
+	resumeHttpRequest       func() error
 }
 
 func NewGlobalLeastRequestLoadBalancer(json gjson.Result) (GlobalLeastRequestLoadBalancer, error) {
-	lb := GlobalLeastRequestLoadBalancer{}
+	lb := GlobalLeastRequestLoadBalancer{
+		getRouteName:            utils.GetRouteName,
+		getClusterName:          utils.GetClusterName,
+		getUpstreamHosts:        proxywasm.GetUpstreamHosts,
+		setUpstreamOverrideHost: proxywasm.SetUpstreamOverrideHost,
+		resumeHttpRequest:       proxywasm.ResumeHttpRequest,
+	}
 	serviceFQDN := json.Get("serviceFQDN").String()
 	servicePort := json.Get("servicePort").Int()
 	if serviceFQDN == "" || servicePort == 0 {
@@ -139,26 +150,29 @@ func NewGlobalLeastRequestLoadBalancer(json gjson.Result) (GlobalLeastRequestLoa
 }
 
 func (lb GlobalLeastRequestLoadBalancer) HandleHttpRequestHeaders(ctx wrapper.HttpContext) types.Action {
+	if !ctx.HasRequestBody() {
+		return lb.HandleHttpRequestBody(ctx, nil)
+	}
 	// If return types.ActionContinue, SetUpstreamOverrideHost will not take effect
 	return types.HeaderStopIteration
 }
 
 func (lb GlobalLeastRequestLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpContext, body []byte) types.Action {
-	routeName, err := utils.GetRouteName()
+	routeName, err := lb.getRouteName()
 	if err != nil || routeName == "" {
 		ctx.SetContext("error", true)
 		return types.ActionContinue
 	} else {
 		ctx.SetContext("routeName", routeName)
 	}
-	clusterName, err := utils.GetClusterName()
+	clusterName, err := lb.getClusterName()
 	if err != nil || clusterName == "" {
 		ctx.SetContext("error", true)
 		return types.ActionContinue
 	} else {
 		ctx.SetContext("clusterName", clusterName)
 	}
-	hostInfos, err := proxywasm.GetUpstreamHosts()
+	hostInfos, err := lb.getUpstreamHosts()
 	if err != nil {
 		ctx.SetContext("error", true)
 		return types.ActionContinue
@@ -213,14 +227,14 @@ func (lb GlobalLeastRequestLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpC
 		if err := response.Error(); err != nil {
 			log.Errorf("HGetAll failed: %+v", err)
 			ctx.SetContext("error", true)
-			proxywasm.ResumeHttpRequest()
+			lb.resumeHttpRequest()
 			return
 		}
 		valArray := response.Array()
 		if len(valArray) < 2 {
 			log.Errorf("redis eval lua result format error, expect at least [host, count], got: %+v", valArray)
 			ctx.SetContext("error", true)
-			proxywasm.ResumeHttpRequest()
+			lb.resumeHttpRequest()
 			return
 		}
 		hostSelected = valArray[0].String()
@@ -248,10 +262,10 @@ func (lb GlobalLeastRequestLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpC
 			return
 		}
 
-		if err := proxywasm.SetUpstreamOverrideHost([]byte(hostSelected)); err != nil {
+		if err := lb.setUpstreamOverrideHost([]byte(hostSelected)); err != nil {
 			ctx.SetContext("error", true)
 			log.Errorf("override upstream host failed, fallback to default lb policy, error informations: %+v", err)
-			proxywasm.ResumeHttpRequest()
+			lb.resumeHttpRequest()
 			return
 		}
 
@@ -259,7 +273,7 @@ func (lb GlobalLeastRequestLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpC
 
 		// finally resume the request
 		ctx.SetContext("host_selected", hostSelected)
-		proxywasm.ResumeHttpRequest()
+		lb.resumeHttpRequest()
 	})
 	if err != nil {
 		ctx.SetContext("error", true)
