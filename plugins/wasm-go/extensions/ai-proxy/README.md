@@ -393,6 +393,10 @@ NVIDIA Triton Interference Server 所对应的 type 为 triton。它特有的配
 | `tritonModelVersion` | string | 非必填   | -     | 用于指定 Triton Server 中 model version     |
 | `tritonDomain`       | string | 非必填   | -     | Triton Server 部署的指定请求 Domain          |
 
+#### Cerebras
+
+Cerebras 所对应的 `type` 为 `cerebras`。它并无特有的配置字段。
+
 ## 用法示例
 
 ### 使用 OpenAI 协议代理 Azure OpenAI 服务
@@ -2444,6 +2448,62 @@ providers:
         }
     ],
     "model": "gpt2",
+}
+```
+
+### 使用 OpenAI 协议代理 Cerebras 服务
+
+**配置信息**
+
+```yaml
+provider:
+  type: cerebras
+  apiTokens:
+    - "YOUR_CEREBRAS_API_TOKEN"
+  modelMapping:
+    "gpt-4": "llama3.1-70b"
+    "gpt-3.5-turbo": "llama3.1-8b"
+    "*": "llama3.1-8b"
+```
+
+**请求示例**
+
+```json
+{
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你好，你是谁？"
+    }
+  ],
+  "stream": false
+}
+```
+
+**响应示例**
+
+```json
+{
+  "id": "cmpl-123456789",
+  "object": "chat.completion",
+  "created": 1699123456,
+  "model": "llama3.1-70b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "你好！我是一个由 Cerebras 提供的 AI 助手，基于 Llama 3.1 模型。我可以帮助回答问题、进行对话和提供各种信息。有什么我可以帮助你的吗？"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 50,
+    "total_tokens": 60
+  }
 }
 ```
 
