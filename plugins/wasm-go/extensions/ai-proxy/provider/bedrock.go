@@ -1280,12 +1280,12 @@ func appendCachePointToBedrockMessage(request *bedrockTextGenRequest, messageInd
 }
 
 func buildPromptTokensDetails(cacheReadInputTokens int, cacheWriteInputTokens int) *promptTokensDetails {
-	totalCachedTokens := cacheReadInputTokens + cacheWriteInputTokens
-	if totalCachedTokens <= 0 {
+	if cacheReadInputTokens <= 0 && cacheWriteInputTokens <= 0 {
 		return nil
 	}
 	return &promptTokensDetails{
-		CachedTokens: totalCachedTokens,
+		CachedTokens:     cacheReadInputTokens,
+		CacheWriteTokens: cacheWriteInputTokens,
 	}
 }
 
