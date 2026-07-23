@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"runtime"
 	"strings"
 	"time"
 
@@ -23,6 +24,22 @@ const (
 	responseStartTimeCtxKey           = "response_start_time"
 )
 
+// clearBufferState clears buffer-related state in context
+// resetDuringCall: if true, resets during_call to false
+func clearBufferState(ctx wrapper.HttpContext, resetDuringCall bool) [][]byte {
+	if _, file, line, ok := runtime.Caller(1); ok {
+		log.Debugf("clearBufferState called from %s:%d", file, line)
+	}
+	var emptyQueue [][]byte
+	ctx.SetContext("bufferQueue", emptyQueue)
+	ctx.SetContext("buffer_pending_content", "")
+	ctx.SetContext("start_ts", time.Now().UnixMilli())
+	if resetDuringCall {
+		ctx.SetContext("during_call", false)
+	}
+	return emptyQueue
+}
+
 func HandleTextGenerationResponseHeader(ctx wrapper.HttpContext, config cfg.AISecurityConfig) types.Action {
 	contentType, _ := proxywasm.GetHttpResponseHeader("content-type")
 	ctx.SetContext("end_of_stream_received", false)
@@ -33,6 +50,12 @@ func HandleTextGenerationResponseHeader(ctx wrapper.HttpContext, config cfg.AISe
 	ctx.SetContext(responseStreamFallbackPathsCtxKey, buildEffectiveFallbackPaths(config.ResponseStreamContentJsonPath, config.ResponseStreamContentFallbackJsonPaths))
 	sessionID, _ := utils.GenerateHexID(20)
 	ctx.SetContext("sessionID", sessionID)
+	// 初始化时间戳，确保每个请求都有独立的时间窗口起点
+	ctx.SetContext("start_ts", time.Now().UnixMilli())
+	// 初始化空的 bufferQueue
+	var emptyQueue [][]byte
+	ctx.SetContext("bufferQueue", emptyQueue)
+	ctx.SetContext("buffer_pending_content", "")
 	if strings.Contains(contentType, "text/event-stream") {
 		ctx.NeedPauseStreamingResponse()
 		return types.ActionContinue
@@ -52,7 +75,20 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 	} else {
 		sessionID, _ = ctx.GetContext("sessionID").(string)
 	}
+
 	var bufferQueue [][]byte
+	if ctx.GetContext("bufferQueue") != nil {
+		bufferQueue = ctx.GetContext("bufferQueue").([][]byte)
+	} else {
+		bufferQueue = [][]byte{}
+	}
+	buffer := ctx.GetStringContext("buffer_pending_content", "")
+	startTs := ctx.GetContext("start_ts")
+	if startTs == nil {
+		startTs = time.Now().UnixMilli()
+		ctx.SetContext("start_ts", startTs)
+	}
+
 	currentSubmissionIndex := 0
 	var singleCall func()
 	callback := func(statusCode int, responseHeaders http.Header, responseBody []byte) {
@@ -63,7 +99,8 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			if ctx.GetContext("end_of_stream_received").(bool) {
 				proxywasm.ResumeHttpResponse()
 			}
-			ctx.SetContext("during_call", false)
+			// Clear state on error, reset start_ts for new time window
+			bufferQueue = clearBufferState(ctx, true)
 			return
 		}
 		var response cfg.Response
@@ -75,7 +112,8 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			if ctx.GetContext("end_of_stream_received").(bool) {
 				proxywasm.ResumeHttpResponse()
 			}
-			ctx.SetContext("during_call", false)
+			// Clear state on error, reset start_ts for new time window
+			bufferQueue = clearBufferState(ctx, true)
 			return
 		}
 		if !cfg.IsRiskLevelAcceptable(config.Action, response.Data, config, consumer) {
@@ -90,7 +128,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 				log.Errorf("failed to build deny response body: %v", err)
 				endStream := ctx.GetContext("end_of_stream_received").(bool) && ctx.BufferQueueSize() == 0
 				proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endStream)
-				bufferQueue = [][]byte{}
+				bufferQueue = clearBufferState(ctx, true)
 				config.IncrementCounter("ai_sec_response_deny_buildfail", 1)
 				startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
 				ctx.SetUserAttribute("safecheck_response_rt", time.Now().UnixMilli()-startTime)
@@ -101,15 +139,14 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 				}
 				ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 				if !endStream {
-					ctx.SetContext("during_call", false)
 					singleCall()
 				}
 				return
 			}
 			cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultDeny)
 			proxywasm.InjectEncodedDataToFilterChain(jsonData, true)
+
 			ctx.SetContext("risk_detected", true)
-			ctx.SetContext("during_call", false)
 			config.IncrementCounter("ai_sec_response_deny", 1)
 			startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
 			ctx.SetUserAttribute("safecheck_response_rt", time.Now().UnixMilli()-startTime)
@@ -119,15 +156,20 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 				ctx.SetUserAttribute("safecheck_riskWords", response.Data.Result[0].RiskWords)
 			}
 			ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+      
+      // Clear state on deny
+			bufferQueue = clearBufferState(ctx, false)
 			return
 		}
 		cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultPass)
 		cfg.WriteGuardrailLog(ctx)
 		endStream := ctx.GetContext("end_of_stream_received").(bool) && ctx.BufferQueueSize() == 0
 		proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endStream)
-		bufferQueue = [][]byte{}
+
+		// Clear state after successful check
+		bufferQueue = clearBufferState(ctx, true)
+
 		if !endStream {
-			ctx.SetContext("during_call", false)
 			singleCall()
 		}
 	}
@@ -135,39 +177,82 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 		if ctx.GetContext("during_call").(bool) {
 			return
 		}
-		if ctx.BufferQueueSize() >= config.BufferLimit || ctx.GetContext("end_of_stream_received").(bool) {
-			var buffer string
-			for ctx.BufferQueueSize() > 0 {
-				front := ctx.PopBuffer()
-				bufferQueue = append(bufferQueue, front)
-				msg := gjson.GetBytes(front, config.ResponseStreamContentJsonPath).String()
-				if len(msg) == 0 {
-					msg = autoExtractStreamingResponseContent(front, streamFallbackPaths)
-				}
-				buffer += msg
-				if len([]rune(buffer)) >= config.BufferLimit {
-					break
+		endOfStreamReceived := ctx.GetContext("end_of_stream_received").(bool)
+		if ctx.BufferQueueSize() == 0 && !endOfStreamReceived {
+			return
+		}
+		log.Debugf("[singleCall] bufferQueue size: %d, buffer_rune_len: %d, endOfStreamReceived:%t", ctx.BufferQueueSize(), len([]rune(buffer)), endOfStreamReceived)
+		var needFlush = false
+		for ctx.BufferQueueSize() > 0 {
+			front := ctx.PopBuffer()
+			bufferQueue = append(bufferQueue, front)
+			ctx.SetContext("bufferQueue", bufferQueue)
+			msg := gjson.GetBytes(front, config.ResponseStreamContentJsonPath).String()
+			if len(msg) == 0 {
+				msg = autoExtractStreamingResponseContent(front, streamFallbackPaths)
+			}
+			buffer += msg
+			bufferRuneLen := len([]rune(buffer))
+			if bufferRuneLen >= config.BufferLimit {
+				needFlush = true
+			} else if config.BufferFlushTimeInterval > 0 {
+				endTs := time.Now().UnixMilli()
+				if endTs-startTs.(int64) > int64(config.BufferFlushTimeInterval) {
+					needFlush = true
 				}
 			}
+
+			needFlush = needFlush || endOfStreamReceived
+			if !needFlush {
+				ctx.SetContext("buffer_pending_content", buffer)
+				log.Debugf("nothing to do! bufferQueue(buffer provider) size: %d, bufferqueue(buffer for consumer) size: %d, buffer_rune_len: %d",
+					ctx.BufferQueueSize(), len(bufferQueue), bufferRuneLen)
+				continue
+			}
+
 			// case 1: streaming body has reasoning_content, part of buffer maybe empty
 			// case 2: streaming body has toolcall result, part of buffer maybe empty
 			log.Debugf("current content piece: %s", buffer)
 			if len(buffer) == 0 {
-				buffer = "[empty content]"
+				proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endOfStreamReceived)
+				bufferQueue = clearBufferState(ctx, false)
+				continue
 			}
 			ctx.SetContext("during_call", true)
-			log.Debugf("current content piece: %s", buffer)
 			checkService := config.GetResponseCheckService(consumer)
 			currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText)
 			path, headers, body := common.GenerateRequestForText(config, config.Action, checkService, buffer, sessionID)
 			err := config.Client.Post(path, headers, body, callback, config.Timeout)
 			if err != nil {
 				log.Errorf("failed call the safe check service: %v", err)
-				startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
+      	startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
 				cfg.MarkGuardrailResponseError(ctx, currentSubmissionIndex, nil, startTime)
-				if ctx.GetContext("end_of_stream_received").(bool) {
-					proxywasm.ResumeHttpResponse()
-				}
+				proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endOfStreamReceived)
+				bufferQueue = clearBufferState(ctx, true)
+			}
+		}
+
+		if endOfStreamReceived && len(bufferQueue) > 0 {
+			log.Debugf("endOfStreamReceived=true but bufferQueue has %d items, forcing flush. current content piece: %s", len(bufferQueue), buffer)
+			if len(buffer) == 0 {
+				proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endOfStreamReceived)
+				bufferQueue = clearBufferState(ctx, false)
+				proxywasm.ResumeHttpResponse()
+				return
+			}
+
+			ctx.SetContext("during_call", true)
+			checkService := config.GetResponseCheckService(consumer)
+      currentSubmissionIndex = cfg.BeginGuardrailSubmissionEvent(ctx, cfg.GuardrailPhaseResponse, cfg.GuardrailModalityText)
+			path, headers, body := common.GenerateRequestForText(config, config.Action, checkService, buffer, sessionID)
+			err := config.Client.Post(path, headers, body, callback, config.Timeout)
+			if err != nil {
+				log.Errorf("failed call the safe check service: %v", err)
+        startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
+				cfg.MarkGuardrailResponseError(ctx, currentSubmissionIndex, nil, startTime)
+				proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), true)
+				bufferQueue = clearBufferState(ctx, false)
+				proxywasm.ResumeHttpResponse()
 			}
 		}
 	}
@@ -197,6 +282,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 		// 	ctx.PushBuffer([]byte(string(chunk) + "\n\n"))
 		// }
 		ctx.SetContext("end_of_stream_received", endOfStream)
+		log.Debugf("bufferQueue size: %d, buffer_rune_len: %d, endOfStreamReceived:%t,during_call:%t", ctx.BufferQueueSize(), len([]rune(buffer)), endOfStream, ctx.GetContext("during_call").(bool))
 		if !ctx.GetContext("during_call").(bool) {
 			singleCall()
 		}
