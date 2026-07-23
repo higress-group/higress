@@ -262,6 +262,30 @@ func (s *Server) initConfigController() error {
 }
 
 func (s *Server) Start(stop <-chan struct{}) error {
+	// Check CRD versions before starting the server
+	log.Info("Checking CRD versions...")
+	crdWarnings := higresskube.CheckCRDVersions(s.kubeClient.RESTConfig())
+	if len(crdWarnings) > 0 {
+		log.Warn("=================================================================")
+		log.Warn("                      CRD VERSION WARNINGS                       ")
+		log.Warn("=================================================================")
+		for i, warning := range crdWarnings {
+			log.Warnf("[%d] %s", i+1, warning)
+		}
+		log.Warn("=================================================================")
+		log.Warn("⚠️  Some features may not work correctly with outdated CRDs.")
+		log.Warn("")
+		log.Warn("Apply the CRDs that match this Higress version:")
+		log.Warn("  # From the same source tree or release bundle used for this build:")
+		log.Warn("  kubectl apply -f api/kubernetes/customresourcedefinitions.gen.yaml")
+		log.Warn("")
+		log.Warn("  # Or from the local Helm chart copy:")
+		log.Warn("  kubectl apply -f helm/core/crds/customresourcedefinitions.gen.yaml")
+		log.Warn("=================================================================")
+	} else {
+		log.Info("✅ All required CRDs are up-to-date")
+	}
+
 	if err := s.server.Start(stop); err != nil {
 		return err
 	}
