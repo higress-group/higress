@@ -5,16 +5,18 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
-	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/tidwall/gjson"
 )
 
 const (
-	ctxRetryCount = "retryCount"
+	ctxRetryCount       = "retryCount"
+	ctxRetryIsStreaming = "retryIsStreaming"
 )
 
 type retryOnFailure struct {
@@ -66,15 +68,88 @@ func (c *ProviderConfig) transformResponseHeadersAndBody(ctx wrapper.HttpContext
 		c.DefaultTransformResponseHeaders(ctx, headers)
 	}
 
-	if handler, ok := activeProvider.(TransformResponseBodyHandler); ok {
-		var err error
-		body, err = handler.TransformResponseBody(ctx, apiName, body)
-		if err != nil {
-			log.Errorf("Failed to transform response body: %v", err)
+	// When protocol is "original", pass through the body without transformation
+	if !c.IsOriginal() {
+		if handler, ok := activeProvider.(TransformResponseBodyHandler); ok {
+			var err error
+			body, err = handler.TransformResponseBody(ctx, apiName, body)
+			if err != nil {
+				log.Errorf("Failed to transform response body: %v", err)
+			}
 		}
 	}
 
 	return util.HeaderToSlice(headers), body
+}
+
+func (c *ProviderConfig) transformStreamingRetryResponse(
+	ctx wrapper.HttpContext, activeProvider Provider,
+	apiName ApiName, headers http.Header, body []byte) ([][2]string, []byte) {
+
+	if handler, ok := activeProvider.(TransformResponseHeadersHandler); ok {
+		handler.TransformResponseHeaders(ctx, apiName, headers)
+	} else {
+		c.DefaultTransformResponseHeaders(ctx, headers)
+	}
+	headers.Set("Content-Type", "text/event-stream")
+
+	var resultBuilder strings.Builder
+	// When protocol is "original", pass through the body without any transformation,
+	// mirroring the normal streaming path that also skips body processing.
+	if c.IsOriginal() {
+		resultBuilder.Write(body)
+	} else if handler, ok := activeProvider.(StreamingResponseBodyHandler); ok {
+		events := ExtractStreamingEvents(ctx, body)
+		for i, event := range events {
+			isLast := i == len(events)-1
+			chunk, err := handler.OnStreamingResponseBody(ctx, apiName, []byte(event.RawEvent), isLast)
+			if err == nil && chunk != nil {
+				resultBuilder.Write(chunk)
+			} else {
+				resultBuilder.WriteString(event.RawEvent)
+			}
+		}
+	} else if handler, ok := activeProvider.(StreamingEventHandler); ok {
+		events := ExtractStreamingEvents(ctx, body)
+		for _, event := range events {
+			outputEvents, err := handler.OnStreamingEvent(ctx, apiName, event)
+			if err != nil || len(outputEvents) == 0 {
+				resultBuilder.WriteString(event.RawEvent)
+			} else {
+				for _, out := range outputEvents {
+					resultBuilder.WriteString(out.ToHttpString())
+				}
+			}
+		}
+	} else {
+		resultBuilder.Write(body)
+	}
+
+	result := []byte(resultBuilder.String())
+
+	// Apply Claude response conversion if needed (same as normal streaming path)
+	needClaudeConversion, _ := ctx.GetContext("needClaudeResponseConversion").(bool)
+	if needClaudeConversion {
+		const claudeConverterKey = "claudeConverter"
+		var converter *ClaudeToOpenAIConverter
+		if converterData := ctx.GetContext(claudeConverterKey); converterData != nil {
+			if c, ok := converterData.(*ClaudeToOpenAIConverter); ok {
+				converter = c
+			}
+		}
+		if converter == nil {
+			converter = &ClaudeToOpenAIConverter{}
+			ctx.SetContext(claudeConverterKey, converter)
+		}
+		claudeResult, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, result)
+		if err != nil {
+			log.Errorf("Failed to convert streaming retry response to Claude format: %v", err)
+		} else {
+			result = claudeResult
+		}
+	}
+
+	return util.HeaderToSlice(headers), result
 }
 
 func (c *ProviderConfig) retryCall(
@@ -88,8 +163,14 @@ func (c *ProviderConfig) retryCall(
 
 	if statusCode == 200 {
 		log.Infof("Retry request succeeded")
-		headers, body := c.transformResponseHeadersAndBody(ctx, activeProvider, apiName, responseHeaders, responseBody)
-		proxywasm.SendHttpResponse(200, headers, body, -1)
+		isStreaming, _ := ctx.GetContext(ctxRetryIsStreaming).(bool)
+		if isStreaming {
+			headers, body := c.transformStreamingRetryResponse(ctx, activeProvider, apiName, responseHeaders, responseBody)
+			proxywasm.SendHttpResponse(200, headers, body, -1)
+		} else {
+			headers, body := c.transformResponseHeadersAndBody(ctx, activeProvider, apiName, responseHeaders, responseBody)
+			proxywasm.SendHttpResponse(200, headers, body, -1)
+		}
 		return
 	} else {
 		log.Infof("The retry request still failed, status: %d, responseHeaders: %v, responseBody: %s", statusCode, responseHeaders, string(responseBody))
@@ -135,6 +216,9 @@ func (c *ProviderConfig) sendRetryRequest(
 	if err != nil {
 		return fmt.Errorf("sendRetryRequest failed to transform request headers and body: %v", err)
 	}
+
+	isStreaming, _ := ctx.GetContext(ctxKeyIsStreaming).(bool)
+	ctx.SetContext(ctxRetryIsStreaming, isStreaming)
 
 	err = retryClient.Post(generateUrl(modifiedHeaders), util.HeaderToSlice(modifiedHeaders), modifiedBody,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
