@@ -207,7 +207,7 @@ func (b *bedrockProvider) convertEventFromBedrockToOpenAI(ctx wrapper.HttpContex
 			CompletionTokens:    bedrockEvent.Usage.OutputTokens,
 			PromptTokens:        bedrockEvent.Usage.InputTokens,
 			TotalTokens:         bedrockEvent.Usage.TotalTokens,
-			PromptTokensDetails: buildPromptTokensDetails(bedrockEvent.Usage.CacheReadInputTokens, bedrockEvent.Usage.CacheWriteInputTokens),
+			PromptTokensDetails: buildPromptTokensDetails(bedrockEvent.Usage.cacheReadTokens(), bedrockEvent.Usage.cacheWriteTokens()),
 		}
 	}
 	openAIFormattedChunkBytes, _ := json.Marshal(openAIFormattedChunk)
@@ -1119,7 +1119,7 @@ func (b *bedrockProvider) buildChatCompletionResponse(ctx wrapper.HttpContext, b
 			PromptTokens:        bedrockResponse.Usage.InputTokens,
 			CompletionTokens:    bedrockResponse.Usage.OutputTokens,
 			TotalTokens:         bedrockResponse.Usage.TotalTokens,
-			PromptTokensDetails: buildPromptTokensDetails(bedrockResponse.Usage.CacheReadInputTokens, bedrockResponse.Usage.CacheWriteInputTokens),
+			PromptTokensDetails: buildPromptTokensDetails(bedrockResponse.Usage.cacheReadTokens(), bedrockResponse.Usage.cacheWriteTokens()),
 		},
 	}
 }
@@ -1280,12 +1280,12 @@ func appendCachePointToBedrockMessage(request *bedrockTextGenRequest, messageInd
 }
 
 func buildPromptTokensDetails(cacheReadInputTokens int, cacheWriteInputTokens int) *promptTokensDetails {
-	totalCachedTokens := cacheReadInputTokens + cacheWriteInputTokens
-	if totalCachedTokens <= 0 {
+	if cacheReadInputTokens <= 0 && cacheWriteInputTokens <= 0 {
 		return nil
 	}
 	return &promptTokensDetails{
-		CachedTokens: totalCachedTokens,
+		CachedTokens:     cacheReadInputTokens,
+		CacheWriteTokens: cacheWriteInputTokens,
 	}
 }
 
@@ -1444,7 +1444,25 @@ type tokenUsage struct {
 
 	CacheReadInputTokens int `json:"cacheReadInputTokens,omitempty"`
 
+	CacheReadInputTokenCount int `json:"cacheReadInputTokenCount,omitempty"`
+
 	CacheWriteInputTokens int `json:"cacheWriteInputTokens,omitempty"`
+
+	CacheWriteInputTokenCount int `json:"cacheWriteInputTokenCount,omitempty"`
+}
+
+func (u tokenUsage) cacheReadTokens() int {
+	if u.CacheReadInputTokens > 0 {
+		return u.CacheReadInputTokens
+	}
+	return u.CacheReadInputTokenCount
+}
+
+func (u tokenUsage) cacheWriteTokens() int {
+	if u.CacheWriteInputTokens > 0 {
+		return u.CacheWriteInputTokens
+	}
+	return u.CacheWriteInputTokenCount
 }
 
 func chatToolMessage2BedrockToolResultContent(chatMessage chatMessage) bedrockMessageContent {
