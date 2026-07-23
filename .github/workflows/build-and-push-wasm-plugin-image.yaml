@@ -132,6 +132,7 @@ jobs:
           set -e
           cd /workspace/plugins/wasm-go/extensions/${PLUGIN_NAME}
           go mod tidy
+          if [ -f prepare.sh ]; then sh ./prepare.sh; fi
           GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o plugin.wasm .
           tar czvf plugin.tar.gz plugin.wasm
           echo ${{ secrets.REGISTRY_PASSWORD }} | oras login -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin ${{ env.IMAGE_REGISTRY_SERVICE }}
