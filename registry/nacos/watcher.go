@@ -51,6 +51,17 @@ const (
 	DefaultJoiner               = "@@"
 )
 
+func normalizeNacosWeight(weight float64) uint32 {
+	if weight <= 0 {
+		return 1
+	}
+	rounded := math.Round(weight)
+	if rounded < 1 {
+		return 1
+	}
+	return uint32(rounded)
+}
+
 type watcher struct {
 	provider.BaseWatcher
 	apiv1.RegistryConfig
@@ -336,7 +347,7 @@ func (w *watcher) generateServiceEntry(host string, services []model.SubscribeSe
 		protocol := common.HTTP
 		if service.Metadata != nil && service.Metadata["protocol"] != "" {
 			protocol = common.ParseProtocol(service.Metadata["protocol"])
-		} else {
+		} else if service.Metadata == nil {
 			service.Metadata = make(map[string]string)
 		}
 		port := &v1alpha3.ServicePort{
@@ -353,14 +364,9 @@ func (w *watcher) generateServiceEntry(host string, services []model.SubscribeSe
 				portList = append(portList, port)
 			}
 		}
-		// Calculate weight from Nacos instance
-		// Nacos weight is float64, need to convert to uint32 for Istio
-		// Use math.Round to preserve fractional weights (e.g., 0.5, 1.5)
-		// If weight is 0 or negative, use default weight 1
-		weight := uint32(1)
-		if service.Weight > 0 {
-			weight = uint32(math.Round(service.Weight))
-		}
+		// Calculate weight from Nacos instance. Nacos weight is float64, and
+		// Istio WorkloadEntry weight must never become 0 for healthy instances.
+		weight := normalizeNacosWeight(service.Weight)
 		endpoint := v1alpha3.WorkloadEntry{
 			Address: service.Ip,
 			Ports:   map[string]uint32{port.Protocol: port.Number},
