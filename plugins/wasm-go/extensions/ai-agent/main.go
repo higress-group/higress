@@ -208,6 +208,19 @@ func extractJson(bodyStr string) (string, error) {
 	return jsonStr, nil
 }
 
+func completionContent(responseBody []byte, log log.Log, context string) (string, bool) {
+	if !gjson.ValidBytes(responseBody) {
+		log.Debugf("[%s] invalid completion response json", context)
+		return "", false
+	}
+	content := gjson.GetBytes(responseBody, "choices.0.message.content")
+	if !content.Exists() {
+		log.Debugf("[%s] no choices in completion response", context)
+		return "", false
+	}
+	return content.String(), true
+}
+
 func jsonFormat(llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonSchema map[string]interface{}, assistantMessage Message, actionInput string, headers [][2]string, streamMode bool, rawResponse Response, log log.Log) string {
 	prompt := fmt.Sprintf(prompttpl.Json_Resp_Template, jsonSchema, actionInput)
 
@@ -226,10 +239,15 @@ func jsonFormat(llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonSchema map[st
 		completionSerialized,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			// 得到gpt的返回结果
-			var responseCompletion dashscope.CompletionResponse
-			_ = json.Unmarshal(responseBody, &responseCompletion)
-			log.Infof("[jsonFormat] content: %s", responseCompletion.Choices[0].Message.Content)
-			content = responseCompletion.Choices[0].Message.Content
+			if statusCode != http.StatusOK {
+				log.Debugf("[jsonFormat] statusCode: %d", statusCode)
+			}
+			var ok bool
+			content, ok = completionContent(responseBody, log, "jsonFormat")
+			if !ok || content == "" {
+				content = actionInput
+			}
+			log.Infof("[jsonFormat] content: %s", content)
 			jsonStr, err := extractJson(content)
 			if err != nil {
 				log.Debugf("[onHttpRequestBody] extractJson err: %s", err.Error())
@@ -250,6 +268,11 @@ func jsonFormat(llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonSchema map[st
 }
 
 func noneStream(assistantMessage Message, actionInput string, rawResponse Response, log log.Log) {
+	if len(rawResponse.Choices) == 0 {
+		log.Debug("[onHttpResponseBody] no choices in raw response")
+		proxywasm.ResumeHttpResponse()
+		return
+	}
 	assistantMessage.Role = "assistant"
 	assistantMessage.Content = actionInput
 	rawResponse.Choices[0].Message = assistantMessage
@@ -304,12 +327,18 @@ func toolsCallResult(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmI
 		completionSerialized,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			// 得到gpt的返回结果
-			var responseCompletion dashscope.CompletionResponse
-			_ = json.Unmarshal(responseBody, &responseCompletion)
-			log.Infof("[toolsCall] content: %s", responseCompletion.Choices[0].Message.Content)
+			if statusCode != http.StatusOK {
+				log.Debugf("[toolsCall] statusCode: %d", statusCode)
+			}
+			responseContent, ok := completionContent(responseBody, log, "toolsCall")
+			if !ok {
+				proxywasm.ResumeHttpRequest()
+				return
+			}
+			log.Infof("[toolsCall] content: %s", responseContent)
 
-			if responseCompletion.Choices[0].Message.Content != "" {
-				retType, actionInput := toolsCall(ctx, llmClient, llmInfo, jsonResp, aPIsParam, aPIClient, responseCompletion.Choices[0].Message.Content, rawResponse, log)
+			if responseContent != "" {
+				retType, actionInput := toolsCall(ctx, llmClient, llmInfo, jsonResp, aPIsParam, aPIClient, responseContent, rawResponse, log)
 				if retType == types.ActionContinue {
 					// 得到了Final Answer
 					var assistantMessage Message
@@ -370,7 +399,11 @@ func outputParser(response string, log log.Log) (string, string) {
 			return actionName, actionInput
 		}
 	}
-	log.Debugf("json parse err: %s", err.Error())
+	if err != nil {
+		log.Debugf("json parse err: %s", err.Error())
+	} else {
+		log.Debug("json parse missing action or action_input")
+	}
 	// Fallback to regex parsing if JSON unmarshaling fails
 	pattern := `\{\s*"action":\s*"([^"]+)",\s*"action_input":\s*((?:\{[^}]+\})|"[^"]+")\s*\}`
 	re := regexp.MustCompile(pattern)
@@ -533,11 +566,16 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byt
 		log.Debugf("[onHttpResponseBody] body to json err: %s", err.Error())
 		return types.ActionContinue
 	}
-	log.Infof("first content: %s", rawResponse.Choices[0].Message.Content)
+	if len(rawResponse.Choices) == 0 {
+		log.Debug("[onHttpResponseBody] no choices in response")
+		return types.ActionContinue
+	}
+	content := rawResponse.Choices[0].Message.Content
+	log.Infof("first content: %s", content)
 	// 如果gpt返回的内容不是空的
-	if rawResponse.Choices[0].Message.Content != "" {
+	if content != "" {
 		// 进入agent的循环思考，工具调用的过程中
-		retType, _ := toolsCall(ctx, config.LLMClient, config.LLMInfo, config.JsonResp, config.APIsParam, config.APIClient, rawResponse.Choices[0].Message.Content, rawResponse, log)
+		retType, _ := toolsCall(ctx, config.LLMClient, config.LLMInfo, config.JsonResp, config.APIsParam, config.APIClient, content, rawResponse, log)
 		return retType
 	} else {
 		return types.ActionContinue
