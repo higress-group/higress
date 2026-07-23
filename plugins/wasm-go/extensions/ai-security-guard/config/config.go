@@ -39,26 +39,12 @@ const (
 	WaterMarkType              = "waterMark"
 
 	// Default configurations
-	// Template parameter order:
-	//   OpenAIResponseFormatLegacy:          id, created (unix sec), content
-	//   OpenAIResponseFormatStructured:      id, created (unix sec), content, x_higress_guardrail JSON
-	//   OpenAIStreamResponseChunk:           id, created, content
-	//   OpenAIStreamResponseEndLegacy:       id, created
-	//   OpenAIStreamResponseEndStructured:   id, created, x_higress_guardrail JSON
-	//   OpenAIStreamResponseFormatLegacy:    id, created, content, id, created
-	//   OpenAIStreamResponseFormatStructured: id, created, content, id, created, x_higress_guardrail JSON
 	// `created` is required by openai-python (ChatCompletion.created is non-Optional).
 	// `finish_reason: "stop"` preserves wire-level compatibility with downstream
 	// consumers (LangChain / LiteLLM / SDKs / BI dashboards) that treat `stop` as
 	// "valid completion"; the moderation-event signal lives in the nested
 	// `choices[0].x_higress_guardrail` block (denyCode / blockedDetails) instead.
-	OpenAIResponseFormatLegacy           = `{"id":"%s","object":"chat.completion","created":%d,"model":"from-security-guard","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
-	OpenAIResponseFormatStructured       = `{"id":"%s","object":"chat.completion","created":%d,"model":"from-security-guard","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":"stop","x_higress_guardrail":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
-	OpenAIStreamResponseChunk            = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{"role":"assistant","content":"%s"},"logprobs":null,"finish_reason":null}]}`
-	OpenAIStreamResponseEndLegacy        = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
-	OpenAIStreamResponseEndStructured    = `data:{"id":"%s","object":"chat.completion.chunk","created":%d,"model":"from-security-guard","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop","x_higress_guardrail":%s}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
-	OpenAIStreamResponseFormatLegacy     = OpenAIStreamResponseChunk + "\n\n" + OpenAIStreamResponseEndLegacy + "\n\n" + `data: [DONE]`
-	OpenAIStreamResponseFormatStructured = OpenAIStreamResponseChunk + "\n\n" + OpenAIStreamResponseEndStructured + "\n\n" + `data: [DONE]`
+	OpenAIDenyModel = "from-security-guard"
 
 	OpenAIDenyResponseFormatLegacy     OpenAIDenyResponseFormat = "legacy"
 	OpenAIDenyResponseFormatStructured OpenAIDenyResponseFormat = "structured"
@@ -1051,6 +1037,120 @@ func openAIDenyContentType(isStream bool) [][2]string {
 	return [][2]string{{"content-type", "application/json"}}
 }
 
+type openAIUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type openAIMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type openAICompletionChoice struct {
+	Index        int             `json:"index"`
+	Message      openAIMessage   `json:"message"`
+	Logprobs     any             `json:"logprobs"`
+	FinishReason string          `json:"finish_reason"`
+	Guardrail    json.RawMessage `json:"x_higress_guardrail,omitempty"`
+}
+
+type openAICompletionResponse struct {
+	ID      string                   `json:"id"`
+	Object  string                   `json:"object"`
+	Created int64                    `json:"created"`
+	Model   string                   `json:"model"`
+	Choices []openAICompletionChoice `json:"choices"`
+	Usage   openAIUsage              `json:"usage"`
+}
+
+type openAIStreamChoice struct {
+	Index        int               `json:"index"`
+	Delta        map[string]string `json:"delta"`
+	Logprobs     any               `json:"logprobs"`
+	FinishReason *string           `json:"finish_reason"`
+	Guardrail    json.RawMessage   `json:"x_higress_guardrail,omitempty"`
+}
+
+type openAIStreamResponse struct {
+	ID      string               `json:"id"`
+	Object  string               `json:"object"`
+	Created int64                `json:"created"`
+	Model   string               `json:"model"`
+	Choices []openAIStreamChoice `json:"choices"`
+	Usage   *openAIUsage         `json:"usage,omitempty"`
+}
+
+func marshalOpenAIDenyData(content string, guardrailBody []byte, id string, created int64, isStream bool) ([]byte, error) {
+	guardrail := json.RawMessage(guardrailBody)
+	if !isStream {
+		return json.Marshal(openAICompletionResponse{
+			ID:      id,
+			Object:  "chat.completion",
+			Created: created,
+			Model:   OpenAIDenyModel,
+			Choices: []openAICompletionChoice{{
+				Index: 0,
+				Message: openAIMessage{
+					Role:    "assistant",
+					Content: content,
+				},
+				Logprobs:     nil,
+				FinishReason: "stop",
+				Guardrail:    guardrail,
+			}},
+			Usage: openAIUsage{},
+		})
+	}
+
+	firstFrame, err := json.Marshal(openAIStreamResponse{
+		ID:      id,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   OpenAIDenyModel,
+		Choices: []openAIStreamChoice{{
+			Index: 0,
+			Delta: map[string]string{
+				"role":    "assistant",
+				"content": content,
+			},
+			Logprobs:     nil,
+			FinishReason: nil,
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	stop := "stop"
+	finalFrame, err := json.Marshal(openAIStreamResponse{
+		ID:      id,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   OpenAIDenyModel,
+		Choices: []openAIStreamChoice{{
+			Index:        0,
+			Delta:        map[string]string{},
+			Logprobs:     nil,
+			FinishReason: &stop,
+			Guardrail:    guardrail,
+		}},
+		Usage: &openAIUsage{},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	data := make([]byte, 0, len(firstFrame))
+	data = append(data, "data:"...)
+	data = append(data, firstFrame...)
+	data = append(data, "\n\ndata:"...)
+	data = append(data, finalFrame...)
+	data = append(data, "\n\ndata: [DONE]"...)
+	return data, nil
+}
+
 // BuildOpenAIDenyData builds the complete OpenAI-formatted deny response bytes
 // (structured or legacy). Callers that need raw bytes (e.g. streaming response
 // handlers using InjectEncodedDataToFilterChain) use this directly; callers that
@@ -1061,25 +1161,17 @@ func BuildOpenAIDenyData(config AISecurityConfig, response Response, consumer st
 		if err != nil {
 			return nil, err
 		}
-		marshalledDenyMessage := wrapper.MarshalStr(ResolveDenyMessage(config))
 		randomID := utils.GenerateRandomChatID()
 		createdTs := time.Now().Unix()
-		if isStream {
-			return []byte(fmt.Sprintf(OpenAIStreamResponseFormatStructured, randomID, createdTs, marshalledDenyMessage, randomID, createdTs, string(guardrailBody))), nil
-		}
-		return []byte(fmt.Sprintf(OpenAIResponseFormatStructured, randomID, createdTs, marshalledDenyMessage, string(guardrailBody))), nil
+		return marshalOpenAIDenyData(ResolveDenyMessage(config), guardrailBody, randomID, createdTs, isStream)
 	}
 	denyBody, err := BuildDenyResponseBody(response, config, consumer)
 	if err != nil {
 		return nil, err
 	}
-	marshalledDenyBody := wrapper.MarshalStr(string(denyBody))
 	randomID := utils.GenerateRandomChatID()
 	createdTs := time.Now().Unix()
-	if isStream {
-		return []byte(fmt.Sprintf(OpenAIStreamResponseFormatLegacy, randomID, createdTs, marshalledDenyBody, randomID, createdTs)), nil
-	}
-	return []byte(fmt.Sprintf(OpenAIResponseFormatLegacy, randomID, createdTs, marshalledDenyBody)), nil
+	return marshalOpenAIDenyData(string(denyBody), nil, randomID, createdTs, isStream)
 }
 
 // SendDenyResponse dispatches a deny HTTP response in the appropriate format
@@ -1122,20 +1214,16 @@ func SendFallbackDenyResponse(config AISecurityConfig, isStream bool) error {
 		if err != nil {
 			return err
 		}
-		var data []byte
-		if isStream {
-			data = []byte(fmt.Sprintf(OpenAIStreamResponseFormatStructured, randomID, createdTs, marshalledDenyMessage, randomID, createdTs, string(guardrailBody)))
-		} else {
-			data = []byte(fmt.Sprintf(OpenAIResponseFormatStructured, randomID, createdTs, marshalledDenyMessage, string(guardrailBody)))
+		data, err := marshalOpenAIDenyData(ResolveDenyMessage(config), guardrailBody, randomID, createdTs, isStream)
+		if err != nil {
+			return err
 		}
 		proxywasm.SendHttpResponse(uint32(config.DenyCode), openAIDenyContentType(isStream), data, -1)
 		return nil
 	}
-	var data []byte
-	if isStream {
-		data = []byte(fmt.Sprintf(OpenAIStreamResponseFormatLegacy, randomID, createdTs, marshalledDenyMessage, randomID, createdTs))
-	} else {
-		data = []byte(fmt.Sprintf(OpenAIResponseFormatLegacy, randomID, createdTs, marshalledDenyMessage))
+	data, err := marshalOpenAIDenyData(ResolveDenyMessage(config), nil, randomID, createdTs, isStream)
+	if err != nil {
+		return err
 	}
 	proxywasm.SendHttpResponse(uint32(config.DenyCode), openAIDenyContentType(isStream), data, -1)
 	return nil
