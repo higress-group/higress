@@ -492,6 +492,14 @@ func (w *watcher) processToolConfig(dataId, data string, credentials map[string]
 			convertTool.Security = security
 		}
 
+		outputSchema, err := getOutputSchemaFromToolMeta(toolMeta)
+		if err != nil {
+			mcpServerLog.Errorf("get output schema from tool meta error:%v, tool name %v", err, t.Name)
+			continue
+		} else {
+			convertTool.OutputSchema = outputSchema
+		}
+
 		rule.Tools = append(rule.Tools, convertTool)
 	}
 
@@ -751,6 +759,30 @@ func getResponseTemplateFromToolMeta(toolMeta *provider.ToolsMeta) (*provider.Re
 		}
 	}
 	return nil, "", nil
+}
+
+func getOutputSchemaFromToolMeta(toolMeta *provider.ToolsMeta) (map[string]interface{}, error) {
+	if toolMeta == nil {
+		return nil, nil
+	}
+	toolTemplate := toolMeta.Templates
+	for kind, meta := range toolTemplate {
+		switch kind {
+		case provider.JsonGoTemplateType:
+			templateData, err := json.Marshal(meta)
+			if err != nil {
+				return nil, err
+			}
+			template := &provider.JsonGoTemplate{}
+			if err = json.Unmarshal(templateData, template); err != nil {
+				return nil, err
+			}
+			return template.OutputSchema, nil
+		default:
+			return nil, fmt.Errorf("unsupported tool meta type: %s", kind)
+		}
+	}
+	return nil, nil
 }
 
 func getSecurityFromToolMeta(toolMeta *provider.ToolsMeta) (*provider.ToolSecurity, error) {
