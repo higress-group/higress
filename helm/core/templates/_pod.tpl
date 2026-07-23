@@ -206,6 +206,8 @@ template:
         {{- if $o11y.enabled }}
         - mountPath: /var/log/proxy
           name: log
+        - mountPath: /var/lib/logrotate
+          name: logrotate-state
         {{- end }}
       {{- if $o11y.enabled }}
         {{- $config := $o11y.promtail }}
@@ -297,6 +299,8 @@ template:
       emptyDir: {}
     {{- if $o11y.enabled }}
     - name: log
+      emptyDir: {}
+    - name: logrotate-state
       emptyDir: {}
     - name: tmp
       emptyDir: {}
