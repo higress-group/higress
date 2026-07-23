@@ -361,6 +361,13 @@ func TestConsumerAffinity(t *testing.T) {
 	test.RunConsumerAffinityOnHttpRequestHeadersTests(t)
 }
 
+func TestSessionAffinity(t *testing.T) {
+	test.RunSessionAffinitySelectionTests(t)
+	test.RunSessionAffinityFailFastTests(t)
+	test.RunSessionAffinityPersistentFallbackTests(t)
+	test.RunSessionAffinityFallbackTests(t)
+}
+
 func TestOpenRouter(t *testing.T) {
 	test.RunOpenRouterClaudeAutoConversionTests(t)
 }

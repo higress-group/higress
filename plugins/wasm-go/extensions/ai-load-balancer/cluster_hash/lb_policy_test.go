@@ -21,6 +21,12 @@ func TestParseConfig_Valid(t *testing.T) {
 	if lb.HashHeader != DefaultHashHeader {
 		t.Errorf("expected default hash_header %q, got %q", DefaultHashHeader, lb.HashHeader)
 	}
+	if lb.Key.Source != hashKeySourceHeader {
+		t.Errorf("expected default key.source %q, got %q", hashKeySourceHeader, lb.Key.Source)
+	}
+	if lb.Key.Name != DefaultHashHeader {
+		t.Errorf("expected default key.name %q, got %q", DefaultHashHeader, lb.Key.Name)
+	}
 	if lb.ClusterHeader != DefaultClusterHeader {
 		t.Errorf("expected default cluster_header %q, got %q", DefaultClusterHeader, lb.ClusterHeader)
 	}
@@ -44,8 +50,151 @@ func TestParseConfig_CustomHeaders(t *testing.T) {
 	if lb.HashHeader != "x-custom-key" {
 		t.Errorf("got hash_header %q", lb.HashHeader)
 	}
+	if lb.Key.Name != "x-custom-key" {
+		t.Errorf("got key.name %q", lb.Key.Name)
+	}
 	if lb.ClusterHeader != "x-custom-target" {
 		t.Errorf("got cluster_header %q", lb.ClusterHeader)
+	}
+}
+
+func TestParseConfig_KeyHeader(t *testing.T) {
+	json := gjson.Parse(`{
+		"key": {"source": "header", "name": "x-session-id"},
+		"clusters": [
+			{"cluster": "outbound|443||llm-a.internal.dns", "weight": 100}
+		]
+	}`)
+	lb, err := NewClusterHashLoadBalancer(json)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if lb.Key.Source != hashKeySourceHeader {
+		t.Errorf("got key.source %q", lb.Key.Source)
+	}
+	if lb.Key.Name != "x-session-id" {
+		t.Errorf("got key.name %q", lb.Key.Name)
+	}
+}
+
+func TestParseConfig_KeyCookie(t *testing.T) {
+	json := gjson.Parse(`{
+		"key": {"source": "cookie", "name": "llm_session"},
+		"clusters": [
+			{"cluster": "outbound|443||llm-a.internal.dns", "weight": 100}
+		]
+	}`)
+	lb, err := NewClusterHashLoadBalancer(json)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if lb.Key.Source != hashKeySourceCookie {
+		t.Errorf("got key.source %q", lb.Key.Source)
+	}
+	if lb.Key.Name != "llm_session" {
+		t.Errorf("got key.name %q", lb.Key.Name)
+	}
+}
+
+func TestParseConfig_KeyCookieMissingName(t *testing.T) {
+	json := gjson.Parse(`{
+		"key": {"source": "cookie"},
+		"clusters": [
+			{"cluster": "outbound|443||llm-a.internal.dns", "weight": 100}
+		]
+	}`)
+	if _, err := NewClusterHashLoadBalancer(json); err == nil {
+		t.Fatal("expected error for cookie key without name")
+	}
+}
+
+func TestParseConfig_KeyBody(t *testing.T) {
+	json := gjson.Parse(`{
+		"key": {"source": "body", "jsonPath": "$.callOptions.stickySessionId", "max_body_bytes": 1024},
+		"clusters": [
+			{"cluster": "outbound|443||llm-a.internal.dns", "weight": 100}
+		]
+	}`)
+	lb, err := NewClusterHashLoadBalancer(json)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if lb.Key.Source != hashKeySourceBody {
+		t.Errorf("got key.source %q", lb.Key.Source)
+	}
+	if lb.Key.JSONPath != "callOptions.stickySessionId" {
+		t.Errorf("got json path %q", lb.Key.JSONPath)
+	}
+	if lb.Key.MaxBodyBytes != 1024 {
+		t.Errorf("got max body bytes %d", lb.Key.MaxBodyBytes)
+	}
+}
+
+func TestParseConfig_KeyBodyMissingJSONPath(t *testing.T) {
+	json := gjson.Parse(`{
+		"key": {"source": "body"},
+		"clusters": [
+			{"cluster": "outbound|443||llm-a.internal.dns", "weight": 100}
+		]
+	}`)
+	if _, err := NewClusterHashLoadBalancer(json); err == nil {
+		t.Fatal("expected error for body key without jsonPath")
+	}
+}
+
+func TestParseConfig_KeyBodyMaxBytesOverflow(t *testing.T) {
+	json := gjson.Parse(`{
+		"key": {"source": "body", "jsonPath": "$.callOptions.stickySessionId", "max_body_bytes": 4294967296},
+		"clusters": [
+			{"cluster": "outbound|443||llm-a.internal.dns", "weight": 100}
+		]
+	}`)
+	if _, err := NewClusterHashLoadBalancer(json); err == nil {
+		t.Fatal("expected error for max_body_bytes overflow")
+	}
+}
+
+func TestParseConfig_KeyMetadataName(t *testing.T) {
+	json := gjson.Parse(`{
+		"key": {"source": "metadata", "name": "selected_session_key"},
+		"clusters": [
+			{"cluster": "outbound|443||llm-a.internal.dns", "weight": 100}
+		]
+	}`)
+	lb, err := NewClusterHashLoadBalancer(json)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fmt.Sprint(lb.Key.PropertyPath) != "[metadata selected_session_key]" {
+		t.Errorf("got metadata path %v", lb.Key.PropertyPath)
+	}
+}
+
+func TestParseConfig_KeyMetadataPropertyPath(t *testing.T) {
+	json := gjson.Parse(`{
+		"key": {"source": "metadata", "propertyPath": ["plugin", "session"]},
+		"clusters": [
+			{"cluster": "outbound|443||llm-a.internal.dns", "weight": 100}
+		]
+	}`)
+	lb, err := NewClusterHashLoadBalancer(json)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fmt.Sprint(lb.Key.PropertyPath) != "[plugin session]" {
+		t.Errorf("got metadata path %v", lb.Key.PropertyPath)
+	}
+}
+
+func TestParseConfig_UnsupportedKeySource(t *testing.T) {
+	json := gjson.Parse(`{
+		"key": {"source": "query", "name": "session"},
+		"clusters": [
+			{"cluster": "outbound|443||llm-a.internal.dns", "weight": 100}
+		]
+	}`)
+	if _, err := NewClusterHashLoadBalancer(json); err == nil {
+		t.Fatal("expected error for unsupported key source")
 	}
 }
 
@@ -155,6 +304,24 @@ func TestSelectCluster_SingleCluster(t *testing.T) {
 	}
 }
 
+func TestExtractCookieHashKey(t *testing.T) {
+	got := extractCookieHashKey("theme=dark; llm_session=session-123; other=1", "llm_session")
+	if got != "session-123" {
+		t.Errorf("expected cookie value %q, got %q", "session-123", got)
+	}
+	if got := extractCookieHashKey("theme=dark", "llm_session"); got != "" {
+		t.Errorf("expected empty missing cookie, got %q", got)
+	}
+}
+
+func TestExtractBodyHashKey(t *testing.T) {
+	body := []byte(`{"model":"gpt-4o","callOptions":{"stickySessionId":"session-123"}}`)
+	got := extractBodyHashKey(body, "callOptions.stickySessionId")
+	if got != "session-123" {
+		t.Errorf("expected body key %q, got %q", "session-123", got)
+	}
+}
+
 func buildLB(t *testing.T, entries []clusterEntry) ClusterHashLoadBalancer {
 	t.Helper()
 	slots := make([]string, 0, 100)
@@ -166,6 +333,11 @@ func buildLB(t *testing.T, entries []clusterEntry) ClusterHashLoadBalancer {
 	return ClusterHashLoadBalancer{
 		HashHeader:    DefaultHashHeader,
 		ClusterHeader: DefaultClusterHeader,
-		slots:         slots,
+		Key: hashKeyConfig{
+			Source:       hashKeySourceHeader,
+			Name:         DefaultHashHeader,
+			MaxBodyBytes: DefaultMaxBodyBytes,
+		},
+		slots: slots,
 	}
 }

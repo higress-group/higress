@@ -7,9 +7,9 @@ import (
 	"net/http"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
-	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/tidwall/gjson"
 )
 
@@ -57,6 +57,38 @@ func (c *ProviderConfig) retryFailedRequest(activeProvider Provider, ctx wrapper
 	apiName, _ := ctx.GetContext(CtxKeyApiName).(ApiName)
 	ctx.SetContext(ctxRetryCount, 1)
 	return c.sendRetryRequest(ctx, apiName, activeProvider, retryClient, apiTokenInUse, apiTokens)
+}
+
+func (c *ProviderConfig) SendProviderFallbackRequest(ctx wrapper.HttpContext, activeProvider Provider, timeout uint32, callback func(int, http.Header, []byte)) error {
+	requestBody := ctx.GetByteSliceContext(CtxRequestBody, []byte(""))
+	c.setFallbackApiTokenInUse(ctx)
+	c.SetAvailableApiTokens(ctx)
+	modifiedHeaders, modifiedBody, err := c.transformRequestHeadersAndBody(ctx, activeProvider, [][2]string{
+		{"content-type", "application/json"},
+		{":authority", ctx.GetStringContext(CtxRequestHost, "")},
+		{":path", ctx.GetStringContext(CtxRequestPath, "")},
+	}, requestBody)
+	if err != nil {
+		return fmt.Errorf("fallback request failed to transform request headers and body: %w", err)
+	}
+	retryClient := createRetryClient()
+	return retryClient.Post(generateUrl(modifiedHeaders), util.HeaderToSlice(modifiedHeaders), modifiedBody, callback, timeout)
+}
+
+func (c *ProviderConfig) setFallbackApiTokenInUse(ctx wrapper.HttpContext) {
+	var apiToken string
+	if c.isFailoverEnabled() {
+		apiToken = c.GetGlobalRandomToken()
+	} else {
+		apiToken = c.selectApiToken(ctx)
+	}
+	log.Debugf("Use fallback apiToken to send request")
+	ctx.SetContext(c.failover.ctxApiTokenInUse, apiToken)
+}
+
+func (c *ProviderConfig) TransformFallbackResponse(ctx wrapper.HttpContext, activeProvider Provider, responseHeaders http.Header, responseBody []byte) ([][2]string, []byte) {
+	apiName, _ := ctx.GetContext(CtxKeyApiName).(ApiName)
+	return c.transformResponseHeadersAndBody(ctx, activeProvider, apiName, responseHeaders, responseBody)
 }
 
 func (c *ProviderConfig) transformResponseHeadersAndBody(ctx wrapper.HttpContext, activeProvider Provider, apiName ApiName, headers http.Header, body []byte) ([][2]string, []byte) {

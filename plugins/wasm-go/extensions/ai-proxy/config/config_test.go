@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/tidwall/gjson"
 )
 
@@ -162,3 +164,360 @@ func TestPluginConfig_OverrideMergeSimulatesParseOverride(t *testing.T) {
 		}
 	})
 }
+
+func TestPluginConfig_SessionAffinity(t *testing.T) {
+	t.Run("body_hash_selects_consistent_provider", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]},
+				{"id":"p2","type":"generic","genericHost":"http://127.0.0.1:8081","apiTokens":["u"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"type": "hash",
+				"key": {"source":"body","jsonPath":"$.callOptions.stickySessionId"}
+			}
+		}`))
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		c.providersByID = map[string]providerRuntime{
+			"p1": {config: &c.providerConfigs[0]},
+			"p2": {config: &c.providerConfigs[1]},
+		}
+
+		ctx := newConfigTestContext()
+		body := []byte(`{"callOptions":{"stickySessionId":"session-123"}}`)
+		if err := c.SelectProviderBySessionAffinity(ctx, body); err != nil {
+			t.Fatal(err)
+		}
+		wantID, err := c.sessionAffinity.selectProviderID("session-123")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.GetProviderConfig(ctx).GetId(); got != wantID {
+			t.Fatalf("selected provider = %q, want %q", got, wantID)
+		}
+	})
+
+	t.Run("provider_ids_limit_hash_ring", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]},
+				{"id":"p2","type":"generic","genericHost":"http://127.0.0.1:8081","apiTokens":["u"]},
+				{"id":"p3","type":"generic","genericHost":"http://127.0.0.1:8082","apiTokens":["v"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"providerIds": ["p2","p3"],
+				"key": {"source":"header","name":"x-session"}
+			}
+		}`))
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(c.sessionAffinity.providerOrder, ",") != "p2,p3" {
+			t.Fatalf("providerOrder = %v, want [p2 p3]", c.sessionAffinity.providerOrder)
+		}
+	})
+
+	t.Run("rejects_unknown_provider_id", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"providerIds": ["missing"],
+				"key": {"source":"header","name":"x-session"}
+			}
+		}`))
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "unknown provider") {
+			t.Fatalf("Validate() err = %v, want unknown provider", err)
+		}
+	})
+
+	t.Run("rejects_duplicate_provider_ids", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]},
+				{"id":"p2","type":"generic","genericHost":"http://127.0.0.1:8081","apiTokens":["u"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"providerIds": ["p1","p1"],
+				"key": {"source":"header","name":"x-session"}
+			}
+		}`))
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "duplicate provider") {
+			t.Fatalf("Validate() err = %v, want duplicate provider", err)
+		}
+	})
+
+	t.Run("rejects_body_without_json_path", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"key": {"source":"body"}
+			}
+		}`))
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "jsonPath") {
+			t.Fatalf("Validate() err = %v, want jsonPath", err)
+		}
+	})
+
+	t.Run("rejects_max_body_bytes_overflow", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"max_body_bytes": 4294967296,
+				"key": {"source":"body","jsonPath":"$.session"}
+			}
+		}`))
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "max_body_bytes") {
+			t.Fatalf("Validate() err = %v, want max_body_bytes", err)
+		}
+	})
+
+	t.Run("persistent_mode_accepts_ttl_seconds", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]},
+				{"id":"p2","type":"generic","genericHost":"http://127.0.0.1:8081","apiTokens":["u"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"mode": "persistent",
+				"ttlSeconds": 120,
+				"key": {"source":"body","jsonPath":"$.session"}
+			}
+		}`))
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if c.sessionAffinity.Type != sessionAffinityModePersistent {
+			t.Fatalf("mode = %q, want persistent", c.sessionAffinity.Type)
+		}
+		if c.sessionAffinity.TTLSeconds != 120 {
+			t.Fatalf("ttlSeconds = %d, want 120", c.sessionAffinity.TTLSeconds)
+		}
+	})
+
+	t.Run("metadata_key_name_maps_to_metadata_property", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"key": {"source":"metadata","name":"sticky_session_id"}
+			}
+		}`))
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(c.sessionAffinity.Key.PropertyPath, ".") != "metadata.sticky_session_id" {
+			t.Fatalf("property path = %v, want metadata.sticky_session_id", c.sessionAffinity.Key.PropertyPath)
+		}
+	})
+
+	t.Run("scope_model_requires_request_body", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"scope": ["model"],
+				"key": {"source":"header","name":"x-session"}
+			}
+		}`))
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if !c.NeedsSessionAffinityRequestBody() {
+			t.Fatal("scope model should require request body")
+		}
+	})
+
+	t.Run("on_provider_unavailable_fallback_and_update", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]},
+				{"id":"p2","type":"generic","genericHost":"http://127.0.0.1:8081","apiTokens":["u"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"mode": "persistent",
+				"onProviderUnavailable": "fallback_and_update",
+				"unavailableStatus": ["5.*"],
+				"key": {"source":"body","jsonPath":"$.session"}
+			}
+		}`))
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if c.sessionAffinity.OnUnavailable != sessionAffinityUnavailableFallbackAndUpdate {
+			t.Fatalf("onProviderUnavailable = %q, want fallbackAndUpdate", c.sessionAffinity.OnUnavailable)
+		}
+		if !c.NeedsSessionAffinityFallback() {
+			t.Fatal("fallbackAndUpdate should require request body capture")
+		}
+	})
+
+	t.Run("rejects_unknown_on_provider_unavailable", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"onProviderUnavailable": "teleport",
+				"key": {"source":"header","name":"x-session"}
+			}
+		}`))
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "onProviderUnavailable") {
+			t.Fatalf("Validate() err = %v, want onProviderUnavailable", err)
+		}
+	})
+
+	t.Run("rejects_fallback_timeout_overflow", func(t *testing.T) {
+		var c PluginConfig
+		c.FromJson(gjson.Parse(`{
+			"providers": [
+				{"id":"p1","type":"generic","genericHost":"http://127.0.0.1:8080","apiTokens":["t"]},
+				{"id":"p2","type":"generic","genericHost":"http://127.0.0.1:8081","apiTokens":["u"]}
+			],
+			"sessionAffinity": {
+				"enabled": true,
+				"onProviderUnavailable": "fallbackWithoutUpdate",
+				"fallbackTimeout": 4294967296,
+				"key": {"source":"header","name":"x-session"}
+			}
+		}`))
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "fallbackTimeout") {
+			t.Fatalf("Validate() err = %v, want fallbackTimeout overflow", err)
+		}
+	})
+
+	t.Run("prunes_expired_persistent_records", func(t *testing.T) {
+		records := map[string]sessionAffinityRecord{
+			"expired": {ProviderID: "p1", ExpiresAt: 99},
+			"live":    {ProviderID: "p2", ExpiresAt: 101},
+		}
+		pruneExpiredPersistentRecords(records, 100)
+		if _, ok := records["expired"]; ok {
+			t.Fatal("expired record should be pruned")
+		}
+		if _, ok := records["live"]; !ok {
+			t.Fatal("live record should remain")
+		}
+	})
+
+	t.Run("persistent_store_failure_keeps_hash_selected_provider", func(t *testing.T) {
+		c := sessionAffinityConfig{
+			Enabled:       true,
+			Type:          sessionAffinityModePersistent,
+			TTLSeconds:    60,
+			providerOrder: []string{"p1", "p2"},
+			sharedDataKey: "test-persistent-store-failure",
+		}
+		originalGetSharedData := getSharedData
+		originalSetSharedData := setSharedData
+		getSharedData = func(string) ([]byte, uint32, error) {
+			return nil, 1, nil
+		}
+		setSharedData = func(string, []byte, uint32) error {
+			return types.ErrorStatusCasMismatch
+		}
+		defer func() {
+			getSharedData = originalGetSharedData
+			setSharedData = originalSetSharedData
+		}()
+
+		wantID, err := c.selectHashProviderID("session-store-failure")
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotID, err := c.selectPersistentProviderID("session-store-failure")
+		if err != nil {
+			t.Fatalf("selectPersistentProviderID() err = %v, want nil", err)
+		}
+		if gotID != wantID {
+			t.Fatalf("selected provider = %q, want %q", gotID, wantID)
+		}
+	})
+}
+
+type configTestContext struct {
+	contextMap map[string]interface{}
+}
+
+func newConfigTestContext() *configTestContext {
+	return &configTestContext{contextMap: make(map[string]interface{})}
+}
+
+func (m *configTestContext) SetContext(key string, value interface{}) { m.contextMap[key] = value }
+func (m *configTestContext) GetContext(key string) interface{}        { return m.contextMap[key] }
+func (m *configTestContext) GetBoolContext(key string, def bool) bool { return def }
+func (m *configTestContext) GetStringContext(key, def string) string {
+	if value, ok := m.contextMap[key].(string); ok {
+		return value
+	}
+	return def
+}
+func (m *configTestContext) GetByteSliceContext(key string, def []byte) []byte { return def }
+func (m *configTestContext) Scheme() string                                    { return "" }
+func (m *configTestContext) Host() string                                      { return "" }
+func (m *configTestContext) Path() string                                      { return "" }
+func (m *configTestContext) Method() string                                    { return "" }
+func (m *configTestContext) GetUserAttribute(key string) interface{}           { return nil }
+func (m *configTestContext) SetUserAttribute(key string, value interface{})    {}
+func (m *configTestContext) SetUserAttributeMap(kvmap map[string]interface{})  {}
+func (m *configTestContext) GetUserAttributeMap() map[string]interface{}       { return nil }
+func (m *configTestContext) WriteUserAttributeToLog() error                    { return nil }
+func (m *configTestContext) WriteUserAttributeToLogWithKey(key string) error   { return nil }
+func (m *configTestContext) WriteUserAttributeToTrace() error                  { return nil }
+func (m *configTestContext) DontReadRequestBody()                              {}
+func (m *configTestContext) DontReadResponseBody()                             {}
+func (m *configTestContext) BufferRequestBody()                                {}
+func (m *configTestContext) BufferResponseBody()                               {}
+func (m *configTestContext) NeedPauseStreamingResponse()                       {}
+func (m *configTestContext) PushBuffer(buffer []byte)                          {}
+func (m *configTestContext) PopBuffer() []byte                                 { return nil }
+func (m *configTestContext) BufferQueueSize() int                              { return 0 }
+func (m *configTestContext) DisableReroute()                                   {}
+func (m *configTestContext) SetRequestBodyBufferLimit(byteSize uint32)         {}
+func (m *configTestContext) SetResponseBodyBufferLimit(byteSize uint32)        {}
+func (m *configTestContext) RouteCall(method, url string, headers [][2]string, body []byte, callback iface.RouteResponseCallback) error {
+	return nil
+}
+func (m *configTestContext) GetExecutionPhase() iface.HTTPExecutionPhase { return 0 }
+func (m *configTestContext) HasRequestBody() bool                        { return false }
+func (m *configTestContext) HasResponseBody() bool                       { return false }
+func (m *configTestContext) IsWebsocket() bool                           { return false }
+func (m *configTestContext) IsBinaryRequestBody() bool                   { return false }
+func (m *configTestContext) IsBinaryResponseBody() bool                  { return false }
