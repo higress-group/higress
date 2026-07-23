@@ -164,6 +164,7 @@ const (
 	providerTypeVllm       = "vllm"
 	providerTypeGeneric    = "generic"
 	providerTypeKling      = "kling"
+	providerTypeTokenPlan  = "tokenplan"
 
 	protocolOpenAI   = "openai"
 	protocolOriginal = "original"
@@ -259,6 +260,7 @@ var (
 		providerTypeVllm:       &vllmProviderInitializer{},
 		providerTypeGeneric:    &genericProviderInitializer{},
 		providerTypeKling:      &klingProviderInitializer{},
+		providerTypeTokenPlan:  &tokenplanProviderInitializer{},
 	}
 )
 
@@ -720,6 +722,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 		// 过滤掉不受支持的能力
 		switch capability {
 		case string(ApiNameChatCompletion),
+			string(ApiNameAnthropicMessages),
 			string(ApiNameEmbeddings),
 			string(ApiNameImageGeneration),
 			string(ApiNameImageVariation),
