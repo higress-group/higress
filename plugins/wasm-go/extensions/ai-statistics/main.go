@@ -34,7 +34,7 @@ func main() {}
 func init() {
 	wrapper.SetCtx(
 		"ai-statistics",
-		wrapper.ParseConfig(parseConfig),
+		wrapper.ParseOverrideConfig(parseConfig, parseOverrideConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
@@ -543,6 +543,86 @@ func isContentTypeEnabled(contentType string, enabledContentTypes []string) bool
 	return false
 }
 
+// parseAttributeArray parses the user-configured attributes array and validates rule values.
+func parseAttributeArray(attributeConfigs []gjson.Result) ([]Attribute, error) {
+	attributes := make([]Attribute, len(attributeConfigs))
+	for i, attributeConfig := range attributeConfigs {
+		attribute := Attribute{}
+		err := json.Unmarshal([]byte(attributeConfig.Raw), &attribute)
+		if err != nil {
+			log.Errorf("parse config failed, %v", err)
+			return nil, err
+		}
+		if attribute.Rule != "" && attribute.Rule != RuleFirst && attribute.Rule != RuleReplace && attribute.Rule != RuleAppend {
+			return nil, errors.New("value of rule must be one of [nil, first, replace, append]")
+		}
+		attributes[i] = attribute
+	}
+	return attributes, nil
+}
+
+// refreshBufferingFlags recalculates shouldBufferRequestBody/shouldBufferStreamingBody
+// based on the current attributes.
+func (config *AIStatisticsConfig) refreshBufferingFlags() {
+	config.shouldBufferRequestBody = false
+	config.shouldBufferStreamingBody = false
+	// Check if any attribute needs request body or streaming body buffering
+	for _, attribute := range config.attributes {
+		// Check for request body buffering
+		if attribute.ValueSource == RequestBody {
+			config.shouldBufferRequestBody = true
+		}
+		// Check for streaming body buffering (explicitly configured)
+		if attribute.ValueSource == ResponseStreamingBody {
+			config.shouldBufferStreamingBody = true
+		}
+		// For built-in attributes without explicit ValueSource, check default sources
+		if attribute.ValueSource == "" && isBuiltinAttribute(attribute.Key) {
+			defaultSources := getBuiltinAttributeDefaultSources(attribute.Key)
+			for _, src := range defaultSources {
+				if src == RequestBody {
+					config.shouldBufferRequestBody = true
+				}
+				// Only answer/reasoning/tool_calls need actual body buffering
+				// Token-related attributes are extracted from context, not from body
+				if src == ResponseStreamingBody && needsBodyBuffering(attribute.Key) {
+					config.shouldBufferStreamingBody = true
+				}
+			}
+		}
+	}
+}
+
+// parsePathSuffixes processes manually configured path suffixes,
+// where "*" means all paths are enabled (empty list).
+func parsePathSuffixes(pathSuffixes []gjson.Result) []string {
+	suffixes := make([]string, 0, len(pathSuffixes))
+	for _, suffix := range pathSuffixes {
+		suffixStr := suffix.String()
+		if suffixStr == "*" {
+			// Clear the suffixes list since * means all paths are enabled
+			return make([]string, 0)
+		}
+		suffixes = append(suffixes, suffixStr)
+	}
+	return suffixes
+}
+
+// parseContentTypes processes configured content types,
+// where "*" means all content types are enabled (empty list).
+func parseContentTypes(contentTypes []gjson.Result) []string {
+	types := make([]string, 0, len(contentTypes))
+	for _, contentType := range contentTypes {
+		contentTypeStr := contentType.String()
+		if contentTypeStr == "*" {
+			// Clear the content types list since * means all content types are enabled
+			return make([]string, 0)
+		}
+		types = append(types, contentTypeStr)
+	}
+	return types
+}
+
 func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 	// Check if use_default_attributes is enabled
 	useDefaultAttributes := configJson.Get("use_default_attributes").Bool()
@@ -575,46 +655,16 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 		}
 		log.Infof("Using default response attributes configuration (lightweight mode)")
 	} else {
-		config.attributes = make([]Attribute, len(attributeConfigs))
-		for i, attributeConfig := range attributeConfigs {
-			attribute := Attribute{}
-			err := json.Unmarshal([]byte(attributeConfig.Raw), &attribute)
-			if err != nil {
-				log.Errorf("parse config failed, %v", err)
-				return err
-			}
-			if attribute.Rule != "" && attribute.Rule != RuleFirst && attribute.Rule != RuleReplace && attribute.Rule != RuleAppend {
-				return errors.New("value of rule must be one of [nil, first, replace, append]")
-			}
-			config.attributes[i] = attribute
+		attributes, err := parseAttributeArray(attributeConfigs)
+		if err != nil {
+			return err
 		}
+		config.attributes = attributes
 	}
 
 	// Check if any attribute needs request body or streaming body buffering
-	for _, attribute := range config.attributes {
-		// Check for request body buffering
-		if attribute.ValueSource == RequestBody {
-			config.shouldBufferRequestBody = true
-		}
-		// Check for streaming body buffering (explicitly configured)
-		if attribute.ValueSource == ResponseStreamingBody {
-			config.shouldBufferStreamingBody = true
-		}
-		// For built-in attributes without explicit ValueSource, check default sources
-		if attribute.ValueSource == "" && isBuiltinAttribute(attribute.Key) {
-			defaultSources := getBuiltinAttributeDefaultSources(attribute.Key)
-			for _, src := range defaultSources {
-				if src == RequestBody {
-					config.shouldBufferRequestBody = true
-				}
-				// Only answer/reasoning/tool_calls need actual body buffering
-				// Token-related attributes are extracted from context, not from body
-				if src == ResponseStreamingBody && needsBodyBuffering(attribute.Key) {
-					config.shouldBufferStreamingBody = true
-				}
-			}
-		}
-	}
+	config.refreshBufferingFlags()
+
 	// Metric settings
 	config.counterMetrics = make(map[string]proxywasm.MetricCounter)
 
@@ -622,41 +672,75 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 	config.disableOpenaiUsage = configJson.Get("disable_openai_usage").Bool()
 
 	// Parse path suffix configuration
-	pathSuffixes := configJson.Get("enable_path_suffixes").Array()
-	config.enablePathSuffixes = make([]string, 0, len(pathSuffixes))
-
 	// If use_default_attributes or use_default_response_attributes is enabled and enable_path_suffixes is not configured, use default path suffixes
 	if (useDefaultAttributes || useDefaultResponseAttributes) && !configJson.Get("enable_path_suffixes").Exists() {
 		config.enablePathSuffixes = []string{"/completions", "/messages"}
 		log.Infof("Using default path suffixes: /completions, /messages")
 	} else {
 		// Process manually configured path suffixes
-		for _, suffix := range pathSuffixes {
-			suffixStr := suffix.String()
-			if suffixStr == "*" {
-				// Clear the suffixes list since * means all paths are enabled
-				config.enablePathSuffixes = make([]string, 0)
-				break
-			}
-			config.enablePathSuffixes = append(config.enablePathSuffixes, suffixStr)
-		}
+		config.enablePathSuffixes = parsePathSuffixes(configJson.Get("enable_path_suffixes").Array())
 	}
 
 	// Parse content type configuration
-	contentTypes := configJson.Get("enable_content_types").Array()
-	config.enableContentTypes = make([]string, 0, len(contentTypes))
-
-	for _, contentType := range contentTypes {
-		contentTypeStr := contentType.String()
-		if contentTypeStr == "*" {
-			// Clear the content types list since * means all content types are enabled
-			config.enableContentTypes = make([]string, 0)
-			break
-		}
-		config.enableContentTypes = append(config.enableContentTypes, contentTypeStr)
-	}
+	config.enableContentTypes = parseContentTypes(configJson.Get("enable_content_types").Array())
 
 	// Parse session ID header configuration
+	if sessionIdHeader := configJson.Get("session_id_header"); sessionIdHeader.Exists() {
+		config.sessionIdHeader = sessionIdHeader.String()
+	}
+
+	return nil
+}
+
+// parseOverrideConfig parses a rule-level config that inherits from the global config.
+// Fields are only overridden when they are explicitly present in the rule-level JSON,
+// so that a matchRule config no longer silently drops the global (defaultConfig) attributes.
+func parseOverrideConfig(configJson gjson.Result, global AIStatisticsConfig, config *AIStatisticsConfig) error {
+	// Inherit everything from the global config first.
+	*config = global
+	// Metric counters must not be shared between rule-level configs.
+	config.counterMetrics = make(map[string]proxywasm.MetricCounter)
+
+	useDefaultAttributes := configJson.Get("use_default_attributes")
+	useDefaultResponseAttributes := configJson.Get("use_default_response_attributes")
+	attributesJson := configJson.Get("attributes")
+
+	// Redefine the attribute set only when the rule explicitly configures it.
+	// An explicit false without an attributes array keeps the inherited global attributes.
+	attributesChanged := false
+	if useDefaultAttributes.Exists() && useDefaultAttributes.Bool() {
+		config.attributes = getDefaultAttributes()
+		attributesChanged = true
+		log.Infof("Using default attributes configuration for rule-level config")
+	} else if useDefaultResponseAttributes.Exists() && useDefaultResponseAttributes.Bool() {
+		config.attributes = getDefaultResponseAttributes()
+		attributesChanged = true
+		log.Infof("Using default response attributes configuration (lightweight mode) for rule-level config")
+	} else if attributesJson.Exists() {
+		attributes, err := parseAttributeArray(attributesJson.Array())
+		if err != nil {
+			return err
+		}
+		config.attributes = attributes
+		attributesChanged = true
+	}
+	if attributesChanged {
+		config.refreshBufferingFlags()
+	}
+
+	// Scalar/list fields are overridden only when explicitly present in the rule-level JSON.
+	if valueLengthLimit := configJson.Get("value_length_limit"); valueLengthLimit.Exists() {
+		config.valueLengthLimit = int(valueLengthLimit.Int())
+	}
+	if disableOpenaiUsage := configJson.Get("disable_openai_usage"); disableOpenaiUsage.Exists() {
+		config.disableOpenaiUsage = disableOpenaiUsage.Bool()
+	}
+	if enablePathSuffixes := configJson.Get("enable_path_suffixes"); enablePathSuffixes.Exists() {
+		config.enablePathSuffixes = parsePathSuffixes(enablePathSuffixes.Array())
+	}
+	if enableContentTypes := configJson.Get("enable_content_types"); enableContentTypes.Exists() {
+		config.enableContentTypes = parseContentTypes(enableContentTypes.Array())
+	}
 	if sessionIdHeader := configJson.Get("session_id_header"); sessionIdHeader.Exists() {
 		config.sessionIdHeader = sessionIdHeader.String()
 	}
