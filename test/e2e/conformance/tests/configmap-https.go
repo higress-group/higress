@@ -15,8 +15,13 @@
 package tests
 
 import (
+	"context"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/alibaba/higress/v2/test/e2e/conformance/utils/cert"
 	"github.com/alibaba/higress/v2/test/e2e/conformance/utils/http"
 	"github.com/alibaba/higress/v2/test/e2e/conformance/utils/suite"
 )
@@ -31,6 +36,39 @@ var ConfigmapHttps = suite.ConformanceTest{
 	Manifests:   []string{"tests/configmap-https.yaml"},
 	Features:    []suite.SupportedFeature{suite.HTTPConformanceFeature},
 	Test: func(t *testing.T, suite *suite.ConformanceTestSuite) {
+		fooCAOut, _, fooCA, fooCAKey := cert.MustGenerateCaCert(t)
+		fooCertOut, fooKeyOut := cert.MustGenerateCertWithCA(t, cert.ServerCertType, fooCA, fooCAKey, []string{"foo.com", "*.foo.com"})
+		barCAOut, _, barCA, barCAKey := cert.MustGenerateCaCert(t)
+		barCertOut, barKeyOut := cert.MustGenerateCertWithCA(t, cert.ServerCertType, barCA, barCAKey, []string{"bar.com"})
+
+		testContext := context.Background()
+		for _, secretUpdate := range []struct {
+			objectKey  client.ObjectKey
+			cert       []byte
+			privateKey []byte
+		}{
+			{
+				objectKey:  client.ObjectKey{Namespace: "higress-system", Name: "foo-com-secret"},
+				cert:       fooCertOut.Bytes(),
+				privateKey: fooKeyOut.Bytes(),
+			},
+			{
+				objectKey:  client.ObjectKey{Namespace: "higress-conformance-infra", Name: "bar-com-secret"},
+				cert:       barCertOut.Bytes(),
+				privateKey: barKeyOut.Bytes(),
+			},
+		} {
+			secret := &corev1.Secret{}
+			if err := suite.Client.Get(testContext, secretUpdate.objectKey, secret); err != nil {
+				t.Fatalf("failed to get TLS secret %s: %v", secretUpdate.objectKey, err)
+			}
+			secret.Data[corev1.TLSCertKey] = secretUpdate.cert
+			secret.Data[corev1.TLSPrivateKeyKey] = secretUpdate.privateKey
+			if err := suite.Client.Update(testContext, secret); err != nil {
+				t.Fatalf("failed to update TLS secret %s: %v", secretUpdate.objectKey, err)
+			}
+		}
+
 		testCases := []struct {
 			httpAssert http.Assertion
 		}{
@@ -47,6 +85,9 @@ var ConfigmapHttps = suite.ConformanceTest{
 							Host: "bar.com",
 							TLSConfig: &http.TLSConfig{
 								SNI: "bar.com",
+								Certificates: http.Certificates{
+									CACerts: [][]byte{barCAOut.Bytes()},
+								},
 							},
 						},
 						ExpectedRequest: &http.ExpectedRequest{
@@ -76,6 +117,9 @@ var ConfigmapHttps = suite.ConformanceTest{
 							Host: "a.foo.com",
 							TLSConfig: &http.TLSConfig{
 								SNI: "a.foo.com",
+								Certificates: http.Certificates{
+									CACerts: [][]byte{fooCAOut.Bytes()},
+								},
 							},
 						},
 						ExpectedRequest: &http.ExpectedRequest{
@@ -105,6 +149,9 @@ var ConfigmapHttps = suite.ConformanceTest{
 							Host: "b.foo.com",
 							TLSConfig: &http.TLSConfig{
 								SNI: "b.foo.com",
+								Certificates: http.Certificates{
+									CACerts: [][]byte{fooCAOut.Bytes()},
+								},
 							},
 						},
 						ExpectedRequest: &http.ExpectedRequest{

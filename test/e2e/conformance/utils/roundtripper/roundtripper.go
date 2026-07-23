@@ -128,13 +128,12 @@ func (d *DefaultRoundTripper) initTransport(client *http.Client, protocol string
 		}
 
 		tlsClientConfig = &tls.Config{
-			MinVersion:         tlsConfig.MinVersion,
-			MaxVersion:         tlsConfig.MaxVersion,
-			ServerName:         tlsConfig.SNI,
-			CipherSuites:       tlsConfig.CipherSuites,
-			RootCAs:            pool,
-			Certificates:       clientCerts,
-			InsecureSkipVerify: true,
+			MinVersion:   tlsConfig.MinVersion,
+			MaxVersion:   tlsConfig.MaxVersion,
+			ServerName:   tlsConfig.SNI,
+			CipherSuites: tlsConfig.CipherSuites,
+			RootCAs:      pool,
+			Certificates: clientCerts,
 		}
 	}
 
@@ -190,13 +189,12 @@ func (d *DefaultRoundTripper) CaptureRoundTrip(request Request) (*CapturedReques
 			TLSHandshakeTimeout: d.TimeoutConfig.TLSHandshakeTimeout,
 			DisableKeepAlives:   true,
 			TLSClientConfig: &tls.Config{
-				MinVersion:         request.TLSConfig.MinVersion,
-				MaxVersion:         request.TLSConfig.MaxVersion,
-				ServerName:         request.TLSConfig.SNI,
-				CipherSuites:       request.TLSConfig.CipherSuites,
-				RootCAs:            pool,
-				Certificates:       clientCerts,
-				InsecureSkipVerify: true,
+				MinVersion:   request.TLSConfig.MinVersion,
+				MaxVersion:   request.TLSConfig.MaxVersion,
+				ServerName:   request.TLSConfig.SNI,
+				CipherSuites: request.TLSConfig.CipherSuites,
+				RootCAs:      pool,
+				Certificates: clientCerts,
 			},
 		}
 	}

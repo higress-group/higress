@@ -36,7 +36,7 @@ var HTTPHttpsWithoutSni = suite.ConformanceTest{
 	Features:    []suite.SupportedFeature{suite.HTTPConformanceFeature},
 	Test: func(t *testing.T, suite *suite.ConformanceTestSuite) {
 		// Prepare secrets for testcases
-		_, _, caCert, caKey := cert.MustGenerateCaCert(t)
+		caCertOut, _, caCert, caKey := cert.MustGenerateCaCert(t)
 		svcCertOut, svcKeyOut := cert.MustGenerateCertWithCA(t, cert.ServerCertType, caCert, caKey, []string{"foo.com"})
 		fooSecret := kubernetes.ConstructTLSSecret("higress-conformance-infra", "foo-secret", svcCertOut.Bytes(), svcKeyOut.Bytes())
 		suite.Applier.MustApplyObjectsWithCleanup(t, suite.Client, suite.TimeoutConfig, []client.Object{fooSecret}, suite.Cleanup)
@@ -54,6 +54,9 @@ var HTTPHttpsWithoutSni = suite.ConformanceTest{
 						Host: "foo.com",
 						TLSConfig: &http.TLSConfig{
 							SNI: "foo.com",
+							Certificates: http.Certificates{
+								CACerts: [][]byte{caCertOut.Bytes()},
+							},
 						},
 					},
 					ExpectedRequest: &http.ExpectedRequest{
@@ -77,9 +80,13 @@ var HTTPHttpsWithoutSni = suite.ConformanceTest{
 				},
 				Request: http.AssertionRequest{
 					ActualRequest: http.Request{
-						Path:      "/foo",
-						Host:      "foo.com",
-						TLSConfig: &http.TLSConfig{},
+						Path: "/foo",
+						Host: "foo.com",
+						TLSConfig: &http.TLSConfig{
+							Certificates: http.Certificates{
+								CACerts: [][]byte{caCertOut.Bytes()},
+							},
+						},
 					},
 					ExpectedRequest: &http.ExpectedRequest{
 						Request: http.Request{
