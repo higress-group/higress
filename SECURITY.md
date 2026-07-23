@@ -17,11 +17,15 @@ your contributions.
 **Please do NOT report security vulnerabilities through public GitHub issues,
 discussions, or pull requests.**
 
-Instead, please report them through **both** of the following private channels:
+Every vulnerability report must be submitted through both of the following
+private channels. Please provide the same substantive report to each channel
+and, when available, include the case identifier from the other channel so the
+Security Response Team can correlate the records. Do not wait for one channel
+to acknowledge the report before submitting it to the other.
 
-1. **GitHub Private Security Advisory**:
+1. **GitHub Private Security Advisory (required)**:
    <https://github.com/higress-group/higress/security/advisories/new>
-2. **Alibaba Security Response Center (ASRC)**:
+2. **Alibaba Security Response Center (required)**:
    <https://security.alibaba.com/>
 
 Please include as much of the following information as possible to help us
@@ -53,9 +57,58 @@ keep you informed of our progress throughout the process.
 
 ## Security Response Team
 
-The Higress security response is handled by the project maintainers listed in
-[`MAINTAINERS.md`](./MAINTAINERS.md). Security reports submitted via GitHub
-Private Security Advisory are visible to all current maintainers.
+The Security Response Team (SRT) is composed of the current project
+maintainers:
+
+- Yiquan Dong ([@CH3CHO](https://github.com/CH3CHO))
+- Yuanxiao Zhao ([@EndlessSeeker](https://github.com/EndlessSeeker))
+- Leilei Geng ([@gengleilei](https://github.com/gengleilei))
+- Xiantao Han ([@hanxiantao](https://github.com/hanxiantao))
+- Zhiwei Cheng ([@cr7258](https://github.com/cr7258))
+- Tianyi Zhang ([@johnlanni](https://github.com/johnlanni))
+- Jingfeng Xu ([@lexburner](https://github.com/lexburner))
+
+[`MAINTAINERS.md`](./MAINTAINERS.md) is authoritative for membership. A merged
+change to that roster onboards or offboards the same person from the SRT and
+their private security access must be updated promptly.
+
+For each report, the SRT assigns the following responsibilities in the private
+advisory or equivalent confidential case record:
+
+- **Triage coordinator**: acknowledges the report, maintains contact with the
+  reporter, assigns severity, tracks deadlines, and coordinates the team.
+- **Fix lead**: reproduces the issue and develops or coordinates remediation.
+- **Reviewer and release lead**: independently reviews the fix, prepares the
+  supported-version releases, and verifies that artifacts are available.
+- **Disclosure lead**: prepares the advisory, CVE request when appropriate,
+  credits, and coordinated public communication.
+
+One person may perform more than one role, but every confirmed vulnerability
+must involve at least two unconflicted SRT members so that remediation receives
+independent review.
+
+### Report handling, conflicts, and escalation
+
+1. The SRT correlates the required GitHub Private Security Advisory and Alibaba
+   Security Response Center submissions. The GitHub advisory or an equivalent
+   access-controlled project record contains the report, assignments,
+   decisions, timeline, fix, and disclosure plan; material status and
+   disclosure updates are reflected in both required reporting records.
+2. An SRT member with a personal, employer, or product conflict must disclose
+   it privately and recuse from severity, release, or disclosure decisions for
+   that case. The triage coordinator assigns an unconflicted replacement.
+3. If acknowledgement, triage, remediation, or disclosure is at risk of
+   missing the timelines in this policy, the triage coordinator escalates the
+   case to the full unconflicted SRT and records a revised plan. Critical
+   vulnerabilities are escalated immediately.
+4. If a reporter receives no acknowledgement within three business days, they
+   should follow up through both private reporting channels and reference both
+   case identifiers when available. No vulnerability details should be posted
+   publicly.
+5. If fewer than two SRT members are unconflicted, the unconflicted member
+   escalates confidentially to the CNCF TOC private mailing list at
+   [cncf-private-toc@lists.cncf.io](mailto:cncf-private-toc@lists.cncf.io)
+   before a release or disclosure decision is made.
 
 ## Disclosure Policy
 

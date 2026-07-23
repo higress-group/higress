@@ -8,8 +8,8 @@
 
 <div align="center">
     
-[![Build Status](https://github.com/alibaba/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/alibaba/higress/actions)
-[![license](https://img.shields.io/github/license/alibaba/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
+[![Build Status](https://github.com/higress-group/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/higress-group/higress/actions)
+[![license](https://img.shields.io/github/license/higress-group/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
 [![CNCF Sandbox](https://img.shields.io/badge/CNCF-Sandbox-30638E?logo=linuxfoundation&logoColor=white)](https://www.cncf.io/projects/)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12667/badge)](https://www.bestpractices.dev/projects/12667)
 
@@ -37,7 +37,7 @@ Higress 是一款云原生 API 网关，内核基于 Istio 和 Envoy，可以用
 
 ### 核心使用场景
 
-Higress 的 AI 网关能力支持国内外所有[主流模型供应商](https://github.com/alibaba/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider)和基于 vllm/ollama 等自建的 DeepSeek 模型。同时，Higress 支持通过插件方式托管 MCP (Model Context Protocol) 服务器，使 AI Agent 能够更容易地调用各种工具和服务。借助 [openapi-to-mcp 工具](https://github.com/higress-group/openapi-to-mcpserver)，您可以快速将 OpenAPI 规范转换为远程 MCP 服务器进行托管。Higress 提供了对 LLM API 和 MCP API 的统一管理。
+Higress 的 AI 网关能力支持国内外所有[主流模型供应商](https://github.com/higress-group/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider)和基于 vllm/ollama 等自建的 DeepSeek 模型。同时，Higress 支持通过插件方式托管 MCP (Model Context Protocol) 服务器，使 AI Agent 能够更容易地调用各种工具和服务。借助 [openapi-to-mcp 工具](https://github.com/higress-group/openapi-to-mcpserver)，您可以快速将 OpenAPI 规范转换为远程 MCP 服务器进行托管。Higress 提供了对 LLM API 和 MCP API 的统一管理。
 
 **🌟 立即体验 [https://mcp.higress.ai/](https://mcp.higress.ai/)** 基于 Higress 托管的远程 MCP 服务器:
 
@@ -45,13 +45,10 @@ Higress 的 AI 网关能力支持国内外所有[主流模型供应商](https://
 
 ### 生产环境采用
 
-Higress 在阿里内部为解决 Tengine reload 对长连接业务有损，以及 gRPC/Dubbo 负载均衡能力不足而诞生。在阿里云内部，Higress 的 AI 网关能力支撑了通义千问 APP、通义百炼模型工作室、机器学习 PAI 平台等核心 AI 应用。同时服务国内头部的 AIGC 企业（如零一万物），以及 AI 产品（如 FastGPT）。阿里云基于 Higress 构建了云原生 API 网关产品，为大量企业客户提供 99.99% 的网关高可用保障服务能力。
-
-可以点下方按钮安装企业版 Higress: 
-
-[![Deploy on AlibabaCloud](https://img.alicdn.com/imgextra/i4/O1CN01tHRaNm22hflDqxKV5_!!6000000007152-55-tps-170-40.svg)](https://www.aliyun.com/product/apigateway?spm=higress-github.topbar.0.0.0)
-
-如果您使用开源的Higress并希望获得企业级支持，可以联系johnlanni的邮箱：zty98751@alibaba-inc.com或社交媒体账号（微信号：nomadao，钉钉号：chengtanzty）。添加好友时请备注Higress :）
+Higress 最初在阿里内部为解决网关 reload 对长连接业务有损，以及
+gRPC/Dubbo 负载均衡能力不足而诞生。Higress 目前作为厂商中立的 CNCF
+项目由社区共同开发，并已被多个行业的组织采用。公开采用者和使用场景见
+[`ADOPTERS.md`](./ADOPTERS.md)。
 
 ## Summary
 
@@ -80,7 +77,8 @@ docker run -d --rm --name higress-ai -v ${PWD}:/data \
 - 8080 端口：网关 HTTP 协议入口
 - 8443 端口：网关 HTTPS 协议入口
 
-**Higress 的所有 Docker 镜像都一直使用自己独享的仓库，不受 Docker Hub 境内访问受限的影响**
+**Higress 通过多个区域的项目镜像仓库发布镜像。使用者也可以将镜像同步到
+自己控制的仓库，并通过 Helm 的 `global.hub` 参数进行配置。**
 
 > 如果从 `higress-registry.cn-hangzhou.cr.aliyuncs.com` 拉取镜像超时，可以尝试使用以下镜像加速源：
 > 
@@ -101,8 +99,6 @@ docker run -d --rm --name higress-ai -v ${PWD}:/data \
 > - **东南亚**: `higress-registry.ap-southeast-7.cr.aliyuncs.com`
 
 K8s 下使用 Helm 部署等其他安装方式可以参考官网 [Quick Start 文档](https://higress.cn/docs/latest/user/quickstart/)。
-
-如果您是在云上部署，推荐使用[企业版](https://www.aliyun.com/product/apigateway?spm=higress-github.topbar.0.0.0)
 
 ## 使用场景
 
@@ -261,13 +257,13 @@ Higress 社区遵循 [**CNCF Code of Conduct**](https://github.com/cncf/foundati
 
 ### 贡献者
 
-<a href="https://github.com/alibaba/higress/graphs/contributors">
-  <img alt="contributors" src="https://contrib.rocks/image?repo=alibaba/higress"/>
+<a href="https://github.com/higress-group/higress/graphs/contributors">
+  <img alt="contributors" src="https://contrib.rocks/image?repo=higress-group/higress"/>
 </a>
 
 ### Star History
 
-[![Star History](https://api.star-history.com/svg?repos=alibaba/higress&type=Date)](https://star-history.com/#alibaba/higress&Date)
+[![Star History](https://api.star-history.com/svg?repos=higress-group/higress&type=Date)](https://star-history.com/#higress-group/higress&Date)
 
 ---
 

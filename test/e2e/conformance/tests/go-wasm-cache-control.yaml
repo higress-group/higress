@@ -45,4 +45,4 @@ spec:
       configDisable: false
       ingress:
         - higress-conformance-infra/wasmplugin-cache-control
-  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cache-control:2.0.0
+  url: file:///opt/plugins/wasm-go/extensions/cache-control/plugin.wasm
