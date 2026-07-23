@@ -117,7 +117,7 @@ func init() {
 }
 
 func parseGlobalConfig(json gjson.Result, pluginConfig *config.PluginConfig) error {
-	log.Debugf("loading global config: %s", json.String())
+	log.Debug("loading global config")
 
 	pluginConfig.FromJson(json)
 	if err := pluginConfig.Validate(); err != nil {
@@ -133,18 +133,20 @@ func parseGlobalConfig(json gjson.Result, pluginConfig *config.PluginConfig) err
 }
 
 func parseOverrideRuleConfig(json gjson.Result, global config.PluginConfig, pluginConfig *config.PluginConfig) error {
-	log.Debugf("loading override rule config: %s", json.String())
+	log.Debug("loading override rule config")
 
 	*pluginConfig = global
 
 	pluginConfig.FromJson(json)
 	if err := pluginConfig.Validate(); err != nil {
-		log.Errorf("overridden rule config is invalid: %v", err)
-		return err
+		log.Errorf("overridden rule config is invalid and will be disabled: %v", err)
+		pluginConfig.Disable()
+		return nil
 	}
 	if err := pluginConfig.Complete(); err != nil {
-		log.Errorf("failed to apply overridden rule config: %v", err)
-		return err
+		log.Errorf("failed to apply overridden rule config and it will be disabled: %v", err)
+		pluginConfig.Disable()
+		return nil
 	}
 
 	return nil
@@ -215,6 +217,18 @@ func saveContextsToHeaders(ctx wrapper.HttpContext) {
 }
 
 func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConfig) types.Action {
+	if pluginConfig.IsDisabled() {
+		log.Error("[onHttpRequestHeader] provider rule is disabled because its configuration is invalid")
+		_ = proxywasm.SendHttpResponseWithDetail(
+			500,
+			"ai-proxy.invalid_provider_config",
+			[][2]string{{"content-type", "text/plain"}},
+			[]byte("AI provider configuration is invalid"),
+			-1,
+		)
+		return types.ActionPause
+	}
+
 	activeProvider := pluginConfig.GetProvider()
 
 	if activeProvider == nil {
