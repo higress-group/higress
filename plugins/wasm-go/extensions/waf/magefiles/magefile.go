@@ -17,6 +17,11 @@ var minGoVersion = "1.19"
 var tinygoMinorVersion = "0.28"
 var Default = Build
 
+const (
+	defaultInitialPages = uint32(2100)
+	maxWasmMemoryPages  = uint64(65536)
+)
+
 func init() {
 	for _, check := range []func() error{
 		checkTinygoVersion,
@@ -100,13 +105,13 @@ func Build() error {
 	buildTagArg := fmt.Sprintf("-tags='%s'", strings.Join(buildTags, " "))
 
 	// ~100MB initial heap
-	initialPages := 2100
+	initialPages := defaultInitialPages
 	if ipEnv := os.Getenv("INITIAL_PAGES"); ipEnv != "" {
-		if ip, err := strconv.Atoi(ipEnv); err != nil {
-			return err
-		} else {
-			initialPages = ip
+		ip, err := strconv.ParseUint(ipEnv, 10, 32)
+		if err != nil || ip == 0 || ip > maxWasmMemoryPages {
+			return fmt.Errorf("invalid INITIAL_PAGES %q: must be between 1 and %d", ipEnv, maxWasmMemoryPages)
 		}
+		initialPages = uint32(ip)
 	}
 
 	if err := sh.RunV("tinygo", "build", "-gc=custom", "-opt=2", "-o", filepath.Join("local", "mainraw.wasm"), "-scheduler=none", "-target=wasi", buildTagArg); err != nil {
@@ -124,7 +129,7 @@ func Build() error {
 	return nil
 }
 
-func patchWasm(inPath, outPath string, initialPages int) error {
+func patchWasm(inPath, outPath string, initialPages uint32) error {
 	raw, err := os.ReadFile(inPath)
 	if err != nil {
 		return err
@@ -134,7 +139,7 @@ func patchWasm(inPath, outPath string, initialPages int) error {
 		return err
 	}
 
-	mod.MemorySection.Min = uint32(initialPages)
+	mod.MemorySection.Min = initialPages
 
 	for _, imp := range mod.ImportSection {
 		switch {
