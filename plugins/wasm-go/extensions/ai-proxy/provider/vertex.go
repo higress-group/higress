@@ -633,7 +633,7 @@ func (v *vertexProvider) buildVertexImageRequest(prompt string, size string, out
 		}
 	}
 
-	parts := make([]vertexPart, 0, len(imageURLs)+1)
+	parts := make([]vertexPart, 0, len(imageURLs))
 	for _, imageURL := range imageURLs {
 		part, err := convertMediaContent(imageURL)
 		if err != nil {

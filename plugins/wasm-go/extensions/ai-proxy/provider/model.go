@@ -646,7 +646,7 @@ type imageEditRequest struct {
 }
 
 func (r *imageEditRequest) GetImageURLs() []string {
-	urls := make([]string, 0, len(r.Images)+2)
+	urls := make([]string, 0, len(r.Images))
 	for _, image := range r.Images {
 		if url := image.GetURL(); url != "" {
 			urls = append(urls, url)
@@ -690,7 +690,7 @@ type imageVariationRequest struct {
 }
 
 func (r *imageVariationRequest) GetImageURLs() []string {
-	urls := make([]string, 0, len(r.Images)+2)
+	urls := make([]string, 0, len(r.Images))
 	for _, image := range r.Images {
 		if url := image.GetURL(); url != "" {
 			urls = append(urls, url)
