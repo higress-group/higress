@@ -75,6 +75,15 @@ func RunMapRequestPathByCapabilityTests(t *testing.T) {
 			expected: "/v1/batches/batch-002/cancel",
 		},
 		{
+			name:    "retrieve model replaces model id",
+			apiName: "openai/v1/retrievemodel",
+			origin:  "/openai/v1/models/ft:gpt-4o-mini:org:abc123?include=metadata",
+			mapping: map[string]string{
+				"openai/v1/retrievemodel": "/v1/models/{model_id}",
+			},
+			expected: "/v1/models/ft:gpt-4o-mini:org:abc123?include=metadata",
+		},
+		{
 			name:    "video placeholder is replaced",
 			apiName: "openai/v1/retrievevideo",
 			origin:  "/openai/v1/videos/video-xyz",
