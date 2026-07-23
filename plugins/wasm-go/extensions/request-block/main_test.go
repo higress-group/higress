@@ -501,7 +501,6 @@ func TestBlockUrlByRegexpEdgeCases(t *testing.T) {
 					"case_sensitive":    true,
 					"blocked_code":      403,
 					"blocked_message":   "Blocked by regexp",
-					"block_urls":        []string{"dummy"}, // 添加一个dummy规则以满足配置检查
 					"block_regexp_urls": []string{`/api/v\d+/users/\d+/posts`},
 				})
 				return data
@@ -534,7 +533,6 @@ func TestBlockUrlByRegexpEdgeCases(t *testing.T) {
 					"case_sensitive":    true,
 					"blocked_code":      403,
 					"blocked_message":   "Blocked by regexp",
-					"block_urls":        []string{"dummy"}, // 添加一个dummy规则以满足配置检查
 					"block_regexp_urls": []string{`/api/v\d+/blocked`},
 				})
 				return data
@@ -558,5 +556,116 @@ func TestBlockUrlByRegexpEdgeCases(t *testing.T) {
 			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
 			host.CompleteHttp()
 		})
+	})
+}
+
+// TestBlockRegexpUrlsOnly verifies that a config containing only
+// block_regexp_urls (no block_urls, no block_exact_urls, no block_headers, no
+// block_bodies) is accepted by parseConfig AND that requests matching the
+// pattern are actually blocked at runtime. Previously parseConfig rejected the
+// config with "there is no block rules" and the runtime guard skipped the
+// regexp loop entirely.
+func TestBlockRegexpUrlsOnly(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		regexpOnlyConfig := func() json.RawMessage {
+			data, _ := json.Marshal(map[string]interface{}{
+				"blocked_code":      403,
+				"blocked_message":   "Access denied",
+				"block_regexp_urls": []string{`/api/v\d+/blocked`},
+			})
+			return data
+		}()
+
+		host, status := test.NewTestHost(regexpOnlyConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"},
+			{":path", "/api/v2/blocked"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+
+		localResponse := host.GetLocalResponse()
+		require.NotNil(t, localResponse, "regexp-only config must block matching requests")
+		require.Equal(t, uint32(403), localResponse.StatusCode)
+		require.Equal(t, "Access denied", string(localResponse.Data))
+		host.CompleteHttp()
+	})
+}
+
+// TestBlockExactUrlsOnly verifies that a config containing only
+// block_exact_urls is accepted by parseConfig AND that exact-match requests
+// are actually blocked at runtime. Same class of bug as regexp-only.
+func TestBlockExactUrlsOnly(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		exactOnlyConfig := func() json.RawMessage {
+			data, _ := json.Marshal(map[string]interface{}{
+				"blocked_code":     403,
+				"blocked_message":  "Access denied",
+				"block_exact_urls": []string{"/admin", "/internal/secrets"},
+			})
+			return data
+		}()
+
+		host, status := test.NewTestHost(exactOnlyConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"},
+			{":path", "/admin"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+
+		localResponse := host.GetLocalResponse()
+		require.NotNil(t, localResponse, "exact-only config must block matching requests")
+		require.Equal(t, uint32(403), localResponse.StatusCode)
+		host.CompleteHttp()
+	})
+}
+
+// TestParseConfigAcceptsRegexpOnly is the parseConfig-level companion to
+// TestBlockRegexpUrlsOnly — locks in that a config with only block_regexp_urls
+// passes parse-time validation.
+func TestParseConfigAcceptsRegexpOnly(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		regexpOnlyConfig := func() json.RawMessage {
+			data, _ := json.Marshal(map[string]interface{}{
+				"block_regexp_urls": []string{`/api/v\d+/blocked`},
+			})
+			return data
+		}()
+
+		host, status := test.NewTestHost(regexpOnlyConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		config, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		require.NotNil(t, config)
+		require.Len(t, config.(*RequestBlockConfig).blockRegExpArray, 1)
+	})
+}
+
+// TestParseConfigAcceptsExactOnly is the parseConfig-level companion to
+// TestBlockExactUrlsOnly.
+func TestParseConfigAcceptsExactOnly(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		exactOnlyConfig := func() json.RawMessage {
+			data, _ := json.Marshal(map[string]interface{}{
+				"block_exact_urls": []string{"/admin"},
+			})
+			return data
+		}()
+
+		host, status := test.NewTestHost(exactOnlyConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		config, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		require.NotNil(t, config)
+		require.Contains(t, config.(*RequestBlockConfig).blockExactUrls, "/admin")
 	})
 }
