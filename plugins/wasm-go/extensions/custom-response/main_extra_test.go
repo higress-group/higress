@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -144,6 +145,22 @@ func TestParseRuleItem_InvalidStatusCode_StartFails(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusFailed, status)
 	})
+}
+
+func TestParseRuleItem_OutOfRangeStatusCode_StartFails(t *testing.T) {
+	for _, statusCode := range []any{-1, 99, 600, "4294967296"} {
+		t.Run(fmt.Sprint(statusCode), func(t *testing.T) {
+			test.RunGoTest(t, func(t *testing.T) {
+				cfg := mustConfigBytes(t, map[string]interface{}{
+					"status_code": statusCode,
+					"body":        "x",
+				})
+				host, status := test.NewTestHost(cfg)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusFailed, status)
+			})
+		})
+	}
 }
 
 // === Module C — parseConfig error paths =================================

@@ -125,8 +125,8 @@ func parseRuleItem(gjson gjson.Result, rule *CustomResponseRule) error {
 	rule.statusCode = 200
 	if gjson.Get("status_code").Exists() {
 		statusCode := gjson.Get("status_code")
-		parsedStatusCode, err := strconv.Atoi(statusCode.String())
-		if err != nil {
+		parsedStatusCode, err := strconv.ParseUint(statusCode.String(), 10, 32)
+		if err != nil || parsedStatusCode < 100 || parsedStatusCode > 599 {
 			return fmt.Errorf("invalid status code value: %s", statusCode.String())
 		}
 		rule.statusCode = uint32(parsedStatusCode)
