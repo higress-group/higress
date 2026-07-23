@@ -24,6 +24,7 @@ description: 针对LLM服务的负载均衡策略
 - `global_least_request`: 基于redis实现的全局最小请求数负载均衡
 - `prefix_cache`: 基于 prompt 前缀匹配选择后端节点，如果通过前缀匹配无法匹配到节点，则通过全局最小请求数进行服务节点的选择
 - `endpoint_metrics`: 基于 llm 服务暴露的 metrics 进行负载均衡
+- `endpoint_hash`: 基于 Redis 的有状态会话保持。读取指定请求头作为 key，将相同 key 的请求始终路由到同一个后端节点（host）；首次出现的 key 由服务自身默认 LB 选址并记录，后续请求复用；当请求缺少该 key 时，退化为服务自身的默认负载均衡策略
 
 `lb_type` 为 `cluster` 时支持的负载均衡策略包括：
 - `cluster_metrics`: 基于网关统计的不同service的指标进行服务之间的负载均衡
@@ -238,6 +239,79 @@ lb_config:
   - outbound|80||test-1.dns
   - outbound|80||test-2.static
 ```
+
+# Endpoint Hash（基于 Redis 的有状态会话保持）
+
+## 功能说明
+
+读取指定请求头的值作为 key，把相同 key 的请求**粘性**路由到同一个后端节点（host），实现会话保持。映射关系保存在 Redis 中，跨网关实例共享、重启不丢失。
+
+选址顺序：
+
+1. 请求**缺少** `hash_header` 指定的请求头 → 不介入选址，直接走服务自身默认 LB，不记录状态。
+2. key 存在 → 用 FNV-1a 对 key 做 hash，按 `路由名:集群名:hash` 作为 Redis key 查询：
+   - **命中**且记录的 host 仍健康 → `SetUpstreamOverrideHost` 固定到该 host，并刷新 TTL。
+   - **未命中**（首次出现）或记录的 host 已不健康 → 不 override，让**服务自身默认 LB**选址；在响应阶段读取实际选中的 host（`upstream.address`），写回 Redis 供后续请求复用。
+
+与 `cluster_hash` 的区别：
+- `endpoint_hash` 作用在 **endpoint 级**，通过 `SetUpstreamOverrideHost` 在已选定的 cluster 内部固定 host（机制与 `global_least_request` 一致），无需配合 EnvoyFilter。
+- **有状态**：首次选址由默认 LB（如 least-request）决定，兼顾负载均衡；之后稳定粘住，且记录写入 Redis 后**不随扩缩容迁移**（除非该 host 不健康才重新选址）。
+- Redis 不可用 / 缺 header / 无健康节点时，均**优雅退化**为服务自身默认 LB，不拒绝请求。
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant H as Higress
+    participant R as Redis
+    participant LB as 默认 LB
+    participant Ht as Host(目标)
+
+    C ->> H: 发起请求(携带 hash_header)
+    H ->> R: GET 路由名:集群名:hash(key)
+    alt 命中且 host 健康
+        R ->> H: 返回已绑定 host
+        H ->> R: EXPIRE 续期 TTL
+        H ->> Ht: SetUpstreamOverrideHost，转发到绑定 host
+    else 未命中 / host 失效
+        R ->> H: 空 / 失效
+        H ->> LB: 不 override，交给服务默认 LB 选址
+        LB ->> Ht: 转发到默认 LB 选中的 host
+        H ->> R: 响应头阶段读取 upstream.address，SETEX 写回映射
+    end
+    Ht ->> H: 返回响应
+    H ->> C: 返回响应
+```
+
+## 配置说明
+
+| 名称 | 数据类型 | 填写要求 | 默认值 | 描述 |
+|------|----------|----------|--------|------|
+| `hash_header` | string | 选填 | `x-mse-consumer` | 读取 hash key 的请求头名称 |
+| `stickyTimeout` | int | 选填 | `60` | 粘性映射的过期时间（分钟），命中时自动续期 |
+| `serviceFQDN` | string | 必填 | - | Redis 服务的 FQDN |
+| `servicePort` | int | 必填 | - | Redis 服务端口 |
+| `username` | string | 选填 | - | Redis 用户名（Redis 6+ ACL 一般为 `default`） |
+| `password` | string | 选填 | - | Redis 密码。**若 Redis 开启鉴权必须填写**，否则每次读写都会 `NOAUTH` 失败，导致粘性完全不生效 |
+| `timeout` | int | 选填 | `3000` | Redis 操作超时（毫秒） |
+| `database` | int | 选填 | `0` | Redis database 编号 |
+
+## 配置示例
+
+```yaml
+lb_type: endpoint
+lb_policy: endpoint_hash
+lb_config:
+  hash_header: x-mse-consumer
+  stickyTimeout: 60
+  serviceFQDN: redis.dns
+  servicePort: 6379
+  username: default
+  password: "123456"
+  timeout: 3000
+  database: 0
+```
+
+> 当请求不含 `hash_header` 指定的请求头时，本策略不介入选址，请求按服务原本的负载均衡策略转发。
 
 # Cluster Hash（一致性 Hash 路由）
 
