@@ -128,3 +128,23 @@ func TestGetDubboConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateServiceEntryRejectsInvalidPorts(t *testing.T) {
+	w := &watcher{}
+	serviceEntry := w.generateServiceEntry(InterfaceConfig{
+		Host: "example.service",
+		Endpoints: []Endpoint{
+			{Ip: "10.0.0.1", Port: "8080"},
+			{Ip: "10.0.0.2", Port: "-1"},
+			{Ip: "10.0.0.3", Port: "0"},
+			{Ip: "10.0.0.4", Port: "65536"},
+			{Ip: "10.0.0.5", Port: "4294967296"},
+			{Ip: "10.0.0.6", Port: "invalid"},
+		},
+	})
+
+	assert.Len(t, serviceEntry.Ports, 1)
+	assert.Equal(t, uint32(8080), serviceEntry.Ports[0].Number)
+	assert.Len(t, serviceEntry.Endpoints, 1)
+	assert.Equal(t, "10.0.0.1", serviceEntry.Endpoints[0].Address)
+}
