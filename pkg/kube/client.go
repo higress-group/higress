@@ -256,12 +256,10 @@ func fastWaitForCacheSync(stop <-chan struct{}, informerFactory reflectInformerS
 func CheckKIngressCRDExist(config *rest.Config) bool {
 	apiExtClientset, err := apiExtensionsV1.NewForConfig(config)
 	if err != nil {
-		fmt.Errorf("failed creating apiExtension Client: %v", err)
 		return false
 	}
 	crdList, err := apiExtClientset.CustomResourceDefinitions().List(context.TODO(), metaV1.ListOptions{})
 	if err != nil {
-		fmt.Errorf("failed listing Custom Resource Definition: %v", err)
 		return false
 	}
 	for _, crd := range crdList.Items {

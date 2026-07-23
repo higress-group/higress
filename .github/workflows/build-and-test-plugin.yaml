@@ -18,17 +18,6 @@ on:
   workflow_dispatch: ~
 
 jobs:
-  lint:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: 1.24
-    # There are too many lint errors in current code bases
-    # uncomment when we decide what lint should be addressed or ignored.
-    # - run: make lint
-
   higress-wasmplugin-test:
     runs-on: ubuntu-22.04
     strategy:

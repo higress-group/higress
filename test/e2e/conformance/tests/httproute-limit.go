@@ -249,14 +249,14 @@ func AssertRps(t *testing.T, result *Result, expectedRps float64, tolerance floa
 		hi := expectedRps * (1 + tolerance)
 		message := fmt.Sprintf("RPS `%.2f` should between `%.2f` - `%.2f`", result.SuccessRps, lo, hi)
 		if result.SuccessRps < lo || result.SuccessRps > hi {
-			t.Errorf(message)
+			t.Error(message)
 		}
 	} else {
 		fmt.Printf("Total Cost(s): %.2f, Total Request: %d, Total Success: %d, Expected: %.2f\n",
 			float64(result.TotalCostMs)/1000, result.Requests, result.Success, expectedRps)
 		message := fmt.Sprintf("Success Requests should less than : %d, actual: %d", int32(expectedRps), result.Success)
 		if result.Success > int32(expectedRps) {
-			t.Errorf(message)
+			t.Error(message)
 		}
 	}
 }
