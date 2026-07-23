@@ -88,9 +88,10 @@ func NetworkingIngressAvailable(client kube.Client) bool {
 func SortIngressByCreationTime(configs []config.Config) {
 	sort.Slice(configs, func(i, j int) bool {
 		if configs[i].CreationTimestamp == configs[j].CreationTimestamp {
-			in := configs[i].Name + "." + configs[i].Namespace
-			jn := configs[j].Name + "." + configs[j].Namespace
-			return in < jn
+			if configs[i].Namespace != configs[j].Namespace {
+				return configs[i].Namespace < configs[j].Namespace
+			}
+			return configs[i].Name < configs[j].Name
 		}
 		return configs[i].CreationTimestamp.Before(configs[j].CreationTimestamp)
 	})
