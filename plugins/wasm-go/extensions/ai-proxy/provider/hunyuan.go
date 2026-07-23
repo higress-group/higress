@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
-	"github.com/higress-group/wasm-go/pkg/log"
-	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 // hunyuanProvider is the provider for hunyuan AI service.
@@ -351,15 +351,23 @@ func (m *hunyuanProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name 
 
 		// 查找事件结束的位置（即下一个事件的开始）
 		newEventPivot = bytes.Index(newBufferedBody, []byte("\n\n"))
-		if newEventPivot == -1 && !isLastChunk {
-			// 未找到事件结束标识，跳出循环等待更多数据，若是最后一个chunk，不一定有2个换行符
-			break
+		var eventData []byte
+		if newEventPivot == -1 {
+			if !isLastChunk {
+				// 未找到事件结束标识，跳出循环等待更多数据，若是最后一个chunk，不一定有2个换行符
+				break
+			}
+			eventData = bytes.TrimSpace(newBufferedBody)
+			newBufferedBody = nil
+		} else {
+			// 提取并处理一个完整的事件
+			eventData = newBufferedBody[:newEventPivot]
+			// log.Debugf("@@@ <<< ori chun is: %s", string(newBufferedBody[:newEventPivot]))
+			newBufferedBody = newBufferedBody[newEventPivot+2:] // 跳过结束标识
 		}
-
-		// 提取并处理一个完整的事件
-		eventData := newBufferedBody[:newEventPivot]
-		// log.Debugf("@@@ <<< ori chun is: %s", string(newBufferedBody[:newEventPivot]))
-		newBufferedBody = newBufferedBody[newEventPivot+2:] // 跳过结束标识
+		if len(eventData) == 0 {
+			continue
+		}
 
 		// 转换并追加到输出缓冲区
 		convertedData, _ := m.convertChunkFromHunyuanToOpenAI(ctx, eventData)
@@ -378,6 +386,9 @@ func (m *hunyuanProvider) convertChunkFromHunyuanToOpenAI(ctx wrapper.HttpContex
 	// 将hunyuan的chunk转为openai的chunk
 	hunyuanFormattedChunk := &hunyuanTextGenDetailedResponseNonStreaming{}
 	if err := json.Unmarshal(hunyuanChunk, hunyuanFormattedChunk); err != nil {
+		return []byte(""), nil
+	}
+	if len(hunyuanFormattedChunk.Choices) == 0 {
 		return []byte(""), nil
 	}
 
