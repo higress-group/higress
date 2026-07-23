@@ -90,10 +90,12 @@ func (c *PluginConfig) FromJson(json gjson.Result, log log.Log) {
 
 	if json.Get("enableSemanticCache").Exists() {
 		c.EnableSemanticCache = json.Get("enableSemanticCache").Bool()
-	} else if c.GetVectorProvider() == nil {
-		c.EnableSemanticCache = false // set value to false when no vector provider
 	} else {
-		c.EnableSemanticCache = true // set default value to true
+		// The vector provider instance is only created later in Complete(), so
+		// checking GetVectorProvider() here always saw nil and silently disabled
+		// semantic cache even when a vector provider was configured (e.g.
+		// cache + vector). Check the parsed provider config instead.
+		c.EnableSemanticCache = c.vectorProviderConfig.GetProviderType() != ""
 	}
 
 	// compatible with legacy config

@@ -135,6 +135,34 @@ var vectorOnlyConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：cache + vector 组合，未显式配置 enableSemanticCache（issue #3880 场景）
+var cacheAndVectorConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"cache": map[string]interface{}{
+			"type":        "redis",
+			"serviceName": "redis.static",
+			"servicePort": 6379,
+		},
+		"embedding": map[string]interface{}{
+			"type":        "dashscope",
+			"serviceName": "dashscope-service",
+			"serviceHost": "dashscope.example.com",
+			"servicePort": 8080,
+			"model":       "text-embedding-v1",
+			"apiKey":      "test-dashscope-key",
+		},
+		"vector": map[string]interface{}{
+			"type":         "dashvector",
+			"serviceName":  "dashvector-service",
+			"serviceHost":  "dashvector.example.com",
+			"servicePort":  8081,
+			"apiKey":       "test-dashvector-key",
+			"collectionID": "test-collection",
+		},
+	})
+	return data
+}()
+
 // 测试配置：禁用缓存策略
 var disabledCacheConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -320,7 +348,26 @@ func TestParseConfig(t *testing.T) {
 
 			// 验证缓存键策略
 			require.Equal(t, "lastQuestion", config.CacheKeyStrategy)
-			require.False(t, config.EnableSemanticCache)
+			// 配置了向量数据库时，语义化缓存默认开启
+			require.True(t, config.EnableSemanticCache)
+		})
+
+		// 测试 cache + vector 组合、未显式配置 enableSemanticCache 时语义化缓存默认开启
+		// 回归测试：https://github.com/higress-group/higress/issues/3880
+		t.Run("cache and vector config defaults semantic cache enabled", func(t *testing.T) {
+			host, status := test.NewTestHost(cacheAndVectorConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			configRaw, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, configRaw)
+
+			config, ok := configRaw.(*config.PluginConfig)
+			require.True(t, ok, "config should be of type *PluginConfig")
+
+			require.True(t, config.EnableSemanticCache,
+				"semantic cache should default to enabled when a vector provider is configured")
 		})
 
 		// 测试禁用缓存策略
