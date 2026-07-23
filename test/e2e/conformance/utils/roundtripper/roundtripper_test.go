@@ -58,9 +58,8 @@ func TestTransport(t *testing.T) {
 			},
 			transport: &http2.Transport{
 				TLSClientConfig: &tls.Config{
-					RootCAs:            x509.NewCertPool(),
-					ServerName:         "www.example.com",
-					InsecureSkipVerify: true,
+					RootCAs:    x509.NewCertPool(),
+					ServerName: "www.example.com",
 				},
 			},
 		},
