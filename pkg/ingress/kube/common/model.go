@@ -350,6 +350,14 @@ func (i *IngressRouteBuilder) Build() model.IngressRoute {
 			i.Ingress.Name,
 			i.ClusterId,
 		)
+	case InvalidPathRegex:
+		errorMsg = fmt.Sprintf("invalid regex path %s for host %s defined in ingress %s/%s within cluster %s",
+			i.Path,
+			i.Host,
+			i.Ingress.Namespace,
+			i.Ingress.Name,
+			i.ClusterId,
+		)
 	}
 
 	ingressRoute := model.IngressRoute{

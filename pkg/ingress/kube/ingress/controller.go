@@ -650,10 +650,18 @@ func (c *controller) ConvertHTTPRoute(convertOptions *common.ConvertOptions, wra
 			}
 			wrapperHttpRoute.OriginPath = originPath
 			wrapperHttpRoute.OriginPathType = pathType
-			wrapperHttpRoute.HTTPRoute.Match = c.generateHttpMatches(pathType, httpPath.Path, wrapperVS)
 			wrapperHttpRoute.HTTPRoute.Name = common.GenerateUniqueRouteName(c.options.SystemNamespace, wrapperHttpRoute)
 
 			ingressRouteBuilder := convertOptions.IngressRouteCache.New(wrapperHttpRoute)
+			if err := common.ValidateRegexPath(pathType, httpPath.Path); err != nil {
+				IngressLog.Warnf("invalid regex path %q in ingress %s/%s for host %q: %v; skipping route",
+					httpPath.Path, cfg.Namespace, cfg.Name, rule.Host, err)
+				ingressRouteBuilder.Event = common.InvalidPathRegex
+				common.IncrementInvalidIngress(c.options.ClusterId, common.InvalidPathRegex)
+				convertOptions.IngressRouteCache.Add(ingressRouteBuilder)
+				continue
+			}
+			wrapperHttpRoute.HTTPRoute.Match = c.generateHttpMatches(pathType, httpPath.Path, wrapperVS)
 
 			hostAndPath := wrapperHttpRoute.PathFormat()
 			key := createRuleKey(cfg.Annotations, hostAndPath)
