@@ -356,9 +356,15 @@ func (c *claudeProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiNam
 		headers.Del("x-api-key")
 
 		// Set Claude Code specific headers
-		headers.Set("user-agent", claudeCodeUserAgent)
+		if c.config.claudeCodeUserAgent == "" {
+			c.config.claudeCodeUserAgent = claudeCodeUserAgent
+		}
+		headers.Set("user-agent", c.config.claudeCodeUserAgent)
 		headers.Set("x-app", "cli")
-		headers.Set("anthropic-beta", claudeCodeBetaFeatures)
+		if c.config.claudeCodeBetaFeatures == "" {
+			c.config.claudeCodeBetaFeatures = claudeCodeBetaFeatures
+		}
+		headers.Set("anthropic-beta", c.config.claudeCodeBetaFeatures)
 
 		// Add ?beta=true query parameter to the path
 		currentPath := headers.Get(":path")

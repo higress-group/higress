@@ -489,6 +489,12 @@ type ProviderConfig struct {
 	// @Title zh-CN Claude Code 模式
 	// @Description zh-CN 仅适用于Claude服务。启用后将伪装成Claude Code客户端发起请求，支持使用Claude Code的OAuth Token进行认证。
 	claudeCodeMode bool `required:"false" yaml:"claudeCodeMode" json:"claudeCodeMode"`
+	// @Title zh-CN Claude Code User-Agent
+	// @Description zh-CN Claude Code 模式下使用的 User-Agent，默认为官方值，可自定义
+	claudeCodeUserAgent string `required:"false" yaml:"claudeCodeUserAgent" json:"claudeCodeUserAgent"`
+	// @Title zh-CN Claude Code Beta Features
+	// @Description zh-CN Claude Code 模式下使用的 anthropic-beta 头，默认为官方值，可自定义
+	claudeCodeBetaFeatures string `required:"false" yaml:"claudeCodeBetaFeatures" json:"claudeCodeBetaFeatures"`
 	// @Title zh-CN 智谱AI服务域名
 	// @Description zh-CN 仅适用于智谱AI服务。默认为 open.bigmodel.cn（中国），可配置为 api.z.ai（国际）
 	zhipuDomain string `required:"false" yaml:"zhipuDomain" json:"zhipuDomain"`
@@ -749,6 +755,8 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	c.vllmCustomUrl = json.Get("vllmCustomUrl").String()
 	c.doubaoDomain = json.Get("doubaoDomain").String()
 	c.claudeCodeMode = json.Get("claudeCodeMode").Bool()
+	c.claudeCodeUserAgent = json.Get("claudeCodeUserAgent").String()
+	c.claudeCodeBetaFeatures = json.Get("claudeCodeBetaFeatures").String()
 	c.zhipuDomain = json.Get("zhipuDomain").String()
 	c.zhipuCodePlanMode = json.Get("zhipuCodePlanMode").Bool()
 	c.contextCleanupCommands = make([]string, 0)
