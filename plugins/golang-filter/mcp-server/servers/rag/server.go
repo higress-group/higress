@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -97,6 +98,22 @@ func init() {
 			},
 		},
 	})
+}
+
+func (c *RAGConfig) Clone() common.Server {
+	if c.config == nil {
+		return &RAGConfig{}
+	}
+	configBytes, err := json.Marshal(c.config)
+	if err != nil {
+		clonedConfig := *c.config
+		return &RAGConfig{config: &clonedConfig}
+	}
+	var clonedConfig config.Config
+	if err := json.Unmarshal(configBytes, &clonedConfig); err != nil {
+		clonedConfig = *c.config
+	}
+	return &RAGConfig{config: &clonedConfig}
 }
 
 func (c *RAGConfig) ParseConfig(cfg map[string]any) error {
