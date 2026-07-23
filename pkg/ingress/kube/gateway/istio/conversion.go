@@ -1098,6 +1098,17 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 		if svc == nil {
 			invalidBackendErr = &ConfigError{Reason: InvalidDestinationNotFound, Message: fmt.Sprintf("backend(%s) not found", hostname)}
 		}
+	// Start - Added by Higress
+	case config.GroupVersionKind{Group: "networking.higress.io", Kind: "Service"}:
+		var port *istio.PortSelector
+		if to.Port != nil {
+			port = &istio.PortSelector{Number: uint32(*to.Port)}
+		}
+		return &istio.Destination{
+			Host: string(to.Name),
+			Port: port,
+		}, nil, nil
+	// End - Added by Higress
 	case gvk.InferencePool:
 		if !features.EnableGatewayAPIInferenceExtension {
 			return &istio.Destination{}, nil, &ConfigError{
@@ -1154,18 +1165,6 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 			Message: fmt.Sprintf("referencing unsupported backendRef: group %q kind %q", ptr.OrEmpty(to.Group), ptr.OrEmpty(to.Kind)),
 		}
 	}
-	// Start - Added by Higress
-	if equal((*string)(to.Group), "networking.higress.io") && nilOrEqual((*string)(to.Kind), "Service") {
-		var port *istio.PortSelector
-		if to.Port != nil {
-			port = &istio.PortSelector{Number: uint32(*to.Port)}
-		}
-		return &istio.Destination{
-			Host: string(to.Name),
-			Port: port,
-		}, nil, nil
-	}
-	// End - Added by Higress
 
 	// All types currently require a Port, so we do this for everything; consider making this per-type if we have future types
 	// that do not require port.
@@ -2696,14 +2695,6 @@ func isCatchAllMatch(m *istio.HTTPMatchRequest) bool {
 		m.Port == 0 &&
 		m.Authority == nil &&
 		m.SourceNamespace == ""
-}
-
-func equal(have *string, expected string) bool {
-	return have != nil && *have == expected
-}
-
-func nilOrEqual(have *string, expected string) bool {
-	return have == nil || *have == expected
 }
 
 func generateRouteName(obj config.Namer, routeType string) string {
