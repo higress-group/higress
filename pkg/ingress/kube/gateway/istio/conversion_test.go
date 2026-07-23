@@ -672,6 +672,85 @@ func (t *TestStatusQueue) Dump() string {
 
 var _ status.Queue = &TestStatusQueue{}
 
+func TestBuildDestinationHigressBackendRef(t *testing.T) {
+	group := k8s.Group("networking.higress.io")
+	serviceKind := k8s.Kind("Service")
+	unsupportedKind := k8s.Kind("McpBridge")
+	port := k8s.PortNumber(80)
+	tests := []struct {
+		name          string
+		backendRef    k8s.BackendRef
+		wantHost      string
+		wantPort      uint32
+		wantErrReason string
+	}{
+		{
+			name: "service with explicit kind and port",
+			backendRef: k8s.BackendRef{BackendObjectReference: k8s.BackendObjectReference{
+				Group: &group,
+				Kind:  &serviceKind,
+				Name:  "llm-inclouder.internal.static",
+				Port:  &port,
+			}},
+			wantHost: "llm-inclouder.internal.static",
+			wantPort: uint32(port),
+		},
+		{
+			name: "service with default kind and no port",
+			backendRef: k8s.BackendRef{BackendObjectReference: k8s.BackendObjectReference{
+				Group: &group,
+				Name:  "llm-inclouder.internal.static",
+			}},
+			wantHost: "llm-inclouder.internal.static",
+		},
+		{
+			name: "unsupported kind",
+			backendRef: k8s.BackendRef{BackendObjectReference: k8s.BackendObjectReference{
+				Group: &group,
+				Kind:  &unsupportedKind,
+				Name:  "default",
+			}},
+			wantErrReason: InvalidDestinationKind,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, inferencePool, err := buildDestination(
+				RouteContext{},
+				tt.backendRef,
+				"default",
+				false,
+				gvk.HTTPRoute,
+			)
+			if tt.wantErrReason != "" {
+				if err == nil {
+					t.Fatal("buildDestination() returned nil error, want error")
+				}
+				if err.Reason != tt.wantErrReason {
+					t.Errorf("buildDestination() error reason = %q, want %q", err.Reason, tt.wantErrReason)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildDestination() returned unexpected error: %v", err)
+			}
+			if inferencePool != nil {
+				t.Fatalf("buildDestination() returned unexpected inference pool config: %v", inferencePool)
+			}
+			if got.Host != tt.wantHost {
+				t.Errorf("buildDestination() host = %q, want %q", got.Host, tt.wantHost)
+			}
+			if tt.wantPort == 0 && got.Port != nil {
+				t.Errorf("buildDestination() port = %v, want nil", got.Port)
+			}
+			if tt.wantPort != 0 && (got.Port == nil || got.Port.Number != tt.wantPort) {
+				t.Errorf("buildDestination() port = %v, want %d", got.Port, tt.wantPort)
+			}
+		})
+	}
+}
+
 func TestConvertResources(t *testing.T) {
 	validator := crdvalidation.NewIstioValidator(t)
 	cases := []struct {
