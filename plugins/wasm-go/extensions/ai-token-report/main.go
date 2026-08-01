@@ -22,20 +22,20 @@ import (
 
 const (
 	// Report configuration
-	defaultReportTimeout int32 = 5000 // 5 seconds
-	maxAccumulatedSize   int    = 100 * 1024 // 100KB
+	defaultReportTimeout int32 = 5000       // 5 seconds
+	maxAccumulatedSize   int   = 100 * 1024 // 100KB
 
 	// Context keys
-	CtxKeyModel       = "token_model"
-	CtxKeyInputToken  = "token_input"
-	CtxKeyOutputToken = "token_output"
-	CtxKeyTotalToken  = "token_total"
-	CtxRequestStart   = "request_start_time"
-	CtxFirstToken     = "first_token_time"
-	CtxTokenUsage     = "token_usage_raw"
+	CtxKeyModel        = "token_model"
+	CtxKeyInputToken   = "token_input"
+	CtxKeyOutputToken  = "token_output"
+	CtxKeyTotalToken   = "token_total"
+	CtxRequestStart    = "request_start_time"
+	CtxFirstToken      = "first_token_time"
+	CtxTokenUsage      = "token_usage_raw"
 	CtxAccumulatedBody = "accumulated_body"
-	CtxSkipPlugin     = "skip_token_report"
-	providerTypeKey   = "providerType"
+	CtxSkipPlugin      = "skip_token_report"
+	providerTypeKey    = "providerType"
 
 	// HTTP headers
 	OriginalAPIKey = "X-Original-Api-Key"
@@ -278,6 +278,18 @@ func accumulateChunk(ctx wrapper.HttpContext, data []byte) bool {
 }
 
 func getRequestID() string {
+	if value, err := proxywasm.GetHttpRequestHeader("request-id"); err == nil {
+		if requestID := normalizeRequestID(value); requestID != "" {
+			return requestID
+		}
+	}
+
+	if value, err := proxywasm.GetProperty([]string{"wasm.requestId"}); err == nil {
+		if requestID := normalizeRequestID(string(value)); requestID != "" {
+			return requestID
+		}
+	}
+
 	if value, err := proxywasm.GetProperty([]string{"x_request_id"}); err == nil {
 		if requestID := normalizeRequestID(string(value)); requestID != "" {
 			return requestID
@@ -521,10 +533,10 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 
 	timestamp := time.Now().UnixMilli()
 	var requestID string
-	upstreamRequestID := getRequestID()
-	if upstreamRequestID != "" {
-		requestID = upstreamRequestID
-		log.Debugf("reportTokenUsage using upstream request ID: %s", upstreamRequestID)
+	selectedRequestID := getRequestID()
+	if selectedRequestID != "" {
+		requestID = selectedRequestID
+		log.Debugf("reportTokenUsage using request ID: %s", selectedRequestID)
 	} else {
 		randomSuffix := generateRandomString(8)
 		requestID = fmt.Sprintf("%s%d", randomSuffix, timestamp)
@@ -625,7 +637,7 @@ func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageRepor
 	outputTokens, _ := convertToUInt(outputTokenVal)
 
 	totalTokens, ok := convertToUInt(totalTokenVal)
-	if !ok {
+		if !ok {
 		// Some models (e.g., image generation) don't return token data in the response.
 		// Check if the response has a "data" field, which indicates a valid non-text response.
 		// For streaming, also check the accumulated body since responseBody may only be the last chunk.

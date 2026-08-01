@@ -67,7 +67,7 @@ AI Token Report 插件用于将 AI 服务的 token 使用情况上报到指定�
 
 | 字段名 | 类型 | 说明 |
 |---------|------|------|
-| `requestId` | string | 请求唯一 ID，格式：`{random8位}{timestamp毫秒}` 或使用有效 Envoy request ID（非空且不为 `-`） |
+| `requestId` | string | 请求唯一 ID，优先使用有效 `request-id` header；header 被移除时使用 `wasm.requestId`；未提供时使用有效 Envoy `x-request-id`；均无效时格式为 `{random8位}{timestamp毫秒}` |
 | `model` | string | 模型名称（从请求体中提取） |
 | `userKey` | string | 用户 Key（从 `X-Original-Api-Key` header 获取） |
 | `inputToken` | integer | 输入 token 数 |

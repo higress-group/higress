@@ -13,6 +13,7 @@ import (
 const (
 	responseRequestIDHeader = "request-id"
 	upstreamRequestIDHeader = "request-id"
+	requestIDPropertyKey    = "wasm.requestId"
 	providerTypePropertyKey = "wasm.providerType"
 	clusterNameProperty     = "cluster_name"
 )
@@ -54,16 +55,31 @@ func parseConfig(json gjson.Result, config *RequestIDHeaderConfig) error {
 	return nil
 }
 
-func onHttpRequestHeaders(_ wrapper.HttpContext, config RequestIDHeaderConfig) types.Action {
+func onHttpRequestHeaders(ctx wrapper.HttpContext, config RequestIDHeaderConfig) types.Action {
+	requestID := getRequestID()
+	if requestID != "" {
+		_ = proxywasm.SetProperty([]string{requestIDPropertyKey}, []byte(requestID))
+	}
+
 	if shouldSkipForAIProvider(config) {
+		// Only mutate if a non-empty request-id header is actually present; otherwise
+		// there is nothing to remove and triggering a header mutation would unnecessarily
+		// clear the route cache that ai-proxy already locked via DisableReroute.
+		existing, err := proxywasm.GetHttpRequestHeader(upstreamRequestIDHeader)
+		if err == nil && normalizeRequestID(existing) != "" {
+			ctx.DisableReroute()
+			if err := proxywasm.RemoveHttpRequestHeader(upstreamRequestIDHeader); err != nil {
+				log.Warnf("ai-request-id-header: failed to remove upstream request header: %v", err)
+			}
+		}
 		return types.ActionContinue
 	}
 
-	requestID := getRequestID()
 	if requestID == "" {
 		return types.ActionContinue
 	}
 
+	ctx.DisableReroute()
 	if err := proxywasm.ReplaceHttpRequestHeader(upstreamRequestIDHeader, requestID); err != nil {
 		log.Warnf("ai-request-id-header: failed to set upstream request header: %v", err)
 	}
@@ -117,17 +133,27 @@ func onHttpResponseHeaders(_ wrapper.HttpContext, _ RequestIDHeaderConfig) types
 }
 
 func getRequestID() string {
+	if value, err := proxywasm.GetHttpRequestHeader(upstreamRequestIDHeader); err == nil {
+		if requestID := normalizeRequestID(value); requestID != "" {
+			return requestID
+		}
+	}
+
+	if value, err := proxywasm.GetProperty([]string{requestIDPropertyKey}); err == nil {
+		if requestID := normalizeRequestID(string(value)); requestID != "" {
+			return requestID
+		}
+	}
+
 	if value, err := proxywasm.GetProperty([]string{"x_request_id"}); err == nil {
 		if requestID := normalizeRequestID(string(value)); requestID != "" {
 			return requestID
 		}
 	}
 
-	for _, header := range []string{upstreamRequestIDHeader, "x-request-id"} {
-		if value, err := proxywasm.GetHttpRequestHeader(header); err == nil {
-			if requestID := normalizeRequestID(value); requestID != "" {
-				return requestID
-			}
+	if value, err := proxywasm.GetHttpRequestHeader("x-request-id"); err == nil {
+		if requestID := normalizeRequestID(value); requestID != "" {
+			return requestID
 		}
 	}
 
