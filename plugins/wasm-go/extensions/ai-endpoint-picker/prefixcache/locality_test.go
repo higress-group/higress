@@ -177,6 +177,45 @@ func TestEscapedStringsAndKeysCanonicalizeDeterministically(t *testing.T) {
 	}
 }
 
+func TestMessageContentRepresentationIsDomainSeparated(t *testing.T) {
+	tests := []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{
+			name:  "absent versus empty string",
+			left:  `{"model":"m","messages":[{"role":"user"}]}`,
+			right: `{"model":"m","messages":[{"role":"user","content":""}]}`,
+		},
+		{
+			name:  "null versus null string",
+			left:  `{"model":"m","messages":[{"role":"user","content":null}]}`,
+			right: `{"model":"m","messages":[{"role":"user","content":"null"}]}`,
+		},
+		{
+			name:  "structured versus matching plain string",
+			left:  `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`,
+			right: `{"model":"m","messages":[{"role":"user","content":"[{\"text\":\"hello\",\"type\":\"text\"}]"}]}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			left := extractForTest(t, test.left)
+			right := extractForTest(t, test.right)
+			if left.Chains[0][0].Hash == right.Chains[0][0].Hash {
+				t.Fatal("different content representations produced the same first hash")
+			}
+		})
+	}
+
+	ordered := extractForTest(t, `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
+	reordered := extractForTest(t, `{"messages":[{"content":[{"text":"hello","type":"text"}],"role":"user"}],"model":"m"}`)
+	if ordered.Chains[0][0].Hash != reordered.Chains[0][0].Hash {
+		t.Fatal("structured content hash changed with JSON field order")
+	}
+}
+
 func TestPrefixTokenCapDoesNotCreateTinyBlocks(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"model":  "m",
@@ -244,6 +283,109 @@ func TestMultiMegabyteTextPromptsRemainAllocationBounded(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCappedSemanticSuffixesDoNotScaleAllocations(t *testing.T) {
+	tests := []struct {
+		name     string
+		capped   []byte
+		extended []byte
+	}{
+		{
+			name:     "token IDs",
+			capped:   tokenIDBody(MaxPrefixTokens),
+			extended: tokenIDBody(MaxPrefixTokens + 1_000_000),
+		},
+		{
+			name:     "messages",
+			capped:   repeatedChatBody(140, 0),
+			extended: repeatedChatBody(140, 100_000),
+		},
+		{
+			name:     "tools",
+			capped:   repeatedToolsBody(140, 0),
+			extended: repeatedToolsBody(140, 100_000),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, body := range [][]byte{test.capped, test.extended} {
+				locality, supported, err := Extract(body)
+				if err != nil || !supported {
+					t.Fatalf("extract: supported=%v err=%v", supported, err)
+				}
+				if got := totalTokens(locality.Chains); got != MaxPrefixTokens {
+					t.Fatalf("token count=%d want capped %d", got, MaxPrefixTokens)
+				}
+			}
+			cappedAllocs := testing.AllocsPerRun(3, func() { _, _, _ = Extract(test.capped) })
+			extendedAllocs := testing.AllocsPerRun(3, func() { _, _, _ = Extract(test.extended) })
+			t.Logf("allocations capped=%v extended=%v", cappedAllocs, extendedAllocs)
+			if extendedAllocs > cappedAllocs+8 {
+				t.Fatalf("allocations scaled after cap: capped=%v extended=%v", cappedAllocs, extendedAllocs)
+			}
+		})
+	}
+}
+
+func tokenIDBody(count int) []byte {
+	var body strings.Builder
+	body.Grow(count*2 + 30)
+	body.WriteString(`{"model":"m","prompt":[`)
+	for token := 0; token < count; token++ {
+		if token > 0 {
+			body.WriteByte(',')
+		}
+		body.WriteByte(byte('0' + token%10))
+	}
+	body.WriteString(`]}`)
+	return []byte(body.String())
+}
+
+func repeatedChatBody(prefixMessages, suffixMessages int) []byte {
+	const prefix = `{"role":"user","content":"`
+	const suffix = `"}`
+	const small = `{"role":"user","content":"x"}`
+	var body strings.Builder
+	body.Grow(prefixMessages*(len(prefix)+maxSegmentBytes+len(suffix)) + suffixMessages*(len(small)+1) + 40)
+	body.WriteString(`{"model":"m","messages":[`)
+	for message := 0; message < prefixMessages+suffixMessages; message++ {
+		if message > 0 {
+			body.WriteByte(',')
+		}
+		if message < prefixMessages {
+			body.WriteString(prefix)
+			body.WriteString(strings.Repeat("a", maxSegmentBytes))
+			body.WriteString(suffix)
+		} else {
+			body.WriteString(small)
+		}
+	}
+	body.WriteString(`]}`)
+	return []byte(body.String())
+}
+
+func repeatedToolsBody(prefixTools, suffixTools int) []byte {
+	const prefix = `{"type":"function","function":{"name":"f","description":"`
+	const suffix = `"}}`
+	const small = `{"type":"function","function":{"name":"f"}}`
+	var body strings.Builder
+	body.Grow(prefixTools*(len(prefix)+maxSegmentBytes+len(suffix)) + suffixTools*(len(small)+1) + 60)
+	body.WriteString(`{"model":"m","tools":[`)
+	for tool := 0; tool < prefixTools+suffixTools; tool++ {
+		if tool > 0 {
+			body.WriteByte(',')
+		}
+		if tool < prefixTools {
+			body.WriteString(prefix)
+			body.WriteString(strings.Repeat("a", maxSegmentBytes))
+			body.WriteString(suffix)
+		} else {
+			body.WriteString(small)
+		}
+	}
+	body.WriteString(`],"messages":[]}`)
+	return []byte(body.String())
 }
 
 func mustJSON(t *testing.T, value any) []byte {
