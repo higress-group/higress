@@ -9,14 +9,16 @@ The plugin runs `Filter → Normalize → Score → Pick → Feedback`:
 - Filter removes only unhealthy endpoints. A missing optional metric never hard-filters an otherwise healthy endpoint.
 - Queue depth and gateway-local inflight are min-max normalized across healthy candidates, with lower values scoring higher.
 - KV cache and failure use `1-utilization` and `1-EWMA`, respectively.
-- Approximate prefix cache scores the longest consecutive prefix observed by this WASM instance as `matched blocks / total blocks`; a cold endpoint scores 0.
+- Approximate prefix cache estimates the longest consecutive semantic prefix observed by this WASM instance. It aggregates consecutive matched pseudo-tokens across prompts and scores `0.75 × matched/total + 0.25 × min(matched/8192,1)²`; a cold endpoint scores 0.
 - When LoRA metrics are available, an endpoint scores 1 if the request `model` is already active and 0 otherwise.
 - Every scorer produces a value in `[0,1]`. The final score always uses the sum of configured weights as its denominator, so a missing signal contributes zero and receives no advantage.
 - Tied maximum scores are picked randomly. When there is no healthy candidate, metrics are malformed, or a hostcall/override fails, the plugin fails open and leaves selection to Envoy's default load balancer.
 
 The KV cache signal prefers `vllm:kv_cache_usage_perc` and supports the legacy `vllm:gpu_cache_usage_perc`. The `vllm:lora_requests_info` family is optional.
 
-Prefix locality supports text inputs for OpenAI Chat Completions and Completions, including tools, roles, text prompts, and token-ID prompts. Output parameters such as temperature and max tokens are excluded. The estimate tokenizer packs every four UTF-8 bytes into one pseudo-token. Block hashes are namespaced by `model` and `cache_salt` and chained to the preceding block. The effective block size defaults to 64 tokens and can be raised by a valid `block_size` label on the first healthy candidate's `vllm:cache_config_info` metric; at most 131072 tokens are indexed. Each endpoint has a thread-safe 31250-block LRU by default, and a valid `num_gpu_blocks` label overrides that capacity. Non-text multimodal input makes only the prefix scorer unavailable, so queue and KV scorers continue to work.
+Prefix locality supports text inputs for OpenAI Chat Completions and Completions while excluding output parameters such as temperature and max tokens. Canonical tools and each canonical Chat message—including role, content, name, tool calls, and other complete prompt-relevant fields—form ordered semantic segments. Completions text and token-ID prompts form independent chains. Every four UTF-8 bytes estimate one pseudo-token; segments longer than 1024 pseudo-tokens are split into bounded slices, and each prompt processes at most 131072 pseudo-tokens. Hashes include `model`, `cache_salt`, segment kind and length, content hash, and the preceding hash, so a changed middle segment prevents later segments from matching. Non-text multimodal input makes only the prefix scorer unavailable, so queue and KV scorers continue to work.
+
+Each endpoint has a thread-safe weighted LRU whose capacity is measured in approximate backend KV blocks. The default is 31250 and a valid `vllm:cache_config_info{num_gpu_blocks=...}` overrides it. Each semantic entry costs `ceil(segmentTokens/actualBlockSize)` incrementally; the selected endpoint's valid `block_size` is used, with a fallback of 16. Scoring does not refresh the LRU.
 
 This approximate index is local to the current WASM runtime/config instance and does not represent the backend's real KV cache. It records a request for the selected endpoint only after override-host succeeds and removes endpoints absent from the current host snapshot.
 

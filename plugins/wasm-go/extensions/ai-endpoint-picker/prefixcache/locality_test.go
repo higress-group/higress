@@ -1,47 +1,135 @@
 package prefixcache
 
 import (
-	"encoding/binary"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-func TestExtractChatAndCompletions(t *testing.T) {
-	chat, supported, err := Extract([]byte(`{"model":"m","messages":[{"role":"user","content":"hello"}],"temperature":0.9}`))
+func extractForTest(t *testing.T, body string) *Locality {
+	t.Helper()
+	locality, supported, err := Extract([]byte(body))
 	if err != nil || !supported {
-		t.Fatalf("chat extraction failed: supported=%v err=%v", supported, err)
+		t.Fatalf("extract failed: supported=%v err=%v", supported, err)
 	}
-	if got := len(chat.Prompts[0]); got != 3 {
-		t.Fatalf("role and text should be estimated in four-byte tokens, got %d", got)
+	return locality
+}
+
+func TestChatUsesWholeCanonicalMessageSegments(t *testing.T) {
+	base := extractForTest(t, `{"model":"m","messages":[{"role":"user","name":"alice","content":"hello","tool_calls":[{"id":"1","type":"function"}]}]}`)
+	if got := len(base.Chains[0]); got != 1 {
+		t.Fatalf("small complete message produced %d blocks, want 1", got)
 	}
-	completion, supported, err := Extract([]byte(`{"model":"m","prompt":[1,2,3],"max_tokens":1}`))
-	if err != nil || !supported {
-		t.Fatalf("completion extraction failed: supported=%v err=%v", supported, err)
+	reordered := extractForTest(t, `{"messages":[{"tool_calls":[{"type":"function","id":"1"}],"content":"hello","name":"alice","role":"user"}],"model":"m"}`)
+	if base.Chains[0][0].Hash != reordered.Chains[0][0].Hash {
+		t.Fatal("canonical message hash changed with JSON field order")
 	}
-	if got := completion.Prompts[0]; len(got) != 3 || got[2] != 3 {
-		t.Fatalf("pre-tokenized prompt not preserved: %v", got)
+	changedName := extractForTest(t, `{"model":"m","messages":[{"role":"user","name":"bob","content":"hello","tool_calls":[{"id":"1","type":"function"}]}]}`)
+	if base.Chains[0][0].Hash == changedName.Chains[0][0].Hash {
+		t.Fatal("prompt-relevant message fields must affect the hash")
 	}
 }
 
-func TestOutputParametersDoNotAffectPrefix(t *testing.T) {
-	first, _, _ := Extract([]byte(`{"model":"m","prompt":"same","temperature":0,"max_tokens":1}`))
-	second, _, _ := Extract([]byte(`{"model":"m","prompt":"same","temperature":1,"max_tokens":999}`))
-	if first.BlockChains(64)[0][0] != second.BlockChains(64)[0][0] {
-		t.Fatal("output-generation parameters changed locality hash")
+func TestChatToolsAreSeparateOrderedCanonicalSegment(t *testing.T) {
+	first := extractForTest(t, `{"model":"m","tools":[{"type":"function","function":{"name":"lookup","parameters":{"b":2,"a":1}}}],"messages":[{"role":"user","content":"hello"}]}`)
+	second := extractForTest(t, `{"messages":[{"content":"hello","role":"user"}],"tools":[{"function":{"parameters":{"a":1,"b":2},"name":"lookup"},"type":"function"}],"model":"m"}`)
+	if len(first.Chains[0]) != 2 {
+		t.Fatalf("tools plus message produced %d blocks, want 2", len(first.Chains[0]))
+	}
+	for index := range first.Chains[0] {
+		if first.Chains[0][index].Hash != second.Chains[0][index].Hash {
+			t.Fatalf("canonical block %d differs after field reorder", index)
+		}
 	}
 }
 
-func TestEstimateTokenizerPacksUTF8Bytes(t *testing.T) {
-	locality, supported, err := Extract([]byte(`{"model":"m","prompt":"abcde"}`))
-	if err != nil || !supported {
-		t.Fatalf("extraction failed: supported=%v err=%v", supported, err)
+func TestLongMessageSplitsAtBoundedSemanticSize(t *testing.T) {
+	content := strings.Repeat("a", MaxSegmentTokens*4*2)
+	body, _ := json.Marshal(map[string]any{
+		"model":    "m",
+		"messages": []any{map[string]any{"role": "user", "content": content}},
+	})
+	locality := extractForTest(t, string(body))
+	if got := len(locality.Chains[0]); got != 3 {
+		t.Fatalf("long canonical message produced %d blocks, want 3", got)
 	}
-	if got, want := locality.Prompts[0][0], binary.LittleEndian.Uint32([]byte("abcd")); got != want {
-		t.Fatalf("first token=%d want %d", got, want)
+	for _, block := range locality.Chains[0] {
+		if block.EstimatedTokens <= 0 || block.EstimatedTokens > MaxSegmentTokens {
+			t.Fatalf("unbounded segment length %d", block.EstimatedTokens)
+		}
 	}
-	if got := locality.Prompts[0][1]; got != uint32('e') {
-		t.Fatalf("zero-padded tail token=%d want %d", got, 'e')
+}
+
+func TestCompletionsTextTokenIDsAndMultiplePrompts(t *testing.T) {
+	text := extractForTest(t, `{"model":"m","prompt":"hello"}`)
+	if len(text.Chains) != 1 || len(text.Chains[0]) != 1 || text.Chains[0][0].EstimatedTokens != 2 {
+		t.Fatalf("text completion locality=%+v", text.Chains)
+	}
+	tokens := extractForTest(t, `{"model":"m","prompt":[1,2,3]}`)
+	if len(tokens.Chains) != 1 || tokens.Chains[0][0].EstimatedTokens != 3 {
+		t.Fatalf("token completion locality=%+v", tokens.Chains)
+	}
+	multiple := extractForTest(t, `{"model":"m","prompt":["first","second"]}`)
+	if len(multiple.Chains) != 2 || len(multiple.Chains[0]) != 1 || len(multiple.Chains[1]) != 1 {
+		t.Fatalf("multiple prompts did not create independent chains: %+v", multiple.Chains)
+	}
+}
+
+func TestNamespaceSegmentKindAndOutputIsolation(t *testing.T) {
+	base := extractForTest(t, `{"model":"m","cache_salt":"a","prompt":"same","temperature":0}`)
+	outputChanged := extractForTest(t, `{"model":"m","cache_salt":"a","prompt":"same","temperature":1,"max_tokens":999}`)
+	otherModel := extractForTest(t, `{"model":"other","cache_salt":"a","prompt":"same"}`)
+	otherSalt := extractForTest(t, `{"model":"m","cache_salt":"b","prompt":"same"}`)
+	ambiguousA := extractForTest(t, `{"model":"ab","cache_salt":"c","prompt":"same"}`)
+	ambiguousB := extractForTest(t, `{"model":"a","cache_salt":"bc","prompt":"same"}`)
+	chat := extractForTest(t, `{"model":"m","cache_salt":"a","messages":[{"role":"user","content":"same"}]}`)
+	baseHash := base.Chains[0][0].Hash
+	if baseHash != outputChanged.Chains[0][0].Hash {
+		t.Fatal("output-generation fields affected prefix hash")
+	}
+	if baseHash == otherModel.Chains[0][0].Hash || baseHash == otherSalt.Chains[0][0].Hash || baseHash == chat.Chains[0][0].Hash {
+		t.Fatal("namespace or segment kind did not isolate prefix hash")
+	}
+	if ambiguousA.Chains[0][0].Hash == ambiguousB.Chains[0][0].Hash {
+		t.Fatal("model and cache_salt namespace components were not length-delimited")
+	}
+}
+
+func TestPrefixTokenCapDoesNotCreateTinyBlocks(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{
+		"model":  "m",
+		"prompt": strings.Repeat("a", (MaxPrefixTokens+MaxSegmentTokens)*4),
+	})
+	locality := extractForTest(t, string(body))
+	if got, want := len(locality.Chains[0]), MaxPrefixTokens/MaxSegmentTokens; got != want {
+		t.Fatalf("block count=%d want %d", got, want)
+	}
+	total := 0
+	for _, block := range locality.Chains[0] {
+		total += block.EstimatedTokens
+	}
+	if total != MaxPrefixTokens {
+		t.Fatalf("estimated tokens=%d want capped %d", total, MaxPrefixTokens)
+	}
+}
+
+func TestTokenIDPromptIsStreamedAndCapped(t *testing.T) {
+	var body strings.Builder
+	body.WriteString(`{"model":"m","prompt":[`)
+	for token := 0; token < MaxPrefixTokens+MaxSegmentTokens; token++ {
+		if token > 0 {
+			body.WriteByte(',')
+		}
+		body.WriteString(strconv.Itoa(token))
+	}
+	body.WriteString(`]}`)
+	locality := extractForTest(t, body.String())
+	if got, want := len(locality.Chains[0]), MaxPrefixTokens/MaxSegmentTokens; got != want {
+		t.Fatalf("token-ID block count=%d want %d", got, want)
+	}
+	if got := totalTokens(locality.Chains); got != MaxPrefixTokens {
+		t.Fatalf("token-ID count=%d want capped %d", got, MaxPrefixTokens)
 	}
 }
 
@@ -49,37 +137,5 @@ func TestUnsupportedMultimodalOnlyDisablesPrefix(t *testing.T) {
 	_, supported, err := Extract([]byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"x"}}]}]}`))
 	if err != nil || supported {
 		t.Fatalf("multimodal request should be unavailable without error: supported=%v err=%v", supported, err)
-	}
-}
-
-func TestBlockChainsUseNamespaceAndConfiguredBlockSize(t *testing.T) {
-	text := strings.Repeat("a", 300)
-	base, _, _ := Extract([]byte(`{"model":"m","cache_salt":"a","prompt":"` + text + `"}`))
-	otherSalt, _, _ := Extract([]byte(`{"model":"m","cache_salt":"b","prompt":"` + text + `"}`))
-	if got := len(base.BlockChains(16)[0]); got != 2 {
-		t.Fatalf("block_size 16 should floor to 64 tokens, got %d blocks", got)
-	}
-	if got := len(base.BlockChains(128)[0]); got != 1 {
-		t.Fatalf("block_size 128 should remain 128 tokens, got %d blocks", got)
-	}
-	if base.BlockChains(64)[0][0] == otherSalt.BlockChains(64)[0][0] {
-		t.Fatal("cache_salt must change the prefix namespace")
-	}
-}
-
-func TestBlockChainsCapPrefixTokens(t *testing.T) {
-	body, err := json.Marshal(map[string]any{
-		"model":  "m",
-		"prompt": strings.Repeat("a", (MaxPrefixTokens+MinBlockSizeTokens)*4),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	locality, supported, err := Extract(body)
-	if err != nil || !supported {
-		t.Fatalf("extract: supported=%v err=%v", supported, err)
-	}
-	if got, want := len(locality.BlockChains(MinBlockSizeTokens)[0]), MaxPrefixTokens/MinBlockSizeTokens; got != want {
-		t.Fatalf("block count=%d want capped %d", got, want)
 	}
 }

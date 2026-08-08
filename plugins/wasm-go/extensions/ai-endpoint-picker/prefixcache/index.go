@@ -2,15 +2,18 @@ package prefixcache
 
 import (
 	"container/list"
+	"math"
 	"sync"
 )
 
 type cacheEntry struct {
 	hash uint64
+	cost int
 }
 
 type endpointCache struct {
 	capacity int
+	usedCost int
 	order    *list.List
 	entries  map[uint64]*list.Element
 }
@@ -39,38 +42,53 @@ func (index *Index) SetCapacity(endpoint string, capacity int) {
 	cache.evict()
 }
 
-func (index *Index) Score(endpoint string, chains [][]uint64) float64 {
+func (index *Index) Score(endpoint string, chains [][]Block) float64 {
 	index.mu.RLock()
 	defer index.mu.RUnlock()
 	cache := index.endpoints[endpoint]
-	matched, total := 0, 0
+	matchedTokens, totalTokens := 0, 0
 	for _, chain := range chains {
-		total += len(chain)
-		for _, hash := range chain {
-			if cache == nil || cache.entries[hash] == nil {
+		for _, block := range chain {
+			totalTokens += block.EstimatedTokens
+		}
+		for _, block := range chain {
+			if cache == nil || cache.entries[block.Hash] == nil {
 				break
 			}
-			matched++
+			matchedTokens += block.EstimatedTokens
 		}
 	}
-	if total == 0 {
+	if totalTokens == 0 {
 		return 0
 	}
-	return float64(matched) / float64(total)
+	ratioScore := float64(matchedTokens) / float64(totalTokens)
+	lengthRatio := math.Min(float64(matchedTokens)/8192, 1)
+	return 0.75*ratioScore + 0.25*lengthRatio*lengthRatio
 }
 
-func (index *Index) Record(endpoint string, chains [][]uint64) {
+func (index *Index) Record(endpoint string, chains [][]Block, actualBlockSize int) {
+	if actualBlockSize <= 0 {
+		actualBlockSize = DefaultBlockSize
+	}
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	cache := index.endpoint(endpoint)
 	for _, chain := range chains {
-		for _, hash := range chain {
-			if element := cache.entries[hash]; element != nil {
-				cache.order.MoveToFront(element)
-				continue
+		for _, block := range chain {
+			cost := block.EstimatedTokens / actualBlockSize
+			if block.EstimatedTokens%actualBlockSize != 0 {
+				cost++
 			}
-			element := cache.order.PushFront(cacheEntry{hash: hash})
-			cache.entries[hash] = element
+			if element := cache.entries[block.Hash]; element != nil {
+				entry := element.Value.(cacheEntry)
+				cache.usedCost += cost - entry.cost
+				element.Value = cacheEntry{hash: block.Hash, cost: cost}
+				cache.order.MoveToFront(element)
+			} else {
+				element := cache.order.PushFront(cacheEntry{hash: block.Hash, cost: cost})
+				cache.entries[block.Hash] = element
+				cache.usedCost += cost
+			}
 			cache.evict()
 		}
 	}
@@ -96,6 +114,16 @@ func (index *Index) Len(endpoint string) int {
 	return len(cache.entries)
 }
 
+func (index *Index) UsedCost(endpoint string) int {
+	index.mu.RLock()
+	defer index.mu.RUnlock()
+	cache := index.endpoints[endpoint]
+	if cache == nil {
+		return 0
+	}
+	return cache.usedCost
+}
+
 func (index *Index) EndpointCount() int {
 	index.mu.RLock()
 	defer index.mu.RUnlock()
@@ -116,9 +144,10 @@ func (index *Index) endpoint(name string) *endpointCache {
 }
 
 func (cache *endpointCache) evict() {
-	for len(cache.entries) > cache.capacity {
+	for cache.usedCost > cache.capacity {
 		oldest := cache.order.Back()
 		entry := oldest.Value.(cacheEntry)
+		cache.usedCost -= entry.cost
 		delete(cache.entries, entry.hash)
 		cache.order.Remove(oldest)
 	}

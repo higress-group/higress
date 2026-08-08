@@ -121,8 +121,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 
 	active := make(map[string]struct{}, len(hosts))
 	endpoints := make([]scheduling.EndpointSnapshot, 0, len(hosts))
-	effectiveBlockSize := prefixcache.MinBlockSizeTokens
-	primaryProfileSelected := false
+	actualBlockSizes := make(map[string]int, len(hosts))
 	for _, host := range hosts {
 		address, metadata := host[0], host[1]
 		if address == "" || !gjson.Valid(metadata) {
@@ -152,10 +151,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 			for name, value := range parsed.Signals {
 				endpoint.Signals[name] = value
 			}
-			if !primaryProfileSelected {
-				effectiveBlockSize = prefixcache.EffectiveBlockSize(parsed.CacheConfig.BlockSize)
-				primaryProfileSelected = true
-			}
+			actualBlockSizes[address] = parsed.CacheConfig.BlockSize
 			config.prefix.SetCapacity(address, parsed.CacheConfig.NumGPUBlocks)
 			for name, value := range config.store.Signals(address) {
 				endpoint.Signals[name] = value
@@ -167,9 +163,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 	}
 	config.store.Cleanup(active)
 	config.prefix.Cleanup(active)
-	var prefixChains [][]uint64
+	var prefixChains [][]prefixcache.Block
 	if prefixAvailable {
-		prefixChains = locality.BlockChains(effectiveBlockSize)
+		prefixChains = locality.Chains
 		if blockCount(prefixChains) > 0 {
 			for index := range endpoints {
 				if !endpoints[index].Healthy {
@@ -201,13 +197,10 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
-	if err := proxywasm.SetUpstreamOverrideHost([]byte(decision.Address)); err != nil {
+	if err := overrideAndRecord(proxywasm.SetUpstreamOverrideHost, config.prefix, decision.Address, prefixChains, actualBlockSizes[decision.Address]); err != nil {
 		log.Debugf("ai-endpoint-picker fail-open: override host %s: %v", decision.Address, err)
 		config.metrics.fallback()
 		return types.ActionContinue
-	}
-	if len(prefixChains) > 0 {
-		config.prefix.Record(decision.Address, prefixChains)
 	}
 
 	now := time.Now()
@@ -222,12 +215,22 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 	return types.ActionContinue
 }
 
-func blockCount(chains [][]uint64) int {
+func blockCount(chains [][]prefixcache.Block) int {
 	total := 0
 	for _, chain := range chains {
 		total += len(chain)
 	}
 	return total
+}
+
+func overrideAndRecord(override func([]byte) error, index *prefixcache.Index, endpoint string, chains [][]prefixcache.Block, actualBlockSize int) error {
+	if err := override([]byte(endpoint)); err != nil {
+		return err
+	}
+	if blockCount(chains) > 0 {
+		index.Record(endpoint, chains, actualBlockSize)
+	}
+	return nil
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, _ Config) types.Action {

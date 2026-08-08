@@ -1,13 +1,37 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-endpoint-picker/prefixcache"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 )
 
 type requestBodyControlStub struct {
 	dontRead bool
+}
+
+func TestOverrideAndRecordOnlyLearnsAfterSuccess(t *testing.T) {
+	chains := [][]prefixcache.Block{{{Hash: 1, EstimatedTokens: 32}}}
+	index := prefixcache.NewIndex(10)
+	failure := errors.New("override failed")
+	if err := overrideAndRecord(func([]byte) error { return failure }, index, "a", chains, 16); !errors.Is(err, failure) {
+		t.Fatalf("override error=%v want %v", err, failure)
+	}
+	if index.Len("a") != 0 {
+		t.Fatal("failed override recorded prefix")
+	}
+	var overridden string
+	if err := overrideAndRecord(func(address []byte) error {
+		overridden = string(address)
+		return nil
+	}, index, "a", chains, 16); err != nil {
+		t.Fatal(err)
+	}
+	if overridden != "a" || index.Len("a") != 1 || index.UsedCost("a") != 2 {
+		t.Fatalf("success boundary endpoint=%q len=%d cost=%d", overridden, index.Len("a"), index.UsedCost("a"))
+	}
 }
 
 func (s *requestBodyControlStub) DontReadRequestBody() {

@@ -9,14 +9,16 @@
 - Filter 只排除非健康 endpoint，缺少可选指标不会触发硬过滤。
 - queue 和本地 inflight 在健康候选集内做 min-max 归一化，值越小分越高。
 - KV cache 和 failure 分别使用 `1-utilization` 与 `1-EWMA`。
-- approximate prefix cache 使用本 WASM 实例观察到的已选请求估算最长连续前缀，得分为 `matched blocks / total blocks`；冷启动得 0 分。
+- approximate prefix cache 使用本 WASM 实例观察到的已选请求估算最长连续语义前缀。先汇总多 prompt 的连续命中 pseudo-token 数，再计算 `0.75 × matched/total + 0.25 × min(matched/8192,1)²`；冷启动得 0 分。
 - LoRA 指标存在时，当前请求的 `model` 已加载得 1 分，否则得 0 分。
 - 每项 scorer 输出 `[0,1]`。总分始终除以固定配置权重之和，因此缺失信号贡献 0，不会获得额外优势。
 - 最高分相同时随机选择。没有健康候选、metrics 损坏或 hostcall/override 失败时 fail-open，由 Envoy 默认负载均衡继续处理。
 
 KV cache 优先读取 `vllm:kv_cache_usage_perc`，并兼容旧名称 `vllm:gpu_cache_usage_perc`。LoRA 指标 `vllm:lora_requests_info` 可以缺失。
 
-prefix locality 支持 OpenAI Chat Completions 和 Completions 的文本输入（包括 tools、role、文本 prompt 与 token ID prompt），不包含 temperature、max tokens 等输出参数。估算 tokenizer 每 4 个 UTF-8 bytes 打包一个 pseudo-token；block hash 以 `model` 和 `cache_salt` 隔离命名空间并链接前一 block。有效 block size 默认 64 tokens；首个健康候选的合法 `vllm:cache_config_info{block_size=...}` 可将其提高，最多索引 131072 tokens。每 endpoint 的 thread-safe LRU 默认保存 31250 个 block，合法的 `num_gpu_blocks` label 可覆盖容量。非文本 multimodal 输入只让 prefix scorer unavailable，queue/KV 等 scorer 继续工作。
+prefix locality 支持 OpenAI Chat Completions 和 Completions 的文本输入，不包含 temperature、max tokens 等输出参数。Chat 的 canonical tools 和每条包含 role、content、name、tool calls 等完整字段的 canonical message 分别形成有序语义 segment；Completions 文本或 token ID prompt 独立建链。每 4 个 UTF-8 bytes 估算一个 pseudo-token，超过 1024 pseudo-tokens 的 segment 有界切片，单 prompt 最多处理 131072 pseudo-tokens。hash 包含 `model`、`cache_salt`、segment 类型/长度、内容 hash 和前一个 hash，因此中间 segment 变化后不会命中后续 segment。非文本 multimodal 输入只让 prefix scorer unavailable，queue/KV 等 scorer 继续工作。
+
+每 endpoint 的 thread-safe weighted LRU 容量单位是近似后端 KV block，默认 31250，合法 `vllm:cache_config_info{num_gpu_blocks=...}` 可覆盖容量。每个语义 entry 的增量成本为 `ceil(segmentTokens/actualBlockSize)`；actual block size 读取所选 endpoint 的合法 `block_size`，否则使用 16。Score 不刷新 LRU。
 
 这个 approximate 索引只存在于当前 WASM runtime/config 实例，不能代表后端真实 KV cache；只有 override host 成功后才写入所选 endpoint，已从当前 host snapshot 消失的 endpoint 会被清理。
 
