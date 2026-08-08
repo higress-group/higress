@@ -11,8 +11,8 @@ func (r fixedRandom) Intn(n int) int { return int(r) % n }
 
 func testWeights() Weights {
 	return Weights{
-		SignalQueue: 2, SignalKVCache: 2, SignalLoRAAffinity: 1,
-		SignalInflight: 1, SignalFailure: 1,
+		SignalQueue: 2, SignalKVCache: 2, SignalPrefixCache: 3,
+		SignalLoRAAffinity: 0, SignalInflight: 0, SignalFailure: 0,
 	}
 }
 
@@ -24,17 +24,17 @@ func endpoint(address string, healthy bool, values map[SignalName]float64) Endpo
 	return EndpointSnapshot{Address: address, Healthy: healthy, Signals: signals}
 }
 
-func TestPipelineCombinesCacheAndLoadPressure(t *testing.T) {
+func TestPipelinePrefixAndQueueKVWeightedConflict(t *testing.T) {
 	decision := NewPipeline(testWeights(), fixedRandom(0)).Schedule([]EndpointSnapshot{
 		endpoint("cache-rich", true, map[SignalName]float64{
-			SignalQueue: 10, SignalKVCache: 0, SignalInflight: 0, SignalFailure: 0,
+			SignalQueue: 10, SignalKVCache: 0, SignalPrefixCache: 1,
 		}),
 		endpoint("short-queue", true, map[SignalName]float64{
-			SignalQueue: 0, SignalKVCache: 0.9, SignalInflight: 0, SignalFailure: 0,
+			SignalQueue: 0, SignalKVCache: 0.9, SignalPrefixCache: 0,
 		}),
 	})
-	if decision.Address != "short-queue" {
-		t.Fatalf("selected %q, want short-queue (score %+v)", decision.Address, decision)
+	if decision.Address != "cache-rich" {
+		t.Fatalf("selected %q, want cache-rich (score %+v)", decision.Address, decision)
 	}
 	if decision.Score <= 0 || decision.Score > 1 {
 		t.Fatalf("score %v outside [0,1]", decision.Score)
@@ -53,14 +53,15 @@ func TestPipelineMissingSignalDoesNotBenefit(t *testing.T) {
 	if decision.Address != "observed" {
 		t.Fatalf("selected %q, want observed", decision.Address)
 	}
-	want := float64(4) / 7
+	want := float64(2) / 7
 	if math.Abs(decision.Score-want) > 1e-9 {
 		t.Fatalf("score = %v, want fixed-denominator %v", decision.Score, want)
 	}
 }
 
 func TestPipelineLoRAAffinityAndFailure(t *testing.T) {
-	decision := NewPipeline(testWeights(), fixedRandom(0)).Schedule([]EndpointSnapshot{
+	weights := Weights{SignalLoRAAffinity: 1, SignalInflight: 1, SignalFailure: 1}
+	decision := NewPipeline(weights, fixedRandom(0)).Schedule([]EndpointSnapshot{
 		endpoint("affinity", true, map[SignalName]float64{
 			SignalLoRAAffinity: 1, SignalInflight: 0, SignalFailure: 0,
 		}),
@@ -74,7 +75,8 @@ func TestPipelineLoRAAffinityAndFailure(t *testing.T) {
 }
 
 func TestPipelineTieUsesInjectedRandom(t *testing.T) {
-	decision := NewPipeline(testWeights(), fixedRandom(1)).Schedule([]EndpointSnapshot{
+	weights := Weights{SignalInflight: 1, SignalFailure: 1}
+	decision := NewPipeline(weights, fixedRandom(1)).Schedule([]EndpointSnapshot{
 		endpoint("first", true, map[SignalName]float64{SignalInflight: 0, SignalFailure: 0}),
 		endpoint("second", true, map[SignalName]float64{SignalInflight: 0, SignalFailure: 0}),
 	})

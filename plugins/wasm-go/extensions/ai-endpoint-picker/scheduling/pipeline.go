@@ -92,10 +92,12 @@ func normalize(endpoints []EndpointSnapshot) []map[SignalName]SignalValue {
 	normalizeLowerIsBetter(result, SignalInflight)
 	transformOneMinus(result, SignalKVCache)
 	transformOneMinus(result, SignalFailure)
-	for i := range result {
-		if value, ok := result[i][SignalLoRAAffinity]; ok && value.Available {
-			value.Value = clamp(value.Value)
-			result[i][SignalLoRAAffinity] = value
+	for _, name := range []SignalName{SignalPrefixCache, SignalLoRAAffinity} {
+		for i := range result {
+			if value, ok := result[i][name]; ok && value.Available {
+				value.Value = clamp(value.Value)
+				result[i][name] = value
+			}
 		}
 	}
 	return result

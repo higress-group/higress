@@ -5,6 +5,7 @@ go 1.24.1
 toolchain go1.24.3
 
 require (
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250822030947-8345453fddd0
 	github.com/higress-group/wasm-go v1.0.2-0.20250821081215-b573359becf8
 	github.com/prometheus/client_model v0.6.2

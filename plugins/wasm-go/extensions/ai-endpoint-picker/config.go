@@ -6,11 +6,13 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-endpoint-picker/prefixcache"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-endpoint-picker/scheduling"
 	"github.com/tidwall/gjson"
 )
 
 const (
+	defaultProfile  = "default"
 	balancedProfile = "balanced"
 	maxScorePicker  = "max-score"
 )
@@ -22,6 +24,7 @@ type Config struct {
 	sampleRate float64
 	store      *scheduling.FeedbackStore
 	pipeline   *scheduling.Pipeline
+	prefix     *prefixcache.Index
 	metrics    *pluginMetrics
 	random     *rand.Rand
 }
@@ -29,18 +32,19 @@ type Config struct {
 func parseConfig(json gjson.Result, config *Config) error {
 	profile := json.Get("profile").String()
 	if profile == "" {
-		profile = balancedProfile
+		profile = defaultProfile
 	}
-	if profile != balancedProfile {
+	if profile != defaultProfile && profile != balancedProfile {
 		return fmt.Errorf("unsupported profile %q", profile)
 	}
 
 	weights := scheduling.Weights{
 		scheduling.SignalQueue:        2,
 		scheduling.SignalKVCache:      2,
-		scheduling.SignalLoRAAffinity: 1,
-		scheduling.SignalInflight:     1,
-		scheduling.SignalFailure:      1,
+		scheduling.SignalPrefixCache:  3,
+		scheduling.SignalLoRAAffinity: 0,
+		scheduling.SignalInflight:     0,
+		scheduling.SignalFailure:      0,
 	}
 	weightsJSON := json.Get("weights")
 	if weightsJSON.Exists() && !weightsJSON.IsObject() {
@@ -52,6 +56,7 @@ func parseConfig(json gjson.Result, config *Config) error {
 	}{
 		{"queue", scheduling.SignalQueue},
 		{"kvCache", scheduling.SignalKVCache},
+		{"prefixCache", scheduling.SignalPrefixCache},
 		{"loraAffinity", scheduling.SignalLoRAAffinity},
 		{"inflight", scheduling.SignalInflight},
 		{"failure", scheduling.SignalFailure},
@@ -112,6 +117,7 @@ func parseConfig(json gjson.Result, config *Config) error {
 	config.sampleRate = sampleRate
 	config.store = scheduling.NewFeedbackStore(ewmaAlpha)
 	config.pipeline = scheduling.NewPipeline(weights, random)
+	config.prefix = prefixcache.NewIndex(prefixcache.DefaultCapacity)
 	config.metrics = &pluginMetrics{}
 	config.random = random
 	return nil

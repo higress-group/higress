@@ -12,13 +12,13 @@ func TestParseConfigDefaults(t *testing.T) {
 	if err := parseConfig(gjson.Parse(`{}`), &config); err != nil {
 		t.Fatalf("parseConfig() error = %v", err)
 	}
-	if config.profile != balancedProfile || config.ewmaAlpha != 0.2 || config.sampleRate != 0 {
+	if config.profile != defaultProfile || config.ewmaAlpha != 0.2 || config.sampleRate != 0 {
 		t.Fatalf("unexpected defaults: %+v", config)
 	}
 	want := scheduling.Weights{
 		scheduling.SignalQueue: 2, scheduling.SignalKVCache: 2,
-		scheduling.SignalLoRAAffinity: 1, scheduling.SignalInflight: 1,
-		scheduling.SignalFailure: 1,
+		scheduling.SignalPrefixCache: 3, scheduling.SignalLoRAAffinity: 0,
+		scheduling.SignalInflight: 0, scheduling.SignalFailure: 0,
 	}
 	for signal, weight := range want {
 		if config.weights[signal] != weight {
@@ -27,11 +27,26 @@ func TestParseConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestParseConfigBalancedAliasesDefault(t *testing.T) {
+	var defaultConfig, balancedConfig Config
+	if err := parseConfig(gjson.Parse(`{}`), &defaultConfig); err != nil {
+		t.Fatal(err)
+	}
+	if err := parseConfig(gjson.Parse(`{"profile":"balanced"}`), &balancedConfig); err != nil {
+		t.Fatal(err)
+	}
+	for signal, weight := range defaultConfig.weights {
+		if balancedConfig.weights[signal] != weight {
+			t.Fatalf("balanced weight %s=%v want default %v", signal, balancedConfig.weights[signal], weight)
+		}
+	}
+}
+
 func TestParseConfigOverrides(t *testing.T) {
 	var config Config
 	err := parseConfig(gjson.Parse(`{
         "profile":"balanced",
-        "weights":{"queue":0,"kvCache":3,"loraAffinity":0,"inflight":2,"failure":0},
+        "weights":{"queue":0,"kvCache":3,"prefixCache":0,"loraAffinity":0,"inflight":2,"failure":0},
         "feedback":{"ewmaAlpha":0.5},
         "picker":{"mode":"max-score"},
         "debug":{"sampleRate":1}
@@ -52,7 +67,7 @@ func TestParseConfigRejectsInvalidValues(t *testing.T) {
 		`{"profile":"latency"}`,
 		`{"weights":"queue"}`,
 		`{"weights":{"queue":-1}}`,
-		`{"weights":{"queue":0,"kvCache":0,"loraAffinity":0,"inflight":0,"failure":0}}`,
+		`{"weights":{"queue":0,"kvCache":0,"prefixCache":0,"loraAffinity":0,"inflight":0,"failure":0}}`,
 		`{"feedback":"invalid"}`,
 		`{"feedback":{"ewmaAlpha":0}}`,
 		`{"feedback":{"ewmaAlpha":1.1}}`,

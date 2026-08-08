@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-endpoint-picker/prefixcache"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-endpoint-picker/scheduling"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -105,6 +106,12 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
+	locality, prefixAvailable, err := prefixcache.Extract(body)
+	if err != nil {
+		log.Debugf("ai-endpoint-picker fail-open: locality extraction failed: %v", err)
+		config.metrics.fallback()
+		return types.ActionContinue
+	}
 	hosts, err := proxywasm.GetUpstreamHosts()
 	if err != nil || len(hosts) == 0 {
 		log.Debugf("ai-endpoint-picker fail-open: upstream hosts unavailable: count=%d error=%v", len(hosts), err)
@@ -114,7 +121,8 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 
 	active := make(map[string]struct{}, len(hosts))
 	endpoints := make([]scheduling.EndpointSnapshot, 0, len(hosts))
-	missingSignals := uint64(0)
+	effectiveBlockSize := prefixcache.MinBlockSizeTokens
+	primaryProfileSelected := false
 	for _, host := range hosts {
 		address, metadata := host[0], host[1]
 		if address == "" || !gjson.Valid(metadata) {
@@ -135,27 +143,58 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 			Signals: map[scheduling.SignalName]scheduling.SignalValue{},
 		}
 		if endpoint.Healthy {
-			signals, parseErr := scheduling.ParseVLLMSignals(gjson.Get(metadata, "metrics").String(), model.String())
+			parsed, parseErr := scheduling.ParseVLLMMetrics(gjson.Get(metadata, "metrics").String(), model.String())
 			if parseErr != nil {
 				log.Debugf("ai-endpoint-picker fail-open: parse metrics for host %s: %v", address, parseErr)
 				config.metrics.fallback()
 				return types.ActionContinue
 			}
-			for name, value := range signals {
+			for name, value := range parsed.Signals {
 				endpoint.Signals[name] = value
 			}
+			if !primaryProfileSelected {
+				effectiveBlockSize = prefixcache.EffectiveBlockSize(parsed.CacheConfig.BlockSize)
+				primaryProfileSelected = true
+			}
+			config.prefix.SetCapacity(address, parsed.CacheConfig.NumGPUBlocks)
 			for name, value := range config.store.Signals(address) {
 				endpoint.Signals[name] = value
 			}
-			for _, name := range scheduling.SignalNames {
-				if value, ok := endpoint.Signals[name]; !ok || !value.Available {
-					missingSignals++
-				}
-			}
+		} else {
+			config.prefix.SetCapacity(address, 0)
 		}
 		endpoints = append(endpoints, endpoint)
 	}
 	config.store.Cleanup(active)
+	config.prefix.Cleanup(active)
+	var prefixChains [][]uint64
+	if prefixAvailable {
+		prefixChains = locality.BlockChains(effectiveBlockSize)
+		if blockCount(prefixChains) > 0 {
+			for index := range endpoints {
+				if !endpoints[index].Healthy {
+					continue
+				}
+				endpoints[index].Signals[scheduling.SignalPrefixCache] = scheduling.SignalValue{
+					Value:      config.prefix.Score(endpoints[index].Address, prefixChains),
+					Available:  true,
+					Confidence: 1,
+					Source:     "gateway:approx_prefix_cache",
+				}
+			}
+		}
+	}
+	missingSignals := uint64(0)
+	for _, endpoint := range endpoints {
+		if !endpoint.Healthy {
+			continue
+		}
+		for _, name := range scheduling.SignalNames {
+			if value, ok := endpoint.Signals[name]; !ok || !value.Available {
+				missingSignals++
+			}
+		}
+	}
 	decision := config.pipeline.Schedule(endpoints)
 	if decision.FallbackReason != "" || decision.Address == "" {
 		log.Debugf("ai-endpoint-picker fail-open: scheduling reason=%s candidates=%d", decision.FallbackReason, decision.CandidateCount)
@@ -166,6 +205,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 		log.Debugf("ai-endpoint-picker fail-open: override host %s: %v", decision.Address, err)
 		config.metrics.fallback()
 		return types.ActionContinue
+	}
+	if len(prefixChains) > 0 {
+		config.prefix.Record(decision.Address, prefixChains)
 	}
 
 	now := time.Now()
@@ -178,6 +220,14 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 		log.Debugf("ai-endpoint-picker candidates=%d score=%.4f missing_signals=%d", decision.CandidateCount, decision.Score, missingSignals)
 	}
 	return types.ActionContinue
+}
+
+func blockCount(chains [][]uint64) int {
+	total := 0
+	for _, chain := range chains {
+		total += len(chain)
+	}
+	return total
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, _ Config) types.Action {

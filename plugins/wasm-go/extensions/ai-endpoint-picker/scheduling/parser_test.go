@@ -28,6 +28,25 @@ vllm:lora_requests_info{running_lora_adapters="base, adapter-a",max_lora="4"} 12
 	}
 }
 
+func TestParseVLLMCacheConfigInfo(t *testing.T) {
+	metrics := "# TYPE vllm:cache_config_info gauge\n" +
+		"vllm:cache_config_info{block_size=\"128\",num_gpu_blocks=\"4096\"} 1\n"
+	parsed, err := ParseVLLMMetrics(metrics, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.CacheConfig.BlockSize != 128 || parsed.CacheConfig.NumGPUBlocks != 4096 {
+		t.Fatalf("cache config=%+v", parsed.CacheConfig)
+	}
+
+	metrics = "# TYPE vllm:cache_config_info gauge\n" +
+		"vllm:cache_config_info{block_size=\"invalid\",num_gpu_blocks=\"-1\"} 1\n"
+	parsed, err = ParseVLLMMetrics(metrics, "model")
+	if err != nil || parsed.CacheConfig != (CacheConfig{}) {
+		t.Fatalf("invalid cache config=%+v err=%v", parsed.CacheConfig, err)
+	}
+}
+
 func TestParseVLLMSignalsLegacyKVAndOptionalLoRA(t *testing.T) {
 	signals, err := ParseVLLMSignals("# TYPE vllm:gpu_cache_usage_perc gauge\nvllm:gpu_cache_usage_perc 0.4\n", "model")
 	if err != nil {

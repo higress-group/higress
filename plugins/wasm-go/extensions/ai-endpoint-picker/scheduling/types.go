@@ -5,6 +5,7 @@ type SignalName string
 const (
 	SignalQueue        SignalName = "queue"
 	SignalKVCache      SignalName = "kv_cache"
+	SignalPrefixCache  SignalName = "prefix_cache"
 	SignalLoRAAffinity SignalName = "lora_affinity"
 	SignalInflight     SignalName = "inflight"
 	SignalFailure      SignalName = "failure"
@@ -13,6 +14,7 @@ const (
 var SignalNames = []SignalName{
 	SignalQueue,
 	SignalKVCache,
+	SignalPrefixCache,
 	SignalLoRAAffinity,
 	SignalInflight,
 	SignalFailure,

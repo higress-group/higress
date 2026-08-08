@@ -3,6 +3,7 @@ package scheduling
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	dto "github.com/prometheus/client_model/go"
@@ -14,13 +15,32 @@ const (
 	currentKVMetric   = "vllm:kv_cache_usage_perc"
 	legacyKVMetric    = "vllm:gpu_cache_usage_perc"
 	loraMetric        = "vllm:lora_requests_info"
+	cacheConfigMetric = "vllm:cache_config_info"
 	loraAdaptersLabel = "running_lora_adapters"
 )
+
+type CacheConfig struct {
+	BlockSize    int
+	NumGPUBlocks int
+}
+
+type VLLMMetrics struct {
+	Signals     map[SignalName]SignalValue
+	CacheConfig CacheConfig
+}
 
 // ParseVLLMSignals parses one endpoint's Prometheus snapshot. A missing metric
 // family is a valid partial snapshot; malformed exposition is not.
 func ParseVLLMSignals(metrics, model string) (map[SignalName]SignalValue, error) {
-	result := map[SignalName]SignalValue{}
+	parsed, err := ParseVLLMMetrics(metrics, model)
+	if err != nil {
+		return nil, err
+	}
+	return parsed.Signals, nil
+}
+
+func ParseVLLMMetrics(metrics, model string) (VLLMMetrics, error) {
+	result := VLLMMetrics{Signals: map[SignalName]SignalValue{}}
 	if strings.TrimSpace(metrics) == "" {
 		return result, nil
 	}
@@ -28,23 +48,45 @@ func ParseVLLMSignals(metrics, model string) (map[SignalName]SignalValue, error)
 	var parser expfmt.TextParser
 	families, err := parser.TextToMetricFamilies(strings.NewReader(metrics))
 	if err != nil {
-		return nil, fmt.Errorf("parse prometheus metrics: %w", err)
+		return VLLMMetrics{}, fmt.Errorf("parse prometheus metrics: %w", err)
 	}
 
 	if value, ok := latestFiniteValue(families[queueMetric]); ok && value >= 0 {
-		result[SignalQueue] = available(value, queueMetric)
+		result.Signals[SignalQueue] = available(value, queueMetric)
 	}
 	if value, ok := latestFiniteValue(families[currentKVMetric]); ok {
-		result[SignalKVCache] = available(value, currentKVMetric)
+		result.Signals[SignalKVCache] = available(value, currentKVMetric)
 	} else if value, ok := latestFiniteValue(families[legacyKVMetric]); ok {
-		result[SignalKVCache] = available(value, legacyKVMetric)
+		result.Signals[SignalKVCache] = available(value, legacyKVMetric)
 	}
 	if family := families[loraMetric]; family != nil {
 		if value, ok := loraAffinity(family, model); ok {
-			result[SignalLoRAAffinity] = available(value, loraMetric)
+			result.Signals[SignalLoRAAffinity] = available(value, loraMetric)
 		}
 	}
+	result.CacheConfig = cacheConfig(families[cacheConfigMetric])
 	return result, nil
+}
+
+func cacheConfig(family *dto.MetricFamily) CacheConfig {
+	metric := latestMetric(family)
+	if metric == nil {
+		return CacheConfig{}
+	}
+	var config CacheConfig
+	for _, label := range metric.Label {
+		value, err := strconv.Atoi(label.GetValue())
+		if err != nil || value <= 0 {
+			continue
+		}
+		switch label.GetName() {
+		case "block_size":
+			config.BlockSize = value
+		case "num_gpu_blocks":
+			config.NumGPUBlocks = value
+		}
+	}
+	return config
 }
 
 func available(value float64, source string) SignalValue {
@@ -52,8 +94,14 @@ func available(value float64, source string) SignalValue {
 }
 
 func latestFiniteValue(family *dto.MetricFamily) (float64, bool) {
+	selected := latestMetric(family)
+	value, ok := metricValue(selected)
+	return value, ok && !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func latestMetric(family *dto.MetricFamily) *dto.Metric {
 	if family == nil || len(family.Metric) == 0 {
-		return 0, false
+		return nil
 	}
 	var selected *dto.Metric
 	for _, metric := range family.Metric {
@@ -61,8 +109,7 @@ func latestFiniteValue(family *dto.MetricFamily) (float64, bool) {
 			selected = metric
 		}
 	}
-	value, ok := metricValue(selected)
-	return value, ok && !math.IsNaN(value) && !math.IsInf(value, 0)
+	return selected
 }
 
 func metricValue(metric *dto.Metric) (float64, bool) {
