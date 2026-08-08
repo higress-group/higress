@@ -21,6 +21,19 @@ type requestFeedback struct {
 	firstByte time.Time
 }
 
+type requestBodyFraming struct {
+	contentLength    string
+	transferEncoding string
+	contentType      string
+	contentEncoding  string
+	connection       string
+	upgrade          string
+}
+
+type requestBodyControl interface {
+	DontReadRequestBody()
+}
+
 func main() {}
 
 func init() {
@@ -37,14 +50,52 @@ func init() {
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config Config) types.Action {
-	method := strings.ToUpper(ctx.Method())
-	contentLength, contentLengthErr := proxywasm.GetHttpRequestHeader("content-length")
-	if method == "GET" || method == "HEAD" || (contentLengthErr == nil && strings.TrimSpace(contentLength) == "0") {
+	framing := requestBodyFraming{}
+	framing.contentLength, _ = proxywasm.GetHttpRequestHeader("content-length")
+	framing.transferEncoding, _ = proxywasm.GetHttpRequestHeader("transfer-encoding")
+	framing.contentType, _ = proxywasm.GetHttpRequestHeader("content-type")
+	framing.contentEncoding, _ = proxywasm.GetHttpRequestHeader("content-encoding")
+	framing.connection, _ = proxywasm.GetHttpRequestHeader("connection")
+	framing.upgrade, _ = proxywasm.GetHttpRequestHeader("upgrade")
+	action := requestHeadersAction(ctx, framing)
+	if action == types.HeaderContinue {
 		config.metrics.fallback()
+	}
+	return action
+}
+
+func requestHeadersAction(ctx requestBodyControl, framing requestBodyFraming) types.Action {
+	if !hasReadableRequestBody(framing) {
 		ctx.DontReadRequestBody()
 		return types.HeaderContinue
 	}
 	return types.HeaderStopIteration
+}
+
+func hasReadableRequestBody(framing requestBodyFraming) bool {
+	contentType := strings.ToLower(framing.contentType)
+	if strings.Contains(contentType, "octet-stream") || strings.Contains(contentType, "grpc") {
+		return false
+	}
+	if strings.TrimSpace(framing.contentEncoding) != "" {
+		return false
+	}
+	if hasHeaderToken(framing.connection, "upgrade") && strings.EqualFold(strings.TrimSpace(framing.upgrade), "websocket") {
+		return false
+	}
+	if contentLength, err := strconv.ParseInt(strings.TrimSpace(framing.contentLength), 10, 64); err == nil && contentLength > 0 {
+		return true
+	}
+	return hasHeaderToken(framing.transferEncoding, "chunked")
+}
+
+func hasHeaderToken(value, token string) bool {
+	for _, part := range strings.Split(value, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), token) {
+			return true
+		}
+	}
+	return false
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) types.Action {
