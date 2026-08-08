@@ -8,7 +8,7 @@ import (
 )
 
 func BenchmarkExtractAndHash(b *testing.B) {
-	for _, size := range []int{4 << 10, 32 << 10, 128 << 10, 512 << 10} {
+	for _, size := range []int{4 << 10, 32 << 10, 128 << 10, 512 << 10, 4 << 20} {
 		body, err := json.Marshal(map[string]any{"model": "m", "prompt": strings.Repeat("a", size)})
 		if err != nil {
 			b.Fatal(err)

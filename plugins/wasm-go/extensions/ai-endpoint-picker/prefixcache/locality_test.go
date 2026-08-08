@@ -61,6 +61,79 @@ func TestLongMessageSplitsAtBoundedSemanticSize(t *testing.T) {
 	}
 }
 
+func TestLongMessageMetadataChangesInvalidateFirstSegment(t *testing.T) {
+	content := strings.Repeat("a", MaxSegmentTokens*4*3)
+	tests := []struct {
+		name  string
+		first map[string]any
+		other map[string]any
+	}{
+		{
+			name:  "role",
+			first: map[string]any{"role": "user", "content": content},
+			other: map[string]any{"role": "system", "content": content},
+		},
+		{
+			name:  "name",
+			first: map[string]any{"role": "user", "name": "alice", "content": content},
+			other: map[string]any{"role": "user", "name": "bob", "content": content},
+		},
+		{
+			name: "tool_calls",
+			first: map[string]any{
+				"role": "assistant", "content": content,
+				"tool_calls": []any{map[string]any{"id": "one", "type": "function"}},
+			},
+			other: map[string]any{
+				"role": "assistant", "content": content,
+				"tool_calls": []any{map[string]any{"id": "two", "type": "function"}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			firstBody, _ := json.Marshal(map[string]any{"model": "m", "messages": []any{test.first}})
+			otherBody, _ := json.Marshal(map[string]any{"model": "m", "messages": []any{test.other}})
+			first := extractForTest(t, string(firstBody))
+			other := extractForTest(t, string(otherBody))
+			if len(first.Chains[0]) < 3 || len(first.Chains[0]) != len(other.Chains[0]) {
+				t.Fatalf("unexpected long-message chains: %d vs %d", len(first.Chains[0]), len(other.Chains[0]))
+			}
+			if first.Chains[0][0].Hash == other.Chains[0][0].Hash {
+				t.Fatal("message framing metadata did not isolate the first segment")
+			}
+			index := NewIndex(DefaultCapacity)
+			index.Record("a", first.Chains, DefaultBlockSize)
+			if score := index.Score("a", other.Chains); score != 0 {
+				t.Fatalf("metadata change retained a false prefix score %v", score)
+			}
+		})
+	}
+}
+
+func TestLongMessageContentSuffixRetainsEarlierChunks(t *testing.T) {
+	prefix := strings.Repeat("a", MaxSegmentTokens*4*2)
+	firstBody, _ := json.Marshal(map[string]any{
+		"model": "m", "messages": []any{map[string]any{"role": "user", "name": "same", "content": prefix + "first suffix"}},
+	})
+	otherBody, _ := json.Marshal(map[string]any{
+		"model": "m", "messages": []any{map[string]any{"name": "same", "content": prefix + "other suffix", "role": "user"}},
+	})
+	first := extractForTest(t, string(firstBody))
+	other := extractForTest(t, string(otherBody))
+	if len(first.Chains[0]) != 3 || len(other.Chains[0]) != 3 {
+		t.Fatalf("unexpected suffix chains: %d vs %d", len(first.Chains[0]), len(other.Chains[0]))
+	}
+	for block := 0; block < 2; block++ {
+		if first.Chains[0][block].Hash != other.Chains[0][block].Hash {
+			t.Fatalf("unchanged content prefix block %d did not match", block)
+		}
+	}
+	if first.Chains[0][2].Hash == other.Chains[0][2].Hash {
+		t.Fatal("changed content suffix retained the final block")
+	}
+}
+
 func TestCompletionsTextTokenIDsAndMultiplePrompts(t *testing.T) {
 	text := extractForTest(t, `{"model":"m","prompt":"hello"}`)
 	if len(text.Chains) != 1 || len(text.Chains[0]) != 1 || text.Chains[0][0].EstimatedTokens != 2 {
@@ -93,6 +166,14 @@ func TestNamespaceSegmentKindAndOutputIsolation(t *testing.T) {
 	}
 	if ambiguousA.Chains[0][0].Hash == ambiguousB.Chains[0][0].Hash {
 		t.Fatal("model and cache_salt namespace components were not length-delimited")
+	}
+}
+
+func TestEscapedStringsAndKeysCanonicalizeDeterministically(t *testing.T) {
+	plain := extractForTest(t, `{"model":"m","messages":[{"role":"user","content":"hello 世界"}]}`)
+	escaped := extractForTest(t, `{"model":"m","messages":[{"r\u006fle":"user","content":"\u0068ello \u4e16\u754c"}]}`)
+	if plain.Chains[0][0].Hash != escaped.Chains[0][0].Hash {
+		t.Fatal("equivalent JSON string/key escapes produced different semantic hashes")
 	}
 }
 
@@ -133,9 +214,61 @@ func TestTokenIDPromptIsStreamedAndCapped(t *testing.T) {
 	}
 }
 
+func TestMultiMegabyteTextPromptsRemainAllocationBounded(t *testing.T) {
+	content := strings.Repeat("a", 4<<20)
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{name: "completion", body: mustJSON(t, map[string]any{"model": "m", "prompt": content})},
+		{name: "chat", body: mustJSON(t, map[string]any{
+			"model": "m", "messages": []any{map[string]any{"role": "user", "content": content}},
+		})},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			locality, supported, err := Extract(test.body)
+			if err != nil || !supported {
+				t.Fatalf("extract: supported=%v err=%v", supported, err)
+			}
+			if got := len(locality.Chains[0]); got != MaxPrefixTokens/MaxSegmentTokens {
+				t.Fatalf("semantic segment count=%d want %d", got, MaxPrefixTokens/MaxSegmentTokens)
+			}
+			if got := totalTokens(locality.Chains); got != MaxPrefixTokens {
+				t.Fatalf("token count=%d want %d", got, MaxPrefixTokens)
+			}
+			if allocations := testing.AllocsPerRun(3, func() {
+				_, _, _ = Extract(test.body)
+			}); allocations > 100 {
+				t.Fatalf("allocations=%v want bounded <=100", allocations)
+			}
+		})
+	}
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 func TestUnsupportedMultimodalOnlyDisablesPrefix(t *testing.T) {
-	_, supported, err := Extract([]byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"x"}}]}]}`))
-	if err != nil || supported {
-		t.Fatalf("multimodal request should be unavailable without error: supported=%v err=%v", supported, err)
+	tests := []string{
+		`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"x"}}]}]}`,
+		`{"model":"m","messages":[{"role":"assistant","content":null,"audio":{"id":"audio-1"}}]}`,
+	}
+	for _, body := range tests {
+		_, supported, err := Extract([]byte(body))
+		if err != nil || supported {
+			t.Fatalf("multimodal request should be unavailable without error: supported=%v err=%v", supported, err)
+		}
+	}
+
+	_, supported, err := Extract([]byte(`{"model":"m","messages":[{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function"}]}]}`))
+	if err != nil || !supported {
+		t.Fatalf("normal tool_calls must remain supported: supported=%v err=%v", supported, err)
 	}
 }
