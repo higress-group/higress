@@ -47,7 +47,8 @@ func BenchmarkCappedStructuredContentSemanticVisit(b *testing.B) {
 }
 
 func BenchmarkScoreFullHit2048Blocks(b *testing.B) {
-	benchmarkScoreFullHit(b, 2048, 1)
+	// The legacy implementation split the 131072-token cap into fixed 64-pseudo-token blocks.
+	benchmarkScoreFullHit(b, 2048, 64)
 }
 
 func BenchmarkScoreFullHit128SemanticSegments(b *testing.B) {
