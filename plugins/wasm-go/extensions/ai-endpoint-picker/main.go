@@ -101,11 +101,13 @@ func hasHeaderToken(value, token string) bool {
 func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) types.Action {
 	model := gjson.GetBytes(body, "model")
 	if !gjson.ValidBytes(body) || !model.Exists() || model.String() == "" {
+		log.Debugf("ai-endpoint-picker fail-open: invalid request body or missing model")
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
 	hosts, err := proxywasm.GetUpstreamHosts()
 	if err != nil || len(hosts) == 0 {
+		log.Debugf("ai-endpoint-picker fail-open: upstream hosts unavailable: count=%d error=%v", len(hosts), err)
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
@@ -116,12 +118,14 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 	for _, host := range hosts {
 		address, metadata := host[0], host[1]
 		if address == "" || !gjson.Valid(metadata) {
+			log.Debugf("ai-endpoint-picker fail-open: invalid host metadata: address=%q", address)
 			config.metrics.fallback()
 			return types.ActionContinue
 		}
 		active[address] = struct{}{}
 		health := gjson.Get(metadata, "health_status")
 		if !health.Exists() {
+			log.Debugf("ai-endpoint-picker fail-open: host %s has no health status", address)
 			config.metrics.fallback()
 			return types.ActionContinue
 		}
@@ -133,6 +137,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 		if endpoint.Healthy {
 			signals, parseErr := scheduling.ParseVLLMSignals(gjson.Get(metadata, "metrics").String(), model.String())
 			if parseErr != nil {
+				log.Debugf("ai-endpoint-picker fail-open: parse metrics for host %s: %v", address, parseErr)
 				config.metrics.fallback()
 				return types.ActionContinue
 			}
@@ -153,10 +158,12 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 	config.store.Cleanup(active)
 	decision := config.pipeline.Schedule(endpoints)
 	if decision.FallbackReason != "" || decision.Address == "" {
+		log.Debugf("ai-endpoint-picker fail-open: scheduling reason=%s candidates=%d", decision.FallbackReason, decision.CandidateCount)
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
 	if err := proxywasm.SetUpstreamOverrideHost([]byte(decision.Address)); err != nil {
+		log.Debugf("ai-endpoint-picker fail-open: override host %s: %v", decision.Address, err)
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
