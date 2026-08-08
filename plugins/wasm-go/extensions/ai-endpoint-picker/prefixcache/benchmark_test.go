@@ -2,6 +2,7 @@ package prefixcache
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -20,6 +21,26 @@ func BenchmarkExtractAndHash(b *testing.B) {
 				if _, supported, err := Extract(body); err != nil || !supported {
 					b.Fatalf("extract: supported=%v err=%v", supported, err)
 				}
+			}
+		})
+	}
+}
+
+func BenchmarkCappedStructuredContentSemanticVisit(b *testing.B) {
+	for name, content := range map[string][]byte{
+		"capped":           repeatedStructuredContent(140, 0, false),
+		"100k-part-suffix": repeatedStructuredContent(140, 100_000, true),
+	} {
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				chain := make([]Block, 0)
+				previous, totalTokens := uint64(0), 0
+				builder := newSegmentBuilder(&chain, segmentMessage, 0, &previous, &totalTokens)
+				if err := writeStructuredTextContent(content, builder); !errors.Is(err, errSemanticCap) {
+					b.Fatalf("semantic visit err=%v", err)
+				}
+				builder.finish()
 			}
 		})
 	}

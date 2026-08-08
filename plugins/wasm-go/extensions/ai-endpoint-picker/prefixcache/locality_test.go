@@ -253,6 +253,47 @@ func TestTokenIDPromptIsStreamedAndCapped(t *testing.T) {
 	}
 }
 
+func TestTokenIDParserIsStrictAndAllocationFree(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want uint32
+		ok   bool
+	}{
+		{raw: "0", ok: true},
+		{raw: "4294967295", want: ^uint32(0), ok: true},
+		{raw: "4294967296"},
+		{raw: "-1"},
+		{raw: "1.0"},
+		{raw: "01"},
+	}
+	for _, test := range tests {
+		got, ok := parseUint32([]byte(test.raw))
+		if got != test.want || ok != test.ok {
+			t.Fatalf("parseUint32(%q)=(%d,%v) want (%d,%v)", test.raw, got, ok, test.want, test.ok)
+		}
+	}
+	if allocations := testing.AllocsPerRun(100, func() {
+		_, _ = parseUint32([]byte("4294967295"))
+	}); allocations != 0 {
+		t.Fatalf("parseUint32 allocations=%v want 0", allocations)
+	}
+}
+
+func TestStructuredContentCapFinishesPartialBlock(t *testing.T) {
+	body := repeatedStructuredBody(140, 0, false, true)
+	locality, supported, err := Extract(body)
+	if err != nil || !supported {
+		t.Fatalf("extract: supported=%v err=%v", supported, err)
+	}
+	if got := totalTokens(locality.Chains); got != MaxPrefixTokens {
+		t.Fatalf("token count=%d want %d", got, MaxPrefixTokens)
+	}
+	chain := locality.Chains[0]
+	if got := chain[len(chain)-1].EstimatedTokens; got <= 0 || got >= MaxSegmentTokens {
+		t.Fatalf("last partial block tokens=%d want between 1 and %d", got, MaxSegmentTokens-1)
+	}
+}
+
 func TestMultiMegabyteTextPromptsRemainAllocationBounded(t *testing.T) {
 	content := strings.Repeat("a", 4<<20)
 	tests := []struct {
@@ -287,14 +328,16 @@ func TestMultiMegabyteTextPromptsRemainAllocationBounded(t *testing.T) {
 
 func TestCappedSemanticSuffixesDoNotScaleAllocations(t *testing.T) {
 	tests := []struct {
-		name     string
-		capped   []byte
-		extended []byte
+		name            string
+		capped          []byte
+		extended        []byte
+		maxCappedAllocs float64
 	}{
 		{
-			name:     "token IDs",
-			capped:   tokenIDBody(MaxPrefixTokens),
-			extended: tokenIDBody(MaxPrefixTokens + 1_000_000),
+			name:            "token IDs",
+			capped:          tokenIDBody(MaxPrefixTokens),
+			extended:        tokenIDBody(MaxPrefixTokens + 1_000_000),
+			maxCappedAllocs: 64,
 		},
 		{
 			name:     "messages",
@@ -302,9 +345,15 @@ func TestCappedSemanticSuffixesDoNotScaleAllocations(t *testing.T) {
 			extended: repeatedChatBody(140, 100_000),
 		},
 		{
-			name:     "tools",
-			capped:   repeatedToolsBody(140, 0),
-			extended: repeatedToolsBody(140, 100_000),
+			name:            "tools",
+			capped:          repeatedToolsBody(140, 0),
+			extended:        repeatedToolsBody(140, 100_000),
+			maxCappedAllocs: 10_000,
+		},
+		{
+			name:     "structured content",
+			capped:   repeatedStructuredBody(140, 0, false, false),
+			extended: repeatedStructuredBody(140, 100_000, true, false),
 		},
 	}
 	for _, test := range tests {
@@ -321,11 +370,44 @@ func TestCappedSemanticSuffixesDoNotScaleAllocations(t *testing.T) {
 			cappedAllocs := testing.AllocsPerRun(3, func() { _, _, _ = Extract(test.capped) })
 			extendedAllocs := testing.AllocsPerRun(3, func() { _, _, _ = Extract(test.extended) })
 			t.Logf("allocations capped=%v extended=%v", cappedAllocs, extendedAllocs)
+			if test.maxCappedAllocs > 0 && cappedAllocs > test.maxCappedAllocs {
+				t.Fatalf("capped allocations=%v want <=%v", cappedAllocs, test.maxCappedAllocs)
+			}
 			if extendedAllocs > cappedAllocs+8 {
 				t.Fatalf("allocations scaled after cap: capped=%v extended=%v", cappedAllocs, extendedAllocs)
 			}
 		})
 	}
+}
+
+func TestToolsCanonicalComplexityIsBounded(t *testing.T) {
+	capped := toolsObjectBody(maxCanonicalNodes + 1)
+	extended := toolsObjectBody(maxCanonicalNodes + 100_000)
+	for _, raw := range [][]byte{capped, extended} {
+		_, supported, err := Extract(raw)
+		if err != nil || supported {
+			t.Fatalf("complex tools should make prefix unavailable: supported=%v err=%v", supported, err)
+		}
+	}
+	cappedAllocs := testing.AllocsPerRun(3, func() { _, _, _ = Extract(capped) })
+	extendedAllocs := testing.AllocsPerRun(3, func() { _, _, _ = Extract(extended) })
+	if cappedAllocs > 70_000 || extendedAllocs > cappedAllocs+8 {
+		t.Fatalf("complexity allocations not bounded: capped=%v extended=%v", cappedAllocs, extendedAllocs)
+	}
+}
+
+func toolsObjectBody(count int) []byte {
+	var body strings.Builder
+	body.Grow(count*3 + 50)
+	body.WriteString(`{"model":"m","tools":[`)
+	for index := 0; index < count; index++ {
+		if index > 0 {
+			body.WriteByte(',')
+		}
+		body.WriteString(`{}`)
+	}
+	body.WriteString(`],"messages":[]}`)
+	return []byte(body.String())
 }
 
 func tokenIDBody(count int) []byte {
@@ -386,6 +468,49 @@ func repeatedToolsBody(prefixTools, suffixTools int) []byte {
 	}
 	body.WriteString(`],"messages":[]}`)
 	return []byte(body.String())
+}
+
+func repeatedStructuredBody(prefixParts, suffixParts int, appendUnsupported, withTools bool) []byte {
+	content := repeatedStructuredContent(prefixParts, suffixParts, appendUnsupported)
+	var body strings.Builder
+	body.Grow(len(content) + 100)
+	body.WriteString(`{"model":"m"`)
+	if withTools {
+		body.WriteString(`,"tools":[{}]`)
+	}
+	body.WriteString(`,"messages":[{"role":"user","content":`)
+	body.Write(content)
+	body.WriteString(`}]}`)
+	return []byte(body.String())
+}
+
+func repeatedStructuredContent(prefixParts, suffixParts int, appendUnsupported bool) []byte {
+	const prefix = `{"type":"text","text":"`
+	const suffix = `"}`
+	const small = `{"type":"text","text":"x"}`
+	var content strings.Builder
+	content.Grow(prefixParts*(len(prefix)+maxSegmentBytes+len(suffix)) + suffixParts*(len(small)+1) + 70)
+	content.WriteByte('[')
+	for part := 0; part < prefixParts+suffixParts; part++ {
+		if part > 0 {
+			content.WriteByte(',')
+		}
+		if part < prefixParts {
+			content.WriteString(prefix)
+			content.WriteString(strings.Repeat("a", maxSegmentBytes))
+			content.WriteString(suffix)
+		} else {
+			content.WriteString(small)
+		}
+	}
+	if appendUnsupported {
+		if prefixParts+suffixParts > 0 {
+			content.WriteByte(',')
+		}
+		content.WriteString(`{"type":"image_url","image_url":{"url":"ignored-after-cap"}}`)
+	}
+	content.WriteByte(']')
+	return []byte(content.String())
 }
 
 func mustJSON(t *testing.T, value any) []byte {

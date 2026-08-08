@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"sort"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -21,6 +20,8 @@ const (
 	DefaultCapacity  = 31250
 	DefaultBlockSize = 16
 	maxSegmentBytes  = MaxSegmentTokens * 4
+	// Over-budget tool schemas fall back to non-prefix scheduling.
+	maxCanonicalNodes = 16384
 )
 
 type segmentKind byte
@@ -107,7 +108,10 @@ func extractChat(rawMessages, rawTools []byte, seed uint64) ([][]Block, bool, er
 		}
 		if hasValues {
 			builder := newSegmentBuilder(&chain, segmentTools, 0, &previous, &totalTokens)
-			if err := writeCanonicalJSON(rawTools, builder); err != nil && !errors.Is(err, errSemanticCap) {
+			writer := &canonicalBudgetWriter{target: builder, remaining: maxCanonicalNodes}
+			if err := writeCanonicalJSON(rawTools, writer); errors.Is(err, errCanonicalComplexity) {
+				return nil, false, nil
+			} else if err != nil && !errors.Is(err, errSemanticCap) {
 				return nil, false, err
 			}
 			builder.finish()
@@ -124,10 +128,7 @@ func extractChat(rawMessages, rawTools []byte, seed uint64) ([][]Block, bool, er
 		if hasTopLevelMultimodal(fields) {
 			return errUnsupportedContent
 		}
-		content, contentKind, supported, err := validateMessageContent(fieldValue(fields, "content"))
-		if err != nil {
-			return err
-		}
+		content, contentKind, supported := classifyMessageContent(fieldValue(fields, "content"))
 		if !supported {
 			return errUnsupportedContent
 		}
@@ -141,17 +142,17 @@ func extractChat(rawMessages, rawTools []byte, seed uint64) ([][]Block, bool, er
 		}
 		builder := newSegmentBuilder(&chain, segmentMessage, domainHasher.Sum64(), &previous, &totalTokens)
 		metadataWriter := &boundedWriter{target: builder, remaining: domainWriter.written}
-		if err := writeCanonicalObject(metadata, metadataWriter); err != nil && !errors.Is(err, errSemanticCap) {
+		if err := writeCanonicalObject(metadata, metadataWriter); err != nil {
+			if errors.Is(err, errSemanticCap) {
+				builder.finish()
+			}
 			return err
 		}
-		if content != nil {
-			if isJSONString(content) {
-				if err := writeDecodedJSONString(content, builder); err != nil {
-					return err
-				}
-			} else if err := writeCanonicalJSON(content, builder); err != nil {
-				return err
+		if err := writeMessageContent(content, contentKind, builder); err != nil {
+			if errors.Is(err, errSemanticCap) {
+				builder.finish()
 			}
+			return err
 		}
 		builder.finish()
 		return nil
@@ -167,6 +168,7 @@ func extractChat(rawMessages, rawTools []byte, seed uint64) ([][]Block, bool, er
 
 var errUnsupportedContent = errors.New("unsupported non-text content")
 var errSemanticCap = errors.New("semantic prefix cap reached")
+var errCanonicalComplexity = errors.New("canonical JSON complexity limit exceeded")
 
 func hasTopLevelMultimodal(fields []jsonField) bool {
 	for _, name := range []string{"audio", "input_audio", "image", "image_url", "video", "video_url"} {
@@ -178,33 +180,72 @@ func hasTopLevelMultimodal(fields []jsonField) bool {
 	return false
 }
 
-func validateMessageContent(raw []byte) ([]byte, messageContentKind, bool, error) {
+func classifyMessageContent(raw []byte) ([]byte, messageContentKind, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
-		return nil, messageContentAbsent, true, nil
+		return nil, messageContentAbsent, true
 	}
 	if bytes.Equal(trimmed, []byte("null")) {
-		return trimmed, messageContentNull, true, nil
+		return trimmed, messageContentNull, true
 	}
 	if isJSONString(trimmed) {
-		return trimmed, messageContentString, true, nil
+		return trimmed, messageContentString, true
 	}
 	if trimmed[0] != '[' {
-		return nil, 0, false, nil
+		return nil, 0, false
 	}
-	supported := true
-	err := forEachArrayValue(trimmed, func(rawPart []byte) error {
+	return trimmed, messageContentStructuredText, true
+}
+
+func writeMessageContent(content []byte, kind messageContentKind, writer io.Writer) error {
+	switch kind {
+	case messageContentAbsent:
+		return nil
+	case messageContentString:
+		return writeDecodedJSONString(content, writer)
+	case messageContentNull:
+		_, err := writer.Write(content)
+		return err
+	case messageContentStructuredText:
+		return writeStructuredTextContent(content, writer)
+	default:
+		return errUnsupportedContent
+	}
+}
+
+func writeStructuredTextContent(raw []byte, writer io.Writer) error {
+	if _, err := writer.Write([]byte{'['}); err != nil {
+		return err
+	}
+	first := true
+	err := forEachArrayValue(raw, func(rawPart []byte) error {
+		if semanticCapReached(writer) {
+			return errSemanticCap
+		}
+		if !first {
+			if _, err := writer.Write([]byte{','}); err != nil {
+				return err
+			}
+			if semanticCapReached(writer) {
+				return errSemanticCap
+			}
+		}
+		first = false
 		fields, err := parseObjectFields(rawPart)
 		if err != nil {
 			return err
 		}
 		partType, err := decodeSmallString(fieldValue(fields, "type"))
 		if err != nil || partType != "text" || !isJSONString(fieldValue(fields, "text")) {
-			supported = false
+			return errUnsupportedContent
 		}
-		return nil
+		return writeCanonicalObject(fields, writer)
 	})
-	return trimmed, messageContentStructuredText, supported, err
+	if err != nil {
+		return err
+	}
+	_, err = writer.Write([]byte{']'})
+	return err
 }
 
 func extractCompletion(raw []byte, seed uint64) ([][]Block, bool, error) {
@@ -335,24 +376,36 @@ func (builder *tokenChainBuilder) appendNumberBytes(raw []byte) error {
 	if builder.total >= MaxPrefixTokens {
 		return errSemanticCap
 	}
-	var number json.Number
-	if err := json.Unmarshal(bytes.TrimSpace(raw), &number); err != nil {
-		return fmt.Errorf("prompt contains mixed types: %w", err)
-	}
-	value, err := number.Int64()
-	if err != nil || value < 0 || value > math.MaxUint32 {
+	value, ok := parseUint32(raw)
+	if !ok {
 		return fmt.Errorf("prompt token ID is invalid")
 	}
-	if builder.total >= MaxPrefixTokens {
-		return nil
-	}
-	builder.buffer[builder.buffered] = uint32(value)
+	builder.buffer[builder.buffered] = value
 	builder.buffered++
 	builder.total++
 	if builder.buffered == len(builder.buffer) {
 		builder.flush()
 	}
 	return nil
+}
+
+func parseUint32(raw []byte) (uint32, bool) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || (len(raw) > 1 && raw[0] == '0') {
+		return 0, false
+	}
+	var value uint32
+	for _, digit := range raw {
+		if digit < '0' || digit > '9' {
+			return 0, false
+		}
+		next := uint32(digit - '0')
+		if value > (^uint32(0)-next)/10 {
+			return 0, false
+		}
+		value = value*10 + next
+	}
+	return value, true
 }
 
 func (builder *tokenChainBuilder) finish() []Block {
@@ -380,6 +433,31 @@ type boundedWriter struct {
 	written   int
 }
 
+type canonicalBudgetWriter struct {
+	target    io.Writer
+	remaining int
+}
+
+func (writer *canonicalBudgetWriter) Write(data []byte) (int, error) {
+	return writer.target.Write(data)
+}
+
+func (writer *canonicalBudgetWriter) semanticCapReached() bool {
+	return semanticCapReached(writer.target)
+}
+
+func (writer *canonicalBudgetWriter) inputLimit() int { return writerInputLimit(writer.target) }
+
+func (writer *canonicalBudgetWriter) consumeCanonicalNodes(count int) bool {
+	if count > writer.remaining {
+		return false
+	}
+	writer.remaining -= count
+	return true
+}
+
+func (writer *canonicalBudgetWriter) canonicalNodesRemaining() int { return writer.remaining }
+
 type countingWriter struct{ written int }
 
 func (writer *countingWriter) Write(data []byte) (int, error) {
@@ -404,9 +482,14 @@ func (writer *boundedWriter) Write(data []byte) (int, error) {
 
 func (writer *boundedWriter) semanticCapReached() bool { return writer.remaining <= 0 }
 
+func (writer *boundedWriter) inputLimit() int { return writer.remaining }
+
 func writeCanonicalJSON(raw []byte, writer io.Writer) error {
 	if semanticCapReached(writer) {
 		return errSemanticCap
+	}
+	if !consumeCanonicalNodes(writer, 1) {
+		return errCanonicalComplexity
 	}
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -414,9 +497,12 @@ func writeCanonicalJSON(raw []byte, writer io.Writer) error {
 	}
 	switch raw[0] {
 	case '{':
-		fields, err := parseObjectFields(raw)
+		fields, err := parseObjectFieldsLimited(raw, canonicalNodesRemaining(writer))
 		if err != nil {
 			return err
+		}
+		if !consumeCanonicalNodes(writer, len(fields)) {
+			return errCanonicalComplexity
 		}
 		return writeCanonicalObject(fields, writer)
 	case '[':
@@ -502,16 +588,30 @@ func (writer *canonicalStringWriter) semanticCapReached() bool {
 	return semanticCapReached(writer.target)
 }
 
+func (writer *canonicalStringWriter) inputLimit() int { return writerInputLimit(writer.target) }
+
 func (writer *canonicalStringWriter) Write(data []byte) (int, error) {
 	original := len(data)
 	for len(data) > 0 {
 		if writer.semanticCapReached() {
 			return original - len(data), errSemanticCap
 		}
-		r, size := utf8.DecodeRune(data)
-		if r == utf8.RuneError && size == 1 {
-			r = utf8.RuneError
+		run := 0
+		for run < len(data) {
+			r, size := utf8.DecodeRune(data[run:])
+			if canonicalRuneNeedsEscape(r, size) {
+				break
+			}
+			run += size
 		}
+		if run > 0 {
+			if _, err := writer.target.Write(data[:run]); err != nil {
+				return original - len(data), err
+			}
+			data = data[run:]
+			continue
+		}
+		r, size := utf8.DecodeRune(data)
 		data = data[size:]
 		var encoded [12]byte
 		var output []byte
@@ -550,9 +650,35 @@ func (writer *canonicalStringWriter) Write(data []byte) (int, error) {
 	return original, nil
 }
 
+func canonicalRuneNeedsEscape(r rune, size int) bool {
+	return (r == utf8.RuneError && size == 1) || r == '\\' || r == '"' || r < 0x20 ||
+		r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029'
+}
+
 func semanticCapReached(writer io.Writer) bool {
 	limiter, ok := writer.(interface{ semanticCapReached() bool })
 	return ok && limiter.semanticCapReached()
+}
+
+func consumeCanonicalNodes(writer io.Writer, count int) bool {
+	limiter, ok := writer.(interface{ consumeCanonicalNodes(int) bool })
+	return !ok || limiter.consumeCanonicalNodes(count)
+}
+
+func canonicalNodesRemaining(writer io.Writer) int {
+	limiter, ok := writer.(interface{ canonicalNodesRemaining() int })
+	if !ok {
+		return -1
+	}
+	return limiter.canonicalNodesRemaining()
+}
+
+func writerInputLimit(writer io.Writer) int {
+	limiter, ok := writer.(interface{ inputLimit() int })
+	if !ok {
+		return int(^uint(0) >> 1)
+	}
+	return limiter.inputLimit()
 }
 
 func writeDecodedJSONString(raw []byte, writer io.Writer) error {
@@ -655,6 +781,10 @@ func parseHex4(data []byte) (uint16, bool) {
 }
 
 func parseObjectFields(raw []byte) ([]jsonField, error) {
+	return parseObjectFieldsLimited(raw, -1)
+}
+
+func parseObjectFieldsLimited(raw []byte, maxFields int) ([]jsonField, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) < 2 || raw[0] != '{' {
 		return nil, fmt.Errorf("expected JSON object")
@@ -668,6 +798,9 @@ func parseObjectFields(raw []byte) ([]jsonField, error) {
 		}
 		if raw[position] == '}' {
 			return fields, nil
+		}
+		if maxFields >= 0 && len(fields) >= maxFields {
+			return nil, errCanonicalComplexity
 		}
 		keyStart := position
 		keyEnd, err := scanJSONString(raw, keyStart)
