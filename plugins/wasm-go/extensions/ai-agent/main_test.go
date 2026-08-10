@@ -404,6 +404,12 @@ func TestParseConfig(t *testing.T) {
 	})
 }
 
+func TestEscapePathParameter(t *testing.T) {
+	require.Equal(t, "123", escapePathParameter(float64(123)))
+	require.Equal(t, "true", escapePathParameter(true))
+	require.Equal(t, "a+b%2Fc", escapePathParameter("a b/c"))
+}
+
 func TestOnHttpRequestHeaders(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		t.Run("basic request headers", func(t *testing.T) {

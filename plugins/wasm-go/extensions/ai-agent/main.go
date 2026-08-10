@@ -449,7 +449,7 @@ func toolsCall(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmInfo LL
 									// 删除已经使用过的
 									delete(data, param)
 									// 替换模板中的占位符
-									urlParts[i] = url.QueryEscape(value.(string))
+									urlParts[i] = escapePathParameter(value)
 								}
 							}
 						}
@@ -522,6 +522,10 @@ func toolsCall(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmInfo LL
 	}
 
 	return types.ActionPause, ""
+}
+
+func escapePathParameter(value interface{}) string {
+	return url.QueryEscape(fmt.Sprintf("%v", value))
 }
 
 // 从response接收到firstreq的大模型返回
