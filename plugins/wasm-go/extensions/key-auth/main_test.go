@@ -349,9 +349,9 @@ func TestParseGlobalConfig(t *testing.T) {
 			keyAuthConfig := config.(*KeyAuthConfig)
 			require.Len(t, keyAuthConfig.consumers, 2)
 			require.Equal(t, []string{"token1", "token1-alt"}, keyAuthConfig.consumers[0].Credentials)
-			require.Equal(t, "consumer1", keyAuthConfig.credential2Name["token1"])
-			require.Equal(t, "consumer1", keyAuthConfig.credential2Name["token1-alt"])
-			require.Equal(t, "consumer2", keyAuthConfig.credential2Name["token2"])
+			require.Equal(t, "consumer1", keyAuthConfig.credential2Consumer["token1"].Name)
+			require.Equal(t, "consumer1", keyAuthConfig.credential2Consumer["token1-alt"].Name)
+			require.Equal(t, "consumer2", keyAuthConfig.credential2Consumer["token2"].Name)
 		})
 
 		// 测试全局认证关闭配置
@@ -587,7 +587,7 @@ func TestOnHTTPRequestHeaders(t *testing.T) {
 
 			localResponse := host.GetLocalResponse()
 			require.NotNil(t, localResponse, "Invalid API key should be rejected")
-			require.Equal(t, uint32(403), localResponse.StatusCode) // Forbidden
+			require.Equal(t, uint32(401), localResponse.StatusCode) // Unauthorized, invalid API key
 
 			host.CompleteHttp()
 		})
@@ -614,7 +614,7 @@ func TestOnHTTPRequestHeaders(t *testing.T) {
 			host.CompleteHttp()
 		})
 
-		// 测试全局认证开启 - 多个 API key（应该被拒绝）
+		// 测试全局认证开启 - 多个 API key（对齐 C++：首个匹配的 key 直接放行，不做 multi-key 拒绝）
 		t.Run("global auth true - multiple api keys", func(t *testing.T) {
 			host, status := test.NewTestHost(basicKeyAuthConfig)
 			defer host.Reset()
@@ -632,8 +632,17 @@ func TestOnHTTPRequestHeaders(t *testing.T) {
 			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
 
 			localResponse := host.GetLocalResponse()
-			require.NotNil(t, localResponse, "Multiple API keys should be rejected")
-			require.Equal(t, uint32(401), localResponse.StatusCode) // Unauthorized
+			require.Nil(t, localResponse, "First matching key authenticates (C++ alignment); no multi-key denial")
+
+			// x-api-key:token1 是 consumer1 的凭证；遍历 consumer1 时即命中
+			consumerHeaderFound := false
+			for _, header := range host.GetRequestHeaders() {
+				if header[0] == "x-mse-consumer" && header[1] == "consumer1" {
+					consumerHeaderFound = true
+					break
+				}
+			}
+			require.True(t, consumerHeaderFound, "X-Mse-Consumer should be consumer1 (first matching credential)")
 
 			host.CompleteHttp()
 		})
@@ -698,7 +707,7 @@ func TestOnHTTPRequestHeaders(t *testing.T) {
 
 			localResponse := host.GetLocalResponse()
 			require.NotNil(t, localResponse, "Invalid API key in query should be rejected")
-			require.Equal(t, uint32(403), localResponse.StatusCode) // Forbidden
+			require.Equal(t, uint32(401), localResponse.StatusCode) // Unauthorized, invalid API key
 
 			host.CompleteHttp()
 		})
@@ -724,5 +733,84 @@ func TestOnHTTPRequestHeaders(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+	})
+}
+
+// 测试配置：所有 consumer 都自带 keys（控制台场景，无需顶层 keys）
+var perConsumerSourceConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{
+				"name":       "consumer1",
+				"credential": "token1",
+				"keys":       []string{"Authorization"},
+				"in_header":  true,
+				"in_query":   false,
+			},
+		},
+		"global_auth": true,
+	})
+	return data
+}()
+
+// 测试配置：部分 consumer 自带 keys，部分需要全局 keys
+var mixedKeysConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"consumers": []map[string]interface{}{
+			{
+				"name":       "consumer1",
+				"credential": "token1",
+				"keys":       []string{"Authorization"},
+				"in_header":  true,
+			},
+			{
+				"name":       "consumer2",
+				"credential": "token2",
+			},
+		},
+		"keys":        []string{"x-api-key"},
+		"in_header":   true,
+		"in_query":    false,
+		"global_auth": true,
+	})
+	return data
+}()
+
+// per-consumer keys 解析测试
+func TestPerConsumerKeySource(t *testing.T) {
+	// 所有 consumer 自带 keys，无全局 keys
+	t.Run("all consumers have their own keys", func(t *testing.T) {
+		host, status := test.NewTestHost(perConsumerSourceConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		config, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		require.NotNil(t, config)
+
+		keyAuthConfig := config.(*KeyAuthConfig)
+		require.Len(t, keyAuthConfig.Keys, 0) // 无全局 keys
+		require.Len(t, keyAuthConfig.consumers, 1)
+		require.Len(t, keyAuthConfig.consumers[0].Keys, 1)
+		require.Equal(t, "Authorization", keyAuthConfig.consumers[0].Keys[0])
+	})
+
+	// 部分 consumer 自带 keys，部分需要全局 keys
+	t.Run("mixed keys config", func(t *testing.T) {
+		host, status := test.NewTestHost(mixedKeysConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		config, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		require.NotNil(t, config)
+
+		keyAuthConfig := config.(*KeyAuthConfig)
+		require.Len(t, keyAuthConfig.Keys, 1)
+		require.Equal(t, "x-api-key", keyAuthConfig.Keys[0])
+		require.Len(t, keyAuthConfig.consumers, 2)
+		require.Len(t, keyAuthConfig.consumers[0].Keys, 1)
+		require.Equal(t, "Authorization", keyAuthConfig.consumers[0].Keys[0])
+		require.Len(t, keyAuthConfig.consumers[1].Keys, 0) // 没有自己 keys，使用全局
 	})
 }
