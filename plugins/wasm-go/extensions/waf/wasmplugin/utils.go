@@ -16,8 +16,10 @@ import (
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
-const noGRPCStream int32 = -1
-const replaceResponseBody int = 10
+const (
+	noGRPCStream        int32 = -1
+	replaceResponseBody int   = 10
+)
 
 // retrieveAddressInfo retrieves address properties from the proxy
 // Expected targets are "source" or "destination"
@@ -80,7 +82,7 @@ func parseServerName(logger log.Log, authority string) string {
 }
 
 func handleInterruption(ctx wrapper.HttpContext, phase string, interruption *ctypes.Interruption, log log.Log) types.Action {
-	if ctx.GetContext("interruptionHandled").(bool) {
+	if ctx.GetBoolContext("interruptionHandled", false) {
 		// handleInterruption should never be called more than once
 		panic("Interruption already handled")
 	}
@@ -91,7 +93,7 @@ func handleInterruption(ctx wrapper.HttpContext, phase string, interruption *cty
 	}
 
 	statusCode := interruption.Status
-	//log.Infof("Status code is %d", statusCode)
+	// log.Infof("Status code is %d", statusCode)
 	if statusCode == 0 {
 		statusCode = 403
 	}

@@ -1,0 +1,87 @@
+apiVersion: 1.0.0
+info:
+  gatewayMinVersion: "2.0.0"
+  type: oss
+  category: auth
+  name: hmac-auth-apisix
+  image: platform_wasm/hmac-auth-apisix
+  title: HMAC Authentication (APISIX Compatible)
+  x-title-i18n:
+    zh-CN: HMAC 认证（APISIX 兼容）
+  description: Authenticate requests with the APISIX HMAC signature format and optionally authorize consumers per route.
+  x-description-i18n:
+    zh-CN: 使用 APISIX HMAC 签名格式认证请求，并可按路由授权消费者。
+  readmeUrl: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/hmac-auth-apisix/README.md
+  x-readmeUrl-i18n:
+    en-US: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/hmac-auth-apisix/README_EN.md
+  version: 2.0.1
+  contact:
+    name: Higress Team
+    url: https://higress.io/
+    email: admin@higress.io
+spec:
+  phase: AUTHN
+  priority: 200
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        consumers:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              access_key:
+                type: string
+              secret_key:
+                type: string
+                format: password
+            required:
+              - access_key
+              - secret_key
+        global_auth:
+          type: boolean
+          default: false
+        allowed_algorithms:
+          type: array
+          items:
+            type: string
+            enum: [hmac-sha1, hmac-sha256, hmac-sha512]
+        clock_skew:
+          type: integer
+          minimum: 0
+          default: 300
+        signed_headers:
+          type: array
+          items:
+            type: string
+        validate_request_body:
+          type: boolean
+          default: false
+        hide_credentials:
+          type: boolean
+          default: false
+        anonymous_consumer:
+          type: string
+      required:
+        - consumers
+      example:
+        consumers:
+          - name: consumer1
+            access_key: consumer1-key
+            secret_key: change-me
+        allowed_algorithms: [hmac-sha256]
+        clock_skew: 300
+  routeConfigSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        allow:
+          type: array
+          items:
+            type: string
+      example:
+        allow: [consumer1]

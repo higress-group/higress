@@ -1,0 +1,61 @@
+apiVersion: 1.0.0
+info:
+  gatewayMinVersion: ""
+  type: oss
+  category: transform
+  image: platform_wasm/json-converter
+  name: json-converter
+  title: JSON Converter
+  x-title-i18n:
+    zh-CN: JSON 转换器
+  description: Extract JSON-RPC and MCP request or response fields into HTTP headers for routing and observability.
+  x-description-i18n:
+    zh-CN: 将 JSON-RPC 与 MCP 请求或响应字段提取到 HTTP 头，供路由与可观测策略使用。
+  readmeUrl: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/jsonrpc-converter/README.md
+  x-readmeUrl-i18n:
+    en-US: https://github.com/alibaba/higress/blob/main/plugins/release/console/json-converter/README_EN.md
+  version: 2.0.1
+  contact:
+    name: Higress Team
+    url: https://higress.io/
+    email: admin@higress.io
+spec:
+  phase: default
+  priority: 50
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        stage:
+          type: string
+          enum: [request, response]
+        max_header_length:
+          type: integer
+          minimum: 1
+          default: 4000
+        allowed_methods:
+          type: array
+          items:
+            type: string
+      required:
+        - stage
+      example:
+        stage: request
+        max_header_length: 4000
+        allowed_methods: [tools/list, tools/call]
+  routeConfigSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        stage:
+          type: string
+          enum: [request, response]
+        max_header_length:
+          type: integer
+          minimum: 1
+        allowed_methods:
+          type: array
+          items:
+            type: string
+      required:
+        - stage

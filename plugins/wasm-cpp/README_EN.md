@@ -126,7 +126,7 @@ spec:
   defaultConfig:
     block_urls:
     - "swagger.html"
-  url: file:///opt/plugins/wasm-go/extensions/request-block/plugin.wasm
+  url: file:///opt/plugins/wasm-cpp/extensions/request_block/plugin.wasm
 ```
 
 `Above of the url, the name of after extensions indicates the name of the folder where the plug-in resides.`

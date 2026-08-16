@@ -1,0 +1,97 @@
+apiVersion: 1.0.0
+info:
+  gatewayMinVersion: "2.0.0"
+  type: oss
+  category: o11y
+  name: log-request-response
+  image: platform_wasm/log-request-response
+  title: Request and Response Logging
+  x-title-i18n:
+    zh-CN: 请求与响应日志
+  description: Capture selected request and response headers and bodies into Envoy filter state for access logging.
+  x-description-i18n:
+    zh-CN: 将选定的请求与响应头和正文写入 Envoy Filter State，供访问日志记录。
+  readmeUrl: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/log-request-response/README.md
+  x-readmeUrl-i18n:
+    en-US: https://github.com/alibaba/higress/blob/main/plugins/release/console/log-request-response/README_EN.md
+  version: 1.0.0
+  contact:
+    name: Higress Team
+    url: https://higress.io/
+    email: admin@higress.io
+spec:
+  phase: default
+  priority: 0
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        request:
+          type: object
+          properties:
+            headers:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                  default: false
+            body:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                  default: false
+                maxSize:
+                  type: integer
+                  minimum: 1
+                  default: 10240
+                contentTypes:
+                  type: array
+                  items:
+                    type: string
+        response:
+          type: object
+          properties:
+            headers:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                  default: false
+            body:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                  default: false
+                maxSize:
+                  type: integer
+                  minimum: 1
+                  default: 10240
+                contentTypes:
+                  type: array
+                  items:
+                    type: string
+      example:
+        request:
+          headers:
+            enabled: true
+          body:
+            enabled: true
+            maxSize: 10240
+            contentTypes: [application/json, text/plain]
+        response:
+          headers:
+            enabled: true
+          body:
+            enabled: true
+            maxSize: 10240
+            contentTypes: [application/json, text/plain]
+  routeConfigSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        request:
+          type: object
+        response:
+          type: object

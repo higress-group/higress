@@ -1,0 +1,234 @@
+{
+  "repository": "https://github.com/modelcontextprotocol/modelcontextprotocol",
+  "commit": "f817239f4d6b1efff2c4dfc2f7af85c985d73076",
+  "release": "2026-07-28",
+  "sourceRoot": "schema/draft/examples",
+  "files": {
+    "discover-request.json": "DiscoverRequest/server-discover-request.json",
+    "discover-result.json": "DiscoverResult/server-capabilities-discovery.json",
+    "discover-result-response.json": "DiscoverResultResponse/discover-result-response.json",
+    "list-tools-request.json": "ListToolsRequest/list-tools-request.json",
+    "list-tools-result-response.json": "ListToolsResultResponse/list-tools-result-response.json",
+    "call-tool-request.json": "CallToolRequest/call-tool-request.json",
+    "call-tool-result-response.json": "CallToolResultResponse/call-tool-result-response.json",
+    "cancelled-notification.json": "CancelledNotification/user-requested-cancellation.json",
+    "tools-minimum-capability.json": "ServerCapabilities/tools-minimum-baseline-support.json",
+    "missing-required-client-capability-error.json": "MissingRequiredClientCapabilityError/missing-elicitation-capability.json",
+    "header-mismatch-error.json": "HeaderMismatchError/header-mismatch.json",
+    "unsupported-version-error.json": "UnsupportedProtocolVersionError/unsupported-version.json",
+    "invalid-tool-arguments-error.json": "InvalidParamsError/invalid-tool-arguments.json",
+    "method-not-found-error.json": "MethodNotFoundError/prompts-not-supported.json",
+    "parse-error.json": "ParseError/invalid-json.json"
+  },
+  "sha256": {
+    "discover-request.json": "9a3b843d325275c4840ce7556204133547d56d8906c42aa243956beec3b48640",
+    "discover-result.json": "2025afe831909d22e9f5824366e587f1c5e2ebfc0eb15836bf788bd749ecfd9c",
+    "discover-result-response.json": "fed5352e48f76294f0e8e63d20caacfcfecf3ec1aa86e7ea0e4fbd57ecc03271",
+    "list-tools-request.json": "d22da12df78cc674498e3effe7b498900db1512665771206c9733f8e5d426e87",
+    "list-tools-result-response.json": "0c297989cb18c4020955e71cec759514dbbe05b3580146279eb76c18416a04c2",
+    "call-tool-request.json": "d275701f77b9ccdaf603b91c9570619720b912ef00a4d7a621175576e9610719",
+    "call-tool-result-response.json": "dba80c897863fc978370b4d856067756a1d566ad91cbaa011f6f6b9e17c8d73f",
+    "cancelled-notification.json": "13f6643825653461ad0a58ac6947351fbc50eaa3086926714dca091297e78c2d",
+    "tools-minimum-capability.json": "61468467448a94c5c6ced36d05894d7ba2e2f7501ca84270a30da1cd18a3c713",
+    "missing-required-client-capability-error.json": "67cec37a4c78c7b06282322bb6788ff83054e10aaa4044069158f7cb2a0b0080",
+    "header-mismatch-error.json": "d3861ec4e8b1d6fb7764d90642675d4e661784ae452b7cf57d7d85e621f89d14",
+    "unsupported-version-error.json": "6f6ff9030449c6a588ebcbc35fdac3fff0c9bb7c0677f1b11010369b820cbcc4",
+    "invalid-tool-arguments-error.json": "bd3f341a3f3373f3c405546265bdf912a946d60a956b53d9857bddae0e866408",
+    "method-not-found-error.json": "429f9c32bf2b6776f638c26ff4e9648182f45054a25f6c73a0abc39ecfd90ea2",
+    "parse-error.json": "7d34ed3b0397d7264718e3fc24e0ca4e8645bfad20fc8e604dbe291099de36ae"
+  },
+  "derivedCases": {
+    "unsupported-content-type": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace Content-Type application/json with text/plain",
+      "sha256": "ef73e188524b26a3ff06f33599a28f89a31faf280b26c68cb9107516acdfe1e5"
+    },
+    "unacceptable-accept": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace Accept with application/json so text/event-stream is absent",
+      "sha256": "c4bbfb670d90d81b119c75001e72443738f867d64a87e6e1a527857d1a70648e"
+    },
+    "hostile-origin": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "append Origin https://evil.example while authority remains mcp.example.com",
+      "sha256": "d0a3b4a9b5e96fef472021e8caffb3d6e08bc9a15aa8cb2c02dbdd5c93d11321"
+    },
+    "same-origin": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "append same-origin Origin https://mcp.example.com",
+      "sha256": "7731aefbb5acc33a41c76824be07a64eef8759723b4d9049378ade4aba9c2711"
+    },
+    "batch-envelope": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "wrap the complete official request in a one-element JSON array",
+      "sha256": "04d2109a11884b795a0211745612f0ffcd2c117e958ab0c46c724dfe9bab1d74"
+    },
+    "response-envelope": {
+      "base": "list-tools-result-response.json",
+      "basePath": "schema/draft/examples/ListToolsResultResponse/list-tools-result-response.json",
+      "derivation": "send the official ListToolsResultResponse example as a request using ListToolsRequest transport headers",
+      "sha256": "16106d294fb727337f6de7898a7eb44114ad30d071abe78beab381fa0af745dc"
+    },
+    "trailing-json": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "append a second empty JSON object after the official request",
+      "sha256": "49069e476532a325bea242f3794641c2a9ea50fc7a84e6a3d1cf0ac482cd3820"
+    },
+    "malformed-json": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "truncate the official request immediately after the params key",
+      "sha256": "748d1727a47a7f9da7c1f80c2e6012a3201471e4b7b135b9650d01d855d022cb"
+    },
+    "duplicate-protocol-version-header": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "append a second identical MCP-Protocol-Version singleton header",
+      "sha256": "482c1b84d819312fcee55a28943735fc874777dc4fb8ef1ac5806b8cbfc9fcea"
+    },
+    "duplicate-method-header": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "append a second identical Mcp-Method singleton header",
+      "sha256": "cfc459e1bd492b6728f435a77ffb28a8872e0386b72f4db88d4f4f25eec74078"
+    },
+    "duplicate-name-header": {
+      "base": "call-tool-request.json",
+      "basePath": "schema/draft/examples/CallToolRequest/call-tool-request.json",
+      "derivation": "append a second identical Mcp-Name singleton header",
+      "sha256": "fd5b2e30d4e90111ea13ba78de03f220aece48531a64ea592b4e34e8f9b4e555"
+    },
+    "missing-protocol-version-header": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "remove MCP-Protocol-Version while retaining the modern method header",
+      "sha256": "0ea1594d9657940a478cdd622af7a7f3c03261288d62c9fdd7ce955844ac1715"
+    },
+    "missing-method-header": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "remove Mcp-Method while retaining the 2026 protocol header",
+      "sha256": "1bbb6b3b0c10205f775692b053f351a0c54c57f07d5ec135f96a0a9bd9eb48e3"
+    },
+    "missing-name-header": {
+      "base": "call-tool-request.json",
+      "basePath": "schema/draft/examples/CallToolRequest/call-tool-request.json",
+      "derivation": "remove the required Mcp-Name header from the official tools/call request",
+      "sha256": "52589952f283ff96801a27291eeabb0feb364f0bc2c461a9af7366a01245db74"
+    },
+    "mismatched-method-header": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace Mcp-Method tools/list with tools/call without changing the body",
+      "sha256": "3470866b3a780e3764c79403f7f20fa05eb6a320ef754945a867509c96df7227"
+    },
+    "mismatched-name-header": {
+      "base": "call-tool-request.json",
+      "basePath": "schema/draft/examples/CallToolRequest/call-tool-request.json",
+      "derivation": "replace Mcp-Name get_weather with different_tool without changing the body",
+      "sha256": "0dbee6341e1f763cffb5b1e09e856191fa787ba015411a603f9195188e120459"
+    },
+    "mismatched-body-version": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace body protocolVersion 2026-07-28 with 1900-01-01 while retaining the 2026 transport header",
+      "sha256": "d0191bb89386565fc53608bd9eea384b2f0cc27ac0bce1040f4afa01051ba92f"
+    },
+    "unsupported-header-version": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace MCP-Protocol-Version 2026-07-28 with 1900-01-01 before body processing",
+      "sha256": "4d036c091047c629cdb856325eac1df024620f0912f06d3ed15a4729c11906bb"
+    },
+    "null-jsonrpc-id": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace the official string id with JSON null",
+      "sha256": "aedbafb0b1dfd61232f72cc125eefa368e6a40bc87018e014570a8ee1d88516a"
+    },
+    "fractional-jsonrpc-id": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace the official string id with fractional number 1.5",
+      "sha256": "ad6c3cdddaebbd759565e7f96ac4467a73f0e395ab2fc1afb1db64d3e7e7a957"
+    },
+    "boolean-jsonrpc-id": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace the official string id with boolean true",
+      "sha256": "56c379666194039f0fa94a30162402160b5d7699dd174e5fd64227f05ddb2eb6"
+    },
+    "integer-jsonrpc-id": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace the official string id with integer 42",
+      "sha256": "1655ee36735c5234051e18f069659803dce9aa5db55598e3dc277919da5ee202"
+    },
+    "notification-without-id": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "remove id to derive a valid modern tools/list notification",
+      "sha256": "823916768d82e0107302e739e2dcad0ad7e2f60f9786ae1199aa6763f6c63cb6"
+    },
+    "missing-meta": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "remove params._meta while retaining complete modern transport headers",
+      "sha256": "16c1654b91b828cb5c922a3d1832c021bbe5b547c3557cb30d7fc9fcaae635df"
+    },
+    "missing-protocol-version-meta": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "remove io.modelcontextprotocol/protocolVersion from request metadata",
+      "sha256": "c126242035ee4e11a47cfea79cb7bf6158b088a02ff94a75b3b2f4af38bd6964"
+    },
+    "missing-client-capabilities-meta": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "remove required io.modelcontextprotocol/clientCapabilities metadata",
+      "sha256": "8d74a703d1a032a17a450838fa53cc335d013dac9258a1ef8e0e8657d54929a6"
+    },
+    "optional-client-info-omitted": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "remove optional io.modelcontextprotocol/clientInfo metadata",
+      "sha256": "53dadb0ed7fe441ddb2b502800c7304bbad692753151ff6f6b4fe7da93e301f4"
+    },
+    "modern-cancelled-notification": {
+      "base": "cancelled-notification.json",
+      "basePath": "schema/draft/examples/CancelledNotification/user-requested-cancellation.json",
+      "derivation": "add required modern metadata to the official cancellation notification and send it with modern identity headers",
+      "sha256": "b71be4c7098644f8fdcba641c2fb5076932063eb6735f200a916d920b37f06a9"
+    },
+    "oversized-request-body": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "append ASCII whitespace until the request exceeds the 1 MiB modern body limit",
+      "sha256": "68a0c55e72ade5b082867d2a17b457828ebce4236c97ab955d41fca259515be8"
+    },
+    "oversized-tool-name": {
+      "base": "call-tool-request.json",
+      "basePath": "schema/draft/examples/CallToolRequest/call-tool-request.json",
+      "derivation": "replace params.name and Mcp-Name with the same 4097 ASCII bytes, one byte beyond the decoded tool-name limit",
+      "sha256": "0fb6ca58e133f21566cf8e72c0533b0d729aca4e9be213712994b013fdd78452"
+    },
+    "invalid-tool-name-type": {
+      "base": "call-tool-request.json",
+      "basePath": "schema/draft/examples/CallToolRequest/call-tool-request.json",
+      "derivation": "replace params.name string with JSON number 7 while retaining the original Mcp-Name header",
+      "sha256": "b0faa15a6e9dcedd51fdddb93ef74392ecfada2b4035b9086e315d6b51e5986f"
+    },
+    "method-not-found": {
+      "base": "list-tools-request.json",
+      "basePath": "schema/draft/examples/ListToolsRequest/list-tools-request.json",
+      "derivation": "replace method tools/list with prompts/list in both body and Mcp-Method header",
+      "sha256": "2994b9fb6bb781253d5e110773ca117364fc54b26803a868f4b36b80e9a7b27e"
+    }
+  }
+}

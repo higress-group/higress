@@ -60,7 +60,7 @@ func TestCorsConfig_getHostAndPort(t *testing.T) {
 		},
 
 		{
-			name:     "protocal is not http",
+			name:     "protocol is not http",
 			scheme:   "wss",
 			host:     "hTTp.Example.com",
 			wantHost: "http.example.com",
@@ -68,7 +68,7 @@ func TestCorsConfig_getHostAndPort(t *testing.T) {
 		},
 
 		{
-			name:     "protocal is not http",
+			name:     "protocol is not http",
 			scheme:   "wss",
 			host:     "hTTp.Example.com:8080",
 			wantHost: "http.example.com",
@@ -362,7 +362,7 @@ func TestCorsConfig_checkOrigin(t *testing.T) {
 		},
 
 		{
-			name:         "OriginPattern pattern match case with specail port 1",
+			name:         "OriginPattern pattern match case with special port 1",
 			allowOrigins: []string{},
 			allowOriginPatterns: []OriginPattern{
 				newOriginPatternFromString("http://*.example.com:[8080,9090]"),
@@ -373,7 +373,7 @@ func TestCorsConfig_checkOrigin(t *testing.T) {
 		},
 
 		{
-			name:         "OriginPattern pattern match case with specail port 2",
+			name:         "OriginPattern pattern match case with special port 2",
 			allowOrigins: []string{},
 			allowOriginPatterns: []OriginPattern{
 				newOriginPatternFromString("http://*.example.com:[8080,9090]"),
@@ -384,7 +384,7 @@ func TestCorsConfig_checkOrigin(t *testing.T) {
 		},
 
 		{
-			name:         "OriginPattern pattern match case with specail port 3",
+			name:         "OriginPattern pattern match case with special port 3",
 			allowOrigins: []string{},
 			allowOriginPatterns: []OriginPattern{
 				newOriginPatternFromString("http://*.example.com:[8080,9090]"),

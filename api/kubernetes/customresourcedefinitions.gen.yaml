@@ -323,6 +323,9 @@ spec:
                     nacosRefreshInterval:
                       format: int64
                       type: integer
+                    nacosTimeout:
+                      format: int64
+                      type: integer
                     nacosSecretKey:
                       type: string
                     name:

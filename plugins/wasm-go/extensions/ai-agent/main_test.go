@@ -660,6 +660,106 @@ func TestOnHttpRequestBody(t *testing.T) {
 
 func TestOnHttpResponseBody(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
+		t.Run("tool call with non-string path parameter", func(t *testing.T) {
+			pathParamConfig := func() json.RawMessage {
+				data, _ := json.Marshal(map[string]interface{}{
+					"returnResponseTemplate": `{"id":"error","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"finish_reason":"stop"}],"model":"gpt-4o","object":"chat.completion","usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`,
+					"llm": map[string]interface{}{
+						"apiKey":      "test-api-key",
+						"serviceName": "llm-service",
+						"servicePort": 8080,
+						"domain":      "llm.example.com",
+						"path":        "/v1/chat/completions",
+						"model":       "qwen-turbo",
+					},
+					"apis": []map[string]interface{}{
+						{
+							"apiProvider": map[string]interface{}{
+								"serviceName": "api-service",
+								"servicePort": 9090,
+								"domain":      "api.example.com",
+							},
+							"api": `openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /users/{id}:
+    get:
+      operationId: getUser
+      summary: Get user
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: active
+          in: query
+          required: false
+          schema:
+            type: boolean`,
+						},
+					},
+					"promptTemplate": map[string]interface{}{
+						"language": "EN",
+					},
+				})
+				return data
+			}()
+
+			host, status := test.NewTestHost(pathParamConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+			})
+
+			requestBody := `{
+				"model": "qwen-turbo",
+				"messages": [
+					{
+						"role": "user",
+						"content": "查询用户"
+					}
+				],
+				"stream": false
+			}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			llmResponse := `{
+				"id": "chatcmpl-123",
+				"choices": [
+					{
+						"index": 0,
+						"message": {
+							"role": "assistant",
+							"content": "{\"action\": \"getUser\", \"action_input\": \"{\\\"id\\\": 123, \\\"active\\\": true}\"}"
+						},
+						"finish_reason": "stop"
+					}
+				],
+				"created": 1677652288,
+				"model": "qwen-turbo",
+				"object": "chat.completion",
+				"usage": {
+					"prompt_tokens": 10,
+					"completion_tokens": 20,
+					"total_tokens": 30
+				}
+			}`
+
+			action := host.CallOnHttpResponseBody([]byte(llmResponse))
+
+			require.Equal(t, types.ActionPause, action)
+		})
+
 		t.Run("valid LLM response with content", func(t *testing.T) {
 			host, status := test.NewTestHost(httpTestConfig)
 			defer host.Reset()

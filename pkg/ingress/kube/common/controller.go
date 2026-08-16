@@ -66,6 +66,36 @@ func CreateMcpServiceKey(host string, portNumber int32) ServiceKey {
 	}
 }
 
+func WrapperConfigForMcpDestination(wrapper *WrapperConfig, destination *networking.HTTPRouteDestination) *WrapperConfig {
+	if wrapper == nil || wrapper.AnnotationsConfig == nil || wrapper.AnnotationsConfig.Destination == nil ||
+		destination == nil || destination.Destination == nil {
+		return wrapper
+	}
+
+	protocol := wrapper.AnnotationsConfig.Destination.BackendProtocolForDestination(destination.Destination)
+	if protocol == "" {
+		return wrapper
+	}
+
+	annotationsConfig := *wrapper.AnnotationsConfig
+	switch protocol {
+	case "HTTP":
+		annotationsConfig.UpstreamTLS = nil
+	case "HTTPS":
+		upstreamTLS := &annotations.UpstreamTLSConfig{BackendProtocol: protocol}
+		if annotationsConfig.UpstreamTLS != nil {
+			*upstreamTLS = *annotationsConfig.UpstreamTLS
+			upstreamTLS.BackendProtocol = protocol
+		}
+		annotationsConfig.UpstreamTLS = upstreamTLS
+	}
+
+	return &WrapperConfig{
+		Config:            wrapper.Config,
+		AnnotationsConfig: &annotationsConfig,
+	}
+}
+
 func (w *WrapperGateway) IsHTTPS() bool {
 	if w.Gateway == nil || len(w.Gateway.Servers) == 0 {
 		return false

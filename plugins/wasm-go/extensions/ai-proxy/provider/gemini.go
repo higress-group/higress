@@ -611,7 +611,6 @@ func (g *geminiProvider) baseStr2InlineData(baseStr string) *geminiInlineData {
 }
 
 func (g *geminiProvider) getImageInlineDataWithCallback(raw string, callback func(*geminiInlineData, error)) {
-
 	responseCallback := func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		if statusCode != http.StatusOK {
 			callback(nil, fmt.Errorf("get %s failed, status: %v", raw, statusCode))
@@ -839,7 +838,7 @@ func (g *geminiProvider) buildEmbeddingsResponse(ctx wrapper.HttpContext, gemini
 	response := embeddingsResponse{
 		Object: "list",
 		Data:   make([]embedding, 0, len(geminiResp.Embeddings)),
-		Model:  ctx.GetContext(ctxKeyFinalRequestModel).(string),
+		Model:  ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
 		Usage: usage{
 			TotalTokens: 0,
 		},

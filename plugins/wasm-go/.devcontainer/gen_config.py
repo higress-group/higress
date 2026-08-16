@@ -3,8 +3,10 @@ import sys
 
 
 plugin_name = sys.argv[1]
+plugin_root = sys.argv[2] if len(sys.argv) > 2 else "extensions"
+plugin_dir = f"{plugin_root}/{plugin_name}"
 
-with open("extensions/"+plugin_name+"/config.json", "r") as f:
+with open(f"{plugin_dir}/config.json", "r") as f:
     plugin_config = json.load(f)
 
 config = f'''static_resources:
@@ -49,7 +51,7 @@ config = f'''static_resources:
                     runtime: envoy.wasm.runtime.v8
                     code:
                       local:
-                        filename: ./extensions/{plugin_name}/main.wasm
+                        filename: ./{plugin_dir}/main.wasm
                   configuration:
                     "@type": "type.googleapis.com/google.protobuf.StringValue"
                     value: '{json.dumps(plugin_config)}'
@@ -72,5 +74,5 @@ config = f'''static_resources:
   #                   port_value: 8000
 '''
 
-with open("extensions/"+plugin_name+"/config.yaml", "w") as f:
+with open(f"{plugin_dir}/config.yaml", "w") as f:
     f.write(config)

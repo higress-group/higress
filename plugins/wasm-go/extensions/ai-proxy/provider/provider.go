@@ -161,6 +161,7 @@ const (
 	providerTypeOpenRouter = "openrouter"
 	providerTypeLongcat    = "longcat"
 	providerTypeFireworks  = "fireworks"
+	providerTypeGaladriel  = "galadriel"
 	providerTypeVllm       = "vllm"
 	providerTypeGeneric    = "generic"
 	providerTypeKling      = "kling"
@@ -256,6 +257,7 @@ var (
 		providerTypeOpenRouter: &openrouterProviderInitializer{},
 		providerTypeLongcat:    &longcatProviderInitializer{},
 		providerTypeFireworks:  &fireworksProviderInitializer{},
+		providerTypeGaladriel:  &galadrielProviderInitializer{},
 		providerTypeVllm:       &vllmProviderInitializer{},
 		providerTypeGeneric:    &genericProviderInitializer{},
 		providerTypeKling:      &klingProviderInitializer{},
@@ -330,6 +332,9 @@ type ProviderConfig struct {
 	// @Title zh-CN API Key 亲和
 	// @Description zh-CN 将同一消费者持久绑定到同一 API Key，并在 Key 失败时切换
 	apiKeyAffinity *apiKeyAffinity `required:"false" yaml:"apiKeyAffinity" json:"apiKeyAffinity"`
+	// @Title zh-CN 禁用流式使用统计
+	// @Description zh-CN 禁用后流式请求不会注入 stream_options.include_usage 字段。启用此选项后，流式请求的 token 使用统计将不可用，影响 ai-statistics/access-log 的 usage 字段。适用于不支持 stream_options 的旧版推理引擎（如 vLLM 0.4.3）。
+	disableStreamUsageStats bool `required:"false" yaml:"disableStreamUsageStats" json:"disableStreamUsageStats"`
 	// @Title zh-CN 推理内容处理方式
 	// @Description zh-CN 如何处理大模型服务返回的推理内容。目前支持以下取值：passthrough（正常输出推理内容）、ignore（不输出推理内容）、concat（将推理内容拼接在常规输出内容之前）。默认为 normal。仅支持通义千问服务。
 	reasoningContentMode string `required:"false" yaml:"reasoningContentMode" json:"reasoningContentMode"`
@@ -526,6 +531,10 @@ func (c *ProviderConfig) GetType() string {
 	return c.typ
 }
 
+func (c *ProviderConfig) IsStreamUsageStatsDisabled() bool {
+	return c.disableStreamUsageStats
+}
+
 func (c *ProviderConfig) GetProtocol() string {
 	return c.protocol
 }
@@ -713,6 +722,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	if affinityJSON := json.Get("apiKeyAffinity"); affinityJSON.Exists() {
 		c.apiKeyAffinity.fromJSON(affinityJSON)
 	}
+	c.disableStreamUsageStats = json.Get("disableStreamUsageStats").Bool()
 	c.difyApiUrl = json.Get("difyApiUrl").String()
 	c.botType = json.Get("botType").String()
 	c.inputVariable = json.Get("inputVariable").String()
@@ -1037,7 +1047,7 @@ func doGetMappedModel(model string, modelMapping map[string]string) string {
 	}
 
 	if v, ok := modelMapping[model]; ok {
-		log.Debugf("model [%s] is mapped to [%s] explictly", model, v)
+		log.Debugf("model [%s] is mapped to [%s] explicitly", model, v)
 		return v
 	}
 
@@ -1243,6 +1253,7 @@ func (c *ProviderConfig) handleRequestBody(
 		converter := &ClaudeToOpenAIConverter{}
 		body, err = converter.ConvertClaudeRequestToOpenAIWithOptions(body, ClaudeToOpenAIConvertOptions{
 			PreserveMessageReasoningContent: c.supportsMessageReasoningContent(),
+			DisableStreamUsageStats:         c.disableStreamUsageStats,
 		})
 		if err != nil {
 			return types.ActionContinue, fmt.Errorf("failed to convert claude request to openai: %v", err)

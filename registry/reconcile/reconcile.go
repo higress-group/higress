@@ -204,6 +204,7 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 			nacos.WithNacosNamespace(registry.NacosNamespace),
 			nacos.WithNacosGroups(registry.NacosGroups),
 			nacos.WithNacosRefreshInterval(registry.NacosRefreshInterval),
+			nacos.WithNacosTimeout(registry.NacosTimeout),
 			nacos.WithAuthOption(authOption),
 			nacos.WithVport(registry.Vport),
 		)
@@ -221,6 +222,7 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 			nacosv2.WithNacosNamespace(registry.NacosNamespace),
 			nacosv2.WithNacosGroups(registry.NacosGroups),
 			nacosv2.WithNacosRefreshInterval(registry.NacosRefreshInterval),
+			nacosv2.WithNacosTimeout(registry.NacosTimeout),
 			nacosv2.WithMcpExportDomains(registry.McpServerExportDomains),
 			nacosv2.WithMcpBaseUrl(registry.McpServerBaseUrl),
 			nacosv2.WithEnableMcpServer(registry.EnableMCPServer),

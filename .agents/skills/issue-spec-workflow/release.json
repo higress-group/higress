@@ -1,0 +1,33 @@
+{
+  "schema": "issue-spec.generated-workflow/v1",
+  "release": "development",
+  "source_revision": "unknown",
+  "requirements_skill_content_id": "sha256:35e55ba3b52b377acbd36ca4305cd958e3bd593008d576a7a82c9b06ab862ed1",
+  "content_digest": "sha256:e13931c3501f5dd522555726aa2f67fedeb9bb4cc910d572df7cec50086431a3",
+  "files": [
+    {
+      "path": ".agents/skills/issue-spec-apply/SKILL.md",
+      "sha256": "1a4c9869af3c3ebdd68064a78e7ef5bab604a5af77b0d80928f122429588ae9d"
+    },
+    {
+      "path": ".agents/skills/issue-spec-github/SKILL.md",
+      "sha256": "10e038e0373468327d6e40987eba0bf85aa96f5e02fb6551330f5cae9c027627"
+    },
+    {
+      "path": ".agents/skills/issue-spec-propose/SKILL.md",
+      "sha256": "61bbbb041fb8448b39c28761f247ed3a866c99e087ca97bf75b1a2205ed29759"
+    },
+    {
+      "path": ".agents/skills/issue-spec-workflow/SKILL.md",
+      "sha256": "20cb4ed210fff49de25a1919c7c956fc0cbf4e7a0cef49bf6f8f5040e19756c5"
+    },
+    {
+      "path": ".claude/commands/issue-spec/apply.md",
+      "sha256": "8ce9a73a140e91115023bed07c230e9ee31233c9b36f663da0aef832e045d05a"
+    },
+    {
+      "path": ".claude/commands/issue-spec/propose.md",
+      "sha256": "d541d240e856e34c9566a9415f6abb2c0548d3599c40544b6afb5e91323acade"
+    }
+  ]
+}

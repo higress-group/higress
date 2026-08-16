@@ -15,6 +15,8 @@
 package client
 
 import (
+	"sync"
+
 	"github.com/hudl/fargo"
 	"istio.io/istio/pkg/log"
 )
@@ -39,9 +41,10 @@ type Handler func(application *fargo.Application) error
  */
 
 type Plan struct {
-	client  EurekaHttpClient
-	stop    chan struct{}
-	handler Handler
+	client   EurekaHttpClient
+	stop     chan struct{}
+	stopOnce sync.Once
+	handler  Handler
 }
 
 func NewPlan(client EurekaHttpClient, serviceName string, handler Handler) *Plan {
@@ -57,8 +60,9 @@ func NewPlan(client EurekaHttpClient, serviceName string, handler Handler) *Plan
 }
 
 func (p *Plan) Stop() {
-	defer close(p.stop)
-	p.stop <- struct{}{}
+	p.stopOnce.Do(func() {
+		close(p.stop)
+	})
 }
 
 func (p *Plan) watch(ch <-chan fargo.AppUpdate) {
@@ -67,9 +71,17 @@ func (p *Plan) watch(ch <-chan fargo.AppUpdate) {
 		case <-p.stop:
 			log.Info("stop eureka plan")
 			return
-		case updateItem := <-ch:
+		case updateItem, ok := <-ch:
+			if !ok {
+				log.Info("eureka application update channel is closed")
+				return
+			}
 			if updateItem.Err != nil {
 				log.Errorf("get eureka application failed, error : %v", updateItem.Err)
+				continue
+			}
+			if updateItem.App == nil {
+				log.Warn("received nil eureka application update")
 				continue
 			}
 			if err := p.handler(updateItem.App); err != nil {

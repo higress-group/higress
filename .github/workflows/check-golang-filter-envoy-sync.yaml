@@ -1,0 +1,32 @@
+name: "Check golang-filter Envoy Sync"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugins/golang-filter/go.mod"
+      - "envoy/envoy"
+      - ".gitmodules"
+      - "tools/hack/check-golang-filter-envoy-sync.sh"
+      - ".github/workflows/check-golang-filter-envoy-sync.yaml"
+  pull_request:
+    branches: ["*"]
+    paths:
+      - "plugins/golang-filter/go.mod"
+      - "envoy/envoy"
+      - ".gitmodules"
+      - "tools/hack/check-golang-filter-envoy-sync.sh"
+      - ".github/workflows/check-golang-filter-envoy-sync.yaml"
+  workflow_dispatch: ~
+
+jobs:
+  check-envoy-sync:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The check reads the submodule commit from the tree, so submodules
+          # do not need to be fetched.
+          submodules: false
+      - name: "Verify golang-filter Envoy pin matches the envoy/envoy submodule"
+        run: bash tools/hack/check-golang-filter-envoy-sync.sh

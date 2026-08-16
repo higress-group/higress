@@ -8,6 +8,51 @@ plugins (Go/Rust/C++/AssemblyScript) and a Go-based `golang-filter`. It supports
 Ingress/Gateway API and ships a rich plugin ecosystem (including AI gateway
 plugins).
 
+## Mandatory issue-spec gate for agent-assisted changes
+
+Before substantive implementation, determine whether an AI or coding agent is
+materially participating under the
+[agent-assisted contribution policy](docs/developers/agent-assisted-contributions.md).
+For every contribution to which that policy applies:
+
+- do not begin implementation until a Higress maintainer has approved both the
+  Proposal Issue and Design Issue; an issue-spec status or agent assertion is
+  not maintainer approval;
+- implement only through TASKs authorized by the approved Design and preserve
+  traceability to the applicable SPECs;
+- ensure the Design contains a concrete Verification Plan before verification
+  begins; and
+- create and complete the corresponding verification TASKs with exact commands,
+  results, evidence links, and hashes before claiming success or asking
+  maintainers to accept verification or review.
+
+Declare agent participation in the PR template. The policy excludes human-only
+work. Small documentation-only corrections limited to spelling, punctuation,
+whitespace, or formatting (such as typo adjustments) may skip the issue-spec
+workflow when they involve no substantive choice or behavioral effect.
+Agent-assisted bug fixes and material feature work must still follow this gate.
+An authenticated `gh` user with canonical-repository `role_name` of `maintain`
+or `admin` may use the verified maintainer/administrator exception documented
+in the canonical policy. Before bypassing the gate, run the documented `gh`
+identity and collaborator-permission checks, record the login, returned
+`role_name`, actual PR author, and rationale in the PR, and still disclose agent
+participation. The PR author must match the verified login and the PR must attest
+that `GH_TOKEN` and `GITHUB_TOKEN` were unset for every verification command;
+any failed or mismatched check disqualifies the exception. Select the matching
+verified-exception status in the PR template. The accepting or merging maintainer
+must independently validate current live evidence with token overrides unset.
+This exception never waives bug-fix runtime verification.
+
+For work subject to this gate, the maintainer-approved issue-spec Design Issue
+is the authoritative design carrier. Do not create or require a plugin-local
+`design/` document for the gate. An optional durable capability spec serves a
+separate long-lived purpose and, only when maintainers request one, belongs at
+`issue-spec/specs/<plugin-qualified-capability>/spec.md`, using a unique
+lowercase, hyphen-separated capability slug that identifies the plugin. It
+must not replace or duplicate the approved Design Issue. Higress leaves
+`durable_specs` unset; do not invent a path field or enable repository
+projection without explicit maintainer direction.
+
 ## Repository layout
 
 Top-level directories (all paths relative to repo root):
@@ -58,10 +103,11 @@ overview. Prebuilt plugin images are published to
   `github.com/higress-group/proxy-wasm-go-sdk` (NOT an in-repo SDK dir).
   In-repo, `plugins/wasm-go/pkg/mcp/` provides MCP helpers and
   `plugins/wasm-go/mcp-servers/` holds MCP server plugins.
-- `examples/` — minimal reference plugins (custom-log, custom-span-attribute,
-  test-foreign-function).
-- Build: `plugins/wasm-go/Makefile`. `PLUGIN_NAME=<name> make build` builds a
-  wasm file (output to `extensions/<name>/plugin.wasm`) + image via
+- `examples/` — reference plugins, including the Go counterparts of C++
+  plugins. These are excluded from official plugin release discovery.
+- Build: `plugins/wasm-go/Makefile`. `PLUGIN_NAME=<name> make build` builds an
+  official plugin; add `PLUGIN_ROOT=examples` for a reference plugin. The wasm
+  file is written below the selected root, and the image is built via
   `Dockerfile`/`DockerfileBuilder` (uses a `wasm-go-builder` image, Go 1.24,
   TinyGo optional). `make build-push` pushes the image; `make local-build`
   builds locally with `GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared`.
@@ -71,11 +117,12 @@ overview. Prebuilt plugin images are published to
 
 ### plugins/wasm-rust/ (Rust WASM plugins)
 
-- Workspace-style: root `Cargo.toml`/`Cargo.lock`, shared `src/`,
-  `extensions/<name>/` per plugin (e.g. `ai-data-masking`, `ai-intent`,
-  `request-block`, `say-hello`, `demo-wasm`), `example/`.
+- Workspace-style: root `Cargo.toml`/`Cargo.lock`, shared `src/`, the official
+  `extensions/ai-data-masking/` plugin, and reference implementations under
+  `example/`.
 - Build via `plugins/wasm-rust/Makefile` (`PLUGIN_NAME=<name> make build`, plus
-  `lint`/`test`); the batch builder runs it when `PLUGIN_TYPE=RUST`.
+  `lint`/`test`); add `PLUGIN_ROOT=example` for a reference plugin. The batch
+  builder runs only official `extensions/` plugins when `PLUGIN_TYPE=RUST`.
 
 ### plugins/wasm-cpp/ (C++ WASM plugins, Bazel)
 

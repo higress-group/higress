@@ -21,6 +21,11 @@ type HigressConfig struct {
 	description string
 }
 
+func (c *HigressConfig) Clone() common.Server {
+	cloned := *c
+	return &cloned
+}
+
 func (c *HigressConfig) ParseConfig(config map[string]interface{}) error {
 	higressURL, ok := config["higressURL"].(string)
 	if !ok {

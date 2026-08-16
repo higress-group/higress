@@ -902,6 +902,78 @@ func TestSSLPassthroughIgnoresNonRootPath(t *testing.T) {
 	}
 }
 
+func TestHTTPRouteUsesMCPDestinationForResourceBackend(t *testing.T) {
+	c := controller{}
+	apiGroup := "networking.higress.io"
+	wrapper := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "ai-route",
+			},
+			Spec: v1.IngressSpec{
+				Rules: []v1.IngressRule{
+					{
+						Host: "ai.example.com",
+						IngressRuleValue: v1.IngressRuleValue{
+							HTTP: &v1.HTTPIngressRuleValue{
+								Paths: []v1.HTTPIngressPath{
+									{
+										Path:     "/v1/chat/completions",
+										PathType: pathTypePtr(v1.PathTypePrefix),
+										Backend: v1.IngressBackend{
+											Resource: &corev1.TypedLocalObjectReference{
+												APIGroup: &apiGroup,
+												Kind:     "McpBridge",
+												Name:     "default",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			Destination: &annotations.DestinationConfig{
+				McpDestination: []*networking.HTTPRouteDestination{
+					{
+						Destination: &networking.Destination{
+							Host: "llm-supplier-xxx.internal.dns",
+							Port: &networking.PortSelector{Number: 443},
+						},
+						Weight: 100,
+					},
+				},
+				WeightSum: 100,
+			},
+		},
+	}
+
+	routeOptions := &common.ConvertOptions{}
+	if err := c.ConvertHTTPRoute(routeOptions, wrapper); err != nil {
+		t.Fatalf("ConvertHTTPRoute() error = %v", err)
+	}
+
+	httpRoutes := routeOptions.HTTPRoutes["ai.example.com"]
+	if len(httpRoutes) != 1 {
+		t.Fatalf("http route count mismatch, want 1, got %d", len(httpRoutes))
+	}
+	routeDestinations := httpRoutes[0].HTTPRoute.Route
+	if len(routeDestinations) != 1 {
+		t.Fatalf("route destination count mismatch, want 1, got %d", len(routeDestinations))
+	}
+	destination := routeDestinations[0].Destination
+	if got := destination.Host; got != "llm-supplier-xxx.internal.dns" {
+		t.Fatalf("destination host mismatch, want llm-supplier-xxx.internal.dns, got %s", got)
+	}
+	if got := destination.GetPort().GetNumber(); got != 443 {
+		t.Fatalf("destination port mismatch, want 443, got %d", got)
+	}
+}
+
 func TestSSLPassthroughKeepsMCPResourceBackend(t *testing.T) {
 	c := controller{}
 	apiGroup := "networking.higress.io"

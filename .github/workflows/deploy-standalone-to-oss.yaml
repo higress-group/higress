@@ -1,38 +1,99 @@
-name: Deploy Standalone to OSS
+name: Deploy Exact Standalone Release to OSS
 
 on:
-  push:
-    tags:
-    - "v*.*.*"
-  workflow_dispatch: ~
+  repository_dispatch:
+    types: [standalone-package-ready]
+  workflow_dispatch:
+    inputs:
+      standalone_tag:
+        description: "Verified immutable higress-standalone vX.Y.Z release tag"
+        required: true
+        type: string
+      archive_sha256:
+        description: "SHA-256 of the selected exact-tag distribution archive"
+        required: true
+        type: string
+      installer_sha256:
+        description: "SHA-256 of src/get-higress.sh from that same exact tag"
+        required: true
+        type: string
+      dry_run:
+        description: "Verify/download only; do not upload to OSS"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-standalone-${{ github.event.client_payload.idempotencyKey || inputs.standalone_tag }}
+  cancel-in-progress: false
 
 jobs:
   deploy-to-oss:
     runs-on: ubuntu-latest
-    environment:
-      name: oss
+    environment: oss
     steps:
-      # Step 1
-      - name: Checkout
-        uses: actions/checkout@v4
-      # Step 2
-      - id: package
-        name: Prepare Standalone Package
+      - name: Validate exact immutable release inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.client_payload.tag || inputs.standalone_tag }}
+          ARCHIVE_SHA256: ${{ github.event.client_payload.archiveSha256 || inputs.archive_sha256 }}
+          INSTALLER_SHA256: ${{ github.event.client_payload.installerSha256 || inputs.installer_sha256 }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_ID: ${{ github.event.client_payload.releaseId }}
+          COMMIT: ${{ github.event.client_payload.commit }}
+          EVENT_KEY: ${{ github.event.client_payload.idempotencyKey }}
         run: |
-          mkdir ./artifact
-          LOCAL_RELEASE_URL="https://github.com/higress-group/higress-standalone/releases"
-          VERSION=$(curl -Ls $LOCAL_RELEASE_URL | grep 'href="/higress-group/higress-standalone/releases/tag/v[0-9]*.[0-9]*.[0-9]*\"' | sed -E 's/.*\/higress-group\/higress-standalone\/releases\/tag\/(v[0-9\.]+)".*/\1/g' | head -1)
-          DOWNLOAD_URL="https://github.com/higress-group/higress-standalone/archive/refs/tags/${VERSION}.tar.gz"
-          curl -SsL "$DOWNLOAD_URL" -o "./artifact/higress-${VERSION}.tar.gz"
-          curl -SsL "https://raw.githubusercontent.com/higress-group/higress-standalone/refs/heads/main/src/get-higress.sh" -o "./artifact/get-higress.sh"
-          echo -n "$VERSION" > ./artifact/VERSION
-          echo "Version=$VERSION"
-      # Step 3
-      - name: Upload to OSS
-        uses: go-choppy/ossutil-github-action@master
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$INSTALLER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          if [ "$EVENT_NAME" = repository_dispatch ]; then test "${{ github.event.client_payload.dryRun }}" = false; fi
+          if [ "$EVENT_NAME" = repository_dispatch ]; then
+            [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]; [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]
+            release=$(gh api "repos/higress-group/higress-standalone/releases/$RELEASE_ID"); test "$(jq -r .tag_name <<<"$release")" = "$TAG"
+            test "$(jq -r .draft <<<"$release")" = false; test "$(jq -r .prerelease <<<"$release")" = false
+            tag_ref=$(gh api "repos/higress-group/higress-standalone/git/ref/tags/$TAG")
+            tag_type=$(jq -er .object.type <<<"$tag_ref"); tag_object=$(jq -er .object.sha <<<"$tag_ref")
+            if [ "$tag_type" = tag ]; then resolved=$(gh api "repos/higress-group/higress-standalone/git/tags/$tag_object" --jq .object.sha); else test "$tag_type" = commit; resolved=$tag_object; fi
+            test "$resolved" = "$COMMIT"
+            payload=$(jq -cn --argjson releaseId "$RELEASE_ID" --arg tag "$TAG" --arg commit "$COMMIT" --arg archive "$ARCHIVE_SHA256" --arg installer "$INSTALLER_SHA256" '{releaseId:$releaseId,tag:$tag,commit:$commit,archiveSha256:$archive,installerSha256:$installer,dryRun:false}')
+            # BEGIN standalone-oss-idempotency-canonical-contract
+            canonical_standalone_oss_payload() {
+              jq -cS .
+            }
+            # END standalone-oss-idempotency-canonical-contract
+            canonical=$(printf '%s' "$payload" | canonical_standalone_oss_payload)
+            test "$(printf '%s' "$canonical" | sha256sum | awk '{print $1}')" = "$EVENT_KEY"
+          fi
+      - id: package
+        name: Download one exact Standalone tag
+        env:
+          TAG: ${{ github.event.client_payload.tag || inputs.standalone_tag }}
+          ARCHIVE_SHA256: ${{ github.event.client_payload.archiveSha256 || inputs.archive_sha256 }}
+          INSTALLER_SHA256: ${{ github.event.client_payload.installerSha256 || inputs.installer_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir artifact
+          archive_url="https://github.com/higress-group/higress-standalone/archive/refs/tags/${TAG}.tar.gz"
+          installer_url="https://raw.githubusercontent.com/higress-group/higress-standalone/${TAG}/src/get-higress.sh"
+          curl --fail --silent --show-error --location "$archive_url" --output "artifact/higress-${TAG}.tar.gz"
+          curl --fail --silent --show-error --location "$installer_url" --output artifact/get-higress.sh
+          test "$(sha256sum "artifact/higress-${TAG}.tar.gz" | awk '{print $1}')" = "$ARCHIVE_SHA256"
+          test "$(sha256sum artifact/get-higress.sh | awk '{print $1}')" = "$INSTALLER_SHA256"
+          printf '%s\n' "$TAG" > artifact/VERSION
+          sha256sum artifact/* | tee "$GITHUB_STEP_SUMMARY"
+      - name: Confirm dry-run boundary
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          echo "Dry run: exact-tag artifacts verified but not uploaded to OSS." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload verified artifacts
+        if: ${{ github.event_name == 'repository_dispatch' || !inputs.dry_run }}
+        uses: go-choppy/ossutil-github-action@796d9f49fcd7c520e1e79918f88d7298eaa19ed8 # v0.1.0
         with:
-          ossArgs: 'cp -r -u ./artifact/ oss://higress-ai/standalone/'
+          ossArgs: "cp -r -u ./artifact/ oss://higress-ai/standalone/"
           accessKey: ${{ secrets.ACCESS_KEYID }}
           accessSecret: ${{ secrets.ACCESS_KEYSECRET }}
           endpoint: oss-cn-hongkong.aliyuncs.com
-

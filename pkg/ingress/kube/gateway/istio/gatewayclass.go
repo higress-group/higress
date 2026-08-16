@@ -19,8 +19,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	k8sv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gateway "sigs.k8s.io/gateway-api/apis/v1beta1"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 
 	"istio.io/istio/pilot/pkg/model/kstatus"
 	"istio.io/istio/pkg/kube"
@@ -102,16 +101,16 @@ func (c *ClassController) reconcileClass(class gateway.ObjectName) error {
 	return nil
 }
 
-func GetClassStatus(existing *k8sv1.GatewayClassStatus, gen int64) *k8sv1.GatewayClassStatus {
+func GetClassStatus(existing *gateway.GatewayClassStatus, gen int64) *gateway.GatewayClassStatus {
 	if existing == nil {
-		existing = &k8sv1.GatewayClassStatus{}
+		existing = &gateway.GatewayClassStatus{}
 	}
 	existing.Conditions = kstatus.UpdateConditionIfChanged(existing.Conditions, metav1.Condition{
-		Type:               string(k8sv1.GatewayClassConditionStatusAccepted),
+		Type:               string(gateway.GatewayClassConditionStatusAccepted),
 		Status:             kstatus.StatusTrue,
 		ObservedGeneration: gen,
 		LastTransitionTime: metav1.Now(),
-		Reason:             string(k8sv1.GatewayClassConditionStatusAccepted),
+		Reason:             string(gateway.GatewayClassConditionStatusAccepted),
 		// Start - Updated by Higress
 		Message: "Handled by Higress controller",
 		// End - Updated by Higress

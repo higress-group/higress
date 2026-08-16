@@ -31,6 +31,19 @@ func (f *filter) DecodeHeaders(header api.RequestHeaderMap, endStream bool) api.
 
 	for _, server := range f.config.servers {
 		if common.MatchDomainWithMatchers(f.host, server.HostMatchers) && strings.HasPrefix(f.path, server.BaseServer.GetMessageEndpoint()) {
+			// Enforce HTTP Basic auth for servers that require it, before any
+			// further processing of the request.
+			if server.AuthUsername != "" {
+				authHeader, _ := header.Get("authorization")
+				if !common.CheckBasicAuth(authHeader, server.AuthUsername, server.AuthPassword) {
+					f.callbacks.DecoderFilterCallbacks().SendLocalReply(
+						http.StatusUnauthorized,
+						"Unauthorized",
+						map[string][]string{"WWW-Authenticate": {`Basic realm="MCP Server"`}},
+						0, "")
+					return api.LocalReply
+				}
+			}
 			if url.Method != http.MethodPost {
 				f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusMethodNotAllowed, "Method not allowed", nil, 0, "")
 				return api.LocalReply
@@ -71,12 +84,20 @@ func (f *filter) DecodeData(buffer api.BufferInstance, endStream bool) api.Statu
 				// Call the handleMessage method of SSEServer with complete body
 				httpStatus := server.BaseServer.HandleMessage(recorder, f.req, buffer.Bytes())
 				f.message = false
-				f.callbacks.DecoderFilterCallbacks().SendLocalReply(httpStatus, recorder.Body.String(), recorder.Header(), 0, "")
+				f.callbacks.DecoderFilterCallbacks().SendLocalReply(httpStatus, recorder.Body.String(), localReplyHeaders(recorder), 0, "")
 				return api.LocalReply
 			}
 		}
 	}
 	return api.Continue
+}
+
+func localReplyHeaders(recorder *httptest.ResponseRecorder) map[string][]string {
+	contentType := recorder.Result().Header.Get("Content-Type")
+	if contentType == "" {
+		return nil
+	}
+	return map[string][]string{"Content-Type": {contentType}}
 }
 
 func (f *filter) EncodeHeaders(header api.ResponseHeaderMap, endStream bool) api.StatusType {

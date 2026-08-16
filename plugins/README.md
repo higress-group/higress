@@ -1,7 +1,7 @@
 ## Wasm 插件
 
 
-目前 Higress 提供了 c++ 和 golang 两种 Wasm 插件开发框架，支持 Wasm 插件路由&域名级匹配生效。
+目前 Higress 提供了 C++、Go 和 Rust Wasm 插件开发框架，支持 Wasm 插件按路由和域名匹配生效。
 
 同时提供了多个内置插件，用户可以基于 Higress 提供的官方镜像仓库直接使用这些插件（以 c++ 版本举例）：
 
@@ -47,7 +47,7 @@ spec:
 
 如果您想要为 Higress 贡献插件请参考下述说明。
 
-根据你选择的开发语言，将插件代码放到 [wasm-cpp/extensions](./wasm-cpp/extensions) ，或者 [wasm-go/extensions](./wasm-go/extensions) 目录下。
+根据你选择的开发语言，将正式插件代码放到 [wasm-cpp/extensions](./wasm-cpp/extensions)、[wasm-go/extensions](./wasm-go/extensions) 或 [wasm-rust/extensions](./wasm-rust/extensions) 目录下。`example`/`examples` 目录仅存放参考实现和开发示例，不参与正式插件发布。
 
 除了代码以外，需要额外提供一个 README.md 文件说明插件配置方式，以及 VERSION 文件用于记录插件版本，用作推送镜像时的 tag。
 

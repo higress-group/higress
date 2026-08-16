@@ -138,7 +138,8 @@ func (i *Ingress) CanaryKind() (bool, bool) {
 
 func (i *Ingress) NeedTrafficPolicy() bool {
 	return i.UpstreamTLS != nil ||
-		i.LoadBalance != nil
+		i.LoadBalance != nil ||
+		i.Destination.HasBackendProtocols()
 }
 
 type AnnotationHandler interface {

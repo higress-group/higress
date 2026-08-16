@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -46,30 +47,37 @@ func init() {
 const (
 	// RedisKeyPrefix 集群限流插件在 Redis 中 key 的统一前缀
 	RedisKeyPrefix = "higress-cluster-key-rate-limit"
+	// 使用 {rule_name} hash tag 让多规则多键操作在 Redis Cluster 下落到同一 slot
 	// ClusterGlobalRateLimitFormat  全局限流模式 redis key 为 RedisKeyPrefix:限流规则名称:global_threshold:时间窗口
-	ClusterGlobalRateLimitFormat = RedisKeyPrefix + ":%s:global_threshold:%d"
+	ClusterGlobalRateLimitFormat = RedisKeyPrefix + ":{%s}:global_threshold:%d"
 	// ClusterRateLimitFormat 规则限流模式 redis key 为 RedisKeyPrefix:限流规则名称:限流类型:时间窗口:限流key名称:限流key对应的实际值
-	ClusterRateLimitFormat = RedisKeyPrefix + ":%s:%s:%d:%s:%s"
-	FixedWindowScript      = `
-		local key = KEYS[1]
-		local threshold = tonumber(ARGV[1])
-		local window = tonumber(ARGV[2])
-		
-		local current = tonumber(redis.call('get', key) or "0")
-		
-		-- 只有超过阈值时才停止累加，达到阈值时仍允许（此时是最后一次允许）
-		if current > threshold then
-			return {threshold, current, redis.call('ttl', key)}
+	ClusterRateLimitFormat = RedisKeyPrefix + ":{%s}:%s:%d:%s:%s"
+	// MultiKeyFixedWindowScript 多规则请求阶段 check + incr 合一脚本（cluster-key-rate-limit 使用）
+	// KEYS = [key1, ..., keyN]
+	// ARGV = [threshold1, window1, ..., thresholdN, windowN]
+	// 返回嵌套数组 {{threshold_i, current_i, ttl_i}, ...}（每个 key 独立判断是否 incr）
+	MultiKeyFixedWindowScript = `
+		local results = {}
+		for i = 1, #KEYS do
+			local threshold = tonumber(ARGV[2*i - 1])
+			local window    = tonumber(ARGV[2*i])
+			local current = tonumber(redis.call('get', KEYS[i]) or "0")
+			local ttl = redis.call('ttl', KEYS[i])
+			if ttl < 0 then ttl = window end
+
+			if current > threshold then
+				-- 已超阈值，不再 incr
+				table.insert(results, {threshold, current, ttl})
+			else
+				-- 未超阈值，原子 incr
+				current = redis.call('incr', KEYS[i])
+				if current == 1 then
+					redis.call('expire', KEYS[i], window)
+				end
+				table.insert(results, {threshold, current, redis.call('ttl', KEYS[i])})
+			end
 		end
-	
-		-- 计数未超过阈值，执行累加
-		current = redis.call('incr', key)
-		-- 第一次累加时设置过期时间
-		if current == 1 then
-			redis.call('expire', key, window)
-		end
-		
-		return {threshold, current, redis.call('ttl', key)}
+		return results
 	`
 
 	LimitContextKey = "LimitContext" // 限流上下文信息
@@ -87,6 +95,13 @@ type LimitContext struct {
 	reset     int
 }
 
+// MatchedRule 表示请求阶段命中的单条限流规则（global 或 rule_item）
+type MatchedRule struct {
+	key    string // 完整 Redis key
+	count  int64  // 时间窗口内的限额
+	window int64  // 时间窗口大小（秒）
+}
+
 func parseConfig(json gjson.Result, cfg *config.ClusterKeyRateLimitConfig) error {
 	err := config.InitRedisClusterClient(json, cfg)
 	if err != nil {
@@ -101,51 +116,82 @@ func parseConfig(json gjson.Result, cfg *config.ClusterKeyRateLimitConfig) error
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimitConfig) types.Action {
 	ctx.DisableReroute()
-	limitKey, count, timeWindow := "", int64(0), int64(0)
 
-	if cfg.GlobalThreshold != nil {
-		// 全局限流模式
-		limitKey = fmt.Sprintf(ClusterGlobalRateLimitFormat, cfg.RuleName, cfg.GlobalThreshold.TimeWindow)
-		count = cfg.GlobalThreshold.Count
-		timeWindow = cfg.GlobalThreshold.TimeWindow
-	} else {
-		// 规则限流模式
-		val, ruleItem, configItem := checkRequestAgainstLimitRule(ctx, cfg.RuleItems)
-		if ruleItem == nil || configItem == nil {
-			// 没有匹配到限流规则直接返回
-			return types.ActionContinue
-		}
-
-		limitKey = fmt.Sprintf(ClusterRateLimitFormat, cfg.RuleName, ruleItem.LimitType, configItem.TimeWindow, ruleItem.Key, val)
-		count = configItem.Count
-		timeWindow = configItem.TimeWindow
+	matched := collectMatchedRules(ctx, cfg)
+	if len(matched) == 0 {
+		// 无任何规则命中：直接放行，不发起 Redis 调用
+		log.Debugf("cluster-key-rate-limit: no rule matched, path=%s host=%s", ctx.Path(), ctx.Host())
+		return types.ActionContinue
 	}
 
-	// 执行限流逻辑
-	keys := []interface{}{limitKey}
-	args := []interface{}{count, timeWindow}
-	err := cfg.RedisClient.Eval(FixedWindowScript, 1, keys, args, func(response resp.Value) {
-		resultArray := response.Array()
-		if len(resultArray) != 3 {
-			log.Errorf("redis response parse error, response: %v", response)
-			proxywasm.ResumeHttpRequest()
+	log.Debugf("cluster-key-rate-limit: request phase matched %d rule(s), path=%s host=%s",
+		len(matched), ctx.Path(), ctx.Host())
+	for i, m := range matched {
+		log.Debugf("cluster-key-rate-limit:   rule[%d] key=%s threshold=%d window=%ds",
+			i, m.key, m.count, m.window)
+	}
+
+	n := len(matched)
+	keys := make([]interface{}, n)
+	args := make([]interface{}, 0, n*2)
+	for i, m := range matched {
+		keys[i] = m.key
+		args = append(args, m.count, m.window)
+	}
+
+	err := cfg.RedisClient.Eval(MultiKeyFixedWindowScript, n, keys, args, func(response resp.Value) {
+		arr := response.Array()
+		if len(arr) != n {
+			log.Errorf("redis response length mismatch: got %d, want %d", len(arr), n)
+			_ = proxywasm.ResumeHttpRequest()
 			return
 		}
 
-		// 获取限流结果
-		threshold, current, ttl := resultArray[0].Integer(), resultArray[1].Integer(), resultArray[2].Integer()
-		context := LimitContext{
-			count:     threshold,
-			remaining: threshold - current,
-			reset:     ttl,
+		// 使用 math.MaxFloat64 初始化，避免在 arr[0] 校验前预先读取
+		tightestIdx := 0
+		tightestRatio := math.MaxFloat64
+
+		for i, sub := range arr {
+			a := sub.Array()
+			if len(a) != 3 {
+				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(a))
+				_ = proxywasm.ResumeHttpRequest()
+				return
+			}
+			threshold, current, ttl := a[0].Integer(), a[1].Integer(), a[2].Integer()
+			log.Debugf("cluster-key-rate-limit:   eval rule[%d] key=%s threshold=%d current=%d ttl=%ds",
+				i, matched[i].key, threshold, current, ttl)
+
+			if current > threshold {
+				// 命中触发的第一条规则（按 collectMatchedRules 顺序，global 优先）
+				log.Debugf("cluster-key-rate-limit: rule[%d] key=%s triggered (current=%d > threshold=%d), rejecting with code %d",
+					i, matched[i].key, current, threshold, cfg.RejectedCode)
+				rejected(cfg, LimitContext{
+					count:     threshold,
+					remaining: threshold - current,
+					reset:     ttl,
+				})
+				return
+			}
+
+			if ratio := float64(threshold-current) / float64(threshold); ratio < tightestRatio {
+				tightestIdx = i
+				tightestRatio = ratio
+			}
 		}
-		if current > threshold {
-			// 触发限流
-			rejected(cfg, context)
-		} else {
-			ctx.SetContext(LimitContextKey, context)
-			proxywasm.ResumeHttpRequest()
-		}
+
+		// 未触发：写入 tightest 规则到 LimitContext，供 onHttpResponseHeaders 读取 X-RateLimit-* 头
+		tightSub := arr[tightestIdx].Array()
+		tightThreshold, tightCurrent, tightTtl := tightSub[0].Integer(), tightSub[1].Integer(), tightSub[2].Integer()
+		log.Debugf("cluster-key-rate-limit: all %d rule(s) within threshold, tightest rule[%d] key=%s (count=%d remaining=%d reset=%ds)",
+			n, tightestIdx, matched[tightestIdx].key, tightThreshold, tightThreshold-tightCurrent, tightTtl)
+		ctx.SetContext(LimitContextKey, LimitContext{
+			count:     tightThreshold,
+			remaining: tightThreshold - tightCurrent,
+			reset:     tightTtl,
+		})
+
+		_ = proxywasm.ResumeHttpRequest()
 	})
 
 	if err != nil {
@@ -158,25 +204,43 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config config.ClusterKeyRateLimitConfig) types.Action {
 	limitContext, ok := ctx.GetContext(LimitContextKey).(LimitContext)
 	if !ok {
+		log.Debugf("cluster-key-rate-limit: response phase reached with no LimitContext, skipping X-RateLimit-* headers")
 		return types.ActionContinue
 	}
 	if config.ShowLimitQuotaHeader {
 		_ = proxywasm.ReplaceHttpResponseHeader(RateLimitLimitHeader, strconv.Itoa(limitContext.count))
 		_ = proxywasm.ReplaceHttpResponseHeader(RateLimitRemainingHeader, strconv.Itoa(limitContext.remaining))
+		log.Debugf("cluster-key-rate-limit: response phase wrote X-RateLimit-Limit=%d X-RateLimit-Remaining=%d",
+			limitContext.count, limitContext.remaining)
 	}
 	return types.ActionContinue
 }
 
-func checkRequestAgainstLimitRule(ctx wrapper.HttpContext, ruleItems []config.LimitRuleItem) (string, *config.LimitRuleItem, *config.LimitConfigItem) {
-	if len(ruleItems) > 0 {
-		for _, rule := range ruleItems {
-			val, ruleItem, configItem := hitRateRuleItem(ctx, rule)
-			if ruleItem != nil && configItem != nil {
-				return val, ruleItem, configItem
-			}
+// collectMatchedRules 遍历 global_threshold 和 rule_items，返回所有命中规则。
+// 顺序：global_threshold（如有）→ rule_items 中所有命中项（按数组顺序追加）。
+func collectMatchedRules(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimitConfig) []MatchedRule {
+	var matched []MatchedRule
+
+	if cfg.GlobalThreshold != nil {
+		matched = append(matched, MatchedRule{
+			key:    fmt.Sprintf(ClusterGlobalRateLimitFormat, cfg.RuleName, cfg.GlobalThreshold.TimeWindow),
+			count:  cfg.GlobalThreshold.Count,
+			window: cfg.GlobalThreshold.TimeWindow,
+		})
+	}
+
+	for _, ruleItem := range cfg.RuleItems {
+		val, hitRule, hitItem := hitRateRuleItem(ctx, ruleItem)
+		if hitRule != nil && hitItem != nil {
+			matched = append(matched, MatchedRule{
+				key:    fmt.Sprintf(ClusterRateLimitFormat, cfg.RuleName, hitRule.LimitType, hitItem.TimeWindow, hitRule.Key, val),
+				count:  hitItem.Count,
+				window: hitItem.TimeWindow,
+			})
 		}
 	}
-	return "", nil, nil
+
+	return matched
 }
 
 func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string, *config.LimitRuleItem, *config.LimitConfigItem) {

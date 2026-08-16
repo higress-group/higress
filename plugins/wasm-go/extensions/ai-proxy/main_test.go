@@ -846,38 +846,65 @@ func Test_isSupportedRequestContentType(t *testing.T) {
 	}
 }
 
+func Test_contentLengthExceedsLimit(t *testing.T) {
+	const limit uint32 = 100
+	tests := []struct {
+		name          string
+		contentLength string
+		want          bool
+	}{
+		{"missing", "", false},
+		{"blank", " \t", false},
+		{"below limit", "99", false},
+		{"equal limit", "100", false},
+		{"above limit", "101", true},
+		{"trim spaces", " 101 ", true},
+		{"invalid", "invalid", false},
+		{"negative", "-1", false},
+		{"overflow", "184467440737095516160", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := contentLengthExceedsLimit(tt.contentLength, limit); got != tt.want {
+				t.Fatalf("contentLengthExceedsLimit(%q, %d) = %v, want %v", tt.contentLength, limit, got, tt.want)
+			}
+		})
+	}
+}
+
 func Test_normalizeOpenAiRequestBody(t *testing.T) {
 	t.Run("stream_adds_include_usage", func(t *testing.T) {
 		in := []byte(`{"model":"x","stream":true}`)
-		got := normalizeOpenAiRequestBody(in)
+		got := normalizeOpenAiRequestBody(in, false)
 		if !gjson.GetBytes(got, "stream_options.include_usage").Bool() {
 			t.Fatalf("want stream_options.include_usage true, got %s", string(got))
 		}
 	})
 	t.Run("stream_false_no_stream_options", func(t *testing.T) {
 		in := []byte(`{"model":"x","stream":false}`)
-		got := normalizeOpenAiRequestBody(in)
+		got := normalizeOpenAiRequestBody(in, false)
 		if gjson.GetBytes(got, "stream_options").Exists() {
 			t.Fatalf("did not expect stream_options, got %s", string(got))
 		}
 	})
 	t.Run("respect_explicit_include_usage_false", func(t *testing.T) {
 		in := []byte(`{"model":"x","stream":true,"stream_options":{"include_usage":false}}`)
-		got := normalizeOpenAiRequestBody(in)
+		got := normalizeOpenAiRequestBody(in, false)
 		if gjson.GetBytes(got, "stream_options.include_usage").Bool() {
 			t.Fatalf("want include_usage false, got %s", string(got))
 		}
 	})
 	t.Run("stream_missing_no_stream_options", func(t *testing.T) {
 		in := []byte(`{"model":"x"}`)
-		got := normalizeOpenAiRequestBody(in)
+		got := normalizeOpenAiRequestBody(in, false)
 		if gjson.GetBytes(got, "stream_options").Exists() {
 			t.Fatalf("unexpected stream_options: %s", string(got))
 		}
 	})
 	t.Run("stream_non_bool_treated_as_false", func(t *testing.T) {
 		in := []byte(`{"model":"x","stream":"yes"}`)
-		got := normalizeOpenAiRequestBody(in)
+		got := normalizeOpenAiRequestBody(in, false)
 		if gjson.GetBytes(got, "stream_options").Exists() {
 			t.Fatalf("unexpected stream_options for non-bool stream: %s", string(got))
 		}
@@ -987,6 +1014,15 @@ func TestFireworks(t *testing.T) {
 	test.RunFireworksParseConfigTests(t)
 	test.RunFireworksOnHttpRequestHeadersTests(t)
 	test.RunFireworksOnHttpRequestBodyTests(t)
+}
+
+func TestGaladriel(t *testing.T) {
+	test.RunGaladrielParseConfigTests(t)
+	test.RunGaladrielOnHttpRequestHeadersTests(t)
+	test.RunGaladrielOnHttpRequestBodyTests(t)
+	test.RunGaladrielOnHttpResponseHeadersTests(t)
+	test.RunGaladrielOnHttpResponseBodyTests(t)
+	test.RunGaladrielOnStreamingResponseBodyTests(t)
 }
 
 func TestMinimax(t *testing.T) {
@@ -1130,4 +1166,73 @@ func TestProviderWasmSmoke(t *testing.T) {
 	test.RunDifyWasmSmokeTests(t)
 	test.RunTritonWasmSmokeTests(t)
 	test.RunVllmWasmSmokeTests(t)
+}
+
+func Test_normalizeOpenAiRequestBody_disableStreamUsageStats(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		disabled bool
+		want     string
+	}{
+		{
+			name:     "disabled skips injection for streaming request",
+			input:    `{"stream":true,"model":"gpt-4"}`,
+			disabled: true,
+			want:     `{"stream":true,"model":"gpt-4"}`,
+		},
+		{
+			name:     "disabled preserves existing stream_options",
+			input:    `{"stream":true,"stream_options":{"include_usage":false},"model":"gpt-4"}`,
+			disabled: true,
+			want:     `{"stream":true,"stream_options":{"include_usage":false},"model":"gpt-4"}`,
+		},
+		{
+			name:     "enabled (default) still injects include_usage",
+			input:    `{"stream":true,"model":"gpt-4"}`,
+			disabled: false,
+			want:     `{"stream":true,"model":"gpt-4","stream_options":{"include_usage":true}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeOpenAiRequestBody([]byte(tt.input), tt.disabled)
+			if string(got) != tt.want {
+				t.Errorf("normalizeOpenAiRequestBody() = %s, want %s", string(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderConfig_disableStreamUsageStats_fromJson(t *testing.T) {
+	tests := []struct {
+		name   string
+		json   string
+		want   bool
+	}{
+		{
+			name: "omitted defaults to false",
+			json: `{"id":"test","type":"openai"}`,
+			want: false,
+		},
+		{
+			name: "explicitly true",
+			json: `{"id":"test","type":"openai","disableStreamUsageStats":true}`,
+			want: true,
+		},
+		{
+			name: "explicitly false",
+			json: `{"id":"test","type":"openai","disableStreamUsageStats":false}`,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var config provider.ProviderConfig
+			config.FromJson(gjson.Parse(tt.json))
+			if config.IsStreamUsageStatsDisabled() != tt.want {
+				t.Errorf("IsStreamUsageStatsDisabled() = %v, want %v", config.IsStreamUsageStatsDisabled(), tt.want)
+			}
+		})
+	}
 }

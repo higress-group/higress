@@ -16,4 +16,9 @@ package consts
 
 const (
 	ToolSetNameSplitter = "___"
+
+	// Request-scoped protocol contexts. Values stored under these keys contain
+	// only typed protocol data and never runtime session identifiers.
+	CtxProtocolTransport = "mcp.protocol.transport"
+	CtxProtocolRequest   = "mcp.protocol.request"
 )

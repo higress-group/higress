@@ -1,0 +1,268 @@
+name: Authorize Exact Higress Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      gateway_version:
+        description: "Stable Higress version to authorize"
+        required: true
+        type: string
+      release_commit:
+        description: "Exact merged release PR commit"
+        required: true
+        type: string
+      snapshot_path:
+        description: "Exact snapshot path"
+        required: true
+        type: string
+      snapshot_sha256:
+        description: "Canonical snapshot SHA-256"
+        required: true
+        type: string
+      plugin_server_commit:
+        description: "Pinned plugin-server source commit"
+        required: true
+        type: string
+      plugin_server_digest:
+        description: "Verified immutable gateway-version plugin-server digest"
+        required: true
+        type: string
+      console_chart_version:
+        description: "Released Console chart version required by Chart.lock"
+        required: true
+        type: string
+      console_release_id:
+        description: "Immutable published higress-console GitHub release ID"
+        required: true
+        type: string
+      approved_readiness_evidence_sha256:
+        description: "Canonical evidence SHA-256 from an approved dry-run; required for formal authorization"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Verify readiness only; never create a Git tag"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authorize-higress-release-tag-${{ inputs.gateway_version }}
+  cancel-in-progress: false
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    environment: higress-release-manager
+    steps:
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        if: ${{ !inputs.dry_run }}
+        id: release-app
+        with:
+          app-id: ${{ vars.RELEASE_MANAGER_APP_ID }}
+          private-key: ${{ secrets.RELEASE_MANAGER_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.release_commit }}
+          fetch-depth: 0
+          token: ${{ inputs.dry_run && github.token || steps.release-app.outputs.token }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.24.0"
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20 # v1.2.3
+        with:
+          version: 1.2.3
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.17.3
+      - name: Verify exact pre-tag release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+          SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
+          PLUGIN_SERVER_COMMIT: ${{ inputs.plugin_server_commit }}
+          PLUGIN_SERVER_DIGEST: ${{ inputs.plugin_server_digest }}
+          PLUGIN_SERVER_REGISTRY: ${{ vars.PLUGIN_SERVER_REGISTRY }}
+          CONSOLE_CHART_VERSION: ${{ inputs.console_chart_version }}
+          CONSOLE_RELEASE_ID: ${{ inputs.console_release_id }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          APPROVED_EVIDENCE_SHA256: ${{ inputs.approved_readiness_evidence_sha256 }}
+        run: |
+          set -euo pipefail
+          # BEGIN plugin-server-index-contract
+          verify_plugin_server_index() {
+            jq -e '
+              def runnable: (.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64"));
+              [.manifests[] | select(runnable)] as $runnable |
+              [.manifests[] | select(runnable | not)] as $extra |
+              (([$runnable[] | .platform.os + "/" + .platform.architecture] | sort) == ["linux/amd64","linux/arm64"]) and
+              (($runnable | length) == 2) and
+              (($extra | length) == 0 or
+                (($extra | length) == 2 and
+                 all($extra[];
+                   .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+                   .platform.os == "unknown" and .platform.architecture == "unknown" and
+                   .annotations["vnd.docker.reference.type"] == "attestation-manifest") and
+                 (([$extra[].annotations["vnd.docker.reference.digest"]] | sort) == ([$runnable[].digest] | sort))))
+            ' "$1" >/dev/null
+          }
+          # END plugin-server-index-contract
+          [[ "$GATEWAY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PLUGIN_SERVER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PLUGIN_SERVER_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$CONSOLE_CHART_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$CONSOLE_RELEASE_ID" =~ ^[0-9]+$ ]]
+          [[ "$PLUGIN_SERVER_REGISTRY" =~ ^[^/@[:space:]]+(\:[0-9]+)?(/[^@[:space:]]+)*$ ]]
+          [[ "$PLUGIN_SERVER_REGISTRY" != *"://"* ]]; [[ "$PLUGIN_SERVER_REGISTRY" != */ ]]
+          [[ "$SNAPSHOT_PATH" =~ ^plugins/release/snapshots/${GATEWAY_VERSION}\.json$ ]]
+          [[ "$SNAPSHOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          if [ "$DRY_RUN" = true ]; then
+            test -z "$APPROVED_EVIDENCE_SHA256"
+          else
+            [[ "$APPROVED_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          fi
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          test "$(sha256sum "$SNAPSHOT_PATH" | awk '{print $1}')" = "$SNAPSHOT_SHA256"
+          (cd tools/plugin-release && go run . verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --committed-source "$RELEASE_COMMIT" --resolve --oci-source public)
+
+          # Resolve all Console evidence from one immutable GitHub release ID.
+          # Operators never assemble a cross-system JSON document by hand.
+          release=$(gh api "repos/higress-group/higress-console/releases/$CONSOLE_RELEASE_ID")
+          test "$(jq -r .draft <<<"$release")" = false; test "$(jq -r .prerelease <<<"$release")" = false
+          CONSOLE_RELEASE_TAG=$(jq -er .tag_name <<<"$release")
+          test "$CONSOLE_RELEASE_TAG" = "v$CONSOLE_CHART_VERSION"
+          console_ref=$(gh api "repos/higress-group/higress-console/git/ref/tags/$CONSOLE_RELEASE_TAG")
+          object_type=$(jq -r .object.type <<<"$console_ref"); object_sha=$(jq -r .object.sha <<<"$console_ref")
+          if [ "$object_type" = tag ]; then console_commit=$(gh api "repos/higress-group/higress-console/git/tags/$object_sha" --jq .object.sha); else test "$object_type" = commit; console_commit=$object_sha; fi
+          [[ "$console_commit" =~ ^[0-9a-f]{40}$ ]]; CONSOLE_RELEASE_COMMIT=$console_commit
+          test "$(jq '[.assets[] | select(.name == "plugin-release-provenance.json")] | length' <<<"$release")" = 1
+          ASSET_ID=$(jq -er '.assets[] | select(.name == "plugin-release-provenance.json") | .id' <<<"$release")
+          gh api "repos/higress-group/higress-console/releases/assets/$ASSET_ID" -H 'Accept: application/octet-stream' > /tmp/console-provenance.json
+          ASSET_SHA=$(sha256sum /tmp/console-provenance.json | awk '{print $1}')
+          [[ "$ASSET_SHA" =~ ^[0-9a-f]{64}$ ]]
+          CONSOLE_CHART_OCI_REF=$(jq -er .chart.ref /tmp/console-provenance.json)
+          CONSOLE_CHART_DIGEST=$(jq -er .chart.digest /tmp/console-provenance.json)
+          [[ "$CONSOLE_CHART_OCI_REF" =~ ^[^@[:space:]]+$ ]]; [[ "$CONSOLE_CHART_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          snapshot_source=$(jq -er .sourceCommit "$SNAPSHOT_PATH")
+          jq -e --arg source "$snapshot_source" --arg snapshot "$SNAPSHOT_SHA256" --arg chart "$CONSOLE_CHART_DIGEST" --arg chartRef "$CONSOLE_CHART_OCI_REF" --arg commit "$CONSOLE_RELEASE_COMMIT" --arg tag "$CONSOLE_RELEASE_TAG" '.schemaVersion == 1 and .tag == $tag and .commit == $commit and .pluginLock.sourceCommit == $source and .pluginLock.snapshotSha256 == $snapshot and .chart.ref == $chartRef and .chart.digest == $chart' /tmp/console-provenance.json >/dev/null
+          jq -cS '[.plugins[] | select(.consumers.console != null) | {key:.consumers.console.propertyKey,resourceDir:.consumers.console.resourceDir,version,ociRef:("oci://" + .ociRef),digest}] | sort_by(.key)' "$SNAPSHOT_PATH" >/tmp/snapshot-console-map.json
+          jq -cS '[.pluginLock.plugins | to_entries[] | {key:.key,resourceDir:.value.resourceDir,version:.value.version,ociRef:.value.ociRef,digest:.value.digest}] | sort_by(.key)' /tmp/console-provenance.json >/tmp/console-map.json
+          cmp /tmp/snapshot-console-map.json /tmp/console-map.json
+          chart_version=${CONSOLE_CHART_OCI_REF##*:}; test "$chart_version" = "$CONSOLE_CHART_VERSION"
+          console_dependency() { awk '$0 == "- name: higress-console" { count++; found=1; next } found && /^- name:/ { found=0 } found && $1 == "repository:" { repo=$2; gsub(/^"|"$/, "", repo) } found && $1 == "version:" { version=$2; gsub(/^"|"$/, "", version) } END { if (count != 1 || repo == "" || version == "") exit 1; print repo "\t" version }' "$1"; }
+          chart_yaml_dependency=$(console_dependency helm/higress/Chart.yaml)
+          chart_lock_dependency=$(console_dependency helm/higress/Chart.lock)
+          test "$chart_yaml_dependency" = "$chart_lock_dependency"
+          IFS=$'\t' read -r CONSOLE_HELM_REPOSITORY chart_dependency_version <<<"$chart_yaml_dependency"
+          test "$chart_dependency_version" = "$CONSOLE_CHART_VERSION"
+          [[ "$CONSOLE_HELM_REPOSITORY" =~ ^https://[^@[:space:]]+/$ ]]
+
+          # Bind the package resolved through the actual Chart.yaml HTTPS
+          # repository to the unique Helm content layer under the proven OCI
+          # manifest. A same-version package mutation therefore fails.
+          mkdir -p /tmp/console-chart-http
+          helm pull higress-console --repo "$CONSOLE_HELM_REPOSITORY" --version "$CONSOLE_CHART_VERSION" --destination /tmp/console-chart-http
+          CONSOLE_HTTP_CHART=/tmp/console-chart-http/higress-console-$CONSOLE_CHART_VERSION.tgz
+          test -s "$CONSOLE_HTTP_CHART"
+          test "$(helm show chart "$CONSOLE_HTTP_CHART" | awk '$1 == "name:" { print $2; exit }')" = higress-console
+          test "$(helm show chart "$CONSOLE_HTTP_CHART" | awk '$1 == "version:" { print $2; exit }')" = "$CONSOLE_CHART_VERSION"
+          console_chart_repo=${CONSOLE_CHART_OCI_REF%:*}
+          oras manifest fetch "$console_chart_repo@$CONSOLE_CHART_DIGEST" --descriptor | jq -e --arg digest "$CONSOLE_CHART_DIGEST" '.digest == $digest' >/dev/null
+          oras manifest fetch "$console_chart_repo@$CONSOLE_CHART_DIGEST" > /tmp/console-chart-oci-manifest.json
+          jq -e '.layers | length == 1 and .[0].mediaType == "application/vnd.cncf.helm.chart.content.v1.tar+gzip"' /tmp/console-chart-oci-manifest.json >/dev/null
+          console_chart_layer=$(jq -er '.layers[0].digest' /tmp/console-chart-oci-manifest.json)
+          [[ "$console_chart_layer" =~ ^sha256:[0-9a-f]{64}$ ]]
+          oras blob fetch "$console_chart_repo@$console_chart_layer" -o /tmp/console-chart-oci.tgz
+          CONSOLE_CHART_PACKAGE_SHA256=$(sha256sum "$CONSOLE_HTTP_CHART" | awk '{print $1}')
+          test "sha256:$CONSOLE_CHART_PACKAGE_SHA256" = "$console_chart_layer"
+          test "$(sha256sum /tmp/console-chart-oci.tgz | awk '{print $1}')" = "$CONSOLE_CHART_PACKAGE_SHA256"
+
+          # Resolve the canonical gateway-version plugin-server tag and bind it
+          # to the operator-approved digest before inspecting child manifests.
+          plugin_server_repo="$PLUGIN_SERVER_REGISTRY/higress/plugin-server"
+          plugin_server_tag="$plugin_server_repo:$GATEWAY_VERSION"
+          resolved_plugin_server_digest=$(oras manifest fetch "$plugin_server_tag" --descriptor | jq -er .digest)
+          test "$resolved_plugin_server_digest" = "$PLUGIN_SERVER_DIGEST"
+          PLUGIN_SERVER_IMAGE="$plugin_server_tag@$resolved_plugin_server_digest"
+          jq -e --arg plugin "$PLUGIN_SERVER_COMMIT" --arg image "$PLUGIN_SERVER_IMAGE" \
+            '.pluginLock.pluginServerCommit == $plugin and .pluginLock.pluginServerImage == $image' \
+            /tmp/console-provenance.json >/dev/null
+          oras manifest fetch "$PLUGIN_SERVER_IMAGE" >/tmp/plugin-server-index.json
+          verify_plugin_server_index /tmp/plugin-server-index.json
+          PLUGIN_SERVER_HIGRESS_COMMIT=""
+          while IFS=$'\t' read -r platform child; do
+            manifest=$(oras manifest fetch "$plugin_server_repo@$child"); config=$(jq -er .config.digest <<<"$manifest")
+            labels=$(oras blob fetch "$plugin_server_repo@$config" -o - | jq -c '.config.Labels // {}')
+            child_higress_commit=$(jq -er '."io.higress.higress-source-commit"' <<<"$labels")
+            [[ "$child_higress_commit" =~ ^[0-9a-f]{40}$ ]]
+            if [ -z "$PLUGIN_SERVER_HIGRESS_COMMIT" ]; then PLUGIN_SERVER_HIGRESS_COMMIT=$child_higress_commit; else test "$child_higress_commit" = "$PLUGIN_SERVER_HIGRESS_COMMIT"; fi
+            jq -e --arg plugin "$PLUGIN_SERVER_COMMIT" --arg snapshot "$SNAPSHOT_SHA256" --arg version "$GATEWAY_VERSION" '."org.opencontainers.image.revision" == $plugin and ."io.higress.plugin-snapshot-sha256" == $snapshot and ."io.higress.gateway-version" == $version' <<<"$labels" >/dev/null
+          done < <(jq -r '.manifests[] | select(.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64")) | [(.platform.os + "/" + .platform.architecture), .digest] | @tsv' /tmp/plugin-server-index.json)
+          [[ "$PLUGIN_SERVER_HIGRESS_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$PLUGIN_SERVER_HIGRESS_COMMIT" "$RELEASE_COMMIT"
+          git show "$PLUGIN_SERVER_HIGRESS_COMMIT:$SNAPSHOT_PATH" > /tmp/plugin-server-source-snapshot.json
+          test "$(sha256sum /tmp/plugin-server-source-snapshot.json | awk '{print $1}')" = "$SNAPSHOT_SHA256"
+          cmp /tmp/plugin-server-source-snapshot.json "$SNAPSHOT_PATH"
+          (cd tools/plugin-release && go run . verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --committed-source "$PLUGIN_SERVER_HIGRESS_COMMIT" --oci-source public)
+
+          jq -cnS --arg gatewayVersion "$GATEWAY_VERSION" --arg releaseCommit "$RELEASE_COMMIT" --arg snapshotPath "$SNAPSHOT_PATH" --arg snapshotSha256 "$SNAPSHOT_SHA256" --argjson consoleReleaseId "$CONSOLE_RELEASE_ID" --arg consoleReleaseTag "$CONSOLE_RELEASE_TAG" --arg consoleReleaseCommit "$CONSOLE_RELEASE_COMMIT" --arg consoleChartOciRef "$CONSOLE_CHART_OCI_REF" --arg consoleChartDigest "$CONSOLE_CHART_DIGEST" --arg consoleHelmRepository "$CONSOLE_HELM_REPOSITORY" --arg consoleChartPackageSha256 "$CONSOLE_CHART_PACKAGE_SHA256" --argjson consoleProvenanceAssetId "$ASSET_ID" --arg consoleProvenanceAssetSha256 "$ASSET_SHA" --arg pluginServerCommit "$PLUGIN_SERVER_COMMIT" --arg pluginServerHigressCommit "$PLUGIN_SERVER_HIGRESS_COMMIT" --arg pluginServerImage "$PLUGIN_SERVER_IMAGE" '{schemaVersion:1,gatewayVersion:$gatewayVersion,releaseCommit:$releaseCommit,snapshotPath:$snapshotPath,snapshotSha256:$snapshotSha256,consoleReleaseId:$consoleReleaseId,consoleReleaseTag:$consoleReleaseTag,consoleReleaseCommit:$consoleReleaseCommit,consoleChartOciRef:$consoleChartOciRef,consoleChartDigest:$consoleChartDigest,consoleHelmRepository:$consoleHelmRepository,consoleChartPackageSha256:$consoleChartPackageSha256,consoleProvenanceAssetId:$consoleProvenanceAssetId,consoleProvenanceAssetSha256:$consoleProvenanceAssetSha256,pluginServerCommit:$pluginServerCommit,pluginServerHigressCommit:$pluginServerHigressCommit,pluginServerImage:$pluginServerImage}' >/tmp/release-evidence.json
+          jq -e 'type == "object" and .schemaVersion == 1 and (keys | sort == ["consoleChartDigest","consoleChartOciRef","consoleChartPackageSha256","consoleHelmRepository","consoleProvenanceAssetId","consoleProvenanceAssetSha256","consoleReleaseCommit","consoleReleaseId","consoleReleaseTag","gatewayVersion","pluginServerCommit","pluginServerHigressCommit","pluginServerImage","releaseCommit","schemaVersion","snapshotPath","snapshotSha256"])' /tmp/release-evidence.json >/dev/null
+          evidence_sha256=$(sha256sum /tmp/release-evidence.json | awk '{print $1}')
+          if [ "$DRY_RUN" = false ]; then test "$evidence_sha256" = "$APPROVED_EVIDENCE_SHA256"; fi
+          echo "Canonical release evidence SHA-256: $evidence_sha256" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"; cat /tmp/release-evidence.json >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "Pinned plugin-server source: $PLUGIN_SERVER_COMMIT" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pinned plugin-server digest: $PLUGIN_SERVER_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload canonical pre-tag evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: higress-release-readiness-${{ inputs.gateway_version }}
+          if-no-files-found: error
+          path: /tmp/release-evidence.json
+      - name: Confirm dry-run boundary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "Dry run: readiness was verified and no v${{ inputs.gateway_version }} tag was created." >> "$GITHUB_STEP_SUMMARY"
+      - name: Create immutable exact tag with release-manager App
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          set -euo pipefail
+          tag="v$GATEWAY_VERSION"
+          ref_error=/tmp/tag-ref-lookup.err
+          if tag_ref=$(gh api "repos/higress-group/higress/git/ref/tags/$tag" 2>"$ref_error"); then
+            object_type=$(jq -er .object.type <<<"$tag_ref")
+            object_sha=$(jq -er .object.sha <<<"$tag_ref")
+            if [ "$object_type" = tag ]; then
+              tag_object=$(gh api "repos/higress-group/higress/git/tags/$object_sha")
+              test "$(jq -er .object.type <<<"$tag_object")" = commit
+              existing=$(jq -er .object.sha <<<"$tag_object")
+            elif [ "$object_type" = commit ]; then
+              existing=$object_sha
+            else
+              echo "existing tag has unsupported object type: $object_type" >&2
+              exit 1
+            fi
+          elif grep -Eq 'HTTP 404' "$ref_error"; then
+            existing=""
+          else
+            cat "$ref_error" >&2
+            echo "GitHub tag lookup failed; refusing tag mutation" >&2
+            exit 1
+          fi
+          [[ -z "$existing" || "$existing" =~ ^[0-9a-f]{40}$ ]]
+          if [ -n "$existing" ] && [ "$existing" != "$RELEASE_COMMIT" ]; then echo "immutable tag conflict: $tag" >&2; exit 1; fi
+          git config user.name "higress-release-manager[bot]"
+          git config user.email "higress-release-manager[bot]@users.noreply.github.com"
+          if [ -z "$existing" ]; then git tag -a "$tag" "$RELEASE_COMMIT" -m "Higress $tag"; git push origin "refs/tags/$tag"; fi

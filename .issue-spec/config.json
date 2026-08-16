@@ -1,4 +1,6 @@
 {
   "hostname": "github.com",
-  "repo": "higress-group/higress"
+  "profile": "github",
+  "repo": "higress-group/higress",
+  "version": 1
 }

@@ -15,6 +15,7 @@
 package validator
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -150,6 +151,34 @@ func TestValidateConfig_InvalidConfig(t *testing.T) {
 
 	if result.Error == nil {
 		t.Errorf("Expected validation error, but got nil")
+	}
+}
+
+func TestValidateConfig_RejectsUnsupportedRESTInputSchemaSemantics(t *testing.T) {
+	configJSON := `{
+		"server":{"name":"test-rest-server"},
+		"tools":[{
+			"name":"test-tool",
+			"description":"A test tool",
+			"args":[{
+				"name":"items",
+				"description":"Items",
+				"type":"array",
+				"items":{"oneOf":[{"type":"string"},{"type":"integer"}]}
+			}],
+			"requestTemplate":{"url":"https://api.example.com/test","method":"POST"}
+		}]
+	}`
+
+	result, err := ValidateConfig(configJSON)
+	if err != nil {
+		t.Fatalf("ValidateConfig returned error: %v", err)
+	}
+	if result.IsValid || result.Error == nil {
+		t.Fatalf("unsupported schema unexpectedly accepted: %#v", result)
+	}
+	if !strings.Contains(result.Error.Error(), `unsupported schema keyword "oneOf"`) {
+		t.Fatalf("unexpected schema validation error: %v", result.Error)
 	}
 }
 

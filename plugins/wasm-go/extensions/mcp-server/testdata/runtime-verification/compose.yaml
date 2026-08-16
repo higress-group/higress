@@ -1,0 +1,62 @@
+services:
+  backend-primary:
+    image: docker.io/library/python:3.12-alpine
+    environment:
+      BACKEND_ORIGIN: primary
+    command: ["python", "/harness/backend.py"]
+    volumes:
+      - .:/harness:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  backend-secondary:
+    image: docker.io/library/python:3.12-alpine
+    environment:
+      BACKEND_ORIGIN: secondary
+    command: ["python", "/harness/backend.py"]
+    volumes:
+      - .:/harness:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  gateway:
+    image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:v2.2.3
+    entrypoint: ["/usr/local/bin/envoy"]
+    command: ["-c", "/evidence/envoy.yaml", "--log-level", "info"]
+    depends_on:
+      backend-primary:
+        condition: service_healthy
+      backend-secondary:
+        condition: service_healthy
+    volumes:
+      - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/evidence:ro
+      - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/runtime:ro
+
+  gateway-auto:
+    image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:v2.2.3
+    entrypoint: ["/usr/local/bin/envoy"]
+    command: ["-c", "/evidence/envoy-auto.yaml", "--log-level", "info"]
+    depends_on:
+      backend-primary:
+        condition: service_healthy
+    volumes:
+      - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/evidence:ro
+      - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/runtime:ro
+
+  verifier:
+    image: docker.io/library/python:3.12-alpine
+    depends_on:
+      - gateway
+    command: ["python", "/harness/verify.py"]
+    environment:
+      RUNTIME_EVIDENCE: /evidence
+    volumes:
+      - .:/harness:ro
+      - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/evidence
+    profiles: ["verify"]

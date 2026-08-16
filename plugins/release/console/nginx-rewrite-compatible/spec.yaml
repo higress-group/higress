@@ -1,0 +1,83 @@
+apiVersion: 1.0.0
+info:
+  gatewayMinVersion: "2.0.0"
+  type: oss
+  category: transform
+  name: nginx-rewrite-compatible
+  image: platform_wasm/nginx-rewrite-compatible
+  title: Nginx Rewrite Compatibility
+  x-title-i18n:
+    zh-CN: Nginx Rewrite 兼容
+  description: Reproduce common Nginx rewrite rules with regular expressions, capture variables, query handling, and break/last behavior.
+  x-description-i18n:
+    zh-CN: 通过正则、捕获变量、查询参数处理及 break/last 语义兼容常见 Nginx rewrite 规则。
+  readmeUrl: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/nginx-rewrite-compatible/README.md
+  x-readmeUrl-i18n:
+    en-US: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/nginx-rewrite-compatible/README_EN.md
+  version: 1.0.0
+  contact:
+    name: Higress Team
+    url: https://higress.io/
+    email: admin@higress.io
+spec:
+  phase: default
+  priority: 0
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        rules:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            properties:
+              regex:
+                type: string
+              replacement:
+                type: string
+              query_append:
+                type: string
+              query_template:
+                type: string
+              set_vars:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    capture_group:
+                      type: integer
+                      minimum: 0
+                  required:
+                    - name
+                    - capture_group
+              pass_to_upstream:
+                type: boolean
+                default: false
+              mode:
+                type: string
+                enum: [break, last]
+                default: last
+            required:
+              - regex
+              - replacement
+      required:
+        - rules
+      example:
+        rules:
+          - regex: ^/old/(.*)$
+            replacement: /new/$1
+            mode: last
+  routeConfigSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        rules:
+          type: array
+          minItems: 1
+          items:
+            type: object
+      required:
+        - rules

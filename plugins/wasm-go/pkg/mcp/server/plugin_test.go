@@ -15,12 +15,28 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
+	"slices"
 	"testing"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	wasmtest "github.com/higress-group/wasm-go/pkg/test"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestSupportedMCPVersionsRemainLegacyOnly(t *testing.T) {
+	want := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+	assert.Equal(t, want, SupportedMCPVersions)
+	assert.False(t, slices.Contains(SupportedMCPVersions, "2026-07-28"), "modern must not enter legacy initialize negotiation")
+	assert.False(t, slices.Contains(SupportedMCPVersions, "2025-11-25"), "deferred profile must not be advertised")
+}
 
 // -----------------------------------------------------------------------------
 // validateURL
@@ -173,6 +189,28 @@ func TestGlobalToolRegistry_RegisterTool_PlainToolHasNoOutputSchema(t *testing.T
 	assert.Nil(t, info.OutputSchema)
 }
 
+func TestGlobalToolRegistry_RegisterTool_CapturesLegacyOnlyCompatibility(t *testing.T) {
+	r := &GlobalToolRegistry{}
+	r.Initialize()
+	r.RegisterTool("rest", "legacy", &RestMCPTool{
+		name: "legacy",
+		toolConfig: RestTool{
+			Name:        "legacy",
+			Description: "legacy",
+			LegacyOnly:  true,
+			Args: []RestToolArg{{
+				Name:  "value",
+				Type:  "array",
+				Items: map[string]any{"oneOf": []any{}},
+			}},
+		},
+	})
+
+	info, ok := r.GetToolInfo("rest", "legacy")
+	require.True(t, ok)
+	assert.True(t, info.LegacyOnly)
+}
+
 func TestGlobalToolRegistry_GetToolInfo_Misses(t *testing.T) {
 	r := &GlobalToolRegistry{}
 	r.Initialize()
@@ -272,6 +310,27 @@ func TestSetupMcpProxyServer_InvalidTransport(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid transport value")
 }
 
+func TestSetupMcpProxyServer_InvalidProtocolStrategy(t *testing.T) {
+	j := mustGJSON(t, `{"transport":"http","protocolStrategy":"auto","mcpServerURL":"http://b"}`)
+	_, err := setupMcpProxyServer("s", j, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "protocolStrategy")
+}
+
+func TestSetupMcpProxyServer_ModernRequiresHTTP(t *testing.T) {
+	j := mustGJSON(t, `{"transport":"sse","protocolStrategy":"modern","mcpServerURL":"http://b"}`)
+	_, err := setupMcpProxyServer("s", j, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires transport 'http'")
+}
+
+func TestSetupMcpProxyServer_AbsentProtocolStrategyDefaultsLegacy(t *testing.T) {
+	j := mustGJSON(t, `{"transport":"http","mcpServerURL":"http://b"}`)
+	srv, err := setupMcpProxyServer("s", j, "")
+	require.NoError(t, err)
+	assert.Equal(t, ProtocolStrategyLegacy, srv.GetProtocolStrategy())
+}
+
 func TestSetupMcpProxyServer_MissingMcpServerURL(t *testing.T) {
 	j := mustGJSON(t, `{"transport":"http"}`)
 	_, err := setupMcpProxyServer("s", j, "")
@@ -322,6 +381,7 @@ func TestSetupMcpProxyServer_BadDefaultUpstreamSecurity(t *testing.T) {
 func TestSetupMcpProxyServer_HappyPath_AppliesAllFields(t *testing.T) {
 	raw := `{
 		"transport":"sse",
+		"protocolStrategy":"legacy",
 		"mcpServerURL":"https://backend.example/mcp",
 		"timeout":7777,
 		"passthroughAuthHeader":true,
@@ -337,6 +397,7 @@ func TestSetupMcpProxyServer_HappyPath_AppliesAllFields(t *testing.T) {
 
 	assert.Equal(t, "alpha", srv.Name)
 	assert.Equal(t, TransportSSE, srv.GetTransport())
+	assert.Equal(t, ProtocolStrategyLegacy, srv.GetProtocolStrategy())
 	assert.Equal(t, "https://backend.example/mcp", srv.GetMcpServerURL())
 	assert.Equal(t, 7777, srv.GetTimeout())
 	assert.True(t, srv.GetPassthroughAuthHeader())
@@ -430,6 +491,75 @@ func TestParseConfigCore_McpProxy_HappyPath_NoTools(t *testing.T) {
 	assert.NotNil(t, c.methodHandlers["initialize"])
 	assert.NotNil(t, c.methodHandlers["tools/list"])
 	assert.NotNil(t, c.methodHandlers["tools/call"])
+}
+
+func TestParseConfigCore_ServerVersion(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "defaults when missing",
+			raw: `{
+				"server":{
+					"name":"p",
+					"type":"mcp-proxy",
+					"transport":"http",
+					"mcpServerURL":"http://b"
+				}
+			}`,
+			want: DefaultServerVersion,
+		},
+		{
+			name: "uses configured server version",
+			raw: `{
+				"server":{
+					"name":"p",
+					"version":"2.3.4",
+					"type":"mcp-proxy",
+					"transport":"http",
+					"mcpServerURL":"http://b"
+				}
+			}`,
+			want: "2.3.4",
+		},
+		{
+			name: "trims configured server version",
+			raw: `{
+				"server":{
+					"name":"p",
+					"version":" 2.3.4 ",
+					"type":"mcp-proxy",
+					"transport":"http",
+					"mcpServerURL":"http://b"
+				}
+			}`,
+			want: "2.3.4",
+		},
+		{
+			name: "blank configured server version falls back to default",
+			raw: `{
+				"server":{
+					"name":"p",
+					"version":" ",
+					"type":"mcp-proxy",
+					"transport":"http",
+					"mcpServerURL":"http://b"
+				}
+			}`,
+			want: DefaultServerVersion,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &McpServerConfig{}
+			err := ParseConfigCore(gjson.Parse(tt.raw), c, newValidationOpts())
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, c.GetServerVersion())
+		})
+	}
 }
 
 func TestParseConfigCore_McpProxy_BadProxyToolJson(t *testing.T) {
@@ -568,6 +698,25 @@ func TestParseConfigCore_ToolSet_HappyPath(t *testing.T) {
 	require.NotNil(t, c.server)
 }
 
+func TestParseConfigCore_ToolSetVersion(t *testing.T) {
+	opts := newValidationOpts()
+	opts.ToolRegistry.RegisterTool("alpha", "search", &stubTool{
+		desc:  "alpha search",
+		input: map[string]any{"type": "object"},
+	})
+
+	c := &McpServerConfig{}
+	err := ParseConfigCore(gjson.Parse(`{
+		"toolSet":{
+			"name":"compound",
+			"version":"3.0.1",
+			"serverTools":[{"serverName":"alpha","tools":["search"]}]
+		}
+	}`), c, opts)
+	require.NoError(t, err)
+	assert.Equal(t, "3.0.1", c.GetServerVersion())
+}
+
 // -----------------------------------------------------------------------------
 // GetServerFromGlobalContext — exercises the package-level singleton
 // -----------------------------------------------------------------------------
@@ -617,4 +766,237 @@ func TestBaseMCPServer_CloneBase_DeepCopiesTools(t *testing.T) {
 	got, ok := cloned.GetMCPTools()["a"]
 	require.True(t, ok)
 	assert.Same(t, stub, got, "existing tools are shared by reference (no deep clone of Tool itself)")
+}
+
+func TestModernMethodPolicyEnablesMCPProxyHandlers(t *testing.T) {
+	handler := func(_ wrapper.HttpContext, _ utils.JsonRpcID, _ gjson.Result) error { return nil }
+	proxyConfig := McpServerConfig{
+		server:         NewMcpProxyServer("proxy"),
+		methodHandlers: utils.MethodHandlers{"tools/call": handler},
+	}
+	assert.True(t, modernMethodPolicy(proxyConfig, "tools/call").Available,
+		"proxy handlers implement explicit modern and legacy upstream bridging")
+
+	regularConfig := McpServerConfig{
+		server:         &stubServer{},
+		methodHandlers: utils.MethodHandlers{"tools/call": handler},
+	}
+	assert.True(t, modernMethodPolicy(regularConfig, "tools/call").Available)
+
+	composedConfig := McpServerConfig{
+		server:         &stubServer{},
+		isComposed:     true,
+		methodHandlers: utils.MethodHandlers{"tools/call": handler},
+	}
+	assert.False(t, modernMethodPolicy(composedConfig, "tools/call").Available,
+		"modern requests must not enter the legacy composed tools/call handler")
+}
+
+func TestProductionEntryModernBoundary(t *testing.T) {
+	savedGlobalContext := globalContext
+	globalContext = Context{servers: make(map[string]Server)}
+	Initialize()
+	t.Cleanup(func() { globalContext = savedGlobalContext })
+
+	newHost := func(t *testing.T) wasmtest.TestHost {
+		t.Helper()
+		host, status := wasmtest.NewTestHost(json.RawMessage(`{
+			"toolSet": {
+				"name": "compound",
+				"serverTools": []
+			}
+		}`))
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+		t.Cleanup(host.Reset)
+		return host
+	}
+	commonHeaders := func() [][2]string {
+		return [][2]string{
+			{":authority", "mcp.example.com"},
+			{":method", "POST"},
+			{":path", "/mcp"},
+			{"content-type", "application/json"},
+			{"accept", "application/json, text/event-stream"},
+		}
+	}
+
+	t.Run("origin rejection precedes version disclosure", func(t *testing.T) {
+		host := newHost(t)
+		headers := append(commonHeaders(),
+			[2]string{"origin", "https://evil.example"},
+			[2]string{protocol.HeaderProtocolVersion, "2025-11-25"},
+			[2]string{protocol.HeaderMethod, "tools/list"},
+		)
+		action := host.CallOnHttpRequestHeaders(headers)
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		assert.Equal(t, uint32(403), response.StatusCode)
+		assert.Equal(t, int64(protocol.CodeInvalidRequest), gjson.GetBytes(response.Data, "error.code").Int())
+	})
+
+	t.Run("large legacy marker string remains legacy", func(t *testing.T) {
+		host := newHost(t)
+		action := host.CallOnHttpRequestHeaders(commonHeaders())
+		require.Equal(t, types.ActionPause, action)
+
+		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"note":"` + protocol.MetaProtocolVersion + `"},"padding":"`)
+		body = append(body, bytes.Repeat([]byte("x"), int(protocol.ModernMaxBodyBytes)+128)...)
+		body = append(body, []byte(`"}`)...)
+		action = host.CallOnHttpRequestBody(body)
+		require.Equal(t, types.ActionContinue, action)
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		assert.Equal(t, uint32(200), response.StatusCode)
+		assert.True(t, gjson.GetBytes(response.Data, "result.tools").Exists())
+		assert.False(t, gjson.GetBytes(response.Data, "error").Exists())
+	})
+
+	t.Run("headerless modern trailing value never dispatches legacy", func(t *testing.T) {
+		host := newHost(t)
+		action := host.CallOnHttpRequestHeaders(commonHeaders())
+		require.Equal(t, types.ActionPause, action)
+
+		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"` + protocol.MetaProtocolVersion + `":"2026-07-28","` + protocol.MetaClientCapabilities + `":{}}}}{}`)
+		action = host.CallOnHttpRequestBody(body)
+		require.Equal(t, types.ActionContinue, action)
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		assert.Equal(t, uint32(400), response.StatusCode)
+		assert.Equal(t, int64(protocol.CodeHeaderMismatch), gjson.GetBytes(response.Data, "error.code").Int())
+		assert.False(t, gjson.GetBytes(response.Data, "result").Exists())
+	})
+
+	t.Run("invalid literal before modern marker never dispatches legacy", func(t *testing.T) {
+		host := newHost(t)
+		action := host.CallOnHttpRequestHeaders(commonHeaders())
+		require.Equal(t, types.ActionPause, action)
+
+		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","junk":truX,"params":{"_meta":{"` + protocol.MetaProtocolVersion + `":"2026-07-28"}}}`)
+		action = host.CallOnHttpRequestBody(body)
+		require.Equal(t, types.ActionContinue, action)
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		assert.Equal(t, uint32(400), response.StatusCode)
+		assert.Equal(t, int64(protocol.CodeParseError), gjson.GetBytes(response.Data, "error.code").Int())
+		assert.Equal(t, "null", gjson.GetBytes(response.Data, "id").Raw)
+		assert.False(t, gjson.GetBytes(response.Data, "result").Exists())
+	})
+
+	t.Run("late direct modern metadata is rejected at modern limit", func(t *testing.T) {
+		host := newHost(t)
+		action := host.CallOnHttpRequestHeaders(commonHeaders())
+		require.Equal(t, types.ActionPause, action)
+
+		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"padding":"`)
+		body = append(body, bytes.Repeat([]byte("x"), int(protocol.ModernMaxBodyBytes)+128)...)
+		body = append(body, []byte(`","_meta":{"`+protocol.MetaProtocolVersion+`":"2026-07-28","`+protocol.MetaClientCapabilities+`":{},"`+protocol.MetaClientInfo+`":{"name":"test","version":"1.0.0"}}}}`)...)
+		action = host.CallOnHttpRequestBody(body)
+		require.Equal(t, types.ActionContinue, action)
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		assert.Equal(t, uint32(413), response.StatusCode)
+		assert.Equal(t, int64(protocol.CodeInvalidRequest), gjson.GetBytes(response.Data, "error.code").Int())
+	})
+
+	t.Run("composed tools call uses modern unavailable mapping", func(t *testing.T) {
+		host := newHost(t)
+		headers := append(commonHeaders(),
+			[2]string{protocol.HeaderProtocolVersion, string(protocol.Version20260728)},
+			[2]string{protocol.HeaderMethod, "tools/call"},
+			[2]string{protocol.HeaderName, "echo"},
+		)
+		action := host.CallOnHttpRequestHeaders(headers)
+		require.Equal(t, types.ActionPause, action)
+
+		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{},"_meta":{"` + protocol.MetaProtocolVersion + `":"2026-07-28","` + protocol.MetaClientCapabilities + `":{},"` + protocol.MetaClientInfo + `":{"name":"test","version":"1.0.0"}}}}`)
+		action = host.CallOnHttpRequestBody(body)
+		require.Equal(t, types.ActionContinue, action)
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		assert.Equal(t, uint32(404), response.StatusCode)
+		assert.Equal(t, int64(protocol.CodeMethodNotFound), gjson.GetBytes(response.Data, "error.code").Int())
+	})
+}
+
+type protocolTestHTTPContext struct {
+	wrapper.HttpContext
+	values map[string]any
+}
+
+func (c *protocolTestHTTPContext) SetContext(key string, value any) {
+	if c.values == nil {
+		c.values = make(map[string]any)
+	}
+	c.values[key] = value
+}
+
+func (c *protocolTestHTTPContext) GetContext(key string) any {
+	return c.values[key]
+}
+
+type pendingCancellableTool struct {
+	pending     bool
+	cancelCalls int
+}
+
+func (t *pendingCancellableTool) Create(_ []byte) Tool { return t }
+func (t *pendingCancellableTool) Description() string  { return "pending" }
+func (t *pendingCancellableTool) InputSchema() map[string]any {
+	return map[string]any{"type": "object"}
+}
+func (t *pendingCancellableTool) Call(_ HttpContext, _ Server) error { t.pending = true; return nil }
+func (t *pendingCancellableTool) Cancel() {
+	if t.pending {
+		t.pending = false
+		t.cancelCalls++
+	}
+}
+
+func TestModernDisconnectCancelsPendingToolOnce(t *testing.T) {
+	transport := protocol.Transport{
+		Method:          "POST",
+		Authority:       "mcp.example.com",
+		ContentType:     "application/json",
+		Accept:          "application/json, text/event-stream",
+		ProtocolVersion: string(protocol.Version20260728),
+		MCPMethod:       "tools/call",
+		MCPName:         "slow",
+	}
+	body := []byte(`{
+		"jsonrpc":"2.0",
+		"id":1,
+		"method":"tools/call",
+		"params":{
+			"name":"slow",
+			"arguments":{},
+			"_meta":{
+				"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+				"io.modelcontextprotocol/clientCapabilities":{}
+			}
+		}
+	}`)
+	request, protocolError := protocol.PrepareRequest(transport, body, func(method string) bool {
+		return method == "tools/call"
+	})
+	require.Nil(t, protocolError)
+	require.NotNil(t, request)
+
+	ctx := &protocolTestHTTPContext{values: map[string]any{consts.CtxProtocolRequest: request}}
+	tool := &pendingCancellableTool{}
+	unregister := bindModernToolCancellation(ctx, tool)
+	require.NoError(t, tool.Call(ctx, &stubServer{}))
+	require.True(t, tool.pending)
+
+	onHttpStreamDone(ctx, McpServerConfig{})
+	onHttpStreamDone(ctx, McpServerConfig{})
+	unregister()
+
+	assert.False(t, tool.pending)
+	assert.Equal(t, 1, tool.cancelCalls, "disconnect cleanup must run exactly once")
+	select {
+	case <-request.Cancellation.Done():
+	default:
+		t.Fatal("modern request cancellation channel was not closed")
+	}
 }

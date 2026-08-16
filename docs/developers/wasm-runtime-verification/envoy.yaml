@@ -1,0 +1,72 @@
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
+
+static_resources:
+  listeners:
+    - name: verification_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 10000
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        text_format_source:
+                          inline_string: "RID=%REQ(X-REQUEST-ID)% ITER=%REQ(X-VERIFICATION-ITERATION)% METHOD=%REQ(:METHOD)% PATH=%REQ(:PATH)% CODE=%RESPONSE_CODE% FLAGS=%RESPONSE_FLAGS% UPSTREAM=%UPSTREAM_HOST% RECEIVED=%BYTES_RECEIVED% SENT=%BYTES_SENT% DURATION_MS=%DURATION%\n"
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: httpbin
+                      domains:
+                        - "*"
+                      routes:
+                        - match:
+                            prefix: /
+                          route:
+                            cluster: httpbin
+                http_filters:
+                  - name: envoy.filters.http.wasm
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+                      config:
+                        name: local-verification-plugin
+                        root_id: local-verification-plugin
+                        configuration:
+                          "@type": type.googleapis.com/google.protobuf.StringValue
+                          value: "{}"
+                        vm_config:
+                          vm_id: local-verification-plugin
+                          runtime: envoy.wasm.runtime.v8
+                          code:
+                            local:
+                              filename: /etc/envoy/main.wasm
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: httpbin
+      connect_timeout: 5s
+      type: STRICT_DNS
+      dns_lookup_family: V4_ONLY
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: httpbin
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: httpbin
+                      port_value: 8080

@@ -1,0 +1,31 @@
+global:
+  local: true
+  volumeWasmPlugins: true
+  onlyPushRouteCluster: false
+  enableStatus: false
+
+higress-core:
+  gateway:
+    replicas: 1
+    service:
+      type: ClusterIP
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+  controller:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+higress-console:
+  service:
+    type: ClusterIP

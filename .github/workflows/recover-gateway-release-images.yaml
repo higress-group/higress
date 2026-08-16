@@ -1,0 +1,192 @@
+name: Recover Verified Gateway Release Image Aliases
+
+on:
+  workflow_dispatch:
+    inputs:
+      gateway_version:
+        description: "Stable Higress version whose verified staging indexes already exist"
+        required: true
+        type: string
+      release_commit:
+        description: "Exact commit targeted by the published annotated release tag"
+        required: true
+        type: string
+      snapshot_sha256:
+        description: "SHA-256 of the committed plugin snapshot"
+        required: true
+        type: string
+      dry_run:
+        description: "Verify all staging indexes without creating missing aliases"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recover-gateway-release-images-${{ inputs.gateway_version }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      short_commit: ${{ steps.release.outputs.short_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/v${{ inputs.gateway_version }}
+          fetch-depth: 0
+      - name: Resolve exact published release and snapshot
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$GATEWAY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SNAPSHOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          tag="v$GATEWAY_VERSION"
+          release=$(gh api "repos/higress-group/higress/releases/tags/$tag")
+          test "$(jq -er .tag_name <<<"$release")" = "$tag"
+          test "$(jq -r .draft <<<"$release")" = false
+          test "$(jq -r .prerelease <<<"$release")" = false
+          tag_ref=$(gh api "repos/higress-group/higress/git/ref/tags/$tag")
+          tag_type=$(jq -er .object.type <<<"$tag_ref"); tag_object=$(jq -er .object.sha <<<"$tag_ref")
+          if [ "$tag_type" = tag ]; then
+            resolved=$(gh api "repos/higress-group/higress/git/tags/$tag_object" --jq .object.sha)
+          else
+            test "$tag_type" = commit
+            resolved=$tag_object
+          fi
+          test "$resolved" = "$RELEASE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          snapshot="plugins/release/snapshots/$GATEWAY_VERSION.json"
+          test -f "$snapshot"
+          test "$(jq -er .gatewayVersion "$snapshot")" = "$GATEWAY_VERSION"
+          test "$(sha256sum "$snapshot" | awk '{print $1}')" = "$SNAPSHOT_SHA256"
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "short_commit=${RELEASE_COMMIT:0:7}" >>"$GITHUB_OUTPUT"
+
+  recover:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: controller
+            environment: image-registry-controller
+            image_name: higress/higress
+            compat_image_name: ""
+          - component: pilot
+            environment: image-registry-pilot
+            image_name: higress/pilot
+            compat_image_name: ""
+          - component: gateway
+            environment: image-registry-gateway
+            image_name: higress/gateway
+            compat_image_name: higress/proxyv2
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ matrix.environment }}
+    steps:
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
+      - name: Login to production registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ vars.IMAGE_REGISTRY || 'higress-registry.cn-hangzhou.cr.aliyuncs.com' }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Verify staging index and recover missing aliases
+        env:
+          IMAGE_REGISTRY: ${{ vars.IMAGE_REGISTRY || 'higress-registry.cn-hangzhou.cr.aliyuncs.com' }}
+          IMAGE_NAME: ${{ matrix.image_name }}
+          COMPAT_IMAGE_NAME: ${{ matrix.compat_image_name }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
+          SHORT_COMMIT: ${{ needs.preflight.outputs.short_commit }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          repo="$IMAGE_REGISTRY/$IMAGE_NAME"
+          staging="$repo:release-provenance-$RELEASE_COMMIT"
+          docker buildx imagetools inspect "$staging" --raw >/tmp/staging-index.json
+          jq -e --arg commit "$RELEASE_COMMIT" --arg snapshot "$SNAPSHOT_SHA256" --arg version "$GATEWAY_VERSION" '
+            .annotations["org.opencontainers.image.revision"] == $commit and
+            .annotations["io.higress.higress-source-commit"] == $commit and
+            .annotations["io.higress.plugin-snapshot-sha256"] == $snapshot and
+            .annotations["io.higress.gateway-version"] == $version and
+            (.manifests | length == 2) and
+            ([.manifests[] | .platform.os + "/" + .platform.architecture] | sort == ["linux/amd64","linux/arm64"]) and
+            all(.manifests[];
+              .annotations["org.opencontainers.image.revision"] == $commit and
+              .annotations["io.higress.higress-source-commit"] == $commit and
+              .annotations["io.higress.plugin-snapshot-sha256"] == $snapshot and
+              .annotations["io.higress.gateway-version"] == $version)
+          ' /tmp/staging-index.json >/dev/null
+          desired=$(docker buildx imagetools inspect "$staging" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          [[ "$desired" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          # BEGIN gateway-recovery-descriptor-contract
+          descriptor_or_absent() {
+            local ref=$1 out err classified_error
+            err=$(mktemp)
+            if out=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' 2>"$err"); then
+              rm -f "$err"; printf '%s' "$out" | tr -d '"'; return 0
+            fi
+            classified_error=$(<"$err")
+            classified_error=${classified_error//"$ref"/}
+            if grep -Eiq 'unauthorized|forbidden|denied|authentication required|authorization required|HTTP[^[:digit:]]*(401|403)|response status( code)?[^[:digit:]]*(401|403)|status code[^[:digit:]]*(401|403)' <<<"$classified_error"; then
+              cat "$err" >&2; rm -f "$err"; echo "release alias lookup was refused: $ref" >&2; return 2
+            fi
+            if grep -Eiq 'HTTP[^[:digit:]]*404|response status( code)?[^[:digit:]]*404|status code[^[:digit:]]*404|404 Not Found|manifest unknown|name unknown|repository does not exist' <<<"$classified_error" || grep -Fqx "ERROR: $ref: not found" "$err"; then
+              rm -f "$err"; return 1
+            fi
+            cat "$err" >&2; rm -f "$err"; echo "release alias lookup failed; refusing mutation: $ref" >&2; return 2
+          }
+          # END gateway-recovery-descriptor-contract
+
+          for alias in "$GATEWAY_VERSION" "v$GATEWAY_VERSION" "sha-$SHORT_COMMIT"; do
+            target="$repo:$alias"
+            if existing=$(descriptor_or_absent "$target"); then
+              test "$existing" = "$desired" || { echo "immutable release alias conflict: $target" >&2; exit 1; }
+              echo "Verified existing $target@$existing" >>"$GITHUB_STEP_SUMMARY"
+              continue
+            else
+              status=$?
+              test "$status" = 1 || exit "$status"
+            fi
+            if [ "$DRY_RUN" = true ]; then
+              echo "Dry run: would create $target@$desired" >>"$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            docker buildx imagetools create --tag "$target" "$staging@$desired"
+            test "$(descriptor_or_absent "$target")" = "$desired"
+            echo "Created $target@$desired" >>"$GITHUB_STEP_SUMMARY"
+          done
+
+          # BEGIN gateway-proxyv2-recovery-contract
+          if [ -n "$COMPAT_IMAGE_NAME" ]; then
+            compat_target="$IMAGE_REGISTRY/$COMPAT_IMAGE_NAME:$GATEWAY_VERSION"
+            if existing=$(descriptor_or_absent "$compat_target"); then
+              test "$existing" = "$desired" || { echo "immutable proxyv2 compatibility tag conflict: $compat_target" >&2; exit 1; }
+              echo "Verified existing $compat_target@$existing" >>"$GITHUB_STEP_SUMMARY"
+            else
+              status=$?
+              test "$status" = 1 || exit "$status"
+              if [ "$DRY_RUN" = true ]; then
+                echo "Dry run: would create $compat_target@$desired" >>"$GITHUB_STEP_SUMMARY"
+              else
+                docker buildx imagetools create --tag "$compat_target" "$staging@$desired"
+                test "$(descriptor_or_absent "$compat_target")" = "$desired"
+                echo "Created $compat_target@$desired" >>"$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+          fi
+          # END gateway-proxyv2-recovery-contract

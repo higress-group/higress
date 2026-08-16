@@ -1,0 +1,23 @@
+GatewayAPIInferenceExtensionVersion: v1.4.0
+apiVersion: gateway.networking.k8s.io/v1
+date: "2026-08-14T17:27:49+08:00"
+gatewayAPIChannel: standard
+gatewayAPIVersion: v1.5.0
+implementation:
+  contact:
+  - '@higress-group/maintainers'
+  organization: higress-group
+  project: higress
+  url: https://github.com/higress-group/higress
+  version: v2.2.4
+kind: ConformanceReport
+mode: default
+profiles:
+- core:
+    result: success
+    statistics:
+      Failed: 0
+      Passed: 12
+      Skipped: 0
+  name: Gateway
+  summary: Core tests succeeded.

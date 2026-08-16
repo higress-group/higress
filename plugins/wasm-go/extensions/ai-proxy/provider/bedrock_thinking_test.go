@@ -389,7 +389,7 @@ func TestBedrockRequestPreservesClaudeNativeThinkingBudget(t *testing.T) {
 	assert.Equal(t, float64(8192), request.AdditionalModelRequestFields["thinking"].(map[string]interface{})["budget_tokens"])
 }
 
-func TestBedrockRequestMapsAdaptiveOutputEffortIntoThinking(t *testing.T) {
+func TestBedrockRequestMapsAdaptiveEffortIntoOutputConfig(t *testing.T) {
 	provider := &bedrockProvider{}
 	openaiBody, err := (&ClaudeToOpenAIConverter{}).ConvertClaudeRequestToOpenAI([]byte(`{
 		"model":"claude",
@@ -408,8 +408,10 @@ func TestBedrockRequestMapsAdaptiveOutputEffortIntoThinking(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &request))
 	thinking := request.AdditionalModelRequestFields["thinking"].(map[string]interface{})
 	assert.Equal(t, "adaptive", thinking["type"])
-	assert.Equal(t, "high", thinking["effort"])
-	assert.NotContains(t, request.AdditionalModelRequestFields, "output_config")
+	assert.NotContains(t, thinking, "effort")
+	require.Contains(t, request.AdditionalModelRequestFields, "output_config")
+	outputConfig := request.AdditionalModelRequestFields["output_config"].(map[string]interface{})
+	assert.Equal(t, "high", outputConfig["effort"])
 	assert.NotContains(t, request.AdditionalModelRequestFields, "anthropic_beta")
 }
 

@@ -26,6 +26,7 @@ import (
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/schema/gvk"
 	"istio.io/istio/pkg/config/xds"
+	corev1 "k8s.io/api/core/v1"
 	ingress "k8s.io/api/networking/v1"
 	ingressv1beta1 "k8s.io/api/networking/v1beta1"
 
@@ -992,6 +993,82 @@ func TestConvertGatewaysForIngress(t *testing.T) {
 	}
 }
 
+func TestConvertDestinationRuleForMcpBridgeMixedDestinationProtocols(t *testing.T) {
+	fake := kube.NewFakeClient()
+	baseOptions := common.Options{
+		Enable:           true,
+		ClusterId:        "gw-123-istio",
+		RawClusterId:     "gw-123-istio__",
+		GatewayHttpPort:  80,
+		GatewayHttpsPort: 443,
+	}
+
+	testCases := []struct {
+		name       string
+		clusterID  cluster.ID
+		controller common.IngressController
+		wrapper    func(cluster.ID, bool) common.WrapperConfig
+	}{
+		{
+			name:      "ingress v1beta1",
+			clusterID: "ingress-v1beta1",
+			controller: controllerv1beta1.NewController(fake, fake, common.Options{
+				Enable:           true,
+				ClusterId:        "ingress-v1beta1",
+				RawClusterId:     "ingress-v1beta1__",
+				GatewayHttpPort:  80,
+				GatewayHttpsPort: 443,
+			}, nil),
+			wrapper: mcpBridgeIngressV1beta1Wrapper,
+		},
+		{
+			name:      "ingress v1",
+			clusterID: "ingress-v1",
+			controller: controllerv1.NewController(fake, fake, common.Options{
+				Enable:           true,
+				ClusterId:        "ingress-v1",
+				RawClusterId:     "ingress-v1__",
+				GatewayHttpPort:  80,
+				GatewayHttpsPort: 443,
+			}, nil),
+			wrapper: mcpBridgeIngressV1Wrapper,
+		},
+	}
+
+	for _, testCase := range testCases {
+		for _, destinationMode := range []struct {
+			name      string
+			withPorts bool
+			ports     [3]uint32
+		}{
+			{name: "port level", withPorts: true, ports: [3]uint32{80, 443, 8443}},
+			{name: "service level"},
+		} {
+			t.Run(testCase.name+"/"+destinationMode.name, func(t *testing.T) {
+				m := NewIngressConfig(fake, nil, "wakanda", baseOptions)
+				m.remoteIngressControllers = map[cluster.ID]common.IngressController{
+					testCase.clusterID: testCase.controller,
+				}
+
+				wrapper := testCase.wrapper(testCase.clusterID, destinationMode.withPorts)
+				result := m.convertDestinationRule([]common.WrapperConfig{wrapper})
+				target := map[string]*networking.DestinationRule{}
+				for _, item := range result {
+					target[item.Spec.(*networking.DestinationRule).Host] = item.Spec.(*networking.DestinationRule)
+				}
+				if len(target) != 3 {
+					t.Fatalf("destination rule count mismatch, want 3, got %d", len(target))
+				}
+
+				assertDestinationRuleTLSMode(t, target, "plain.example.internal", destinationMode.ports[0], nil)
+				httpsMode := networking.ClientTLSSettings_SIMPLE
+				assertDestinationRuleTLSMode(t, target, "secure.example.internal", destinationMode.ports[1], &httpsMode)
+				assertDestinationRuleTLSMode(t, target, "noscheme.example.internal", destinationMode.ports[2], &httpsMode)
+			})
+		}
+	}
+}
+
 func TestConstructBasicAuthEnvoyFilter(t *testing.T) {
 	rules := &common.BasicAuthRules{
 		Rules: []*common.Rule{
@@ -1058,4 +1135,167 @@ func ingressV1Wrapper(name, host, path string, sslPassthrough bool) common.Wrapp
 		wrapper.AnnotationsConfig.SSLPassthrough = &annotations.SSLPassthroughConfig{Enabled: true}
 	}
 	return wrapper
+}
+
+func mcpBridgeIngressV1Wrapper(clusterID cluster.ID, withPorts bool) common.WrapperConfig {
+	apiGroup := "networking.higress.io"
+	return common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "wakanda",
+				Name:      "mcp-bridge-v1",
+				Annotations: map[string]string{
+					common.ClusterIdAnnotation: clusterID.String(),
+				},
+			},
+			Spec: ingress.IngressSpec{
+				Rules: []ingress.IngressRule{
+					{
+						Host: "example.com",
+						IngressRuleValue: ingress.IngressRuleValue{
+							HTTP: &ingress.HTTPIngressRuleValue{
+								Paths: []ingress.HTTPIngressPath{
+									{
+										Path: "/",
+										Backend: ingress.IngressBackend{
+											Resource: &corev1.TypedLocalObjectReference{
+												APIGroup: &apiGroup,
+												Kind:     "McpBridge",
+												Name:     "default",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		AnnotationsConfig: mcpBridgeIngressAnnotations(withPorts),
+	}
+}
+
+func mcpBridgeIngressV1beta1Wrapper(clusterID cluster.ID, withPorts bool) common.WrapperConfig {
+	apiGroup := "networking.higress.io"
+	return common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "wakanda",
+				Name:      "mcp-bridge-v1beta1",
+				Annotations: map[string]string{
+					common.ClusterIdAnnotation: clusterID.String(),
+				},
+			},
+			Spec: ingressv1beta1.IngressSpec{
+				Rules: []ingressv1beta1.IngressRule{
+					{
+						Host: "example.com",
+						IngressRuleValue: ingressv1beta1.IngressRuleValue{
+							HTTP: &ingressv1beta1.HTTPIngressRuleValue{
+								Paths: []ingressv1beta1.HTTPIngressPath{
+									{
+										Path: "/",
+										Backend: ingressv1beta1.IngressBackend{
+											Resource: &corev1.TypedLocalObjectReference{
+												APIGroup: &apiGroup,
+												Kind:     "McpBridge",
+												Name:     "default",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		AnnotationsConfig: mcpBridgeIngressAnnotations(withPorts),
+	}
+}
+
+func mcpBridgeIngressAnnotations(withPorts bool) *annotations.Ingress {
+	ports := [3]uint32{}
+	protocols := map[string]string{
+		"plain.example.internal:0":  "HTTP",
+		"secure.example.internal:0": "HTTPS",
+	}
+	if withPorts {
+		ports = [3]uint32{80, 443, 8443}
+		protocols = map[string]string{
+			"plain.example.internal:80":   "HTTP",
+			"secure.example.internal:443": "HTTPS",
+		}
+	}
+
+	return &annotations.Ingress{
+		Destination: &annotations.DestinationConfig{
+			McpDestination: []*networking.HTTPRouteDestination{
+				{
+					Destination: mcpDestination("plain.example.internal", ports[0]),
+					Weight:      34,
+				},
+				{
+					Destination: mcpDestination("secure.example.internal", ports[1]),
+					Weight:      33,
+				},
+				{
+					Destination: mcpDestination("noscheme.example.internal", ports[2]),
+					Weight:      33,
+				},
+			},
+			WeightSum: 100,
+			Protocols: protocols,
+		},
+		UpstreamTLS: &annotations.UpstreamTLSConfig{BackendProtocol: "HTTPS"},
+	}
+}
+
+func mcpDestination(host string, port uint32) *networking.Destination {
+	destination := &networking.Destination{Host: host}
+	if port != 0 {
+		destination.Port = &networking.PortSelector{Number: port}
+	}
+	return destination
+}
+
+func assertDestinationRuleTLSMode(t *testing.T, rules map[string]*networking.DestinationRule, host string, port uint32, want *networking.ClientTLSSettings_TLSmode) {
+	t.Helper()
+
+	rule := rules[host]
+	if rule == nil {
+		t.Fatalf("missing destination rule for %s", host)
+	}
+	var tls *networking.ClientTLSSettings
+	if port == 0 {
+		if len(rule.TrafficPolicy.GetPortLevelSettings()) != 0 {
+			t.Fatalf("%s unexpectedly generated port-level settings", host)
+		}
+		tls = rule.TrafficPolicy.GetTls()
+	} else {
+		if len(rule.TrafficPolicy.GetPortLevelSettings()) != 1 {
+			t.Fatalf("%s port settings count mismatch, want 1, got %d", host, len(rule.TrafficPolicy.GetPortLevelSettings()))
+		}
+
+		portPolicy := rule.TrafficPolicy.GetPortLevelSettings()[0]
+		if got := portPolicy.Port.GetNumber(); got != port {
+			t.Fatalf("%s port mismatch, want %d, got %d", host, port, got)
+		}
+		tls = portPolicy.GetTls()
+	}
+
+	if want == nil {
+		if tls != nil {
+			t.Fatalf("%s unexpectedly enabled tls: %+v", host, tls)
+		}
+		return
+	}
+
+	if tls == nil {
+		t.Fatalf("%s missing tls settings", host)
+	}
+	if got := tls.GetMode(); got != *want {
+		t.Fatalf("%s tls mode mismatch, want %s, got %s", host, want.String(), got)
+	}
 }

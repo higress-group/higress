@@ -17,3 +17,6 @@ target/
 tools/hack/cluster.conf
 envoy/1.20
 istio/1.12
+
+# Local working notes (design specs, implementation plans) — not for upstream PRs
+docs/superpowers/

@@ -37,7 +37,7 @@ import (
 )
 
 const (
-	DefaultNacosTimeout         = 5000
+	DefaultNacosTimeout         = 30000
 	DefaultNacosLogLevel        = "warn"
 	DefaultNacosLogDir          = "/var/log/nacos/log/"
 	DefaultNacosCacheDir        = "/var/log/nacos/cache/"
@@ -48,6 +48,8 @@ const (
 	DefaultRefreshInterval      = time.Second * 30
 	DefaultRefreshIntervalLimit = time.Second * 10
 	DefaultFetchPageSize        = 50
+	DefaultFetchRetryBackoff    = time.Second
+	DefaultFetchMaxRetries      = 10
 	DefaultJoiner               = "@@"
 )
 
@@ -79,6 +81,7 @@ func NewWatcher(cache memory.Cache, opts ...WatcherOption) (provider.Watcher, er
 	}
 
 	w.NacosRefreshInterval = int64(DefaultRefreshInterval)
+	w.NacosTimeout = DefaultNacosTimeout
 
 	for _, opt := range opts {
 		opt(w)
@@ -91,7 +94,7 @@ func NewWatcher(cache memory.Cache, opts ...WatcherOption) (provider.Watcher, er
 	log.Infof("new nacos watcher with config Name:%s", w.Name)
 
 	cc := constant.NewClientConfig(
-		constant.WithTimeoutMs(DefaultNacosTimeout),
+		constant.WithTimeoutMs(uint64(w.NacosTimeout)),
 		constant.WithLogLevel(DefaultNacosLogLevel),
 		constant.WithLogDir(DefaultNacosLogDir),
 		constant.WithCacheDir(DefaultNacosCacheDir),
@@ -157,6 +160,15 @@ func WithNacosRefreshInterval(refreshInterval int64) WatcherOption {
 	}
 }
 
+func WithNacosTimeout(timeout int64) WatcherOption {
+	return func(w *watcher) {
+		if timeout <= 0 {
+			timeout = DefaultNacosTimeout
+		}
+		w.NacosTimeout = timeout
+	}
+}
+
 func WithType(t string) WatcherOption {
 	return func(w *watcher) {
 		w.Type = t
@@ -211,22 +223,35 @@ func (w *watcher) Run() {
 
 func (w *watcher) fetchAllServices() error {
 	w.mutex.Lock()
-	defer w.mutex.Unlock()
 	if w.isStop {
+		w.mutex.Unlock()
 		return nil
 	}
+	nacosGroups := append([]string(nil), w.NacosGroups...)
+	nacosNamespace := w.NacosNamespace
+	namingClient := w.namingClient
+	w.mutex.Unlock()
+
 	fetchedServices := make(map[string]bool)
-	for _, groupName := range w.NacosGroups {
+	var tries int
+	for _, groupName := range nacosGroups {
 		for page := 1; ; page++ {
-			ss, err := w.namingClient.GetAllServicesInfo(vo.GetAllServiceInfoParam{
+			ss, err := namingClient.GetAllServicesInfo(vo.GetAllServiceInfoParam{
 				GroupName: groupName,
 				PageNo:    uint32(page),
 				PageSize:  DefaultFetchPageSize,
-				NameSpace: w.NacosNamespace,
+				NameSpace: nacosNamespace,
 			})
 			if err != nil {
-				log.Errorf("fetch all services error:%v", err)
-				break
+				if tries >= DefaultFetchMaxRetries {
+					return err
+				}
+				tries++
+				backoff := fetchRetryBackoff(tries)
+				log.Errorf("fetch all services error:%v, pageNo:%d, retry:%d, backoff:%v", err, page, tries, backoff)
+				time.Sleep(backoff)
+				page--
+				continue
 			}
 			for _, serviceName := range ss.Doms {
 				fetchedServices[groupName+DefaultJoiner+serviceName] = true
@@ -235,6 +260,12 @@ func (w *watcher) fetchAllServices() error {
 				break
 			}
 		}
+	}
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	if w.isStop {
+		return nil
 	}
 
 	for key := range w.WatchingServices {
@@ -260,6 +291,13 @@ func (w *watcher) fetchAllServices() error {
 		}
 	}
 	return nil
+}
+
+func fetchRetryBackoff(retry int) time.Duration {
+	if retry <= 0 {
+		return 0
+	}
+	return time.Duration(retry) * DefaultFetchRetryBackoff
 }
 
 func (w *watcher) subscribe(groupName string, serviceName string) error {

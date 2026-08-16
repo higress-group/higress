@@ -3,8 +3,8 @@ package server
 import (
 	"fmt"
 
-	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
+	"github.com/higress-group/wasm-go/pkg/log"
 )
 
 // ComposedMCPServer represents a server composed of tools from other servers.
@@ -54,6 +54,7 @@ func (cs *ComposedMCPServer) GetMCPTools() map[string]Tool {
 				description:  toolInfo.Description,
 				inputSchema:  toolInfo.InputSchema,
 				outputSchema: toolInfo.OutputSchema, // New field for MCP Protocol Version 2025-06-18
+				legacyOnly:   toolInfo.LegacyOnly,
 			}
 		}
 	}
@@ -92,6 +93,7 @@ type DescriptiveTool struct {
 	description  string
 	inputSchema  map[string]any
 	outputSchema map[string]any // New field for MCP Protocol Version 2025-06-18
+	legacyOnly   bool
 }
 
 // Create for DescriptiveTool should not be called.
@@ -102,6 +104,7 @@ func (dt *DescriptiveTool) Create(params []byte) Tool {
 		description:  dt.description,
 		inputSchema:  dt.inputSchema,
 		outputSchema: dt.outputSchema,
+		legacyOnly:   dt.legacyOnly,
 	}
 }
 
@@ -124,4 +127,8 @@ func (dt *DescriptiveTool) InputSchema() map[string]any {
 // OutputSchema returns the tool's output schema (MCP Protocol Version 2025-06-18).
 func (dt *DescriptiveTool) OutputSchema() map[string]any {
 	return dt.outputSchema
+}
+
+func (dt *DescriptiveTool) legacyOnlyInputSchema() bool {
+	return dt.legacyOnly
 }

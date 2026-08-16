@@ -15,6 +15,7 @@
 package istio
 
 import (
+	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -39,6 +40,12 @@ func TestReconcileInferencePool(t *testing.T) {
 			TargetPorts: []inferencev1.Port{
 				{
 					Number: inferencev1.PortNumber(8080),
+				},
+				{
+					Number: inferencev1.PortNumber(8081),
+				},
+				{
+					Number: inferencev1.PortNumber(8082),
 				},
 			},
 			Selector: inferencev1.LabelSelector{
@@ -82,6 +89,10 @@ func TestReconcileInferencePool(t *testing.T) {
 	assert.Equal(t, service.ObjectMeta.Labels[constants.InternalServiceSemantics], constants.ServiceSemanticsInferencePool)
 	assert.Equal(t, service.ObjectMeta.Labels[InferencePoolRefLabel], pool.Name)
 	assert.Equal(t, service.OwnerReferences[0].Name, pool.Name)
-	assert.Equal(t, service.Spec.Ports[0].TargetPort.IntVal, int32(8080))
-	assert.Equal(t, service.Spec.Ports[0].Port, int32(54321)) // dummyPort + i
+	assert.Equal(t, len(service.Spec.Ports), 3)
+	for i, servicePort := range service.Spec.Ports {
+		assert.Equal(t, servicePort.Name, fmt.Sprintf("http-%d", i))
+		assert.Equal(t, servicePort.Port, int32(54321+i))
+		assert.Equal(t, servicePort.TargetPort.IntVal, int32(8080+i))
+	}
 }

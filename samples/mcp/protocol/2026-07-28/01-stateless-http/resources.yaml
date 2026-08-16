@@ -1,0 +1,46 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-2026-stateless-http
+  namespace: mcp-demo
+spec:
+  ingressClassName: higress
+  rules:
+    - host: stateless.mcp.demo
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: observable-weather
+                port:
+                  number: 8080
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: mcp-2026-stateless-http
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  matchRules:
+    - config:
+        server:
+          name: stateless-demo
+          type: rest
+          version: 1.0.0
+        tools:
+          - name: say_hello
+            description: Return a deterministic greeting
+            args:
+              - name: name
+                description: Name to greet
+                type: string
+                required: true
+            responseTemplate:
+              body: "hello {{.args.name}}"
+      configDisable: false
+      ingress:
+        - mcp-demo/mcp-2026-stateless-http
+  url: file:///opt/plugins/mcp-server/2026-07-28/plugin.wasm

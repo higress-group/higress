@@ -17,7 +17,11 @@ func handleNonStreamChunk(ctx wrapper.HttpContext, c config.PluginConfig, chunk 
 		ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, chunk)
 		return nil
 	}
-	tempContent := tempContentI.([]byte)
+	tempContent, ok := tempContentI.([]byte)
+	if !ok {
+		ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, chunk)
+		return nil
+	}
 	tempContent = append(tempContent, chunk...)
 	ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, tempContent)
 	return nil
@@ -34,7 +38,12 @@ func handleStreamChunk(ctx wrapper.HttpContext, c config.PluginConfig, chunk []b
 	partialMessageI := ctx.GetContext(PARTIAL_MESSAGE_CONTEXT_KEY)
 	log.Debugf("[handleStreamChunk] cache content: %v", ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY))
 	if partialMessageI != nil {
-		partialMessage = append(partialMessageI.([]byte), chunk...)
+		pm, ok := partialMessageI.([]byte)
+		if !ok {
+			partialMessage = chunk
+		} else {
+			partialMessage = append(pm, chunk...)
+		}
 	} else {
 		partialMessage = chunk
 	}
@@ -59,7 +68,12 @@ func processNonStreamLastChunk(ctx wrapper.HttpContext, c config.PluginConfig, c
 	var body []byte
 	tempContentI := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY)
 	if tempContentI != nil {
-		body = append(tempContentI.([]byte), chunk...)
+		tc, ok := tempContentI.([]byte)
+		if ok {
+			body = append(tc, chunk...)
+		} else {
+			body = chunk
+		}
 	} else {
 		body = chunk
 	}
@@ -76,7 +90,12 @@ func processStreamLastChunk(ctx wrapper.HttpContext, c config.PluginConfig, chun
 		var lastMessage []byte
 		partialMessageI := ctx.GetContext(PARTIAL_MESSAGE_CONTEXT_KEY)
 		if partialMessageI != nil {
-			lastMessage = append(partialMessageI.([]byte), chunk...)
+			pm, ok := partialMessageI.([]byte)
+			if ok {
+				lastMessage = append(pm, chunk...)
+			} else {
+				lastMessage = chunk
+			}
 		} else {
 			lastMessage = chunk
 		}
@@ -92,7 +111,9 @@ func processStreamLastChunk(ctx wrapper.HttpContext, c config.PluginConfig, chun
 		// 此时从 ctx 取已累积的缓存内容，避免缓存写空。
 		if value == "" {
 			if tempContentI := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY); tempContentI != nil {
-				value = tempContentI.(string)
+				if s, ok := tempContentI.(string); ok {
+					value = s
+				}
 			}
 		}
 		return value, nil
@@ -101,7 +122,11 @@ func processStreamLastChunk(ctx wrapper.HttpContext, c config.PluginConfig, chun
 	if tempContentI == nil {
 		return "", nil
 	}
-	return tempContentI.(string), nil
+	s, ok := tempContentI.(string)
+	if !ok {
+		return "", nil
+	}
+	return s, nil
 }
 
 func processSSEMessage(ctx wrapper.HttpContext, c config.PluginConfig, sseMessage string, log log.Log) (string, error) {
@@ -158,15 +183,17 @@ func processSSEMessage(ctx wrapper.HttpContext, c config.PluginConfig, sseMessag
 	if content != "" {
 		if v := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY); v == nil {
 			ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, content)
-		} else {
-			ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, v.(string)+content)
+		} else if s, ok := v.(string); ok {
+			ctx.SetContext(CACHE_CONTENT_CONTEXT_KEY, s+content)
 		}
 	}
 
 	// handleStreamChunk 不使用返回值；processStreamLastChunk 把它作为 cacheResponse 的
 	// SET value，必须是完整累积值（避免最后一段 content 因 [DONE] 早 return 被丢）。
 	if v := ctx.GetContext(CACHE_CONTENT_CONTEXT_KEY); v != nil {
-		return v.(string), nil
+		if s, ok := v.(string); ok {
+			return s, nil
+		}
 	}
 	return "", nil
 }

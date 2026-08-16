@@ -46,7 +46,7 @@ import (
 
 const (
 	DefaultInitTimeout          = time.Second * 10
-	DefaultNacosTimeout         = 5000
+	DefaultNacosTimeout         = 30000
 	DefaultNacosLogLevel        = "warn"
 	DefaultNacosLogDir          = "/var/log/nacos/log/"
 	DefaultNacosCacheDir        = "/var/log/nacos/cache/"
@@ -57,6 +57,8 @@ const (
 	DefaultRefreshInterval      = time.Second * 30
 	DefaultRefreshIntervalLimit = time.Second * 10
 	DefaultFetchPageSize        = 50
+	DefaultFetchRetryBackoff    = time.Second
+	DefaultFetchMaxRetries      = 10
 	DefaultJoiner               = "@@"
 )
 
@@ -93,6 +95,7 @@ func NewWatcher(cache memory.Cache, opts ...WatcherOption) (provider.Watcher, er
 	}
 
 	w.NacosRefreshInterval = int64(DefaultRefreshInterval)
+	w.NacosTimeout = DefaultNacosTimeout
 
 	for _, opt := range opts {
 		opt(w)
@@ -115,6 +118,7 @@ func NewWatcher(cache memory.Cache, opts ...WatcherOption) (provider.Watcher, er
 				mcpserver.WithNacosAccessKey(w.NacosAccessKey),
 				mcpserver.WithNacosSecretKey(w.NacosSecretKey),
 				mcpserver.WithNacosRefreshInterval(w.NacosRefreshInterval),
+				mcpserver.WithNacosTimeout(w.NacosTimeout),
 				mcpserver.WithMcpExportDomains(w.McpServerExportDomains),
 				mcpserver.WithMcpBaseUrl(w.McpServerBaseUrl),
 				mcpserver.WithEnableMcpServer(w.EnableMCPServer),
@@ -144,7 +148,7 @@ func NewWatcher(cache memory.Cache, opts ...WatcherOption) (provider.Watcher, er
 	log.Infof("new nacos2 watcher with config Name:%s", w.Name)
 
 	w.nacosClientConfig = constant.NewClientConfig(
-		constant.WithTimeoutMs(DefaultNacosTimeout),
+		constant.WithTimeoutMs(uint64(w.NacosTimeout)),
 		constant.WithLogLevel(DefaultNacosLogLevel),
 		constant.WithLogDir(DefaultNacosLogDir),
 		constant.WithCacheDir(DefaultNacosCacheDir),
@@ -249,6 +253,15 @@ func WithNacosRefreshInterval(refreshInterval int64) WatcherOption {
 			refreshInterval = int64(DefaultRefreshIntervalLimit)
 		}
 		w.NacosRefreshInterval = refreshInterval
+	}
+}
+
+func WithNacosTimeout(timeout int64) WatcherOption {
+	return func(w *watcher) {
+		if timeout <= 0 {
+			timeout = DefaultNacosTimeout
+		}
+		w.NacosTimeout = timeout
 	}
 }
 
@@ -384,31 +397,31 @@ func (w *watcher) updateNacosClient() {
 
 func (w *watcher) fetchAllServices() error {
 	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
 	if w.isStop {
+		w.mutex.Unlock()
 		return nil
 	}
+	nacosGroups := append([]string(nil), w.NacosGroups...)
+	w.mutex.Unlock()
+
 	fetchedServices := make(map[string]bool)
 	var tries int
-	for _, groupName := range w.NacosGroups {
+	for _, groupName := range nacosGroups {
 		for page := 1; ; page++ {
-			ss, err := w.namingClient.GetAllServicesInfo(vo.GetAllServiceInfoParam{
-				GroupName: groupName,
-				PageNo:    uint32(page),
-				PageSize:  DefaultFetchPageSize,
-				NameSpace: w.NacosNamespace,
-			})
+			ss, stopped, err := w.getAllServicesInfo(groupName, page)
+			if stopped {
+				return nil
+			}
 			if err != nil {
-				if tries > 10 {
+				if tries >= DefaultFetchMaxRetries {
 					return err
 				}
-				if w.addrProvider != nil {
-					w.addrProvider.Trigger()
-				}
-				log.Errorf("fetch nacos service list failed, err:%v, pageNo:%d", err, page)
-				page--
+				w.triggerAddressRefresh()
 				tries++
+				backoff := fetchRetryBackoff(tries)
+				log.Errorf("fetch nacos service list failed, err:%v, pageNo:%d, retry:%d, backoff:%v", err, page, tries, backoff)
+				time.Sleep(backoff)
+				page--
 				continue
 			}
 			for _, serviceName := range ss.Doms {
@@ -418,6 +431,12 @@ func (w *watcher) fetchAllServices() error {
 				break
 			}
 		}
+	}
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	if w.isStop {
+		return nil
 	}
 
 	for key := range w.WatchingServices {
@@ -461,6 +480,42 @@ func (w *watcher) fetchAllServices() error {
 		return errors.New("subscribe services failed")
 	}
 	return nil
+}
+
+func (w *watcher) getAllServicesInfo(groupName string, page int) (model.ServiceList, bool, error) {
+	w.mutex.Lock()
+	if w.isStop {
+		w.mutex.Unlock()
+		return model.ServiceList{}, true, nil
+	}
+	namingClient := w.namingClient
+	nacosNamespace := w.NacosNamespace
+	w.mutex.Unlock()
+
+	ss, err := namingClient.GetAllServicesInfo(vo.GetAllServiceInfoParam{
+		GroupName: groupName,
+		PageNo:    uint32(page),
+		PageSize:  DefaultFetchPageSize,
+		NameSpace: nacosNamespace,
+	})
+	return ss, false, err
+}
+
+func (w *watcher) triggerAddressRefresh() {
+	w.mutex.Lock()
+	addrProvider := w.addrProvider
+	w.mutex.Unlock()
+
+	if addrProvider != nil {
+		addrProvider.Trigger()
+	}
+}
+
+func fetchRetryBackoff(retry int) time.Duration {
+	if retry <= 0 {
+		return 0
+	}
+	return time.Duration(retry) * DefaultFetchRetryBackoff
 }
 
 func (w *watcher) subscribe(groupName string, serviceName string) error {

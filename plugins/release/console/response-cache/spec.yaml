@@ -1,0 +1,104 @@
+apiVersion: 1.0.0
+info:
+  gatewayMinVersion: "2.0.0"
+  type: oss
+  category: traffic
+  name: response-cache
+  image: platform_wasm/response-cache
+  title: Response Cache
+  x-title-i18n:
+    zh-CN: 响应缓存
+  description: Cache selected upstream response data in Redis and serve it for matching request keys.
+  x-description-i18n:
+    zh-CN: 将选定的上游响应数据缓存到 Redis，并对匹配请求键的请求直接返回缓存内容。
+  readmeUrl: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/response-cache/README.md
+  x-readmeUrl-i18n:
+    en-US: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/response-cache/README_EN.md
+  version: 1.0.1
+  contact:
+    name: Higress Team
+    url: https://higress.io/
+    email: admin@higress.io
+spec:
+  phase: default
+  priority: 0
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        cache:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [redis]
+            serviceName:
+              type: string
+            servicePort:
+              type: integer
+              minimum: 1
+              maximum: 65535
+              default: 6379
+            serviceHost:
+              type: string
+            username:
+              type: string
+            password:
+              type: string
+              format: password
+            timeout:
+              type: integer
+              minimum: 1
+              default: 10000
+            cacheTTL:
+              type: integer
+              minimum: 0
+              default: 0
+            cacheKeyPrefix:
+              type: string
+              default: "higress-resp-cache:"
+          required:
+            - type
+            - serviceName
+        cacheKeyFromHeader:
+          type: string
+        cacheKeyFromBody:
+          type: string
+        cacheValueFromBodyType:
+          type: string
+          default: application/json
+        cacheValueFromBody:
+          type: string
+        cacheResponseCode:
+          type: array
+          items:
+            type: integer
+            minimum: 100
+            maximum: 999
+      required:
+        - cache
+      example:
+        cache:
+          type: redis
+          serviceName: my-redis.dns
+          servicePort: 6379
+          timeout: 2000
+          cacheTTL: 300
+        cacheKeyFromHeader: x-cache-key
+        cacheResponseCode: [200]
+  routeConfigSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        cacheKeyFromHeader:
+          type: string
+        cacheKeyFromBody:
+          type: string
+        cacheValueFromBodyType:
+          type: string
+        cacheValueFromBody:
+          type: string
+        cacheResponseCode:
+          type: array
+          items:
+            type: integer

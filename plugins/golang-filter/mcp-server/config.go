@@ -24,6 +24,10 @@ const (
 type SSEServerWrapper struct {
 	BaseServer   *common.SSEServer
 	HostMatchers []common.HostMatcher // Pre-parsed host matchers for efficient matching
+	// AuthUsername/AuthPassword hold the HTTP Basic credentials required to
+	// reach this server. An empty AuthUsername means authentication is disabled.
+	AuthUsername string
+	AuthPassword string
 }
 
 type config struct {
@@ -55,20 +59,30 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 		return conf, nil
 	}
 
-	for _, serverConfig := range serverConfigs {
-		serverConfigMap, ok := serverConfig.(map[string]interface{})
+	var parseErrors []string
+	for index, rawServerConfig := range serverConfigs {
+		serverConfigMap, ok := rawServerConfig.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("server config must be an object")
+			msg := fmt.Sprintf("server config at index %d must be an object", index)
+			parseErrors = append(parseErrors, msg)
+			api.LogWarnf("mcp-server: skipped invalid entry at index %d: %s", index, msg)
+			continue
 		}
 
 		serverType, ok := serverConfigMap["type"].(string)
 		if !ok {
-			return nil, fmt.Errorf("server type is not set")
+			msg := fmt.Sprintf("server config at index %d type is not set", index)
+			parseErrors = append(parseErrors, msg)
+			api.LogWarnf("mcp-server: skipped invalid entry at index %d: %s", index, msg)
+			continue
 		}
 
 		serverPath, ok := serverConfigMap["path"].(string)
 		if !ok {
-			return nil, fmt.Errorf("server %s path is not set", serverType)
+			msg := fmt.Sprintf("server %s path is not set", serverType)
+			parseErrors = append(parseErrors, msg)
+			api.LogWarnf("mcp-server: skipped invalid entry at index %d: %s", index, msg)
+			continue
 		}
 
 		// Parse domain list directly into HostMatchers for efficient matching
@@ -87,36 +101,58 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 
 		serverName, ok := serverConfigMap["name"].(string)
 		if !ok {
-			return nil, fmt.Errorf("server %s name is not set", serverType)
+			msg := fmt.Sprintf("server %s name is not set", serverType)
+			parseErrors = append(parseErrors, msg)
+			api.LogWarnf("mcp-server: skipped invalid entry at index %d: %s", index, msg)
+			continue
 		}
-		server := common.GlobalRegistry.GetServer(serverType)
+		server := common.GlobalRegistry.NewServerConfig(serverType)
 
 		if server == nil {
-			return nil, fmt.Errorf("server %s is not registered", serverType)
+			msg := fmt.Sprintf("server %s is not registered", serverType)
+			parseErrors = append(parseErrors, msg)
+			api.LogWarnf("mcp-server: skipped invalid entry at index %d: %s", index, msg)
+			continue
 		}
-		serverConfig, ok := serverConfigMap["config"].(map[string]interface{})
+		innerCfg, ok := serverConfigMap["config"].(map[string]interface{})
 		if !ok {
 			api.LogDebug(fmt.Sprintf("No config provided for server %s", serverType))
 		}
-		api.LogDebug(fmt.Sprintf("Server config: %+v", serverConfig))
 
-		err := server.ParseConfig(serverConfig)
+		err := server.ParseConfig(innerCfg)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse server config: %w", err)
+			msg := fmt.Sprintf("server %s failed to parse config: %v", serverName, err)
+			parseErrors = append(parseErrors, msg)
+			api.LogWarnf("mcp-server: skipped invalid entry at index %d: %s", index, msg)
+			continue
 		}
 
 		serverInstance, err := server.NewServer(serverName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize MCP Server: %w", err)
+			msg := fmt.Sprintf("server %s failed to initialize MCP Server: %v", serverName, err)
+			parseErrors = append(parseErrors, msg)
+			api.LogWarnf("mcp-server: skipped invalid entry at index %d: %s", index, msg)
+			continue
 		}
 
-		conf.servers = append(conf.servers, &SSEServerWrapper{
+		wrapper := &SSEServerWrapper{
 			BaseServer: common.NewSSEServer(serverInstance,
 				common.WithSSEEndpoint(fmt.Sprintf("%s%s", serverPath, mcp_session.GlobalSSEPathSuffix)),
 				common.WithMessageEndpoint(serverPath)),
 			HostMatchers: hostMatchers,
-		})
+		}
+
+		// Servers that require HTTP Basic auth expose their credentials via the
+		// BasicAuthProvider interface; the filter enforces them per request.
+		if authProvider, ok := server.(common.BasicAuthProvider); ok {
+			wrapper.AuthUsername, wrapper.AuthPassword = authProvider.GetBasicAuthCredentials()
+		}
+
+		conf.servers = append(conf.servers, wrapper)
 		api.LogDebug(fmt.Sprintf("Registered MCP Server: %s", serverType))
+	}
+	if len(parseErrors) > 0 {
+		api.LogWarnf("mcp-server: some servers failed to load and were skipped: %v", parseErrors)
 	}
 
 	return conf, nil

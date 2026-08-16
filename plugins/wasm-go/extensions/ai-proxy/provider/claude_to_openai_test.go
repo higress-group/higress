@@ -1099,6 +1099,72 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIResponseToClaude(t *testing.T) {
 		require.NotNil(t, toolContent.Input)
 		assert.Equal(t, "/Users/zhangty/git/higress/README.md", (*toolContent.Input)["file_path"])
 	})
+
+	t.Run("openai_standard_usage_with_cached_tokens", func(t *testing.T) {
+		// OpenAI standard: prompt_tokens includes cached_tokens.
+		// total_tokens == prompt_tokens + completion_tokens -> subtract cached_tokens.
+		openaiResponse := `{
+			"id": "chatcmpl-test",
+			"model": "gpt-4o",
+			"object": "chat.completion",
+			"choices": [{
+				"index": 0,
+				"finish_reason": "stop",
+				"message": {"role": "assistant", "content": "Hello!"}
+			}],
+			"usage": {
+				"prompt_tokens": 100,
+				"completion_tokens": 20,
+				"total_tokens": 120,
+				"prompt_tokens_details": {"cached_tokens": 60}
+			}
+		}`
+
+		result, err := converter.ConvertOpenAIResponseToClaude(nil, []byte(openaiResponse))
+		require.NoError(t, err)
+
+		var claudeResp claudeTextGenResponse
+		err = json.Unmarshal(result, &claudeResp)
+		require.NoError(t, err)
+
+		// input_tokens should exclude cache: 100 - 60 = 40
+		assert.Equal(t, 40, claudeResp.Usage.InputTokens)
+		assert.Equal(t, 20, claudeResp.Usage.OutputTokens)
+		assert.Equal(t, 60, claudeResp.Usage.CacheReadInputTokens)
+	})
+
+	t.Run("bedrock_style_usage_with_cached_tokens", func(t *testing.T) {
+		// Bedrock-style: prompt_tokens does NOT include cached_tokens.
+		// total_tokens (180) != prompt_tokens (100) + completion_tokens (20) -> do NOT subtract.
+		openaiResponse := `{
+			"id": "chatcmpl-test",
+			"model": "gpt-4o",
+			"object": "chat.completion",
+			"choices": [{
+				"index": 0,
+				"finish_reason": "stop",
+				"message": {"role": "assistant", "content": "Hello!"}
+			}],
+			"usage": {
+				"prompt_tokens": 100,
+				"completion_tokens": 20,
+				"total_tokens": 180,
+				"prompt_tokens_details": {"cached_tokens": 60}
+			}
+		}`
+
+		result, err := converter.ConvertOpenAIResponseToClaude(nil, []byte(openaiResponse))
+		require.NoError(t, err)
+
+		var claudeResp claudeTextGenResponse
+		err = json.Unmarshal(result, &claudeResp)
+		require.NoError(t, err)
+
+		// input_tokens should NOT be adjusted: 100 (prompt_tokens already excludes cache)
+		assert.Equal(t, 100, claudeResp.Usage.InputTokens)
+		assert.Equal(t, 20, claudeResp.Usage.OutputTokens)
+		assert.Equal(t, 60, claudeResp.Usage.CacheReadInputTokens)
+	})
 }
 
 func TestProviderConfigSupportsMessageReasoningContent(t *testing.T) {
@@ -1354,6 +1420,28 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_WithCachedT
 
 	resultStr := string(result)
 	assert.Contains(t, resultStr, "\"type\":\"message_delta\"")
+	// OpenAI standard: prompt_tokens (100) includes cached_tokens (60).
+	// Claude semantics: input_tokens should exclude cache tokens, so 100 - 60 = 40.
+	assert.Contains(t, resultStr, "\"input_tokens\":40")
+	assert.Contains(t, resultStr, "\"output_tokens\":20")
+	assert.Contains(t, resultStr, "\"cache_read_input_tokens\":60")
+}
+
+func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_BedrockStyleUsage(t *testing.T) {
+	converter := &ClaudeToOpenAIConverter{}
+
+	// Bedrock-style usage: prompt_tokens does NOT include cached_tokens.
+	// total_tokens (180) != prompt_tokens (100) + completion_tokens (20),
+	// so computeClaudeInputTokens should NOT subtract cached_tokens.
+	streamChunk := "data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":180,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\n"
+
+	result, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(streamChunk))
+	require.NoError(t, err)
+
+	resultStr := string(result)
+	assert.Contains(t, resultStr, "\"type\":\"message_delta\"")
+	// Bedrock: prompt_tokens already excludes cache, so input_tokens = prompt_tokens = 100.
 	assert.Contains(t, resultStr, "\"input_tokens\":100")
 	assert.Contains(t, resultStr, "\"output_tokens\":20")
 	assert.Contains(t, resultStr, "\"cache_read_input_tokens\":60")

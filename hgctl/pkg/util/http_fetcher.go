@@ -16,7 +16,6 @@ package util
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,10 +39,6 @@ func NewHTTPFetcher(requestTimeout time.Duration, requestMaxRetry int, bufferSiz
 	if requestTimeout == 0 {
 		requestTimeout = 5 * time.Second
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	// nolint: gosec
-	// This is only when a user explicitly sets a flag to enable insecure mode
-	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	return &HTTPFetcher{
 		client: &http.Client{
 			Timeout: requestTimeout,

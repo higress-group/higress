@@ -16,6 +16,7 @@ tools/controller-gen = $(tools.bindir)/controller-gen
 tools/golangci-lint  = $(tools.bindir)/golangci-lint
 tools/kustomize      = $(tools.bindir)/kustomize
 tools/kind           = $(tools.bindir)/kind
+tools/kind-gateway-api = $(tools.bindir)/kind-gateway-api
 tools/setup-envtest  = $(tools.bindir)/setup-envtest
 $(tools.bindir)/%: $(tools.srcdir)/%/pin.go $(tools.srcdir)/%/go.mod
 	cd $(<D) && GOOS= GOARCH= go build -o $(abspath $@) $$(sed -En 's,^import "(.*)".*,\1,p' pin.go)

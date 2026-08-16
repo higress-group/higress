@@ -909,7 +909,7 @@ func (v *vertexProvider) buildEmbeddingsResponse(ctx wrapper.HttpContext, vertex
 	response := embeddingsResponse{
 		Object: "list",
 		Data:   make([]embedding, 0, len(vertexResp.Predictions)),
-		Model:  ctx.GetContext(ctxKeyFinalRequestModel).(string),
+		Model:  ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
 	}
 	totalTokens := 0
 	for _, item := range vertexResp.Predictions {

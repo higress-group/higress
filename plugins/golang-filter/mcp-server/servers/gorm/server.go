@@ -21,6 +21,11 @@ type DBConfig struct {
 	description string
 }
 
+func (c *DBConfig) Clone() common.Server {
+	cloned := *c
+	return &cloned
+}
+
 func (c *DBConfig) ParseConfig(config map[string]any) error {
 	dsn, ok := config["dsn"].(string)
 	if !ok {

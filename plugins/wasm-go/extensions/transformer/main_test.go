@@ -199,12 +199,12 @@ func TestRequest_Headers_DedupeStrategies(t *testing.T) {
 		// for SPLIT_*, input has a single value containing commas.
 		want []string
 	}{
-		{"", []string{"a", "b", "a", "c"}, []string{"a"}},                                // default = RETAIN_FIRST
-		{"RETAIN_FIRST", []string{"a", "b", "a", "c"}, []string{"a"}},                    // explicit
-		{"RETAIN_LAST", []string{"a", "b", "a", "c"}, []string{"c"}},                     // last only
-		{"RETAIN_UNIQUE", []string{"a", "b", "a", "c"}, []string{"a", "b", "c"}},         // dedup preserving order
-		{"SPLIT_AND_RETAIN_FIRST", []string{"x,y,z"}, []string{"x"}},                     // split first value, keep first part
-		{"SPLIT_AND_RETAIN_LAST", []string{"x,y,z"}, []string{"z"}},                      // split first value, keep last part
+		{"", []string{"a", "b", "a", "c"}, []string{"a"}},                        // default = RETAIN_FIRST
+		{"RETAIN_FIRST", []string{"a", "b", "a", "c"}, []string{"a"}},            // explicit
+		{"RETAIN_LAST", []string{"a", "b", "a", "c"}, []string{"c"}},             // last only
+		{"RETAIN_UNIQUE", []string{"a", "b", "a", "c"}, []string{"a", "b", "c"}}, // dedup preserving order
+		{"SPLIT_AND_RETAIN_FIRST", []string{"x,y,z"}, []string{"x"}},             // split first value, keep first part
+		{"SPLIT_AND_RETAIN_LAST", []string{"x,y,z"}, []string{"z"}},              // split first value, keep last part
 	}
 	for _, tc := range tests {
 		t.Run(tc.strategy, func(t *testing.T) {
@@ -486,7 +486,7 @@ func TestRequest_Headers_AddWithHostPattern(t *testing.T) {
 	})
 }
 
-func TestRequest_Headers_AddWithPathPattern_NoMatchKeepsValue(t *testing.T) {
+func TestRequest_Headers_AddWithPathPattern_NoMatchSkipsAdd(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(configJSON(map[string]any{
 			"reqRules": []map[string]any{
@@ -505,7 +505,31 @@ func TestRequest_Headers_AddWithPathPattern_NoMatchKeepsValue(t *testing.T) {
 		}))
 
 		got := headersToMap(host.GetRequestHeaders())
-		require.Equal(t, []string{"literal"}, got["x-v"])
+		require.NotContains(t, got, "x-v")
+		host.CompleteHttp()
+	})
+}
+
+func TestRequest_Headers_AddSameHeaderWithDifferentPathPatterns(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(configJSON(map[string]any{
+			"reqRules": []map[string]any{
+				{"operate": "add", "headers": []map[string]any{
+					{"key": "access-appId", "value": "ij2b6Nfg", "path_pattern": `^/test/.*`},
+					{"key": "access-appId", "value": "Y6JK5J7T", "path_pattern": `^/prod/.*`},
+				}},
+			},
+		}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"},
+			{":path", "/prod/chat"},
+		}))
+
+		got := headersToMap(host.GetRequestHeaders())
+		require.Equal(t, []string{"Y6JK5J7T"}, got["access-appid"])
 		host.CompleteHttp()
 	})
 }

@@ -218,4 +218,15 @@ func TestNeedTrafficPolicy(t *testing.T) {
 	if !config2.NeedTrafficPolicy() {
 		t.Fatal("should be true")
 	}
+
+	config3 := &Ingress{
+		Destination: &DestinationConfig{
+			Protocols: map[string]string{
+				"secure.example.com:443": "HTTPS",
+			},
+		},
+	}
+	if !config3.NeedTrafficPolicy() {
+		t.Fatal("should be true")
+	}
 }

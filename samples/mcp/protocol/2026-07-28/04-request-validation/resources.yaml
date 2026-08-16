@@ -1,0 +1,48 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-2026-request-validation
+  namespace: mcp-demo
+spec:
+  ingressClassName: higress
+  rules:
+    - host: validation.mcp.demo
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: observable-weather
+                port:
+                  number: 8080
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: mcp-2026-request-validation
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  matchRules:
+    - config:
+        server:
+          name: validation-demo
+          type: rest
+          version: 1.0.0
+        tools:
+          - name: get_weather
+            description: Query deterministic weather
+            args:
+              - name: location
+                description: City name
+                type: string
+                required: true
+            requestTemplate:
+              url: http://observable-weather.mcp-demo.svc.cluster.local:8080/weather
+              method: GET
+              argsToUrlParam: true
+      configDisable: false
+      ingress:
+        - mcp-demo/mcp-2026-request-validation
+  url: file:///opt/plugins/mcp-server/2026-07-28/plugin.wasm

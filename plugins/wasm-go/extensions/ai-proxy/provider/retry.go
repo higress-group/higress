@@ -7,14 +7,15 @@ import (
 	"net/http"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
-	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/tidwall/gjson"
 )
 
 const (
-	ctxRetryCount = "retryCount"
+	ctxRetryCount              = "retryCount"
+	defaultRetryFailureTimeout = 30 * 1000
 )
 
 type retryOnFailure struct {
@@ -36,7 +37,7 @@ func (r *retryOnFailure) FromJson(json gjson.Result) {
 	}
 	r.retryTimeout = json.Get("retryTimeout").Int()
 	if r.retryTimeout == 0 {
-		r.retryTimeout = 60 * 1000
+		r.retryTimeout = defaultRetryFailureTimeout
 	}
 	for _, status := range json.Get("retryOnStatus").Array() {
 		r.retryOnStatus = append(r.retryOnStatus, status.String())
@@ -81,9 +82,14 @@ func (c *ProviderConfig) retryCall(
 	ctx wrapper.HttpContext, activeProvider Provider,
 	apiName ApiName, statusCode int, responseHeaders http.Header, responseBody []byte,
 	retryClient *wrapper.ClusterClient[wrapper.RouteCluster],
-	apiTokenInUse string, apiTokens []string) {
-
-	retryCount := ctx.GetContext(ctxRetryCount).(int)
+	apiTokenInUse string, apiTokens []string,
+) {
+	retryCount, ok := ctx.GetContext(ctxRetryCount).(int)
+	if !ok {
+		log.Errorf("retryCount context value missing or invalid, aborting retry")
+		proxywasm.ResumeHttpResponse()
+		return
+	}
 	log.Infof("Sent retry request: %d/%d", retryCount, c.retryOnFailure.maxRetries)
 
 	if statusCode == 200 {
@@ -114,8 +120,8 @@ func (c *ProviderConfig) retryCall(
 func (c *ProviderConfig) sendRetryRequest(
 	ctx wrapper.HttpContext, apiName ApiName, activeProvider Provider,
 	retryClient *wrapper.ClusterClient[wrapper.RouteCluster],
-	apiTokenInUse string, apiTokens []string) error {
-
+	apiTokenInUse string, apiTokens []string,
+) error {
 	// Remove last failed token from retry apiTokens list
 	apiTokens = removeApiTokenFromRetryList(apiTokens, apiTokenInUse)
 	if len(apiTokens) == 0 {

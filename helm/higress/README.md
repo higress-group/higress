@@ -169,6 +169,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.enableAlphaGatewayAPI | bool | `false` | If true, Higress Controller will monitor Gateway API resources that have not reached v1 yet |
 | global.enableDeltaXDS | bool | `true` | Whether to enable Istio delta xDS, default is false. |
 | global.enableGatewayAPI | bool | `true` | If true, Higress Controller will monitor Gateway API resources as well |
+| global.enableGatewayAPIDeploymentController | bool | `false` | If true, provision an isolated Deployment and Service for each managed Gateway API Gateway. This is opt-in to preserve the default shared Higress gateway deployment model. |
 | global.enableH3 | bool | `false` |  |
 | global.enableIPv6 | bool | `false` |  |
 | global.enableInferenceExtension | bool | `false` | If true, enable Gateway API Inference Extension support |
@@ -218,7 +219,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.proxy.excludeInboundPorts | string | `""` |  |
 | global.proxy.excludeOutboundPorts | string | `""` |  |
 | global.proxy.holdApplicationUntilProxyStarts | bool | `false` | Controls if sidecar is injected at the front of the container list and blocks the start of the other containers until the proxy is ready |
-| global.proxy.image | string | `"proxyv2"` |  |
+| global.proxy.image | string | `"gateway"` |  |
 | global.proxy.includeIPRanges | string | `"*"` | istio egress capture allowlist https://istio.io/docs/tasks/traffic-management/egress.html#calling-external-services-directly example: includeIPRanges: "172.30.0.0/16,172.20.0.0/16" would only capture egress traffic on those two IP Ranges, all other outbound traffic would be allowed by the sidecar |
 | global.proxy.includeInboundPorts | string | `"*"` |  |
 | global.proxy.includeOutboundPorts | string | `""` |  |
@@ -233,7 +234,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.proxy.resources | object | `{"limits":{"cpu":"2000m","memory":"1024Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resources for the sidecar. |
 | global.proxy.statusPort | int | `15020` | Default port for Pilot agent health checks. A value of 0 will disable health checking. |
 | global.proxy.tracer | string | `""` | Specify which tracer to use. One of: lightstep, datadog, stackdriver. If using stackdriver tracer outside GCP, set env GOOGLE_APPLICATION_CREDENTIALS to the GCP credential file. |
-| global.proxy_init.image | string | `"proxyv2"` | Base name for the proxy_init container, used to configure iptables. |
+| global.proxy_init.image | string | `"gateway"` | Base name for the proxy_init container, used to configure iptables. |
 | global.proxy_init.resources.limits.cpu | string | `"2000m"` |  |
 | global.proxy_init.resources.limits.memory | string | `"1024Mi"` |  |
 | global.proxy_init.resources.requests.cpu | string | `"10m"` |  |

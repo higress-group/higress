@@ -1,4 +1,5 @@
-PLUGIN_NAME ?= say-hello
+PLUGIN_NAME ?= ai-data-masking
+PLUGIN_ROOT ?= extensions
 BUILDER_REGISTRY ?= higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/
 REGISTRY ?= higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/
 RUST_VERSION ?= 1.82
@@ -14,15 +15,17 @@ IMG ?= ${REGISTRY}${PLUGIN_NAME}:${IMAGE_TAG}
 build:
 	DOCKER_BUILDKIT=1 docker build \
 		--build-arg PLUGIN_NAME=${PLUGIN_NAME} \
+		--build-arg PLUGIN_ROOT=${PLUGIN_ROOT} \
 		-t ${IMG} \
-	    --output extensions/${PLUGIN_NAME} \
+	    --output ${PLUGIN_ROOT}/${PLUGIN_NAME} \
 	    .
 	@echo ""
-	@echo "output wasm file: extensions/${PLUGIN_NAME}/plugin.wasm"
+	@echo "output wasm file: ${PLUGIN_ROOT}/${PLUGIN_NAME}/plugin.wasm"
 
 build-image:
 	DOCKER_BUILDKIT=1 docker build \
 	    --build-arg PLUGIN_NAME=${PLUGIN_NAME} \
+	    --build-arg PLUGIN_ROOT=${PLUGIN_ROOT} \
 	    --build-arg BUILDER=${BUILDER}  \
 	    -t ${IMG} \
 	    .
@@ -34,17 +37,17 @@ lint-base:
 	cargo clippy --workspace --all-features --all-targets
 	cargo clean
 lint:
-	cargo fmt --all --check --manifest-path extensions/${PLUGIN_NAME}/Cargo.toml
-	cargo clippy --workspace --all-features --all-targets --manifest-path extensions/${PLUGIN_NAME}/Cargo.toml
-	cargo clean --manifest-path extensions/${PLUGIN_NAME}/Cargo.toml
+	cargo fmt --all --check --manifest-path ${PLUGIN_ROOT}/${PLUGIN_NAME}/Cargo.toml
+	cargo clippy --workspace --all-features --all-targets --manifest-path ${PLUGIN_ROOT}/${PLUGIN_NAME}/Cargo.toml
+	cargo clean --manifest-path ${PLUGIN_ROOT}/${PLUGIN_NAME}/Cargo.toml
 
 test-base:
 	cargo test --lib
 	cargo clean
 
 test:
-	cargo test --manifest-path extensions/${PLUGIN_NAME}/Cargo.toml
-	cargo clean --manifest-path extensions/${PLUGIN_NAME}/Cargo.toml
+	cargo test --manifest-path ${PLUGIN_ROOT}/${PLUGIN_NAME}/Cargo.toml
+	cargo clean --manifest-path ${PLUGIN_ROOT}/${PLUGIN_NAME}/Cargo.toml
 
 builder:
 	DOCKER_BUILDKIT=1 docker build \

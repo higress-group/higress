@@ -31,6 +31,8 @@ header:
     - 'tools/'
     - 'test/README.md'
     - 'test/README_CN.md'
+    - 'test/gateway/reports/**'
+    - 'test/inference-extension/reports/**'
     - 'hgctl/cmd/hgctl/config/testdata/config'
     - 'hgctl/pkg/manifests'
     - 'pkg/ingress/kube/gateway/istio/testdata'
@@ -39,6 +41,7 @@ header:
     - '.claude/**'
     - '.agents/**'
     - '.issue-spec/**'
+    - 'issue-spec/**'
 
   comment: on-failure
 dependency:

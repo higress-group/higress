@@ -1,0 +1,17 @@
+{
+  "jsonrpc": "2.0",
+  "id": "validation-invalid-arguments",
+  "method": "tools/call",
+  "params": {
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "higress-mcp-demo",
+        "version": "1.0.0"
+      },
+      "io.modelcontextprotocol/clientCapabilities": {}
+    },
+    "name": "get_weather",
+    "arguments": {}
+  }
+}

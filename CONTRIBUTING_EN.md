@@ -169,30 +169,49 @@ No matter commit message, or commit content, we do take more emphasis on code re
 
 PR is the only way to make change to Higress project files. To help reviewers better get your purpose, PR description could not be too detailed. We encourage contributors to follow the [PR template](./.github/PULL_REQUEST_TEMPLATE.md) to finish the pull request.
 
-#### Special Requirements for AI Coding Tool Usage
+#### Mandatory gate for materially agent-assisted contributions
 
-If you use AI Coding tools (such as Cursor, GitHub Copilot, etc.) to generate PRs, we have the following **strict requirements**:
+If an AI or coding agent materially participates in analysis, design,
+implementation, testing, or PR preparation, the contribution **MUST** enter the
+Higress issue-spec workflow before implementation begins. A Higress maintainer
+must approve the Proposal and Design Issues first. Implementation must follow
+the approved Design and authorized implementation TASKs. The Design must
+contain a concrete Verification Plan before verification starts, and the
+corresponding verification TASKs must be completed with evidence before asking
+maintainers to accept the verification or review.
 
-**For new standalone plugin scenarios** (e.g., newly implemented wasm plugins or golang-filter plugins):
-- You **MUST** create a `design/` directory under the plugin directory
-- Place the design document you provided to the AI Coding tool in the `design/` directory
-- Provide an AI Coding summary in the PR description
+Material participation includes substantive analysis or design, choosing an
+implementation or verification approach, producing or materially transforming
+code/tests/docs/configuration, interpreting test results, or preparing
+substantive PR content. Mechanical autocomplete that the author independently
+directs and verifies is not automatically material. The only exception is
+declared agent use limited to spelling, punctuation, whitespace, or formatting
+with no substantive choice or behavioral effect. Human-only PRs are unaffected.
 
-**For regular updates/changes scenarios**:
-- Provide the prompts/instructions you gave to the AI Coding tool in the PR description
-- Provide an AI Coding summary in the PR description
+A canonical-repository maintainer or administrator may elect to bypass the
+planning gate only after using authenticated `gh` to verify the current login
+and a canonical-repository collaborator `role_name` of `maintain` or `admin` for
+`higress-group/higress`. The PR must select the verified-maintainer/
+administrator exception, ensure its GitHub author matches that login, record the
+current PR number or URL, login, returned `role_name`, PR author (never a token),
+attest that `GH_TOKEN` and `GITHUB_TOKEN` were unset for every verification
+command, and explain the bypass. A failed or mismatched check disqualifies the
+exception; the accepting or merging maintainer independently validates current
+live evidence with token overrides unset. This does not waive AI disclosure,
+review, merge requirements, or runtime verification for bug fixes.
 
-**AI Coding Summary should include**:
-- Key decisions made
-- Major changes implemented
-- Important considerations or limitations
+All PRs that used an AI or coding agent must disclose the prompts/instructions
+and provide an AI-assisted work summary with key decisions, major changes, and
+important limitations. For contributions subject to this gate, the
+maintainer-approved issue-spec Design Issue is the authoritative design
+carrier; no plugin-local `design/` document is required for the gate.
+Materially agent-assisted PRs that do not satisfy the gate receive **lower
+review priority**, and timely maintainer review is **not guaranteed**.
 
-**Review Priority Notice**:
-- If you use AI Coding tools but do not follow the above requirements, your PR review priority will be **lowered**
-- We **cannot guarantee** timely reviews for AI Coding PRs that do not meet these requirements
-- If the PR is not completed using AI Coding tools, these additional requirements do not apply
-
-The purpose of these requirements is to ensure that AI-generated code is adequately documented and traceable, facilitating code review and subsequent maintenance. By requiring prompts/design documents, we can better understand the development intent and context.
+See the canonical
+[agent-assisted contribution policy](./docs/developers/agent-assisted-contributions.md)
+for definitions, current issue-spec commands, enforcement boundaries, and
+runtime-verification requirements.
 
 ### Pre-development preparation
 
@@ -208,7 +227,11 @@ Any test case would be welcomed. Currently, Higress function test cases are high
 
 - **New Wasm plugins**: MUST include unit tests with at least 30% code coverage (enforced by CI).
 - **New core features**: SHOULD include unit tests and, where applicable, E2E conformance test cases.
-- **Bug fixes**: SHOULD include a regression test that reproduces the bug.
+- **Bug fixes**: MUST include a regression test and affected/pre-fix baseline
+  reproduction plus fixed-version confirmation using the same pinned inputs
+  and configuration. When the claim concerns runtime behavior, unit tests do
+  not replace that runtime evidence; see the
+  [runtime-verification policy](./docs/developers/agent-assisted-contributions.md#runtime-verification-for-bug-fixes).
 - **Patch coverage**: New or changed code must meet a 50% coverage target for the patch (enforced by Codecov via `codecov.yml`).
 
 ### How to write tests

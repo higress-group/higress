@@ -4,26 +4,39 @@
 
 此 SDK 用于使用 Go 语言开发 Higress 的 Wasm 插件。
 
+`mcp-server` 的 MCP `2026-07-28` 一致性验证有独立构建入口，不依赖仅扫描 `VERSION` 以 `-alpha` 结尾插件的批量规则：
+
+```bash
+make build-mcp-server-wasmplugin
+cd plugins/wasm-go/extensions/mcp-server && ./testdata/interop/run.sh
+```
+
+互操作测试固定使用官方 Go SDK `v1.7.0` 和 TypeScript Client `2.0.0`，分别要求 Go 1.25+ 和 Node.js 20+。详见 [mcp-server 文档](extensions/mcp-server/README.md)。
+
 ## 使用 Higress wasm-go builder 快速构建
 
 使用以下命令可以快速构建 wasm-go 插件:
 
 ```bash
 # NOTE: 如果你想在构建插件的时候设置额外的构建参数 EXTRA_TAGS
-# 请更新 extensions/${PLUGIN_NAME} 插件目录对应的 .buildrc 文件
-$ PLUGIN_NAME=request-block make build
+# 请更新 ${PLUGIN_ROOT}/${PLUGIN_NAME} 插件目录对应的 .buildrc 文件
+# NOTE: 如果你想自定义最终推送的镜像短名（覆盖默认的插件目录名），
+# 可以在 .buildrc 中添加 IMAGE_NAME=<your-image-name>。
+# 镜像短名只能包含小写字母、数字、`.`、`_`、`-`，否则构建会失败。
+# 本设置仅影响推送的镜像 tag，不影响源码路径。
+$ PLUGIN_ROOT=examples PLUGIN_NAME=request-block make build
 ```
 
 <details>
 <summary>输出结果</summary>
 <pre><code>
-DOCKER_BUILDKIT=1 docker build --build-arg PLUGIN_NAME=request-block \
+DOCKER_BUILDKIT=1 docker build --build-arg PLUGIN_ROOT=examples --build-arg PLUGIN_NAME=request-block \
                                -t request-block:20230223-173305-3b1a471 \
-                               --output extensions/request-block .
+                               --output examples/request-block .
 [+] Building 67.7s (12/12) FINISHED
 
 image:            request-block:20230223-173305-3b1a471
-output wasm file: extensions/request-block/plugin.wasm
+output wasm file: examples/request-block/plugin.wasm
 </code></pre>
 </details>
 
@@ -36,6 +49,7 @@ output wasm file: extensions/request-block/plugin.wasm
 | 参数名称          | 可选/必须 | 默认值                                       | 含义                                                                   |
 |---------------|-------|-------------------------------------------|----------------------------------------------------------------------|
 | `PLUGIN_NAME` | 可选的   | hello-world                               | 要构建的插件名称。                                                            |
+| `PLUGIN_ROOT` | 可选的   | extensions                                | 插件所在的根目录；构建参考插件时设为 `examples`。                                      |
 | `REGISTRY`    | 可选的   | 空                                         | 生成的镜像的仓库地址，如 `example.registry.io/my-name/`.  注意 REGISTRY 值应当以 / 结尾。 |
 | `IMG`         | 可选的   | 如不设置则根据仓库地址、插件名称、构建时间以及 git commit id 生成。 | 生成的镜像名称。如非空，则会覆盖`REGISTRY` 参数。                                       |
 
@@ -47,12 +61,12 @@ output wasm file: extensions/request-block/plugin.wasm
 
 - Go 版本: >= 1.24 (需要支持 wasm 构建特性)
 
-下面是本地多步骤构建 [request-block](extensions/request-block) 的例子。
+下面是本地多步骤构建 [request-block](examples/request-block) 参考插件的例子。
 
 ### step1. 编译 wasm
 
 ```bash
-GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ./extensions/request-block/main.wasm ./extensions/request-block
+GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ./examples/request-block/main.wasm ./examples/request-block
 
 ```
 
@@ -208,9 +222,9 @@ spec:
   defaultConfig:
     block_urls:
     - "swagger.html"
-  url: file:///opt/plugins/wasm-go/extensions/request-block/plugin.wasm
+  url: file:///opt/plugins/wasm-go/examples/request-block/plugin.wasm
 ```
-`其中url中extensions后面的'request-block'为插件所在文件夹名称`
+`其中 url 中 examples 后面的 request-block 为参考插件所在文件夹名称。参考插件不参与官方插件发布。`
 
 ./test/e2e/conformance/tests/request-block.go
 
@@ -247,5 +261,5 @@ cSuite.Setup(t)
 考虑到本地构建wasm比较耗时, 我们支持只构建需要测试的插件(同时你也可以临时修改上面第二小步的测试cases列表, 只执行你新写的case)。
 
 ```bash
-PLUGIN_NAME=request-block make higress-wasmplugin-test
+PLUGIN_ROOT=examples PLUGIN_NAME=request-block make higress-wasmplugin-test
 ```

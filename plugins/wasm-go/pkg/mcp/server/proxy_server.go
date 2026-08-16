@@ -39,6 +39,16 @@ const (
 	TransportSSE  TransportProtocol = "sse"  // SSE protocol
 )
 
+// ProtocolStrategy selects the upstream MCP protocol profile. The zero value
+// intentionally remains legacy so existing proxy configurations keep their
+// initialize/session behavior.
+type ProtocolStrategy string
+
+const (
+	ProtocolStrategyLegacy ProtocolStrategy = "legacy"
+	ProtocolStrategyModern ProtocolStrategy = "modern"
+)
+
 // ToolArg represents an argument for a proxy tool
 type ToolArg struct {
 	Name        string        `json:"name"`
@@ -75,16 +85,18 @@ type McpProxyServer struct {
 	mcpServerURL              string              // Backend MCP server URL
 	timeout                   int                 // Request timeout in milliseconds
 	transport                 TransportProtocol   // Transport protocol (http or sse)
+	protocolStrategy          ProtocolStrategy    // Upstream protocol profile (legacy or modern)
 	passthroughAuthHeader     bool                // If true, pass through Authorization header even without downstream security
 }
 
 // NewMcpProxyServer creates a new MCP proxy server
 func NewMcpProxyServer(name string) *McpProxyServer {
 	return &McpProxyServer{
-		Name:            name,
-		base:            NewBaseMCPServer(),
-		toolsConfig:     make(map[string]McpProxyToolConfig),
-		securitySchemes: make(map[string]SecurityScheme),
+		Name:             name,
+		base:             NewBaseMCPServer(),
+		toolsConfig:      make(map[string]McpProxyToolConfig),
+		securitySchemes:  make(map[string]SecurityScheme),
+		protocolStrategy: ProtocolStrategyLegacy,
 	}
 }
 
@@ -152,6 +164,17 @@ func (s *McpProxyServer) GetTransport() TransportProtocol {
 	return s.transport
 }
 
+func (s *McpProxyServer) SetProtocolStrategy(strategy ProtocolStrategy) {
+	s.protocolStrategy = strategy
+}
+
+func (s *McpProxyServer) GetProtocolStrategy() ProtocolStrategy {
+	if s.protocolStrategy == "" {
+		return ProtocolStrategyLegacy
+	}
+	return s.protocolStrategy
+}
+
 // AddMCPTool implements Server interface
 func (s *McpProxyServer) AddMCPTool(name string, tool Tool) Server {
 	s.base.AddMCPTool(name, tool)
@@ -187,10 +210,11 @@ func (s *McpProxyServer) GetConfig(v any) {
 // Clone implements Server interface
 func (s *McpProxyServer) Clone() Server {
 	newServer := &McpProxyServer{
-		Name:            s.Name,
-		base:            s.base.CloneBase(),
-		toolsConfig:     make(map[string]McpProxyToolConfig),
-		securitySchemes: make(map[string]SecurityScheme),
+		Name:             s.Name,
+		base:             s.base.CloneBase(),
+		toolsConfig:      make(map[string]McpProxyToolConfig),
+		securitySchemes:  make(map[string]SecurityScheme),
+		protocolStrategy: s.GetProtocolStrategy(),
 	}
 	for k, v := range s.toolsConfig {
 		newServer.toolsConfig[k] = v
@@ -255,9 +279,12 @@ func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error
 			proxywasm.RemoveHttpRequestHeader("Authorization")
 		}
 	}
+	_, modernDownstream := ModernRequestContext(wrapperCtx)
+	wrapperCtx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(wrapperCtx, modernDownstream && s.GetProtocolStrategy() == ProtocolStrategyModern))
 
 	// Create protocol handler using server fields
 	handler := NewMcpProtocolHandler(s.GetMcpServerURL(), s.GetTimeout())
+	handler.SetProtocolStrategy(s.GetProtocolStrategy())
 
 	// Prepare authentication information for gateway-to-backend communication
 	var authInfo *ProxyAuthInfo
@@ -267,6 +294,11 @@ func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error
 			SecuritySchemeID:      upstreamSecurity.ID,
 			PassthroughCredential: passthroughCredential,
 			Server:                s,
+		}
+	} else if s.GetPassthroughAuthHeader() {
+		authorization, _ := proxywasm.GetHttpRequestHeader("Authorization")
+		if authorization != "" {
+			authInfo = &ProxyAuthInfo{ForwardAuthorization: authorization, Server: s}
 		}
 	}
 
@@ -323,7 +355,6 @@ func (t *McpProxyTool) Call(httpCtx HttpContext, server Server) error {
 			log.Debugf("Using default downstream security for tool %s: %s", t.name, downstreamSecurity.ID)
 		}
 	}
-
 	if downstreamSecurity.ID != "" {
 		clientScheme, schemeOk := proxyServer.GetSecurityScheme(downstreamSecurity.ID)
 		if !schemeOk {
@@ -351,9 +382,12 @@ func (t *McpProxyTool) Call(httpCtx HttpContext, server Server) error {
 			proxywasm.RemoveHttpRequestHeader("Authorization")
 		}
 	}
+	_, modernDownstream := ModernRequestContext(ctx)
+	ctx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(ctx, modernDownstream && proxyServer.GetProtocolStrategy() == ProtocolStrategyModern))
 
 	// Create protocol handler using server fields
 	handler := NewMcpProtocolHandler(proxyServer.GetMcpServerURL(), proxyServer.GetTimeout())
+	handler.SetProtocolStrategy(proxyServer.GetProtocolStrategy())
 
 	// Prepare authentication information for gateway-to-backend communication
 	// toolConfig.RequestTemplate.Security represents gateway-to-backend authentication, falls back to server's defaultUpstreamSecurity
@@ -376,6 +410,11 @@ func (t *McpProxyTool) Call(httpCtx HttpContext, server Server) error {
 			SecuritySchemeID:      upstreamSecurity.ID,
 			PassthroughCredential: passthroughCredential,
 			Server:                proxyServer,
+		}
+	} else if proxyServer.GetPassthroughAuthHeader() {
+		authorization, _ := proxywasm.GetHttpRequestHeader("Authorization")
+		if authorization != "" {
+			authInfo = &ProxyAuthInfo{ForwardAuthorization: authorization, Server: proxyServer}
 		}
 	}
 

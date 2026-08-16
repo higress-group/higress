@@ -7,18 +7,19 @@ on:
     branches: ["*"]
 
 env:
-  GO_VERSION: 1.24
+  GO_VERSION: 1.26
 jobs:
   lint:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-    # There are too many lint errors in current code bases
-    # uncomment when we decide what lint should be addressed or ignored.
-    # - run: make lint
+      - name: Run Go vet
+        run: GOPROXY="https://proxy.golang.org,direct" make lint.vet
 
   coverage-test:
     runs-on: ubuntu-22.04
@@ -91,10 +92,214 @@ jobs:
           path: out/
 
   gateway-conformance-test:
+    name: ${{ matrix.check-name }}
     runs-on: ubuntu-22.04
-    needs: [build]
+    needs: [lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gateway-api-version: v1.4.0
+            check-name: gateway-conformance-test (v1.4.0)
+            test-directory: test/gateway/v1.4
+            crd-versions: v1.4.0
+            crd-channel: standard
+            required-crds: gatewayclasses.gateway.networking.k8s.io gateways.gateway.networking.k8s.io httproutes.gateway.networking.k8s.io referencegrants.gateway.networking.k8s.io
+            profiles: GATEWAY-HTTP
+            supported-features: Gateway,HTTPRoute,ReferenceGrant
+            allow-crds-mismatch: "false"
+            supports-test-cleanup: "false"
+          - gateway-api-version: v1.6.0
+            check-name: gateway-conformance-test (v1.6.0)
+            test-directory: test/gateway/v1.6
+            crd-versions: v1.6.0
+            crd-channel: standard
+            required-crds: gatewayclasses.gateway.networking.k8s.io gateways.gateway.networking.k8s.io httproutes.gateway.networking.k8s.io referencegrants.gateway.networking.k8s.io
+            profiles: GATEWAY-HTTP
+            supported-features: Gateway,HTTPRoute,ReferenceGrant
+            allow-crds-mismatch: "false"
+            supports-test-cleanup: "true"
+    env:
+      GATEWAY_API_TEST_NAMESPACE: gateway-conformance-infra
+      HIGRESS_TEST_IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HIGRESS_TEST_IMAGE_TAG }}
+
+      - name: Disable containerd image store
+        run: |
+          sudo bash -c 'cat > /etc/docker/daemon.json << EOF
+          {
+            "features": {
+              "containerd-snapshotter": false
+            }
+          }
+          EOF'
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
+
+      - name: Free Up GitHub Actions Ubuntu Runner Disk Space 🔧
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: "Setup Go"
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.test-directory }}/go.mod
+
+      - name: Setup Golang Caches
+        uses: actions/cache@v4
+        with:
+          path: |-
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-go
+
+      - name: Run Higress Gateway API Tests
+        run: |-
+          GOPROXY="https://proxy.golang.org,direct" make gateway-conformance-test \
+            TAG="${HIGRESS_TEST_IMAGE_TAG}" \
+            HIGRESS_CONFORMANCE_VERSION="${HIGRESS_TEST_IMAGE_TAG}" \
+            GATEWAY_API_VERSION="${{ matrix.gateway-api-version }}" \
+            GATEWAY_CONFORMANCE_TEST_DIR="${{ matrix.test-directory }}" \
+            GATEWAY_API_CRD_VERSIONS="${{ matrix.crd-versions }}" \
+            GATEWAY_API_CRD_CHANNEL="${{ matrix.crd-channel }}" \
+            GATEWAY_API_REQUIRED_CRDS="${{ matrix.required-crds }}" \
+            GATEWAY_CONFORMANCE_PROFILE="${{ matrix.profiles }}" \
+            GATEWAY_CONFORMANCE_SUPPORTED_FEATURES="${{ matrix.supported-features }}" \
+            GATEWAY_CONFORMANCE_ALLOW_CRDS_MISMATCH="${{ matrix.allow-crds-mismatch }}" \
+            GATEWAY_CONFORMANCE_SUPPORTS_TEST_CLEANUP="${{ matrix.supports-test-cleanup }}"
+
+      - name: Collect Gateway API Test Diagnostics
+        if: always()
+        run: |-
+          mkdir -p out/gateway-api-conformance/diagnostics
+          kubectl get gatewayclass,gateway,httproute,referencegrant -A -o yaml > out/gateway-api-conformance/diagnostics/resources.yaml 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > out/gateway-api-conformance/diagnostics/events.txt 2>&1 || true
+          kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-controller --all-containers > out/gateway-api-conformance/diagnostics/controller.log 2>&1 || true
+          kubectl logs -n "${GATEWAY_API_TEST_NAMESPACE}" deployment/higress-gateway --all-containers > out/gateway-api-conformance/diagnostics/gateway.log 2>&1 || true
+          tools/bin/kind-gateway-api export logs out/gateway-api-conformance/diagnostics/kind --name higress || true
+
+      - name: Upload Gateway API Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-conformance-test-${{ matrix.gateway-api-version }}
+          path: out/gateway-api-conformance/
+          if-no-files-found: warn
+
+      - name: Clean Gateway API Test Environment
+        if: always()
+        run: make gateway-conformance-test-clean
+
+  inference-extension-conformance-test:
+    name: ${{ matrix.check-name }}
+    runs-on: ubuntu-22.04
+    needs: [lint]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each release is intentionally isolated. To add a new release, add one
+          # entry with the versions declared by that release's go.work/go.mod and
+          # the gateway image built for the corresponding data-plane support.
+          - inference-extension-version: v1.4.0
+            gateway-api-version: v1.5.0
+            go-version: 1.25.0
+            expected-passed: 12
+            gateway-image-tag: gie-v14-dc8a83fe-gofilter
+            gateway-image-digest: sha256:057171104acacc7381560e41491511dde0f919d44afe3860b7c8654736b98957
+            check-name: inference-extension-conformance-test (v1.4.0)
+    env:
+      HIGRESS_TEST_IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
+      INFERENCE_EXTENSION_SYSTEM_NAMESPACE: inference-conformance-infra
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HIGRESS_TEST_IMAGE_TAG }}
+
+      - name: Disable containerd image store
+        run: |
+          sudo bash -c 'cat > /etc/docker/daemon.json << EOF
+          {
+            "features": {
+              "containerd-snapshotter": false
+            }
+          }
+          EOF'
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
+
+      - name: Free Up GitHub Actions Ubuntu Runner Disk Space 🔧
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Setup Golang Caches
+        uses: actions/cache@v4
+        with:
+          path: |-
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-gie-${{ matrix.inference-extension-version }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-gie-${{ matrix.inference-extension-version }}-
+            ${{ runner.os }}-go-
+
+      - name: Run Gateway API Inference Extension Conformance Tests
+        run: |-
+          GOPROXY="https://proxy.golang.org,direct" make inference-extension-conformance-test \
+            TAG="${HIGRESS_TEST_IMAGE_TAG}" \
+            HIGRESS_CONFORMANCE_VERSION="${HIGRESS_TEST_IMAGE_TAG}" \
+            INFERENCE_EXTENSION_VERSION="${{ matrix.inference-extension-version }}" \
+            INFERENCE_EXTENSION_GATEWAY_API_VERSION="${{ matrix.gateway-api-version }}" \
+            INFERENCE_EXTENSION_EXPECTED_PASSED="${{ matrix.expected-passed }}" \
+            INFERENCE_EXTENSION_GATEWAY_IMAGE_TAG="${{ matrix.gateway-image-tag }}" \
+            INFERENCE_EXTENSION_GATEWAY_IMAGE_DIGEST="${{ matrix.gateway-image-digest }}"
+
+      - name: Collect Inference Extension Test Diagnostics
+        if: always()
+        run: |-
+          mkdir -p out/gateway-api-inference-extension/diagnostics
+          kubectl get gatewayclass,gateway,httproute,inferencepool,service,pod -A -o yaml > out/gateway-api-inference-extension/diagnostics/resources.yaml 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > out/gateway-api-inference-extension/diagnostics/events.txt 2>&1 || true
+          kubectl logs -n "${INFERENCE_EXTENSION_SYSTEM_NAMESPACE}" deployment/higress-controller --all-containers --prefix > out/gateway-api-inference-extension/diagnostics/controller.log 2>&1 || true
+          kubectl logs -n "${INFERENCE_EXTENSION_SYSTEM_NAMESPACE}" deployment/higress-gateway --all-containers --prefix > out/gateway-api-inference-extension/diagnostics/gateway.log 2>&1 || true
+          for pod in $(kubectl get pod -n inference-conformance-app-backend -o name 2>/dev/null); do
+            kubectl logs -n inference-conformance-app-backend "${pod}" --all-containers --prefix
+          done > out/gateway-api-inference-extension/diagnostics/backends.log 2>&1 || true
+          tools/bin/kind-gateway-api export logs out/gateway-api-inference-extension/diagnostics/kind --name higress || true
+
+      - name: Upload Inference Extension Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inference-extension-conformance-test-${{ matrix.inference-extension-version }}
+          path: out/gateway-api-inference-extension/
+          if-no-files-found: warn
+
+      - name: Clean Inference Extension Test Environment
+        if: always()
+        run: make inference-extension-conformance-test-clean
 
   higress-conformance-test:
     runs-on: ubuntu-22.04
@@ -152,6 +357,6 @@ jobs:
 
   publish:
     runs-on: ubuntu-22.04
-    needs: [higress-conformance-test, gateway-conformance-test]
+    needs: [higress-conformance-test, gateway-conformance-test, inference-extension-conformance-test]
     steps:
       - uses: actions/checkout@v4

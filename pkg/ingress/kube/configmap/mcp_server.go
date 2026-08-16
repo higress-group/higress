@@ -495,22 +495,21 @@ func (m *McpServerController) constructMcpSessionStruct(mcp *McpServer) string {
 			continue
 		}
 		for _, server := range servers {
-			matchRuleDomain := ""
-			if len(server.Domains) != 0 {
-				if len(server.Domains) > 1 {
-					matchRuleDomain = fmt.Sprintf("(%s)", strings.Join(server.Domains, "|"))
-				} else {
-					matchRuleDomain = server.Domains[0]
-				}
+			domains := server.Domains
+			if len(domains) == 0 {
+				// Preserve the existing rule generated for providers without domains.
+				domains = []string{""}
 			}
-			matchList = append(matchList, &MatchRule{
-				MatchRuleDomain:   matchRuleDomain,
-				MatchRuleType:     server.PathMatchType,
-				MatchRulePath:     server.PathMatchValue,
-				UpstreamType:      server.UpstreamType,
-				EnablePathRewrite: server.EnablePathRewrite,
-				PathRewritePrefix: server.PathRewritePrefix,
-			})
+			for _, domain := range domains {
+				matchList = append(matchList, &MatchRule{
+					MatchRuleDomain:   domain,
+					MatchRuleType:     server.PathMatchType,
+					MatchRulePath:     server.PathMatchValue,
+					UpstreamType:      server.UpstreamType,
+					EnablePathRewrite: server.EnablePathRewrite,
+					PathRewritePrefix: server.PathRewritePrefix,
+				})
+			}
 		}
 	}
 	matchListConfig := "[]"

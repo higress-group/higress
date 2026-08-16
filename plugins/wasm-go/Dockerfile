@@ -6,12 +6,13 @@ ARG GOPROXY
 ENV GOPROXY=${GOPROXY}
 
 ARG PLUGIN_NAME=hello-world
+ARG PLUGIN_ROOT=extensions
 
 WORKDIR /workspace
 
 COPY . .
 
-WORKDIR /workspace/extensions/$PLUGIN_NAME
+WORKDIR /workspace/$PLUGIN_ROOT/$PLUGIN_NAME
 
 RUN go mod tidy
 RUN if [ -f prepare.sh ]; then sh ./prepare.sh; fi
