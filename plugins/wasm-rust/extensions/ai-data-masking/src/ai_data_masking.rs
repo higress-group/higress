@@ -68,6 +68,7 @@ struct AiDataMasking {
     msg_window: MsgWindow,
     char_window_size: usize,
     byte_window_size: usize,
+    deny: bool,
 }
 fn deserialize_regexp<'de, D>(deserializer: D) -> Result<Regex, D::Error>
 where
@@ -362,6 +363,7 @@ impl RootContextWrapper<AiDataMaskingConfig> for AiDataMaskingRoot {
             log: Log::new(PLUGIN_NAME.to_string()),
             char_window_size: 0,
             byte_window_size: 0,
+            deny: false,
         }))
     }
 }
@@ -380,23 +382,20 @@ impl AiDataMasking {
         } else if self.stream {
             (
                 format!(
-                    "data:{}\n\n",
-                    json!({"choices": [{"index": 0, "delta": {"role": "assistant", "content": msg}}], "usage": {}})
+                    "data:{}\n\ndata: [DONE]\n\n",
+                    json!({"choices": [{"index": 0, "delta": {"role": "assistant", "content": msg, "finish_reason": "deny"}}], "usage": {}})
                 ),
                 "text/event-stream;charset=UTF-8".to_string(),
             )
         } else {
             (
-                json!({"choices": [{"index": 0, "message": {"role": "assistant", "content": msg}}], "usage": {}}).to_string(),
+                json!({"choices": [{"index": 0, "message": {"role": "assistant", "content": msg, "finish_reason": "deny"}}], "usage": {}}).to_string(),
                  "application/json".to_string()
             )
         }
     }
     fn deny(&mut self, in_response: bool) -> DataAction {
-        if in_response && self.stream {
-            self.replace_http_response_body(&[]);
-            return DataAction::Continue;
-        }
+        self.deny = true;
         let (deny_code, (deny_message, content_type)) = if let Some(config) = &self.config {
             (
                 config.deny_code,
@@ -514,6 +513,10 @@ impl HttpContext for AiDataMasking {
         if !self.stream {
             return DataAction::Continue;
         }
+        if self.deny {
+            self.replace_http_response_body(&[]);
+            return DataAction::Continue;
+        }
         if body_size > 0 {
             if let Some(body) = self.get_http_response_body(0, body_size) {
                 if self.is_openai && self.is_openai_stream.is_none() {
@@ -556,6 +559,12 @@ impl HttpContext for AiDataMasking {
                 self.is_openai_stream.unwrap(),
             )
         };
+        self.log().debugf(format_args!(
+            "char_window_size: {}, byte_window_size: {}, new_body {}",
+            self.char_window_size,
+            self.byte_window_size,
+            String::from_utf8_lossy(&new_body)
+        ));
         self.replace_http_response_body(&new_body);
         DataAction::Continue
     }
@@ -573,6 +582,21 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
     }
     fn on_config(&mut self, config: Rc<AiDataMaskingConfig>) {
         self.config = Some(config.clone());
+
+        let (max_char_size, max_byte_size) = config.deny_words.get_max_size();
+        let (sys_max_char_size, sys_max_byte_size) = if config.system_deny {
+            config.deny_words.get_max_size()
+        } else {
+            (0, 0)
+        };
+        self.char_window_size = self
+            .char_window_size
+            .max(max_char_size)
+            .max(sys_max_char_size);
+        self.byte_window_size = self
+            .byte_window_size
+            .max(max_byte_size)
+            .max(sys_max_byte_size);
     }
     fn cache_request_body(&self) -> bool {
         true
