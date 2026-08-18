@@ -1,0 +1,28 @@
+diff -Naur istio/pilot/pkg/xds/discovery.go istio_new/pilot/pkg/xds/discovery.go
+--- istio/pilot/pkg/xds/discovery.go	2024-04-12 18:10:38.866840552 +0800
++++ istio_new/pilot/pkg/xds/discovery.go	2024-04-12 18:13:56.689402752 +0800
+@@ -409,6 +409,11 @@
+ // ConfigUpdate implements ConfigUpdater interface, used to request pushes.
+ // It replaces the 'clear cache' from v1.
+ func (s *DiscoveryServer) ConfigUpdate(req *model.PushRequest) {
++        if s.Env.Mesh().IgnorePushRequest {
++		log.Infof("the mesh config \"ignorePushRequest\" is true, so ignore this config update")
++		return
++	}
++
+ 	if req.Full {
+ 		log.Infof("full push happen, reason:%v", req.Reason)
+ 	}
+diff -Naur istio/pkg/config/mesh/mesh.go istio_new/pkg/config/mesh/mesh.go
+--- istio/pkg/config/mesh/mesh.go	2024-04-12 18:10:38.754837855 +0800
++++ istio_new/pkg/config/mesh/mesh.go	2024-04-12 18:09:57.557826604 +0800
+@@ -100,7 +100,8 @@
+ 		ThriftConfig:                   &meshconfig.MeshConfig_ThriftConfig{},
+ 		ServiceSettings:                make([]*meshconfig.MeshConfig_ServiceSettings, 0),
+ 
+-		DefaultProviders: &meshconfig.MeshConfig_DefaultProviders{},
++		DefaultProviders:  &meshconfig.MeshConfig_DefaultProviders{},
++		IgnorePushRequest: false,
+ 		ExtensionProviders: []*meshconfig.MeshConfig_ExtensionProvider{
+ 			{
+ 				Name: "prometheus",
