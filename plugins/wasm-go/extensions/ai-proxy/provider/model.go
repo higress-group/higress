@@ -193,8 +193,13 @@ type usage struct {
 }
 
 type promptTokensDetails struct {
-	AudioTokens  int `json:"audio_tokens,omitempty"`
-	CachedTokens int `json:"cached_tokens,omitempty"`
+	AudioTokens      int `json:"audio_tokens,omitempty"`
+	CachedTokens     int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+}
+
+func (d *promptTokensDetails) cacheTokenUsage() (int, int) {
+	return d.CachedTokens, d.CacheWriteTokens
 }
 
 type completionTokensDetails struct {

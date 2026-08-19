@@ -1409,6 +1409,108 @@ func TestClaudeToOpenAIConverter_ConvertReasoningResponseToClaude(t *testing.T) 
 	}
 }
 
+func TestClaudeToOpenAIConverter_ConvertOpenAIResponseToClaude_WithCacheTokenDetails(t *testing.T) {
+	tests := []struct {
+		name                  string
+		promptTokensDetails   string
+		expectedInput         int
+		expectedCacheRead     int
+		expectedCacheCreation int
+	}{
+		{
+			name:                  "cache read and write details",
+			promptTokensDetails:   `{"cached_tokens":7,"cache_write_tokens":3}`,
+			expectedInput:         93,
+			expectedCacheRead:     7,
+			expectedCacheCreation: 3,
+		},
+		{
+			name:                  "only cache write details",
+			promptTokensDetails:   `{"cache_write_tokens":3}`,
+			expectedInput:         100,
+			expectedCacheCreation: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			converter := &ClaudeToOpenAIConverter{}
+			openAIResponse := []byte(`{
+				"id":"chatcmpl-test",
+				"model":"gpt-4o",
+				"choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
+				"usage":{
+					"prompt_tokens":100,
+					"completion_tokens":20,
+					"total_tokens":120,
+					"prompt_tokens_details":` + tt.promptTokensDetails + `
+				}
+			}`)
+
+			result, err := converter.ConvertOpenAIResponseToClaude(nil, openAIResponse)
+			require.NoError(t, err)
+
+			var claudeResponse claudeTextGenResponse
+			require.NoError(t, json.Unmarshal(result, &claudeResponse))
+			assert.Equal(t, tt.expectedInput, claudeResponse.Usage.InputTokens)
+			assert.Equal(t, 20, claudeResponse.Usage.OutputTokens)
+			assert.Equal(t, tt.expectedCacheRead, claudeResponse.Usage.CacheReadInputTokens)
+			assert.Equal(t, tt.expectedCacheCreation, claudeResponse.Usage.CacheCreationInputTokens)
+		})
+	}
+}
+
+func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_WithCacheTokenDetails(t *testing.T) {
+	tests := []struct {
+		name                  string
+		promptTokensDetails   string
+		expectedInput         string
+		expectedCacheRead     string
+		expectedCacheCreation string
+	}{
+		{
+			name:                  "cache read and write details",
+			promptTokensDetails:   `{"cached_tokens":7,"cache_write_tokens":3}`,
+			expectedInput:         `"input_tokens":93`,
+			expectedCacheRead:     `"cache_read_input_tokens":7`,
+			expectedCacheCreation: `"cache_creation_input_tokens":3`,
+		},
+		{
+			name:                  "only cache write details",
+			promptTokensDetails:   `{"cache_write_tokens":3}`,
+			expectedInput:         `"input_tokens":100`,
+			expectedCacheCreation: `"cache_creation_input_tokens":3`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			converter := &ClaudeToOpenAIConverter{}
+			streamChunk := "data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+				"data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":" +
+				tt.promptTokensDetails + "}}\n\n"
+
+			result, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(streamChunk))
+			require.NoError(t, err)
+
+			resultStr := string(result)
+			assert.Contains(t, resultStr, `"type":"message_delta"`)
+			assert.Contains(t, resultStr, tt.expectedInput)
+			assert.Contains(t, resultStr, `"output_tokens":20`)
+			if tt.expectedCacheRead == "" {
+				assert.NotContains(t, resultStr, `"cache_read_input_tokens"`)
+			} else {
+				assert.Contains(t, resultStr, tt.expectedCacheRead)
+			}
+			if tt.expectedCacheCreation == "" {
+				assert.NotContains(t, resultStr, `"cache_creation_input_tokens"`)
+			} else {
+				assert.Contains(t, resultStr, tt.expectedCacheCreation)
+			}
+		})
+	}
+}
+
 func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_WithCachedTokens(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
 
