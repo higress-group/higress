@@ -104,7 +104,6 @@ type KVExtractor struct {
 }
 
 func parseConfig(json gjson.Result, c *PluginConfig, log log.Log) error {
-	log.Infof("config:%s", json.Raw)
 	// init scene
 	c.SceneInfo.Category = json.Get("scene.category").String()
 	log.Infof("SceneInfo.Category:%s", c.SceneInfo.Category)
@@ -119,7 +118,6 @@ func parseConfig(json gjson.Result, c *PluginConfig, log log.Log) error {
 	if c.SceneInfo.Prompt == "" {
 		c.SceneInfo.Prompt = DefaultPrompt
 	}
-	log.Infof("SceneInfo.Prompt:%s", c.SceneInfo.Prompt)
 	// init llmProxy
 	log.Debug("Start to init proxyService's http client.")
 	c.LLMInfo.ProxyServiceName = json.Get("llm.proxyServiceName").String()
@@ -128,7 +126,6 @@ func parseConfig(json gjson.Result, c *PluginConfig, log log.Log) error {
 		return errors.New("llm.proxyServiceName must not by empty")
 	}
 	c.LLMInfo.ProxyUrl = json.Get("llm.proxyUrl").String()
-	log.Infof("c.LLMInfo.ProxyUrl:%s", c.LLMInfo.ProxyUrl)
 	if c.LLMInfo.ProxyUrl == "" {
 		return errors.New("llm.proxyUrl must not by empty")
 	}
@@ -184,7 +181,6 @@ func parseConfig(json gjson.Result, c *PluginConfig, log log.Log) error {
 		c.LLMInfo.ProxyTimeout = defaultTimeout
 	}
 	c.LLMInfo.ProxyApiKey = json.Get("llm.proxyApiKey").String()
-	log.Infof("c.LLMInfo.ProxyApiKey:%s", c.LLMInfo.ProxyApiKey)
 	c.KeyFrom.RequestBody = json.Get("keyFrom.requestBody").String()
 	if c.KeyFrom.RequestBody == "" {
 		c.KeyFrom.RequestBody = "messages.@reverse.0.content"
