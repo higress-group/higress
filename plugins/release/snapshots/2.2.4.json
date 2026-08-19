@@ -718,10 +718,10 @@
       "image": "plugins/mcp-server",
       "version": "2.0.1",
       "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-server:2.0.1",
-      "digest": "sha256:1fe9a60eae0563e855cf66ead8062e14bc57f823b431a90963b4a026373cd6da",
-      "inputHash": "sha256:6f5f2097da93edfe478d1432496509bfcd8f861db71786d8e0f96fb7563c8c55",
-      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
-      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/mcp-server:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043566f5f2097da93edfe478d1432496509bfcd8f861db71786d8e0f96fb7563c8c55@sha256:1fe9a60eae0563e855cf66ead8062e14bc57f823b431a90963b4a026373cd6da",
+      "digest": "sha256:dc855ad0f911a8ae0a36af1c55fd0f1afe6c0cfbbfb5cb885d0f43b03d5b9502",
+      "inputHash": "sha256:17518be24d7e0c16e685f78318045a0d2f14a5db0d17873cdd8678b5ea113951",
+      "sourceCommit": "394a644a724b6ef6e56b2fab0e9b086999937b39",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-server:2.0.1@sha256:dc855ad0f911a8ae0a36af1c55fd0f1afe6c0cfbbfb5cb885d0f43b03d5b9502",
       "provenanceMode": "candidate",
       "consumers": {
         "console": {

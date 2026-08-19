@@ -187,10 +187,17 @@
       "inputHash": "sha256:e0201480ccd7a5f3f646276e590a308784450673092541baa039eb55f83f79c3"
     },
     "mcp-server": {
-      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/mcp-server:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043566f5f2097da93edfe478d1432496509bfcd8f861db71786d8e0f96fb7563c8c55@sha256:1fe9a60eae0563e855cf66ead8062e14bc57f823b431a90963b4a026373cd6da",
-      "digest": "sha256:1fe9a60eae0563e855cf66ead8062e14bc57f823b431a90963b4a026373cd6da",
-      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
-      "inputHash": "sha256:6f5f2097da93edfe478d1432496509bfcd8f861db71786d8e0f96fb7563c8c55"
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-server:2.0.1@sha256:dc855ad0f911a8ae0a36af1c55fd0f1afe6c0cfbbfb5cb885d0f43b03d5b9502",
+      "digest": "sha256:dc855ad0f911a8ae0a36af1c55fd0f1afe6c0cfbbfb5cb885d0f43b03d5b9502",
+      "sourceCommit": "394a644a724b6ef6e56b2fab0e9b086999937b39",
+      "inputHash": "sha256:17518be24d7e0c16e685f78318045a0d2f14a5db0d17873cdd8678b5ea113951",
+      "provenanceMode": "emergency-overwrite",
+      "emergencyOverwrite": {
+        "runId": 32254841269,
+        "previousDigest": "sha256:a997902aa59115a95d3b9badd2c20b202cb79a9a7b92db28841a1c94acf59fd3",
+        "workflow": "emergency-overwrite-plugin-tag.yaml",
+        "reason": "mcp capability tolerance fix #4573 (urgent, same-version recovery)"
+      }
     },
     "model-mapper": {
       "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/model-mapper:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356738e1ff769fc53d5d882aa99e7a1b0e70415dcfdc33fbfc82c7f42bda7344089@sha256:e587c00a42abae26ce7086d8fc1652ab560e2b3f72125ae655fc8aeaf504181b",
