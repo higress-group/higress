@@ -22,6 +22,7 @@ const (
 	maxSegmentBytes  = MaxSegmentTokens * 4
 	// Over-budget tool schemas fall back to non-prefix scheduling.
 	maxCanonicalNodes = 16384
+	maxJSONDepth      = 64
 )
 
 type segmentKind byte
@@ -61,41 +62,72 @@ const (
 // unescaped directly into bounded hash buffers instead of materializing a full
 // decoded string or token slice.
 func Extract(body []byte) (*Locality, bool, error) {
+	_, locality, supported, err := InspectRequest(body)
+	return locality, supported, err
+}
+
+// InspectRequest validates the bounded request envelope, extracts the model,
+// and derives approximate prefix locality. Requests beyond the canonical depth
+// limit retain a safely extracted top-level model but disable prefix locality.
+func InspectRequest(body []byte) (string, *Locality, bool, error) {
+	start := skipWhitespace(body, 0)
+	if start >= len(body) || body[start] != '{' {
+		return "", nil, false, fmt.Errorf("expected JSON object")
+	}
+	end, err := scanJSONValue(body, start)
+	if errors.Is(err, errJSONDepthLimit) {
+		model, modelErr := extractModelFromDeepEnvelope(body)
+		if modelErr != nil {
+			return "", nil, false, modelErr
+		}
+		return model, nil, false, nil
+	}
+	if err != nil || skipWhitespace(body, end) != len(body) || !json.Valid(body) {
+		return "", nil, false, fmt.Errorf("invalid JSON request")
+	}
+	return inspectValidatedRequest(body)
+}
+
+func inspectValidatedRequest(body []byte) (string, *Locality, bool, error) {
 	fields, err := parseObjectFields(body)
 	if err != nil {
-		return nil, false, err
+		return "", nil, false, err
 	}
 	modelRaw := fieldValue(fields, "model")
-	if modelRaw == nil {
-		return nil, false, fmt.Errorf("model is required")
+	model, err := decodeSmallString(modelRaw)
+	if err != nil || model == "" {
+		return "", nil, false, fmt.Errorf("model is required")
 	}
-	modelLength, err := decodedStringLength(modelRaw)
-	if err != nil || modelLength == 0 {
-		return nil, false, fmt.Errorf("model is required")
-	}
+	modelLength := len(model)
 	cacheSaltRaw := fieldValue(fields, "cache_salt")
 	if bytes.Equal(bytes.TrimSpace(cacheSaltRaw), []byte("null")) {
 		cacheSaltRaw = nil
 	}
 	seed, err := namespaceHash(modelRaw, modelLength, cacheSaltRaw)
 	if err != nil {
-		return nil, false, err
+		return "", nil, false, err
 	}
 	if messages := fieldValue(fields, "messages"); messages != nil {
 		chains, supported, err := extractChat(messages, fieldValue(fields, "tools"), seed)
-		if err != nil || !supported {
-			return nil, supported, err
+		if errors.Is(err, errCanonicalComplexity) || errors.Is(err, errJSONDepthLimit) {
+			return model, nil, false, nil
 		}
-		return &Locality{Chains: chains}, true, nil
+		if err != nil || !supported {
+			return model, nil, supported, err
+		}
+		return model, &Locality{Chains: chains}, true, nil
 	}
 	if prompt := fieldValue(fields, "prompt"); prompt != nil {
 		chains, supported, err := extractCompletion(prompt, seed)
-		if err != nil || !supported {
-			return nil, supported, err
+		if errors.Is(err, errCanonicalComplexity) || errors.Is(err, errJSONDepthLimit) {
+			return model, nil, false, nil
 		}
-		return &Locality{Chains: chains}, true, nil
+		if err != nil || !supported {
+			return model, nil, supported, err
+		}
+		return model, &Locality{Chains: chains}, true, nil
 	}
-	return nil, false, nil
+	return model, nil, false, nil
 }
 
 func extractChat(rawMessages, rawTools []byte, seed uint64) ([][]Block, bool, error) {
@@ -109,7 +141,7 @@ func extractChat(rawMessages, rawTools []byte, seed uint64) ([][]Block, bool, er
 		if hasValues {
 			builder := newSegmentBuilder(&chain, segmentTools, 0, &previous, &totalTokens)
 			writer := &canonicalBudgetWriter{target: builder, remaining: maxCanonicalNodes}
-			if err := writeCanonicalJSON(rawTools, writer); errors.Is(err, errCanonicalComplexity) {
+			if err := writeCanonicalJSON(rawTools, writer); errors.Is(err, errCanonicalComplexity) || errors.Is(err, errJSONDepthLimit) {
 				return nil, false, nil
 			} else if err != nil && !errors.Is(err, errSemanticCap) {
 				return nil, false, err
@@ -169,6 +201,7 @@ func extractChat(rawMessages, rawTools []byte, seed uint64) ([][]Block, bool, er
 var errUnsupportedContent = errors.New("unsupported non-text content")
 var errSemanticCap = errors.New("semantic prefix cap reached")
 var errCanonicalComplexity = errors.New("canonical JSON complexity limit exceeded")
+var errJSONDepthLimit = errors.New("JSON nesting depth limit exceeded")
 
 func hasTopLevelMultimodal(fields []jsonField) bool {
 	for _, name := range []string{"audio", "input_audio", "image", "image_url", "video", "video_url"} {
@@ -269,9 +302,12 @@ func extractCompletion(raw []byte, seed uint64) ([][]Block, bool, error) {
 	err := forEachArrayValue(trimmed, func(item []byte) error {
 		item = bytes.TrimSpace(item)
 		if mode == 0 {
-			if isJSONString(item) {
+			switch {
+			case isJSONString(item):
 				mode = 's'
-			} else {
+			case len(item) > 0 && item[0] == '[':
+				mode = 'b'
+			default:
 				mode = 'n'
 				tokenBuilder = newTokenChainBuilder(seed)
 			}
@@ -290,7 +326,13 @@ func extractCompletion(raw []byte, seed uint64) ([][]Block, bool, error) {
 			chains = append(chains, chain)
 			return nil
 		}
-		if isJSONString(item) {
+		if mode == 'b' {
+			if len(item) == 0 || item[0] != '[' {
+				return fmt.Errorf("prompt contains mixed types")
+			}
+			return validateTokenIDArray(item)
+		}
+		if isJSONString(item) || (len(item) > 0 && item[0] == '[') {
 			return fmt.Errorf("prompt contains mixed types")
 		}
 		if tokenBuilder.total >= MaxPrefixTokens {
@@ -304,7 +346,19 @@ func extractCompletion(raw []byte, seed uint64) ([][]Block, bool, error) {
 	if tokenBuilder != nil {
 		chains = append(chains, tokenBuilder.finish())
 	}
+	if mode == 'b' {
+		return nil, false, nil
+	}
 	return chains, true, nil
+}
+
+func validateTokenIDArray(raw []byte) error {
+	return forEachArrayValue(raw, func(item []byte) error {
+		if _, ok := parseUint32(item); !ok {
+			return fmt.Errorf("prompt token ID is invalid")
+		}
+		return nil
+	})
 }
 
 type segmentBuilder struct {
@@ -485,6 +539,10 @@ func (writer *boundedWriter) semanticCapReached() bool { return writer.remaining
 func (writer *boundedWriter) inputLimit() int { return writer.remaining }
 
 func writeCanonicalJSON(raw []byte, writer io.Writer) error {
+	return writeCanonicalJSONAtDepth(raw, writer, 1)
+}
+
+func writeCanonicalJSONAtDepth(raw []byte, writer io.Writer, depth int) error {
 	if semanticCapReached(writer) {
 		return errSemanticCap
 	}
@@ -497,6 +555,9 @@ func writeCanonicalJSON(raw []byte, writer io.Writer) error {
 	}
 	switch raw[0] {
 	case '{':
+		if depth > maxJSONDepth {
+			return errJSONDepthLimit
+		}
 		fields, err := parseObjectFieldsLimited(raw, canonicalNodesRemaining(writer))
 		if err != nil {
 			return err
@@ -504,8 +565,11 @@ func writeCanonicalJSON(raw []byte, writer io.Writer) error {
 		if !consumeCanonicalNodes(writer, len(fields)) {
 			return errCanonicalComplexity
 		}
-		return writeCanonicalObject(fields, writer)
+		return writeCanonicalObjectAtDepth(fields, writer, depth)
 	case '[':
+		if depth > maxJSONDepth {
+			return errJSONDepthLimit
+		}
 		if _, err := writer.Write([]byte{'['}); err != nil {
 			return err
 		}
@@ -520,7 +584,7 @@ func writeCanonicalJSON(raw []byte, writer io.Writer) error {
 				}
 			}
 			first = false
-			return writeCanonicalJSON(value, writer)
+			return writeCanonicalJSONAtDepth(value, writer, depth+1)
 		})
 		if err != nil {
 			return err
@@ -536,6 +600,10 @@ func writeCanonicalJSON(raw []byte, writer io.Writer) error {
 }
 
 func writeCanonicalObject(fields []jsonField, writer io.Writer) error {
+	return writeCanonicalObjectAtDepth(fields, writer, 1)
+}
+
+func writeCanonicalObjectAtDepth(fields []jsonField, writer io.Writer, depth int) error {
 	if semanticCapReached(writer) {
 		return errSemanticCap
 	}
@@ -559,7 +627,7 @@ func writeCanonicalObject(fields []jsonField, writer io.Writer) error {
 		if _, err := writer.Write([]byte{':'}); err != nil {
 			return err
 		}
-		if err := writeCanonicalJSON(field.value, writer); err != nil {
+		if err := writeCanonicalJSONAtDepth(field.value, writer, depth+1); err != nil {
 			return err
 		}
 	}
@@ -895,7 +963,9 @@ func scanJSONValue(raw []byte, start int) (int, error) {
 		}
 		return end, nil
 	}
-	stack := []byte{raw[start]}
+	var stack [maxJSONDepth]byte
+	stack[0] = raw[start]
+	depth := 1
 	for position := start + 1; position < len(raw); position++ {
 		switch raw[position] {
 		case '"':
@@ -905,17 +975,116 @@ func scanJSONValue(raw []byte, start int) (int, error) {
 			}
 			position = end - 1
 		case '{', '[':
-			stack = append(stack, raw[position])
+			if depth == len(stack) {
+				return 0, errJSONDepthLimit
+			}
+			stack[depth] = raw[position]
+			depth++
 		case '}', ']':
 			expected := byte('{')
 			if raw[position] == ']' {
 				expected = '['
 			}
-			if len(stack) == 0 || stack[len(stack)-1] != expected {
+			if depth == 0 || stack[depth-1] != expected {
 				return 0, fmt.Errorf("mismatched JSON delimiter")
 			}
-			stack = stack[:len(stack)-1]
-			if len(stack) == 0 {
+			depth--
+			if depth == 0 {
+				return position + 1, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("unterminated JSON value")
+}
+
+func extractModelFromDeepEnvelope(raw []byte) (string, error) {
+	position := skipWhitespace(raw, 0)
+	if position >= len(raw) || raw[position] != '{' {
+		return "", fmt.Errorf("expected JSON object")
+	}
+	position++
+	model := ""
+	for {
+		position = skipWhitespace(raw, position)
+		if position >= len(raw) {
+			return "", fmt.Errorf("unterminated JSON object")
+		}
+		if raw[position] == '}' {
+			position = skipWhitespace(raw, position+1)
+			if position != len(raw) || model == "" {
+				return "", fmt.Errorf("model is required")
+			}
+			return model, nil
+		}
+		keyEnd, err := scanJSONString(raw, position)
+		if err != nil {
+			return "", err
+		}
+		key, err := decodeSmallString(raw[position:keyEnd])
+		if err != nil {
+			return "", err
+		}
+		position = skipWhitespace(raw, keyEnd)
+		if position >= len(raw) || raw[position] != ':' {
+			return "", fmt.Errorf("missing JSON object colon")
+		}
+		position = skipWhitespace(raw, position+1)
+		valueEnd, err := scanJSONValueUnbounded(raw, position)
+		if err != nil {
+			return "", err
+		}
+		if key == "model" {
+			model, err = decodeSmallString(raw[position:valueEnd])
+			if err != nil || model == "" {
+				return "", fmt.Errorf("model is required")
+			}
+		}
+		position = skipWhitespace(raw, valueEnd)
+		if position < len(raw) && raw[position] == ',' {
+			position++
+			continue
+		}
+		if position < len(raw) && raw[position] == '}' {
+			continue
+		}
+		return "", fmt.Errorf("invalid JSON object separator")
+	}
+}
+
+// scanJSONValueUnbounded is used only after the strict preflight has already
+// classified the request as over-depth. It keeps an integer nesting counter so
+// locating later top-level fields remains linear and allocation-free.
+func scanJSONValueUnbounded(raw []byte, start int) (int, error) {
+	if start >= len(raw) {
+		return 0, fmt.Errorf("missing JSON value")
+	}
+	if raw[start] == '"' {
+		return scanJSONString(raw, start)
+	}
+	if raw[start] != '{' && raw[start] != '[' {
+		end := start
+		for end < len(raw) && !isValueDelimiter(raw[end]) {
+			end++
+		}
+		if end == start {
+			return 0, fmt.Errorf("invalid JSON value")
+		}
+		return end, nil
+	}
+	depth := 1
+	for position := start + 1; position < len(raw); position++ {
+		switch raw[position] {
+		case '"':
+			end, err := scanJSONString(raw, position)
+			if err != nil {
+				return 0, err
+			}
+			position = end - 1
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
 				return position + 1, nil
 			}
 		}

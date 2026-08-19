@@ -2,6 +2,7 @@ package prefixcache
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -147,6 +148,87 @@ func TestCompletionsTextTokenIDsAndMultiplePrompts(t *testing.T) {
 	if len(multiple.Chains) != 2 || len(multiple.Chains[0]) != 1 || len(multiple.Chains[1]) != 1 {
 		t.Fatalf("multiple prompts did not create independent chains: %+v", multiple.Chains)
 	}
+}
+
+func TestCompletionTokenPromptShapes(t *testing.T) {
+	flat := extractForTest(t, `{"model":"m","prompt":[1,2,3]}`)
+	if len(flat.Chains) != 1 || totalTokens(flat.Chains) != 3 {
+		t.Fatalf("flat token prompt locality=%+v", flat.Chains)
+	}
+
+	if locality, supported, err := Extract([]byte(`{"model":"m","prompt":[[1,2],[3,4]]}`)); err != nil || supported || locality != nil {
+		t.Fatalf("batched token prompt must be prefix-unsupported: locality=%+v supported=%v err=%v", locality, supported, err)
+	}
+
+	invalid := []string{
+		`{"model":"m","prompt":[[1,2],3]}`,
+		`{"model":"m","prompt":[[1,"two"],[3,4]]}`,
+		`{"model":"m","prompt":[1,[2,3]]}`,
+	}
+	for _, body := range invalid {
+		if _, _, err := Extract([]byte(body)); err == nil {
+			t.Fatalf("mixed or invalid token prompt succeeded: %s", body)
+		}
+	}
+}
+
+func TestCanonicalJSONDepthLimit(t *testing.T) {
+	for _, test := range []struct {
+		depth   int
+		wantErr bool
+	}{
+		{depth: 63},
+		{depth: 64},
+		{depth: 65, wantErr: true},
+	} {
+		writer := &canonicalBudgetWriter{target: &countingWriter{}, remaining: maxCanonicalNodes}
+		err := writeCanonicalJSON(nestedJSONArray(test.depth), writer)
+		if got := errors.Is(err, errJSONDepthLimit); got != test.wantErr {
+			t.Fatalf("depth %d error=%v, depth-limit=%v want %v", test.depth, err, got, test.wantErr)
+		}
+		locality, supported, err := Extract(deepToolsBody(test.depth - 1))
+		if test.wantErr {
+			if err != nil || supported || locality != nil {
+				t.Fatalf("depth %d extraction must be prefix-unsupported: locality=%+v supported=%v err=%v", test.depth, locality, supported, err)
+			}
+		} else if err != nil || !supported || locality == nil {
+			t.Fatalf("depth %d extraction failed: locality=%+v supported=%v err=%v", test.depth, locality, supported, err)
+		}
+	}
+}
+
+func TestDeepCanonicalInputHasBoundedTraversal(t *testing.T) {
+	depth65 := deepToolsBody(65)
+	depth5000 := deepToolsBody(5000)
+	for _, body := range [][]byte{depth65, depth5000} {
+		locality, supported, err := Extract(body)
+		if err != nil || supported || locality != nil {
+			t.Fatalf("deep tools must be prefix-unsupported: locality=%+v supported=%v err=%v", locality, supported, err)
+		}
+	}
+	baselineAllocs := testing.AllocsPerRun(10, func() { _, _, _ = Extract(depth65) })
+	deepAllocs := testing.AllocsPerRun(10, func() { _, _, _ = Extract(depth5000) })
+	if deepAllocs > baselineAllocs+4 {
+		t.Fatalf("deep traversal allocations grew with depth: depth65=%v depth5000=%v", baselineAllocs, deepAllocs)
+	}
+}
+
+func nestedJSONArray(depth int) []byte {
+	var value strings.Builder
+	value.Grow(depth*2 + 1)
+	value.WriteString(strings.Repeat("[", depth))
+	value.WriteByte('0')
+	value.WriteString(strings.Repeat("]", depth))
+	return []byte(value.String())
+}
+
+func deepToolsBody(depth int) []byte {
+	value := nestedJSONArray(depth)
+	body := make([]byte, 0, len(value)+43)
+	body = append(body, `{"model":"m","tools":`...)
+	body = append(body, value...)
+	body = append(body, `,"messages":[]}`...)
+	return body
 }
 
 func TestNamespaceSegmentKindAndOutputIsolation(t *testing.T) {

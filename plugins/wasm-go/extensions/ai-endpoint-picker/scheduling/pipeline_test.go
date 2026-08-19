@@ -39,6 +39,10 @@ func TestPipelinePrefixAndQueueKVWeightedConflict(t *testing.T) {
 	if decision.Score <= 0 || decision.Score > 1 {
 		t.Fatalf("score %v outside [0,1]", decision.Score)
 	}
+	wantMask := SignalAvailabilityQueue | SignalAvailabilityKVCache | SignalAvailabilityPrefixCache
+	if decision.Reason != DecisionReasonMaxScore || decision.SignalAvailability != wantMask {
+		t.Fatalf("decision summary reason=%q mask=0x%x", decision.Reason, decision.SignalAvailability)
+	}
 }
 
 func TestPipelineMissingSignalDoesNotBenefit(t *testing.T) {
@@ -83,6 +87,10 @@ func TestPipelineTieUsesInjectedRandom(t *testing.T) {
 	if decision.Address != "second" {
 		t.Fatalf("selected %q, want injected tie choice", decision.Address)
 	}
+	wantMask := SignalAvailabilityInflight | SignalAvailabilityFailure
+	if decision.Reason != DecisionReasonRandomTie || decision.SignalAvailability != wantMask {
+		t.Fatalf("tie summary reason=%q mask=0x%x", decision.Reason, decision.SignalAvailability)
+	}
 }
 
 func TestPipelineFailOpenWhenAllFiltered(t *testing.T) {
@@ -100,6 +108,10 @@ func TestPipelineFailOpenWithoutAnyConfiguredSignal(t *testing.T) {
 	})
 	if decision.Address != "" || decision.FallbackReason != "no_valid_signal" {
 		t.Fatalf("decision = %+v, want no-valid-signal fail-open", decision)
+	}
+	wantMask := SignalAvailabilityInflight | SignalAvailabilityFailure
+	if decision.SignalAvailability != wantMask {
+		t.Fatalf("fallback availability mask=0x%x want 0x30", decision.SignalAvailability)
 	}
 }
 

@@ -2,9 +2,12 @@ package main
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-endpoint-picker/prefixcache"
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-endpoint-picker/scheduling"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 )
 
@@ -31,6 +34,153 @@ func TestOverrideAndRecordOnlyLearnsAfterSuccess(t *testing.T) {
 	}
 	if overridden != "a" || index.Len("a") != 1 || index.UsedCost("a") != 2 {
 		t.Fatalf("success boundary endpoint=%q len=%d cost=%d", overridden, index.Len("a"), index.UsedCost("a"))
+	}
+}
+
+func TestParseHostCandidateIsolatesMalformedHosts(t *testing.T) {
+	validMetrics := "# TYPE vllm:num_requests_waiting gauge\nvllm:num_requests_waiting 1\n"
+	validMetadata := `{"health_status":"Healthy","metrics":` + strconv.Quote(validMetrics) + `}`
+	tests := []struct {
+		name       string
+		host       []string
+		wantReason candidateSkipReason
+	}{
+		{name: "short host tuple", host: []string{"only-address"}, wantReason: candidateSkipAddress},
+		{name: "empty address", host: []string{"", validMetadata}, wantReason: candidateSkipAddress},
+		{name: "invalid metadata", host: []string{"bad", `{"health_status":`}, wantReason: candidateSkipMetadata},
+		{name: "non-object metadata", host: []string{"bad", `[]`}, wantReason: candidateSkipMetadata},
+		{name: "missing health", host: []string{"bad", `{}`}, wantReason: candidateSkipHealth},
+		{name: "invalid metrics type", host: []string{"bad", `{"health_status":"Healthy","metrics":3}`}, wantReason: candidateSkipMetrics},
+		{name: "malformed prometheus", host: []string{"bad", `{"health_status":"Healthy","metrics":"metric nope\\n"}`}, wantReason: candidateSkipMetrics},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, got := parseHostCandidate(test.host, "m"); got != test.wantReason {
+				t.Fatalf("skip reason=%d want %d", got, test.wantReason)
+			}
+		})
+	}
+
+	good, reason := parseHostCandidate([]string{"good", validMetadata}, "m")
+	if reason != 0 || good.endpoint.Address != "good" || !good.endpoint.Healthy || !good.endpoint.Signals[scheduling.SignalQueue].Available {
+		t.Fatalf("valid candidate=%+v reason=%d", good, reason)
+	}
+	missingCapacity, reason := parseHostCandidate([]string{"default-capacity", `{"health_status":"Healthy","metrics":""}`}, "m")
+	if reason != 0 || missingCapacity.cacheConfig.NumGPUBlocks != 0 {
+		t.Fatalf("missing capacity candidate=%+v reason=%d", missingCapacity, reason)
+	}
+	unhealthy, reason := parseHostCandidate([]string{"unhealthy", `{"health_status":"Unhealthy","metrics":"malformed ignored"}`}, "m")
+	if reason != 0 || unhealthy.endpoint.Healthy {
+		t.Fatalf("unhealthy candidate=%+v reason=%d", unhealthy, reason)
+	}
+}
+
+func TestMalformedHostDoesNotPreventHealthyCandidateScheduling(t *testing.T) {
+	validMetrics := "# TYPE vllm:num_requests_waiting gauge\nvllm:num_requests_waiting 1\n"
+	validMetadata := `{"health_status":"Healthy","metrics":` + strconv.Quote(validMetrics) + `}`
+	hosts := [][]string{
+		{"bad", `{"health_status":"Healthy","metrics":"metric nope\\n"}`},
+		{"good", validMetadata},
+	}
+	endpoints := make([]scheduling.EndpointSnapshot, 0, len(hosts))
+	for _, host := range hosts {
+		candidate, reason := parseHostCandidate(host, "m")
+		if reason == 0 {
+			endpoints = append(endpoints, candidate.endpoint)
+		}
+	}
+	decision := scheduling.NewPipeline(scheduling.Weights{scheduling.SignalQueue: 1}, nil).Schedule(endpoints)
+	if decision.Address != "good" || decision.FallbackReason != "" {
+		t.Fatalf("isolated scheduling decision=%+v", decision)
+	}
+}
+
+func TestBatchedTokenPromptLeavesQueueSchedulingAvailable(t *testing.T) {
+	locality, prefixAvailable, err := prefixcache.Extract([]byte(`{"model":"m","prompt":[[1,2],[3,4]]}`))
+	if err != nil || prefixAvailable || locality != nil {
+		t.Fatalf("batched prompt prefix result locality=%+v available=%v err=%v", locality, prefixAvailable, err)
+	}
+	decision := scheduling.NewPipeline(scheduling.Weights{scheduling.SignalQueue: 1}, nil).Schedule([]scheduling.EndpointSnapshot{
+		{
+			Address: "queue-observed",
+			Healthy: true,
+			Signals: map[scheduling.SignalName]scheduling.SignalValue{
+				scheduling.SignalQueue: {Value: 1, Available: true, Confidence: 1},
+			},
+		},
+	})
+	if decision.Address != "queue-observed" || decision.FallbackReason != "" {
+		t.Fatalf("queue scheduling failed after prefix-unsupported prompt: %+v", decision)
+	}
+}
+
+func TestDeepRequestPreflightRunsBeforeRecursiveJSONAccess(t *testing.T) {
+	depth65 := deepChatMetadataRequest(65)
+	depth20000 := deepChatMetadataRequest(20_000)
+	for _, body := range [][]byte{depth65, depth20000} {
+		model, locality, prefixAvailable, err := inspectRequestBody(body)
+		if err != nil || model != "m" || prefixAvailable || locality != nil {
+			t.Fatalf("deep request inspection model=%q locality=%+v available=%v err=%v", model, locality, prefixAvailable, err)
+		}
+		decision := scheduling.NewPipeline(scheduling.Weights{scheduling.SignalQueue: 1}, nil).Schedule([]scheduling.EndpointSnapshot{
+			{
+				Address: "queue-observed",
+				Healthy: true,
+				Signals: map[scheduling.SignalName]scheduling.SignalValue{
+					scheduling.SignalQueue: {Value: 1, Available: true, Confidence: 1},
+				},
+			},
+		})
+		if decision.Address != "queue-observed" || decision.FallbackReason != "" {
+			t.Fatalf("queue scheduling failed for deep prefix-unsupported request: %+v", decision)
+		}
+	}
+	baselineAllocs := testing.AllocsPerRun(10, func() { _, _, _, _ = inspectRequestBody(depth65) })
+	deepAllocs := testing.AllocsPerRun(10, func() { _, _, _, _ = inspectRequestBody(depth20000) })
+	if deepAllocs > baselineAllocs+4 {
+		t.Fatalf("main request inspection allocations grew with depth: depth65=%v depth20000=%v", baselineAllocs, deepAllocs)
+	}
+}
+
+func TestRequestInspectionRejectsInvalidJSONAndModel(t *testing.T) {
+	for _, body := range []string{
+		`{"model":"m",}`,
+		`{"messages":[]}`,
+		`{"model":3,"messages":[]}`,
+	} {
+		if _, _, _, err := inspectRequestBody([]byte(body)); err == nil {
+			t.Fatalf("invalid request succeeded: %s", body)
+		}
+	}
+}
+
+func deepChatMetadataRequest(depth int) []byte {
+	var body strings.Builder
+	body.Grow(depth*2 + 100)
+	body.WriteString(`{"model":"m","messages":[{"role":"user","content":"hello","metadata":`)
+	body.WriteString(strings.Repeat("[", depth))
+	body.WriteByte('0')
+	body.WriteString(strings.Repeat("]", depth))
+	body.WriteString(`}]}`)
+	return []byte(body.String())
+}
+
+func TestSyncPrefixCapacityDeletesUnhealthyAndKeepsHealthyDefault(t *testing.T) {
+	index := prefixcache.NewIndex(2)
+	chain := [][]prefixcache.Block{{
+		{Hash: 1, EstimatedTokens: 1},
+		{Hash: 2, EstimatedTokens: 1},
+	}}
+	index.Record("host", chain, 16)
+	syncPrefixCapacity(index, "host", false, 0)
+	if index.Len("host") != 0 || index.EndpointCount() != 0 {
+		t.Fatalf("unhealthy prefix state remains: len=%d endpoints=%d", index.Len("host"), index.EndpointCount())
+	}
+
+	syncPrefixCapacity(index, "host", true, 0)
+	index.Record("host", chain, 16)
+	if index.Len("host") != 2 {
+		t.Fatalf("healthy host without num_gpu_blocks did not use default capacity: len=%d", index.Len("host"))
 	}
 }
 

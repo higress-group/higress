@@ -35,10 +35,26 @@ type EndpointSnapshot struct {
 }
 
 type Decision struct {
-	Address        string
-	Score          float64
-	CandidateCount int
-	FallbackReason string
+	Address            string
+	Score              float64
+	CandidateCount     int
+	Reason             string
+	SignalAvailability uint64
+	FallbackReason     string
 }
+
+const (
+	DecisionReasonMaxScore  = "max_score"
+	DecisionReasonRandomTie = "random_tie"
+)
+
+const (
+	SignalAvailabilityQueue uint64 = 1 << iota
+	SignalAvailabilityKVCache
+	SignalAvailabilityPrefixCache
+	SignalAvailabilityLoRAAffinity
+	SignalAvailabilityInflight
+	SignalAvailabilityFailure
+)
 
 type Weights map[SignalName]float64

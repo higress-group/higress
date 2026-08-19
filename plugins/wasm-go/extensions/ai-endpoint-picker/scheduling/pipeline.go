@@ -22,6 +22,7 @@ func (p *Pipeline) Schedule(endpoints []EndpointSnapshot) Decision {
 	if len(candidates) == 0 {
 		return Decision{FallbackReason: "no_healthy_endpoint"}
 	}
+	availableSignals := signalAvailability(candidates)
 
 	normalized := normalize(candidates)
 	denominator := 0.0
@@ -29,7 +30,7 @@ func (p *Pipeline) Schedule(endpoints []EndpointSnapshot) Decision {
 		denominator += p.weights[signal]
 	}
 	if denominator <= 0 || math.IsNaN(denominator) || math.IsInf(denominator, 0) {
-		return Decision{CandidateCount: len(candidates), FallbackReason: "invalid_weights"}
+		return Decision{CandidateCount: len(candidates), SignalAvailability: availableSignals, FallbackReason: "invalid_weights"}
 	}
 
 	scores := make([]float64, len(candidates))
@@ -56,17 +57,52 @@ func (p *Pipeline) Schedule(endpoints []EndpointSnapshot) Decision {
 		}
 	}
 	if !anyValidSignal {
-		return Decision{CandidateCount: len(candidates), FallbackReason: "no_valid_signal"}
+		return Decision{CandidateCount: len(candidates), SignalAvailability: availableSignals, FallbackReason: "no_valid_signal"}
 	}
 
 	selected := bestIndexes[0]
+	reason := DecisionReasonMaxScore
 	if len(bestIndexes) > 1 && p.random != nil {
 		selected = bestIndexes[p.random.Intn(len(bestIndexes))]
+		reason = DecisionReasonRandomTie
 	}
 	return Decision{
-		Address:        candidates[selected].Address,
-		Score:          scores[selected],
-		CandidateCount: len(candidates),
+		Address:            candidates[selected].Address,
+		Score:              scores[selected],
+		CandidateCount:     len(candidates),
+		Reason:             reason,
+		SignalAvailability: signalAvailability([]EndpointSnapshot{candidates[selected]}),
+	}
+}
+
+func signalAvailability(endpoints []EndpointSnapshot) uint64 {
+	var mask uint64
+	for _, endpoint := range endpoints {
+		for _, name := range SignalNames {
+			if value, ok := endpoint.Signals[name]; ok && validSignal(value) {
+				mask |= signalAvailabilityBit(name)
+			}
+		}
+	}
+	return mask
+}
+
+func signalAvailabilityBit(name SignalName) uint64 {
+	switch name {
+	case SignalQueue:
+		return SignalAvailabilityQueue
+	case SignalKVCache:
+		return SignalAvailabilityKVCache
+	case SignalPrefixCache:
+		return SignalAvailabilityPrefixCache
+	case SignalLoRAAffinity:
+		return SignalAvailabilityLoRAAffinity
+	case SignalInflight:
+		return SignalAvailabilityInflight
+	case SignalFailure:
+		return SignalAvailabilityFailure
+	default:
+		return 0
 	}
 }
 

@@ -75,7 +75,7 @@ func TestWeightedLRUInsertUpdateShrinkAndOversize(t *testing.T) {
 
 func TestScoreDoesNotRefreshLRU(t *testing.T) {
 	index := NewIndex(2)
-	index.Record("a", [][]Block{{{Hash: 1, EstimatedTokens: 1}, {Hash: 2, EstimatedTokens: 1}}}, 16)
+	index.Record("a", [][]Block{{{Hash: 1, EstimatedTokens: 1}}, {{Hash: 2, EstimatedTokens: 1}}}, 16)
 	_ = index.Score("a", [][]Block{{{Hash: 1, EstimatedTokens: 1}}})
 	index.Record("a", [][]Block{{{Hash: 3, EstimatedTokens: 1}}}, 16)
 	if got := index.Score("a", [][]Block{{{Hash: 1, EstimatedTokens: 1}}}); got != 0 {
@@ -96,6 +96,35 @@ func TestRecordRefreshesDuplicateAndOversizeInsertSelfEvicts(t *testing.T) {
 	index.Record("oversize", [][]Block{{{Hash: 4, EstimatedTokens: 33}}}, 16)
 	if index.Len("oversize") != 0 || index.UsedCost("oversize") != 0 {
 		t.Fatal("oversized insert did not self-evict")
+	}
+}
+
+func TestRecordEvictsSuffixBeforePrefix(t *testing.T) {
+	index := NewIndex(2)
+	chain := [][]Block{{
+		{Hash: 1, EstimatedTokens: 1},
+		{Hash: 2, EstimatedTokens: 1},
+		{Hash: 3, EstimatedTokens: 1},
+	}}
+	index.Record("a", chain, 16)
+	if index.Len("a") != 2 {
+		t.Fatalf("retained entries=%d want 2", index.Len("a"))
+	}
+	prefix := [][]Block{{chain[0][0], chain[0][1]}}
+	if score := index.Score("a", prefix); score == 0 {
+		t.Fatal("capacity pressure evicted the chain head")
+	}
+	if score := index.Score("a", [][]Block{{chain[0][2]}}); score != 0 {
+		t.Fatalf("tail entry survived before prefix, score=%v", score)
+	}
+}
+
+func TestDeleteRemovesEndpointState(t *testing.T) {
+	index := NewIndex(2)
+	index.Record("unhealthy", [][]Block{{{Hash: 1, EstimatedTokens: 1}}}, 16)
+	index.Delete("unhealthy")
+	if index.Len("unhealthy") != 0 || index.EndpointCount() != 0 {
+		t.Fatalf("deleted endpoint state remains: len=%d count=%d", index.Len("unhealthy"), index.EndpointCount())
 	}
 }
 

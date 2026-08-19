@@ -74,7 +74,8 @@ func (index *Index) Record(endpoint string, chains [][]Block, actualBlockSize in
 	defer index.mu.Unlock()
 	cache := index.endpoint(endpoint)
 	for _, chain := range chains {
-		for _, block := range chain {
+		for blockIndex := len(chain) - 1; blockIndex >= 0; blockIndex-- {
+			block := chain[blockIndex]
 			cost := block.EstimatedTokens / actualBlockSize
 			if block.EstimatedTokens%actualBlockSize != 0 {
 				cost++
@@ -92,6 +93,12 @@ func (index *Index) Record(endpoint string, chains [][]Block, actualBlockSize in
 			cache.evict()
 		}
 	}
+}
+
+func (index *Index) Delete(endpoint string) {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	delete(index.endpoints, endpoint)
 }
 
 func (index *Index) Cleanup(active map[string]struct{}) {

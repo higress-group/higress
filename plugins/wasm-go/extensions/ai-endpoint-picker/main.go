@@ -16,6 +16,20 @@ import (
 
 const feedbackContextKey = "ai_endpoint_picker_feedback"
 
+type candidateSkipReason uint8
+
+const (
+	candidateSkipAddress candidateSkipReason = 1 << iota
+	candidateSkipMetadata
+	candidateSkipHealth
+	candidateSkipMetrics
+)
+
+type parsedHostCandidate struct {
+	endpoint    scheduling.EndpointSnapshot
+	cacheConfig scheduling.CacheConfig
+}
+
 type requestFeedback struct {
 	lease     *scheduling.FeedbackLease
 	status    int
@@ -100,21 +114,15 @@ func hasHeaderToken(value, token string) bool {
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) types.Action {
-	model := gjson.GetBytes(body, "model")
-	if !gjson.ValidBytes(body) || !model.Exists() || model.String() == "" {
-		log.Debugf("ai-endpoint-picker fail-open: invalid request body or missing model")
-		config.metrics.fallback()
-		return types.ActionContinue
-	}
-	locality, prefixAvailable, err := prefixcache.Extract(body)
+	model, locality, prefixAvailable, err := inspectRequestBody(body)
 	if err != nil {
-		log.Debugf("ai-endpoint-picker fail-open: locality extraction failed: %v", err)
+		log.Debugf("ai-endpoint-picker fail-open: reason=invalid_request")
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
 	hosts, err := proxywasm.GetUpstreamHosts()
 	if err != nil || len(hosts) == 0 {
-		log.Debugf("ai-endpoint-picker fail-open: upstream hosts unavailable: count=%d error=%v", len(hosts), err)
+		log.Debugf("ai-endpoint-picker fail-open: reason=upstream_hosts_unavailable")
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
@@ -122,44 +130,25 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 	active := make(map[string]struct{}, len(hosts))
 	endpoints := make([]scheduling.EndpointSnapshot, 0, len(hosts))
 	actualBlockSizes := make(map[string]int, len(hosts))
+	var skipMask candidateSkipReason
+	skippedCandidates := 0
 	for _, host := range hosts {
-		address, metadata := host[0], host[1]
-		if address == "" || !gjson.Valid(metadata) {
-			log.Debugf("ai-endpoint-picker fail-open: invalid host metadata: address=%q", address)
-			config.metrics.fallback()
-			return types.ActionContinue
+		candidate, reason := parseHostCandidate(host[:], model)
+		if reason != 0 {
+			skipMask |= reason
+			skippedCandidates++
+			continue
 		}
+		address := candidate.endpoint.Address
 		active[address] = struct{}{}
-		health := gjson.Get(metadata, "health_status")
-		if !health.Exists() {
-			log.Debugf("ai-endpoint-picker fail-open: host %s has no health status", address)
-			config.metrics.fallback()
-			return types.ActionContinue
-		}
-		endpoint := scheduling.EndpointSnapshot{
-			Address: address,
-			Healthy: health.String() == "Healthy",
-			Signals: map[scheduling.SignalName]scheduling.SignalValue{},
-		}
-		if endpoint.Healthy {
-			parsed, parseErr := scheduling.ParseVLLMMetrics(gjson.Get(metadata, "metrics").String(), model.String())
-			if parseErr != nil {
-				log.Debugf("ai-endpoint-picker fail-open: parse metrics for host %s: %v", address, parseErr)
-				config.metrics.fallback()
-				return types.ActionContinue
-			}
-			for name, value := range parsed.Signals {
-				endpoint.Signals[name] = value
-			}
-			actualBlockSizes[address] = parsed.CacheConfig.BlockSize
-			config.prefix.SetCapacity(address, parsed.CacheConfig.NumGPUBlocks)
+		syncPrefixCapacity(config.prefix, address, candidate.endpoint.Healthy, candidate.cacheConfig.NumGPUBlocks)
+		if candidate.endpoint.Healthy {
+			actualBlockSizes[address] = candidate.cacheConfig.BlockSize
 			for name, value := range config.store.Signals(address) {
-				endpoint.Signals[name] = value
+				candidate.endpoint.Signals[name] = value
 			}
-		} else {
-			config.prefix.SetCapacity(address, 0)
 		}
-		endpoints = append(endpoints, endpoint)
+		endpoints = append(endpoints, candidate.endpoint)
 	}
 	config.store.Cleanup(active)
 	config.prefix.Cleanup(active)
@@ -193,12 +182,12 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 	}
 	decision := config.pipeline.Schedule(endpoints)
 	if decision.FallbackReason != "" || decision.Address == "" {
-		log.Debugf("ai-endpoint-picker fail-open: scheduling reason=%s candidates=%d", decision.FallbackReason, decision.CandidateCount)
+		log.Debugf("ai-endpoint-picker fail-open: reason=%s candidates=%d signal_mask=0x%x skip_mask=0x%x skipped=%d", decision.FallbackReason, decision.CandidateCount, decision.SignalAvailability, skipMask, skippedCandidates)
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
 	if err := overrideAndRecord(proxywasm.SetUpstreamOverrideHost, config.prefix, decision.Address, prefixChains, actualBlockSizes[decision.Address]); err != nil {
-		log.Debugf("ai-endpoint-picker fail-open: override host %s: %v", decision.Address, err)
+		log.Debugf("ai-endpoint-picker fail-open: reason=override_failed")
 		config.metrics.fallback()
 		return types.ActionContinue
 	}
@@ -210,9 +199,53 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 	config.metrics.decision()
 	config.metrics.beginFeedback()
 	if config.sampleRate > 0 && config.random.Float64() < config.sampleRate {
-		log.Debugf("ai-endpoint-picker candidates=%d score=%.4f missing_signals=%d", decision.CandidateCount, decision.Score, missingSignals)
+		log.Debugf("ai-endpoint-picker reason=%s candidates=%d score=%.4f signal_mask=0x%x missing_signals=%d skip_mask=0x%x skipped=%d", decision.Reason, decision.CandidateCount, decision.Score, decision.SignalAvailability, missingSignals, skipMask, skippedCandidates)
 	}
 	return types.ActionContinue
+}
+
+func inspectRequestBody(body []byte) (string, *prefixcache.Locality, bool, error) {
+	return prefixcache.InspectRequest(body)
+}
+
+func syncPrefixCapacity(index *prefixcache.Index, address string, healthy bool, capacity int) {
+	if !healthy {
+		index.Delete(address)
+		return
+	}
+	index.SetCapacity(address, capacity)
+}
+
+func parseHostCandidate(host []string, model string) (parsedHostCandidate, candidateSkipReason) {
+	if len(host) < 2 || strings.TrimSpace(host[0]) == "" {
+		return parsedHostCandidate{}, candidateSkipAddress
+	}
+	address, metadata := host[0], host[1]
+	if !gjson.Valid(metadata) || !gjson.Parse(metadata).IsObject() {
+		return parsedHostCandidate{}, candidateSkipMetadata
+	}
+	health := gjson.Get(metadata, "health_status")
+	if health.Type != gjson.String || strings.TrimSpace(health.String()) == "" {
+		return parsedHostCandidate{}, candidateSkipHealth
+	}
+	endpoint := scheduling.EndpointSnapshot{
+		Address: address,
+		Healthy: health.String() == "Healthy",
+		Signals: map[scheduling.SignalName]scheduling.SignalValue{},
+	}
+	if !endpoint.Healthy {
+		return parsedHostCandidate{endpoint: endpoint}, 0
+	}
+	metrics := gjson.Get(metadata, "metrics")
+	if metrics.Exists() && metrics.Type != gjson.String {
+		return parsedHostCandidate{}, candidateSkipMetrics
+	}
+	parsed, err := scheduling.ParseVLLMMetrics(metrics.String(), model)
+	if err != nil {
+		return parsedHostCandidate{}, candidateSkipMetrics
+	}
+	endpoint.Signals = parsed.Signals
+	return parsedHostCandidate{endpoint: endpoint, cacheConfig: parsed.CacheConfig}, 0
 }
 
 func blockCount(chains [][]prefixcache.Block) int {
