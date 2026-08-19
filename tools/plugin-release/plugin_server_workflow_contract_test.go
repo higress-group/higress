@@ -535,7 +535,7 @@ if [ "$1 $2" = "manifest fetch" ]; then
 	  absent-manifest) echo "MANIFEST UNKNOWN" >&2; exit 1 ;;
 	  absent-name) echo "name unknown" >&2; exit 1 ;;
 	  absent-acr) echo "Error response from registry: $ref: not found" >&2; exit 1 ;;
-	  absent-build-error|absent-push-error|absent-malformed-push) echo "response status code 404: Not Found" >&2; exit 1 ;;
+	  absent-build-error|absent-push-error|absent-malformed-push|absent-bad-published-layout) echo "response status code 404: Not Found" >&2; exit 1 ;;
       auth) echo "401 unauthorized" >&2; exit 1 ;;
       auth-401-status) echo "response status code 401" >&2; exit 1 ;;
       auth-403-http) echo "HTTP/1.1 403" >&2; exit 1 ;;
@@ -559,20 +559,35 @@ if [ "$1 $2" = "manifest fetch" ]; then
   revision=$SOURCE_COMMIT
   version=$STABLE_VERSION
   input_hash=$INPUT_HASH
-  layer_digest=$WASM_DIGEST
-	layer_media=application/vnd.module.wasm.content.layer.v1+wasm
-	manifest_media=${manifest_media:-application/vnd.oci.image.manifest.v1+json}
-	layers=''
-	case "$ORAS_MODE" in
-	  annotation-mismatch) revision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
-		version-mismatch) version=9.9.9 ;;
-		input-hash-mismatch) input_hash=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ;;
-		valid-different-layer) layer_digest=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ;;
-		invalid-layer-digest) layer_digest=sha256:not-a-digest ;;
-    layer-media-mismatch) layer_media=application/octet-stream ;;
-    layer-count-mismatch) layers=',{"mediaType":"application/vnd.module.wasm.content.layer.v1+wasm","digest":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}' ;;
+  wasm_digest=$WASM_DIGEST
+  config_media=application/vnd.module.wasm.config.v1+json
+  wasm_media=application/vnd.module.wasm.content.layer.v1+wasm
+  config_digest=sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+  manifest_media=${manifest_media:-application/vnd.oci.image.manifest.v1+json}
+  extra_layers=''
+  layers_override=''
+  case "$ORAS_MODE" in
+    annotation-mismatch) revision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
+    version-mismatch) version=9.9.9 ;;
+    input-hash-mismatch) input_hash=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ;;
+    valid-different-layer) wasm_digest=sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ;;
+    invalid-layer-digest) wasm_digest=sha256:not-a-digest ;;
+    layer-media-mismatch) wasm_media=application/octet-stream ;;
+    config-media-mismatch) config_media=application/octet-stream ;;
+    layer-count-mismatch) extra_layers=',{"mediaType":"application/vnd.module.wasm.config.v1+json","digest":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}' ;;
+    # The exact single-layer raw-wasm shape promoted during the 2026-08-13
+    # v2.2.4 incident (#4528) must never validate as a candidate manifest,
+    # and a legacy compat manifest is equally unacceptable for candidates.
+    incident-single-layer) layers_override='[{"mediaType":"application/vnd.module.wasm.content.layer.v1+wasm","digest":"'"$wasm_digest"'"}]' ;;
+    compat-legacy-layout) layers_override='[{"mediaType":"application/vnd.module.wasm.doc.v1+markdown","digest":"'"$config_digest"'"},{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"'"$wasm_digest"'"}]' ;;
+    absent-bad-published-layout) layers_override='[{"mediaType":"application/vnd.module.wasm.content.layer.v1+wasm","digest":"'"$wasm_digest"'"}]' ;;
   esac
-  printf '{"schemaVersion":2,"mediaType":"%s","annotations":{"org.opencontainers.image.revision":"%s","org.opencontainers.image.version":"%s","io.higress.plugin.input-hash":"%s"},"layers":[{"mediaType":"%s","digest":"%s"}%s]}\n' "$manifest_media" "$revision" "$version" "$input_hash" "$layer_media" "$layer_digest" "$layers"
+  if [ -n "$layers_override" ]; then
+    layers="$layers_override"
+  else
+    layers="[{\"mediaType\":\"$config_media\",\"digest\":\"$config_digest\"},{\"mediaType\":\"$wasm_media\",\"digest\":\"$wasm_digest\"}$extra_layers]"
+  fi
+  printf '{"schemaVersion":2,"mediaType":"%s","annotations":{"org.opencontainers.image.revision":"%s","org.opencontainers.image.version":"%s","io.higress.plugin.input-hash":"%s"},"layers":%s}\n' "$manifest_media" "$revision" "$version" "$input_hash" "$layers"
   exit 0
 fi
 if [ "$1" = push ]; then
@@ -672,11 +687,73 @@ func TestPreparationPushesOnceOnlyForStrictlyProvenCandidateAbsence(t *testing.T
 	}
 }
 
+// Candidates must be pushed as the Envoy-loadable 2-layer OCI variant with the
+// provenance annotations unchanged, and the pushed manifest must be re-resolved
+// and layout-verified before its digest becomes evidence (incident #4528).
+func TestPreparationPublishesEnvoyLoadableTwoLayerCandidate(t *testing.T) {
+	result := runCandidatePublishContract(t, "absent-404")
+	if result.err != nil {
+		t.Fatalf("strict absence was not published: %v\n%s", result.err, result.output)
+	}
+	pushLine := ""
+	for _, line := range strings.Split(result.log, "\n") {
+		if strings.HasPrefix(line, "oras:push ") {
+			pushLine = line
+			break
+		}
+	}
+	if pushLine == "" {
+		t.Fatalf("candidate publish performed no push:\n%s", result.log)
+	}
+	configType := strings.Index(pushLine, "application/vnd.module.wasm.config.v1+json")
+	wasmType := strings.Index(pushLine, "application/vnd.module.wasm.content.layer.v1+wasm")
+	if configType < 0 || wasmType < 0 || configType > wasmType {
+		t.Fatalf("candidate push is not the 2-layer OCI variant (config layer before wasm layer): %q", pushLine)
+	}
+	for _, annotation := range []string{"org.opencontainers.image.revision=", "org.opencontainers.image.version=", "io.higress.plugin.input-hash="} {
+		if !strings.Contains(pushLine, annotation) {
+			t.Fatalf("candidate push lost the %s provenance contract: %q", annotation, pushLine)
+		}
+	}
+	manifestFetches := 0
+	for _, line := range strings.Split(result.log, "\n") {
+		if strings.HasPrefix(line, "oras:manifest fetch ") {
+			manifestFetches++
+		}
+	}
+	if manifestFetches != 2 {
+		t.Fatalf("candidate publish must resolve the descriptor for absence and re-resolve the pushed manifest by digest, got %d manifest fetches:\n%s", manifestFetches, result.log)
+	}
+	if !strings.Contains(result.log, "@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd") {
+		t.Fatalf("published candidate manifest was not re-resolved by its pushed digest:\n%s", result.log)
+	}
+}
+
+func TestPreparationRejectsPublishedCandidateThatIsNotEnvoyLoadable(t *testing.T) {
+	result := runCandidatePublishContract(t, "absent-bad-published-layout")
+	if result.err == nil {
+		t.Fatalf("registry accepting a non-Envoy-loadable published layout was accepted: %s", result.output)
+	}
+	if result.output != "" {
+		t.Fatalf("rejected published layout returned evidence %q", result.output)
+	}
+	if strings.Count(result.log, "oras:push ") != 1 {
+		t.Fatalf("rejected published layout performed other than one bounded push:\n%s", result.log)
+	}
+	if !strings.Contains(result.diagnostics, "not in the Envoy-loadable 2-layer OCI layout") {
+		t.Fatalf("rejection lacks the layout diagnostic:\n%s", result.diagnostics)
+	}
+}
+
 func TestPreparationCandidateLookupAndManifestMismatchesFailWithoutMutation(t *testing.T) {
 	modes := []string{
 		"auth", "ambiguous", "repository-missing", "wrong-acr-ref", "transport", "malformed-descriptor", "wrong-descriptor-media",
 		"manifest-error", "malformed-manifest", "wrong-manifest-media", "annotation-mismatch", "version-mismatch", "input-hash-mismatch",
-		"layer-count-mismatch", "layer-media-mismatch", "invalid-layer-digest",
+		"layer-count-mismatch", "layer-media-mismatch", "invalid-layer-digest", "config-media-mismatch",
+		// The #4528 incident shape and the legacy compat layout are both
+		// unacceptable as reusable candidates: candidates are published only
+		// in the Envoy-loadable 2-layer OCI variant.
+		"incident-single-layer", "compat-legacy-layout",
 	}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
@@ -1166,8 +1243,12 @@ func TestPromotionBackfillsVersionTagAndJoinsMonotonicLatest(t *testing.T) {
 			t.Fatalf("latest promotion lacks the monotonic complete-set contract %q", required)
 		}
 	}
-	if strings.Count(workflow, `done < <(jq -c '.plugins[]' "$SNAPSHOT_PATH")`) != 2 {
-		t.Fatal("version and latest phases must both iterate the complete selected snapshot set")
+	// The version phase, the post-copy gateway layout smoke gate, and the
+	// latest phase each iterate the complete selected snapshot set: the smoke
+	// gate must prove every candidate-provenance public ref resolves in an
+	// Envoy-accepted layout before latest movement (#4528).
+	if strings.Count(workflow, `done < <(jq -c '.plugins[]' "$SNAPSHOT_PATH")`) != 3 {
+		t.Fatal("version, smoke-gate, and latest phases must each iterate the complete selected snapshot set")
 	}
 	if strings.Contains(workflow, `select(.backfill != true)`) {
 		t.Fatal("backfill is provenance/migration state, never a blanket exclusion from latest")

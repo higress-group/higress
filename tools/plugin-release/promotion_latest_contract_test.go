@@ -7,10 +7,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -24,6 +26,9 @@ type latestContractPlugin struct {
 	EvidenceVersion string
 	EvidenceDigest  string
 	EvidenceRef     string
+	// Candidate marks the snapshot entry as candidate provenance, which the
+	// promotion layout gate must verify before any latest alias moves.
+	Candidate bool
 }
 
 type latestContractResult struct {
@@ -231,9 +236,14 @@ func runPromotionLatestContractFixture(t *testing.T, bootstrap, corruptEvidenceS
 	for _, plugin := range plugins {
 		ref := "registry.example.invalid/plugins/" + plugin.ID + ":" + plugin.Version
 		latest := "registry.example.invalid/plugins/" + plugin.ID + ":latest"
-		snapshot["plugins"] = append(snapshot["plugins"].([]any), map[string]any{
-			"logicalId": plugin.ID, "ociRef": ref, "digest": plugin.Digest, "version": plugin.Version,
-		})
+		snapshotEntry := map[string]any{
+			"logicalId": plugin.ID, "ociRef": ref, "digest": plugin.Digest, "version": plugin.Version, "candidateRef": "",
+		}
+		if plugin.Candidate {
+			snapshotEntry["provenanceMode"] = "candidate"
+			snapshotEntry["candidateRef"] = "registry.example.invalid/candidates/" + plugin.ID + "@" + plugin.Digest
+		}
+		snapshot["plugins"] = append(snapshot["plugins"].([]any), snapshotEntry)
 		registry[ref] = map[string]any{"digest": plugin.Digest, "version": plugin.Version}
 		if plugin.CurrentDigest != "" {
 			registry[latest] = map[string]any{"digest": plugin.CurrentDigest, "version": plugin.CurrentVersion}
@@ -295,6 +305,14 @@ if [ "$1 $2" = "manifest fetch" ]; then
     jq -cn --arg version "$(jq -r '.version // empty' <<<"$record")" '{annotations:{"org.opencontainers.image.version":$version}}'
     exit 0
   fi
+  # A plain manifest fetch resolves the full manifest for the layout gate.
+  if [ "${ORAS_LAYOUT_MODE:-}" = incident ]; then
+    layers='[{"mediaType":"application/vnd.module.wasm.content.layer.v1+wasm","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}]'
+  else
+    layers='[{"mediaType":"application/vnd.module.wasm.config.v1+json","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"},{"mediaType":"application/vnd.module.wasm.content.layer.v1+wasm","digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222"}]'
+  fi
+  jq -cn --arg version "$(jq -r '.version // empty' <<<"$record")" --argjson layers "$layers" '{schemaVersion:2,mediaType:"application/vnd.oci.image.manifest.v1+json",annotations:{"org.opencontainers.image.version":$version},layers:$layers}'
+  exit 0
 fi
 if [ "$1" = cp ]; then
   source=$2
@@ -312,8 +330,17 @@ exit 2
 	if len(descriptorContracts) != 2 {
 		t.Fatalf("promotion workflow has %d descriptor contracts, want 2", len(descriptorContracts))
 	}
+	layoutContracts := workflowShellContracts(t, "promote-plugin-release.yaml", "promotion-layout-contract")
+	if len(layoutContracts) != 3 {
+		t.Fatalf("promotion workflow has %d layout contracts, want 3 (version copy, smoke gate, latest)", len(layoutContracts))
+	}
+	for i, contract := range layoutContracts {
+		if contract != layoutContracts[0] {
+			t.Fatalf("promotion layout contract %d is not canonical", i)
+		}
+	}
 	latestContract := workflowShellContract(t, "promote-plugin-release.yaml", "promotion-latest-contract")
-	script := "set -euo pipefail\n" + descriptorContracts[1] + "\n" + latestContract
+	script := "set -euo pipefail\n" + descriptorContracts[1] + "\n" + layoutContracts[2] + "\n" + latestContract
 	snapshotSHA := sha256.Sum256([]byte(root))
 	snapshotSHAHex := hex.EncodeToString(snapshotSHA[:])
 	journalPath := filepath.Join("/tmp", "plugin-release-latest-"+snapshotSHAHex+".json")
@@ -327,6 +354,7 @@ exit 2
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"ORAS_LOG="+logPath,
 		"ORAS_STATE="+statePath,
+		"PLUGIN_RELEASE_BIN="+pluginReleaseVerifyBin(t),
 		"SNAPSHOT_PATH=plugins/release/snapshots/"+gateway+".json",
 		"SNAPSHOT_SHA256="+snapshotSHAHex,
 	)
@@ -381,4 +409,147 @@ func marshalLatestFixture(t *testing.T, value any) []byte {
 func testDigest(seed string) string {
 	sum := sha256.Sum256([]byte(seed))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+var (
+	pluginReleaseVerifyBuild    sync.Once
+	pluginReleaseVerifyPath     string
+	pluginReleaseVerifyBuildErr error
+)
+
+// pluginReleaseVerifyBin builds the real plugin-release tool once so the
+// extracted promotion contracts exercise the same verify-oci-layout gate the
+// workflow runs.
+func pluginReleaseVerifyBin(t *testing.T) string {
+	t.Helper()
+	pluginReleaseVerifyBuild.Do(func() {
+		dir, err := os.MkdirTemp("", "plugin-release-verify-")
+		if err != nil {
+			pluginReleaseVerifyBuildErr = err
+			return
+		}
+		path := filepath.Join(dir, "plugin-release-verify")
+		output, err := exec.Command("go", "build", "-o", path, ".").CombinedOutput()
+		if err != nil {
+			pluginReleaseVerifyBuildErr = fmt.Errorf("build plugin-release: %v: %s", err, output)
+			return
+		}
+		pluginReleaseVerifyPath = path
+	})
+	if pluginReleaseVerifyBuildErr != nil {
+		t.Fatal(pluginReleaseVerifyBuildErr)
+	}
+	return pluginReleaseVerifyPath
+}
+
+// TestPromotionLayoutContractRunsTheSharedPredicate proves the extracted
+// promotion-layout-contract shell function surfaces the shared predicate's
+// layout verdict and fails with the offending reference on rejection.
+func TestPromotionLayoutContractRunsTheSharedPredicate(t *testing.T) {
+	contract := workflowShellContract(t, "promote-plugin-release.yaml", "promotion-layout-contract")
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutableFixture(t, filepath.Join(bin, "layout-shim"), `#!/usr/bin/env bash
+set -euo pipefail
+ref=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--ref" ]; then ref=$arg; fi
+  prev=$arg
+done
+case "$ORAS_LAYOUT_MODE" in
+  oci) printf 'oci\n'; exit 0 ;;
+  compat) printf 'compat\n'; exit 0 ;;
+  *) echo "$ref is not loadable by Envoy as a Wasm OCI image" >&2; exit 1 ;;
+esac
+`)
+	const ref = "registry.example.invalid/plugins/demo:1.0.0"
+	run := func(mode string) (string, error) {
+		script := "set -euo pipefail\n" + contract + "\nverify_envoy_loadable_layout " + ref
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "PLUGIN_RELEASE_BIN="+filepath.Join(bin, "layout-shim"), "ORAS_LAYOUT_MODE="+mode)
+		output, err := cmd.CombinedOutput()
+		return string(output), err
+	}
+	for _, mode := range []string{"oci", "compat"} {
+		output, err := run(mode)
+		if err != nil || strings.TrimSpace(output) != mode {
+			t.Fatalf("layout contract did not surface the %s verdict: err=%v output=%q", mode, err, output)
+		}
+	}
+	output, err := run("incident")
+	if err == nil || !strings.Contains(output, "promoted artifact is not loadable by Envoy as a Wasm OCI image: "+ref) {
+		t.Fatalf("layout contract did not fail naming the offending ref: err=%v output=%q", err, output)
+	}
+}
+
+// TestPromotionWorkflowGatesCandidateArtifactsOnEnvoyLayout statically proves
+// the promotion workflow checks every candidate-provenance public ref with the
+// shared predicate after copy, records the verdict in the version journal, and
+// does all of it before the latest phase can move any alias.
+func TestPromotionWorkflowGatesCandidateArtifactsOnEnvoyLayout(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/promote-plugin-release.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(data)
+	for _, required := range []string{
+		`verify-oci-layout --ref "$ref"`,
+		`if [ "$(jq -r '.provenanceMode // "candidate"' <<<"$entry")" = candidate ]; then
+              verify_envoy_loadable_layout "$ref" >/dev/null
+            fi`,
+		`layout=$(verify_envoy_loadable_layout "$ref")`,
+		`(.entries[] | select(.ref == $ref)) |= . + {layoutGate: $layoutGate}`,
+		`test "$candidate_total" = "$verified_total"`,
+		`Gateway layout smoke gate:`,
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("promotion workflow lacks the Envoy layout gate contract %q", strings.Split(required, "\n")[0])
+		}
+	}
+	smokeGate := strings.Index(workflow, "Gateway layout smoke gate before latest movement")
+	journalUpload := strings.Index(workflow, "Persist complete version batch journal")
+	latestPhase := strings.Index(workflow, "Promote latest only after complete verified batch")
+	if smokeGate < 0 || journalUpload < 0 || latestPhase < 0 || !(smokeGate < journalUpload && journalUpload < latestPhase) {
+		t.Fatal("the layout smoke gate must run after the version batch and before its journal and the latest phase")
+	}
+}
+
+func TestPromotionLatestContractGatesCandidateLayoutBeforeLatestMovement(t *testing.T) {
+	t.Run("envoy-loadable-candidate-moves-latest", func(t *testing.T) {
+		t.Setenv("ORAS_LAYOUT_MODE", "two-layer")
+		result := runPromotionLatestContract(t, false, []latestContractPlugin{
+			{ID: "gated", Version: "1.0.0", Digest: testDigest("gated-desired"), Candidate: true},
+		})
+		if result.err != nil {
+			t.Fatalf("Envoy-loadable candidate was blocked from latest: %v\n%s", result.err, result.output)
+		}
+		if !strings.Contains(result.log, "plugins/gated:latest") {
+			t.Fatalf("gated candidate never created its latest alias:\n%s", result.log)
+		}
+	})
+
+	t.Run("issue-4528-single-layer-candidate-blocks-latest", func(t *testing.T) {
+		t.Setenv("ORAS_LAYOUT_MODE", "incident")
+		result := runPromotionLatestContract(t, false, []latestContractPlugin{
+			{ID: "incident", Version: "1.0.0", Digest: testDigest("incident-desired"), Candidate: true},
+		})
+		if result.err == nil || !strings.Contains(result.output, "not loadable by Envoy as a Wasm OCI image") {
+			t.Fatalf("incident-layout candidate was not blocked: err=%v\n%s", result.err, result.output)
+		}
+		assertNoLatestMutation(t, result.log)
+	})
+
+	t.Run("historical-public-import-is-not-gated-on-layout", func(t *testing.T) {
+		t.Setenv("ORAS_LAYOUT_MODE", "incident")
+		result := runPromotionLatestContract(t, false, []latestContractPlugin{
+			{ID: "legacy-public", Version: "2.0.1", Digest: testDigest("legacy-desired")},
+		})
+		if result.err != nil {
+			t.Fatalf("historical public import was blocked on layout: %v\n%s", result.err, result.output)
+		}
+	})
 }

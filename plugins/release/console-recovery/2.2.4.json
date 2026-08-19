@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "gatewayVersion": "2.2.4",
   "snapshotPath": "plugins/release/snapshots/2.2.4.json",
-  "snapshotSha256": "09bc798df37e50dae2e684947885c31eb756636c76a98761a9a980fc031e3a1a",
+  "snapshotSha256": "7036245ed274519d474aa002e66364aa92404bd745e926470725374f53b44c01",
   "imageRepository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/console",
   "originalConsoleCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
   "originalImageDigest": "sha256:c8cb47ad0a550e58df4cfee57f2f358eb0b1635a0812c77e04388dfb17bbebb6",
@@ -12,7 +12,7 @@
       "logicalId": "ai-context-limit",
       "version": "1.0.0",
       "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-context-limit:1.0.0",
-      "digest": "sha256:6325ca94b20a3f5ab5e9df4014b60daca8d86e7d0999e74abb2c1ddd29b36f83",
+      "digest": "sha256:d212fbb3b498f45b7e18eba461d4aa7fc3a12e50fb710270a9c3156491e4c63a",
       "console": {
         "propertyKey": "ai-context-limit",
         "resourceDir": "ai-context-limit",
@@ -43,7 +43,7 @@
       "logicalId": "gw-error-format",
       "version": "1.0.0",
       "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/gw-error-format:1.0.0",
-      "digest": "sha256:a0b80b448e995cc3c5697397167e81d3d557205f8ec00e44b16b00997c4082e9",
+      "digest": "sha256:1025d9e051c0fb5d1fb6e358b11e853151b882bf1337817e23736317d0187d91",
       "console": {
         "propertyKey": "gw-error-format",
         "resourceDir": "gw-error-format",
@@ -74,7 +74,7 @@
       "logicalId": "hmac-auth-apisix",
       "version": "2.0.1",
       "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/hmac-auth-apisix:2.0.1",
-      "digest": "sha256:9c4ffddfd75efc557840d2b5844a03d7292268ed97deb3af69ebf3583d3a0633",
+      "digest": "sha256:f452a1c9233cb991dce6cca446d0ad875f1afc8b96b67be49a0f367ce52d8c79",
       "console": {
         "propertyKey": "hmac-auth-apisix",
         "resourceDir": "hmac-auth-apisix",
@@ -105,7 +105,7 @@
       "logicalId": "log-request-response",
       "version": "1.0.0",
       "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/log-request-response:1.0.0",
-      "digest": "sha256:a3e915062ffc312b79f67dd1a6a8a9e199f6f6d2bdd2afb4b272327552b68731",
+      "digest": "sha256:151794f2fd8d88665b77352a02ecf5b789d66ac114465f0c34053c75c5728832",
       "console": {
         "propertyKey": "log-request-response",
         "resourceDir": "log-request-response",
@@ -136,7 +136,7 @@
       "logicalId": "mcp-router",
       "version": "2.0.1",
       "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-router:2.0.1",
-      "digest": "sha256:2f888548c5284d514ed9f0384711610dfdb8b72f572e95bfcd1c64e41d199203",
+      "digest": "sha256:ca49cf99a90239872575423dad2f4cf6f386a52285136923a55fae8d7a23f03e",
       "console": {
         "propertyKey": "mcp-router",
         "resourceDir": "mcp-router",
@@ -167,7 +167,7 @@
       "logicalId": "nginx-rewrite-compatible",
       "version": "1.0.0",
       "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/nginx-rewrite-compatible:1.0.0",
-      "digest": "sha256:9ab80c0c7e9abd30e099ef92964efc0291f1161175ea2a6873019d1d47a06922",
+      "digest": "sha256:61a5684328800e4d07055cb3cef09614fa2436032b2a2ae1f6a8a04119ca9226",
       "console": {
         "propertyKey": "nginx-rewrite-compatible",
         "resourceDir": "nginx-rewrite-compatible",
@@ -198,7 +198,7 @@
       "logicalId": "response-cache",
       "version": "1.0.1",
       "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/response-cache:1.0.1",
-      "digest": "sha256:48ac08f29879b14b76e154ec5107a67137a82dc2b90964726177e7f5abdd97e5",
+      "digest": "sha256:a5d04a8f14878d31d60e41643f8e1b645705fa712035821a1aa548733d04e540",
       "console": {
         "propertyKey": "response-cache",
         "resourceDir": "response-cache",
@@ -229,7 +229,7 @@
       "logicalId": "simple-jwt-auth",
       "version": "1.0.1",
       "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/simple-jwt-auth:1.0.1",
-      "digest": "sha256:fc47399ea9eb53bf3b15485a7819b1c4d00e777f8bb5223e0502087b19b1d53e",
+      "digest": "sha256:16d17145e95981e1019de546cf96d831609309f29cf161ece8046e31f38f21fe",
       "console": {
         "propertyKey": "simple-jwt-auth",
         "resourceDir": "simple-jwt-auth",

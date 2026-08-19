@@ -203,3 +203,141 @@ and Standalone defaults remain pinned and do not depend on `latest`.
 `src/get-higress.sh`. It downloads both from that exact tag and fails for a
 missing tag or checksum mismatch. It never selects a release from HTML or
 downloads an installer from `main`.
+
+## Incident record: 2026-08-13 v2.2.4 broken Wasm OCI layouts
+
+Incident [#4528](https://github.com/higress-group/higress/issues/4528);
+remediation proposal
+[#4529](https://github.com/higress-group/higress/issues/4529).
+
+Timeline:
+
+- 2026-08-13: the first release published by the immutable plugin release
+  pipeline (PR
+  [#4449](https://github.com/higress-group/higress/pull/4449),
+  promote runs
+  [31740993111](https://github.com/higress-group/higress/actions/runs/31740993111)
+  and
+  [31746736542](https://github.com/higress-group/higress/actions/runs/31746736542))
+  published each plugin candidate as a single-layer image whose only layer
+  had media type `application/vnd.module.wasm.content.layer.v1+wasm`, then
+  copied those manifests verbatim with `oras cp` to public version tags and
+  `latest`.
+- 2026-08-13 21:56: gateways began failing to fetch plugin modules with
+  `the given image is in invalid format as an OCI image: could not parse as
+  compat variant ... could not parse as oci variant: number of layers must
+  be 2 but got 1`, breaking 43 plugin repositories (43 `latest` tags and 36
+  version tags).
+- 2026-08-13/14: all affected `latest` and version tags were restored with
+  the legacy pipeline from the pre-#4449 commit `b97225f7`, whose
+  `oras push` layout (optional spec/doc layers, final
+  `application/vnd.oci.image.layer.v1.tar+gzip` layer) is loadable by every
+  gateway version.
+- 2026-08-15: registry-side finding recorded on #4529: re-enabling
+  repo-level tag overwrite in ACR did not unblock the three remaining
+  broken `1.0.0` tags; re-pushes still failed with 409 tag conflict and the
+  release credential could not delete manifests (401). Their `latest`
+  aliases were already restored.
+- 2026-08-15 (later the same day): the three remaining tags were repaired
+  through console-side tag deletion plus a compat-layout re-push; live
+  public-pull verification (below) now resolves all of them to
+  Envoy-loadable compat manifests.
+
+Root-cause chain: (1) `prepare-plugin-release.yaml` pushed candidates in a
+wasm-pkg single-layer layout; (2) promotion copies candidates verbatim, so
+the public tags inherited that layout; (3) no machine check anywhere —
+candidate publish, snapshot verification, or promotion — compared the
+manifest layer composition against the layouts Envoy actually accepts
+(the 2-layer OCI variant, or the compat variant whose final layer is
+`application/vnd.oci.image.layer.v1.tar+gzip`).
+
+Detection gap: `verifyOCI` validated only the resolved digest and the
+provenance annotations, so a structurally unloadable manifest passed every
+gate; the first failure appeared at gateway fetch time in production.
+
+Gates added by #4529:
+
+- `tools/plugin-release` now has a single Envoy layout predicate
+  (`envoyWasmLayout`, exposed as `verify-oci-layout`) that accepts exactly
+  the two loadable layouts and rejects anything else naming the layer media
+  types. The compat rule requires the final layer to be tar+gzip, which is
+  the strictest common denominator of the runtime resolvers; a manifest
+  that passes the gate is loadable by every gateway version in the wild.
+- Preparation publishes candidates only in the 2-layer OCI variant
+  (deterministic `{}` wasm-config layer, then the raw wasm layer), keeps the
+  `org.opencontainers.image.revision`, `org.opencontainers.image.version`,
+  and `io.higress.plugin.input-hash` annotations, and re-resolves the pushed
+  manifest by digest to assert the layout before the digest becomes
+  evidence. An existing candidate tag that does not resolve to that exact
+  layout fails closed instead of being reused.
+- `verify-snapshot --resolve` rejects a candidate-provenance manifest in any
+  non-loadable layout. Historical public imports keep digest-only
+  verification: they predate this pipeline and include documented
+  docker-format tags, which are explicitly out of scope.
+- Promotion gates every candidate-provenance public ref with the same
+  predicate after copy, and again in the latest preflight before any
+  `latest` alias moves. A "gateway layout smoke gate" step runs after the
+  version batch completes and strictly before the latest phase: because CI
+  runners cannot instantiate the full gateway integration stack, it is a
+  layout-equivalence check against the exact public ref using the same
+  parser rules as `verifyOCI`, and it records a `layoutGate` verdict per
+  entry in the version journal plus a completeness assertion that the gate
+  ran and passed for every candidate-provenance entry. This predicate-based
+  check is the smoke test; it does not execute a real gateway.
+
+## Repair runbook: blocked immutable tags and recovery digests
+
+`ai-context-limit:1.0.0`, `gw-error-format:1.0.0`, and
+`nginx-rewrite-compatible:1.0.0` were the last tags still serving the broken
+single-layer manifests, because their immutability is tag-scoped on this ACR
+instance: tag overwrite is refused (409) and the release credential cannot
+delete manifests (401). The audited procedure below is how they — and,
+during the main recovery, the other 43 `latest` and 36 version tags — were
+repaired. Keep it for the next blocked tag.
+
+Live public-pull evidence (registry
+`higress-registry.cn-hangzhou.cr.aliyuncs.com`, anonymous pull; digests
+captured 2026-08-15 ~08:51 UTC, after the final repair wave):
+
+| Repository | Broken digest (pre-repair, 2026-08-13) | Restored digest (current, compat layout) |
+| --- | --- | --- |
+| `plugins/ai-context-limit:1.0.0` | `sha256:6325ca94b20a3f5ab5e9df4014b60daca8d86e7d0999e74abb2c1ddd29b36f83` | `sha256:d212fbb3b498f45b7e18eba461d4aa7fc3a12e50fb710270a9c3156491e4c63a` |
+| `plugins/gw-error-format:1.0.0` | `sha256:a0b80b448e995cc3c5697397167e81d3d557205f8ec00e44b16b00997c4082e9` | `sha256:1025d9e051c0fb5d1fb6e358b11e853151b882bf1337817e23736317d0187d91` |
+| `plugins/nginx-rewrite-compatible:1.0.0` | `sha256:9ab80c0c7e9abd30e099ef92964efc0291f1161175ea2a6873019d1d47a06922` | `sha256:61a5684328800e4d07055cb3cef09614fa2436032b2a2ae1f6a8a04119ca9226` |
+
+Audited recovery procedure for a blocked tag:
+
+1. Record the pre-repair state (read-only; anonymous pull is sufficient):
+   `oras manifest fetch higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/<name>:<tag> --descriptor | jq -r .digest`
+2. Delete the broken tag through the ACR console (or a delete-capable
+   credential). Tag overwrite remains refused (409) and the release
+   credential cannot delete (401), so this step is an audited registry-side
+   action with maintainer approval.
+3. Re-push the restored compat-layout manifest from the legacy pipeline at
+   the pre-#4449 ref `b97225f7`, then verify both layout and digest:
+   `cd tools/plugin-release && go run . verify-oci-layout --ref higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/<name>:<tag>`
+   must print `compat`.
+4. Refresh the checked-in evidence to the restored digests. The Console
+   recovery manifest is validated against the snapshot, so both files must
+   move together: update the affected `digest` values in
+   `plugins/release/snapshots/2.2.4.json`, recompute `snapshotSha256` with
+   `sha256sum plugins/release/snapshots/2.2.4.json`, and update the same
+   `digest` values plus `snapshotSha256` in
+   `plugins/release/console-recovery/2.2.4.json`. Never guess digests; take
+   them from step 3 or a fresh public pull.
+5. Prove the refreshed manifest still binds:
+   `cd tools/plugin-release && go run . validate-console-recovery --root ../.. --catalog ../../plugins/release/catalog.json --manifest ../../plugins/release/console-recovery/2.2.4.json`.
+6. Commit the refreshed snapshot/recovery bytes through a reviewed PR that
+   links this runbook, the deletion record, and the digest table.
+
+The v2.2.4 recovery refresh executed with this change: every one of the
+eight Console-recovery plugin tags had been restored to a compat-layout
+manifest, so the eight `digest` values plus the rebound `snapshotSha256`
+were refreshed in `plugins/release/snapshots/2.2.4.json` and
+`plugins/release/console-recovery/2.2.4.json` from live public pulls, and
+`validate-console-recovery` passes on the refreshed bytes. The remaining
+2.2.4 snapshot entries whose version tags were also restored during the
+recovery were deliberately left untouched here: refreshing them is a
+separate reviewed decision (the next managed release's snapshot re-baselines
+them naturally), because the Console recovery validator binds only the
+eight refreshed entries.

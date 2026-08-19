@@ -76,11 +76,14 @@ func TestVerifySnapshotUsesPreMergeInputsAndMergedVersions(t *testing.T) {
 	if err := verifySnapshot(root, catalog, snapshotPath, preMerge, merged, false, "candidate"); err != nil {
 		t.Fatal(err)
 	}
+	// Resolved manifests of candidate-provenance entries must now also carry
+	// an Envoy-loadable layer layout (incident #4528 gate).
+	twoLayerLayout := []ociLayer{{MediaType: wasmConfigMediaType, Digest: "sha256:" + strings.Repeat("c", 64)}, {MediaType: wasmContentMediaType, Digest: "sha256:" + strings.Repeat("a", 64)}}
 	withManifestResolver(t, func(ref string) (ociManifest, error) {
 		if ref != snapshot.Plugins[0].CandidateRef {
 			t.Fatalf("candidate verification resolved %q", ref)
 		}
-		return ociManifest{Digest: snapshot.Plugins[0].Digest, Annotations: map[string]string{"org.opencontainers.image.revision": preMerge, "io.higress.plugin.input-hash": hash, "org.opencontainers.image.version": "1.0.0"}}, nil
+		return ociManifest{Digest: snapshot.Plugins[0].Digest, Annotations: map[string]string{"org.opencontainers.image.revision": preMerge, "io.higress.plugin.input-hash": hash, "org.opencontainers.image.version": "1.0.0"}, Layers: twoLayerLayout}, nil
 	})
 	if err := verifySnapshot(root, catalog, snapshotPath, preMerge, merged, true, "candidate"); err != nil {
 		t.Fatal(err)
@@ -89,7 +92,7 @@ func TestVerifySnapshotUsesPreMergeInputsAndMergedVersions(t *testing.T) {
 		if ref != snapshot.Plugins[0].OCIRef {
 			t.Fatalf("public verification resolved %q", ref)
 		}
-		return ociManifest{Digest: snapshot.Plugins[0].Digest, Annotations: map[string]string{"org.opencontainers.image.revision": preMerge, "io.higress.plugin.input-hash": hash, "org.opencontainers.image.version": "1.0.0"}}, nil
+		return ociManifest{Digest: snapshot.Plugins[0].Digest, Annotations: map[string]string{"org.opencontainers.image.revision": preMerge, "io.higress.plugin.input-hash": hash, "org.opencontainers.image.version": "1.0.0"}, Layers: twoLayerLayout}, nil
 	})
 	if err := verifySnapshot(root, catalog, snapshotPath, preMerge, merged, true, "public"); err != nil {
 		t.Fatal(err)

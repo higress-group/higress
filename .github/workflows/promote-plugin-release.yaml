@@ -98,6 +98,23 @@ jobs:
             args+=(--previous "../../plugins/release/snapshots/$(jq -r .previousRelease "$SNAPSHOT_PATH").json")
           fi
           (cd tools/plugin-release && go run . "${args[@]}")
+          PLUGIN_RELEASE_BIN=/tmp/plugin-release-verify
+          (cd tools/plugin-release && go build -o "$PLUGIN_RELEASE_BIN" .)
+          # BEGIN promotion-layout-contract
+          # Envoy loads a Wasm OCI image in exactly two layouts (incident
+          # #4528): the 2-layer oci variant (wasm config json then raw wasm)
+          # or the compat variant whose final layer is tar+gzip. Every
+          # candidate-provenance artifact must resolve to one of them before
+          # any public tag or latest alias moves.
+          verify_envoy_loadable_layout() {
+            local ref=$1 layout
+            if ! layout=$("$PLUGIN_RELEASE_BIN" verify-oci-layout --ref "$ref"); then
+              echo "promoted artifact is not loadable by Envoy as a Wasm OCI image: $ref" >&2
+              return 1
+            fi
+            printf '%s\n' "$layout"
+          }
+          # END promotion-layout-contract
           # BEGIN promotion-descriptor-contract
           descriptor_or_absent() {
             local ref=$1 out err auth_error
@@ -155,10 +172,70 @@ jobs:
             jq --arg ref "$ref" --arg digest "$digest" --arg candidate "$candidate" --arg provenance "$provenance" --arg state "$state" '.entries += [{ref:$ref,digest:$digest,candidateRef:$candidate,provenanceMode:$provenance,preflight:$state}]' "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json" > /tmp/journal.next && mv /tmp/journal.next "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json"
           done < <(jq -c '.plugins[]' "$SNAPSHOT_PATH")
           # Only preflight-approved absent tags are copied; every version tag
-          # is then re-resolved before this phase is considered complete.
+          # is then re-resolved before this phase is considered complete. A
+          # candidate-provenance public ref must additionally resolve in one
+          # of the two Envoy-accepted Wasm layouts (incident #4528).
           jq -c '.entries[] | select(.preflight == "absent" and .provenanceMode == "candidate")' "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json" | while read -r entry; do oras cp "$(jq -r .candidateRef <<<"$entry")" "$(jq -r .ref <<<"$entry")"; done
-          jq -c '.entries[]' "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json" | while read -r entry; do test "$(oras manifest fetch "$(jq -r .ref <<<"$entry")" --descriptor | jq -r .digest)" = "$(jq -r .digest <<<"$entry")"; done
+          jq -c '.entries[]' "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json" | while read -r entry; do
+            ref=$(jq -r .ref <<<"$entry")
+            test "$(oras manifest fetch "$ref" --descriptor | jq -r .digest)" = "$(jq -r .digest <<<"$entry")"
+            if [ "$(jq -r '.provenanceMode // "candidate"' <<<"$entry")" = candidate ]; then
+              verify_envoy_loadable_layout "$ref" >/dev/null
+            fi
+          done
           jq '.phase="version-complete"' "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json" > /tmp/journal.next && mv /tmp/journal.next "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json"
+      - name: Gateway layout smoke gate before latest movement
+        if: ${{ !inputs.dry_run }}
+        env:
+          REGISTRY: ${{ vars.PLUGIN_PUBLIC_REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.PRODUCTION_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.PRODUCTION_REGISTRY_PASSWORD }}
+          SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+          SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "$REGISTRY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
+          echo "$REGISTRY_PASSWORD" | oras login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+          PLUGIN_RELEASE_BIN=/tmp/plugin-release-verify
+          test -x "$PLUGIN_RELEASE_BIN" || { (cd tools/plugin-release && go build -o "$PLUGIN_RELEASE_BIN" .); }
+          # BEGIN promotion-layout-contract
+          # Envoy loads a Wasm OCI image in exactly two layouts (incident
+          # #4528): the 2-layer oci variant (wasm config json then raw wasm)
+          # or the compat variant whose final layer is tar+gzip. Every
+          # candidate-provenance artifact must resolve to one of them before
+          # any public tag or latest alias moves.
+          verify_envoy_loadable_layout() {
+            local ref=$1 layout
+            if ! layout=$("$PLUGIN_RELEASE_BIN" verify-oci-layout --ref "$ref"); then
+              echo "promoted artifact is not loadable by Envoy as a Wasm OCI image: $ref" >&2
+              return 1
+            fi
+            printf '%s\n' "$layout"
+          }
+          # END promotion-layout-contract
+          # CI runners cannot instantiate the full gateway integration stack,
+          # so this smoke gate is a layout-equivalence check against the exact
+          # promoted public ref using the same Envoy parser rules as the
+          # verifyOCI gate; it runs after copy and strictly before any latest
+          # alias moves.
+          journal="/tmp/plugin-release-version-$SNAPSHOT_SHA256.json"
+          test -f "$journal"
+          jq -e '.phase == "version-complete" and (.entries | type == "array")' "$journal" >/dev/null
+          while read -r entry; do
+            provenance=$(jq -r 'if .provenanceMode == "candidate" or ((.candidateRef // "") != "") then "candidate" else "public" end' <<<"$entry")
+            [ "$provenance" = candidate ] || continue
+            ref=$(jq -r .ociRef <<<"$entry")
+            digest=$(jq -r .digest <<<"$entry")
+            test "$(oras manifest fetch "$ref" --descriptor | jq -r .digest)" = "$digest"
+            layout=$(verify_envoy_loadable_layout "$ref")
+            jq --arg ref "$ref" --arg layoutGate "envoy-loadable:$layout" '(.entries[] | select(.ref == $ref)) |= . + {layoutGate: $layoutGate}' "$journal" > /tmp/journal.next && mv /tmp/journal.next "$journal"
+          done < <(jq -c '.plugins[]' "$SNAPSHOT_PATH")
+          # Static completeness assertion: the gate ran and passed for every
+          # candidate-provenance entry, or the batch had none to verify.
+          candidate_total=$(jq '[.entries[] | select(.provenanceMode == "candidate")] | length' "$journal")
+          verified_total=$(jq '[.entries[] | select((.layoutGate // "") | startswith("envoy-loadable:"))] | length' "$journal")
+          test "$candidate_total" = "$verified_total"
+          echo "Gateway layout smoke gate: $verified_total of $candidate_total candidate-provenance public refs resolved in an Envoy-accepted Wasm layout (oci/compat) before latest movement." >> "$GITHUB_STEP_SUMMARY"
       - name: Persist complete version batch journal
         if: ${{ !inputs.dry_run }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -200,6 +277,23 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
           test -n "$REGISTRY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
           echo "$REGISTRY_PASSWORD" | oras login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+          PLUGIN_RELEASE_BIN=/tmp/plugin-release-verify
+          (cd tools/plugin-release && go build -o "$PLUGIN_RELEASE_BIN" .)
+          # BEGIN promotion-layout-contract
+          # Envoy loads a Wasm OCI image in exactly two layouts (incident
+          # #4528): the 2-layer oci variant (wasm config json then raw wasm)
+          # or the compat variant whose final layer is tar+gzip. Every
+          # candidate-provenance artifact must resolve to one of them before
+          # any public tag or latest alias moves.
+          verify_envoy_loadable_layout() {
+            local ref=$1 layout
+            if ! layout=$("$PLUGIN_RELEASE_BIN" verify-oci-layout --ref "$ref"); then
+              echo "promoted artifact is not loadable by Envoy as a Wasm OCI image: $ref" >&2
+              return 1
+            fi
+            printf '%s\n' "$layout"
+          }
+          # END promotion-layout-contract
           # BEGIN promotion-descriptor-contract
           descriptor_or_absent() {
             local ref=$1 out err auth_error
@@ -269,6 +363,12 @@ jobs:
           while read -r entry; do
             id=$(jq -r .logicalId <<<"$entry"); ref=$(jq -r .ociRef <<<"$entry"); digest=$(jq -r .digest <<<"$entry")
             test "$(oras manifest fetch "$ref" --descriptor | jq -r .digest)" = "$digest"
+            # Incident #4528 gate: a candidate-provenance version ref that
+            # does not resolve in an Envoy-accepted layout must stop the batch
+            # before any latest alias is written.
+            if [ "$(jq -r 'if .provenanceMode == "candidate" or ((.candidateRef // "") != "") then "candidate" else "public" end' <<<"$entry")" = candidate ]; then
+              verify_envoy_loadable_layout "$ref" >/dev/null
+            fi
             version=$(jq -r .version <<<"$entry")
             image=${ref%:*}; latest="$image:latest"
             if latest_json=$(descriptor_or_absent "$latest"); then

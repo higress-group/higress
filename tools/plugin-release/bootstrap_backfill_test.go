@@ -237,12 +237,15 @@ func TestBootstrapBackfillProducesMixedSnapshotVerifiedFromBothSources(t *testin
 	// PR validation resolves only candidate references; the historical public
 	// entry is deliberately not re-resolved or annotated there. The bootstrap
 	// baseline itself is not committed, so the carried public entry is bound by
-	// the committed evidence marker rather than a previous snapshot.
+	// the committed evidence marker rather than a previous snapshot. The
+	// backfill candidate resolves in the Envoy-loadable 2-layer layout the
+	// candidate publisher now emits (incident #4528 gate).
+	candidateLayout := []ociLayer{{MediaType: wasmConfigMediaType, Digest: "sha256:" + strings.Repeat("e", 64)}, {MediaType: wasmContentMediaType, Digest: candidateDigest}}
 	withManifestResolver(t, func(ref string) (ociManifest, error) {
 		if ref != candidateRef {
 			t.Fatalf("candidate validation resolved %q, want only the backfill candidate", ref)
 		}
-		return ociManifest{Digest: candidateDigest, Annotations: annotations}, nil
+		return ociManifest{Digest: candidateDigest, Annotations: annotations, Layers: candidateLayout}, nil
 	})
 	if err := verifySnapshotBindings(root, catalog, mixedPath, planPath, "", target, target, true, "candidate"); err != nil {
 		t.Fatalf("mixed snapshot must pass candidate PR validation: %v", err)
@@ -250,12 +253,14 @@ func TestBootstrapBackfillProducesMixedSnapshotVerifiedFromBothSources(t *testin
 
 	// Post-promotion verification resolves every public tag; the backfilled
 	// tag serves the copied candidate content with its provenance annotations.
+	// The imported historical public tag keeps digest-only verification and may
+	// keep any legacy layout.
 	withManifestResolver(t, func(ref string) (ociManifest, error) {
 		switch ref {
 		case "registry.example/plugins/pub:1.0.0":
 			return ociManifest{Digest: pubDigest}, nil
 		case "registry.example/plugins/miss:1.0.0":
-			return ociManifest{Digest: candidateDigest, Annotations: annotations}, nil
+			return ociManifest{Digest: candidateDigest, Annotations: annotations, Layers: candidateLayout}, nil
 		default:
 			t.Fatalf("unexpected public resolve %q", ref)
 			return ociManifest{}, nil

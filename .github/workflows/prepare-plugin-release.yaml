@@ -277,12 +277,14 @@ jobs:
                   (.annotations["org.opencontainers.image.revision"] == $commit) and
                   (.annotations["org.opencontainers.image.version"] == $version) and
                   (.annotations["io.higress.plugin.input-hash"] == $input_hash) and
-                  (.layers | type == "array" and length == 1) and
-                  (.layers[0].mediaType == "application/vnd.module.wasm.content.layer.v1+wasm") and
-                  (.layers[0].digest | strings | test("^sha256:[0-9a-f]{64}$"))
+                  (.layers | type == "array" and length == 2) and
+                  (.layers[0].mediaType == "application/vnd.module.wasm.config.v1+json") and
+                  (.layers[1].mediaType == "application/vnd.module.wasm.content.layer.v1+wasm") and
+                  (.layers[0].digest | strings | test("^sha256:[0-9a-f]{64}$")) and
+                  (.layers[1].digest | strings | test("^sha256:[0-9a-f]{64}$"))
                 )
               ' >/dev/null <<<"$manifest"; then
-                echo "existing candidate manifest does not match its planned provenance: $candidate" >&2
+                echo "existing candidate manifest does not match its planned provenance or the Envoy-loadable 2-layer OCI layout: $candidate" >&2
                 return 1
               fi
               printf '%s\n' "$resolved_digest"
@@ -312,12 +314,32 @@ jobs:
               echo "candidate build did not produce plugin.wasm: $candidate" >&2
               return 1
             fi
-            if ! push_result=$(oras push "$candidate" "$wasm:application/vnd.module.wasm.content.layer.v1+wasm" --annotation "org.opencontainers.image.revision=$source_commit" --annotation "org.opencontainers.image.version=$version" --annotation "io.higress.plugin.input-hash=$input_hash" --format json); then
+            # Envoy loads exactly two Wasm OCI layouts (incident #4528). Publish
+            # candidates in the 2-layer OCI variant: a deterministic empty wasm
+            # config JSON layer followed by the raw wasm module layer. The fixed
+            # config bytes keep the content-addressed candidate digest stable.
+            candidate_config=$(mktemp)
+            printf '%s' '{}' > "$candidate_config"
+            if ! push_result=$(oras push "$candidate" "$candidate_config:application/vnd.module.wasm.config.v1+json" "$wasm:application/vnd.module.wasm.content.layer.v1+wasm" --annotation "org.opencontainers.image.revision=$source_commit" --annotation "org.opencontainers.image.version=$version" --annotation "io.higress.plugin.input-hash=$input_hash" --format json); then
               echo "candidate push failed: $candidate" >&2
               return 1
             fi
             if ! resolved_digest=$(jq -ser 'select(length == 1) | .[0].digest | strings | select(test("^sha256:[0-9a-f]{64}$"))' <<<"$push_result"); then
               echo "candidate push returned a malformed descriptor: $candidate" >&2
+              return 1
+            fi
+            if ! pushed_manifest=$(oras manifest fetch "$candidate_repo@$resolved_digest"); then
+              echo "published candidate manifest cannot be resolved by digest: $candidate_repo@$resolved_digest" >&2
+              return 1
+            fi
+            if ! jq -se '
+              length == 1 and (.[0] |
+                (.layers | type == "array" and length == 2) and
+                (.layers[0].mediaType == "application/vnd.module.wasm.config.v1+json") and
+                (.layers[1].mediaType == "application/vnd.module.wasm.content.layer.v1+wasm")
+              )
+            ' >/dev/null <<<"$pushed_manifest"; then
+              echo "published candidate is not in the Envoy-loadable 2-layer OCI layout: $candidate" >&2
               return 1
             fi
             printf '%s\n' "$resolved_digest"

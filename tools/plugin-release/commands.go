@@ -82,6 +82,7 @@ func classifyOCIFailure(err error, expectedRef string) ociFailureClass {
 type ociManifest struct {
 	Digest      string
 	Annotations map[string]string
+	Layers      []ociLayer
 }
 
 // ociManifestResolver is a seam for the bootstrap and verification tests. It
@@ -1149,6 +1150,13 @@ func verifyOCI(entry SnapshotEntry, provenanceMode, snapshotMode, ociSource stri
 		manifest.Annotations["org.opencontainers.image.version"] != entry.Version {
 		return errors.New("OCI provenance annotations do not match snapshot")
 	}
+	// Incident #4528 gate: a candidate-provenance manifest that is not one of
+	// the two Envoy-accepted Wasm layouts must fail verification before any
+	// promotion. Historical public imports keep digest-only verification:
+	// they predate this pipeline and include documented docker-format tags.
+	if _, err := envoyWasmLayout(manifest.Layers); err != nil {
+		return fmt.Errorf("%s is not promotable: %w", ref, err)
+	}
 	return nil
 }
 
@@ -1169,11 +1177,12 @@ func resolveOCIManifest(ref string) (ociManifest, error) {
 	}
 	var manifest struct {
 		Annotations map[string]string `json:"annotations"`
+		Layers      []ociLayer        `json:"layers"`
 	}
 	if err := json.Unmarshal(manifestOut, &manifest); err != nil {
 		return ociManifest{}, err
 	}
-	return ociManifest{Digest: descriptor.Digest, Annotations: manifest.Annotations}, nil
+	return ociManifest{Digest: descriptor.Digest, Annotations: manifest.Annotations, Layers: manifest.Layers}, nil
 }
 
 func runORAS(args ...string) ([]byte, string, error) {
@@ -1561,6 +1570,31 @@ func commandVerify(args []string) error {
 		return errors.New("--snapshot is required")
 	}
 	return verifySnapshotBindings(*root, *catalog, *snapshot, *plan, *previous, *expected, *committed, *resolve, *ociSource)
+}
+
+// commandVerifyOCILayout resolves one exact OCI reference and reports which
+// Envoy-accepted Wasm layout its manifest uses. It is the workflow-level gate
+// shared by candidate publication and promotion, so a non-loadable manifest
+// fails with the offending reference and layer media types.
+func commandVerifyOCILayout(args []string) error {
+	fs := flag.NewFlagSet("verify-oci-layout", flag.ContinueOnError)
+	ref := fs.String("ref", "", "exact OCI reference to verify")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *ref == "" {
+		return errors.New("--ref is required")
+	}
+	manifest, err := ociManifestResolver(*ref)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", *ref, err)
+	}
+	layout, err := envoyWasmLayout(manifest.Layers)
+	if err != nil {
+		return fmt.Errorf("%s is not loadable by Envoy as a Wasm OCI image: %w", *ref, err)
+	}
+	fmt.Println(layout)
+	return nil
 }
 
 func commandCompare(args []string) error {
