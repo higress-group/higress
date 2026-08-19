@@ -33,6 +33,12 @@ type upgradeArgs struct {
 	*InstallArgs
 }
 
+var (
+	getAllProfilesForUpgrade = getAllProfiles
+	promptUpgradeForUpgrade  = promptUpgrade
+	newInstallerForUpgrade   = installer.NewInstaller
+)
+
 func addUpgradeFlags(cmd *cobra.Command, args *upgradeArgs) {
 	cmd.PersistentFlags().StringSliceVarP(&args.InFilenames, "filename", "f", nil, filenameFlagHelpStr)
 	cmd.PersistentFlags().StringArrayVarP(&args.Set, "set", "s", nil, setFlagHelpStr)
@@ -64,13 +70,17 @@ func newUpgradeCmd() *cobra.Command {
 func upgrade(writer io.Writer, iArgs *InstallArgs) error {
 	setFlags := applyFlagAliases(iArgs.Set, iArgs.ManifestsPath)
 	fmt.Fprintf(writer, "⌛️ Checking higress installed profiles...\n")
-	profileContexts, _ := getAllProfiles()
+	profileContexts, _ := getAllProfilesForUpgrade()
 	if len(profileContexts) == 0 {
 		fmt.Fprintf(writer, "\nHigress hasn't been installed yet!\n")
 		return nil
 	}
 
 	valuesOverlay, err := helm.GetValuesOverylayFromFiles(iArgs.InFilenames)
+	if err != nil {
+		return err
+	}
+	overlayYAML, err := helm.GetProfileOverlay(valuesOverlay, setFlags)
 	if err != nil {
 		return err
 	}
@@ -81,6 +91,11 @@ func upgrade(writer io.Writer, iArgs *InstallArgs) error {
 	if err != nil {
 		return err
 	}
+	if profileContext.Profile.Global.Install == helm.InstallLocalDocker {
+		if err := validateLocalDockerUpgradeOverlay(profileContext.Profile, overlayYAML); err != nil {
+			return err
+		}
+	}
 
 	fmt.Fprintf(writer, "\n🧐 Validating Profile: \"%s\" \n", profileContext.PathOrName)
 	err = profile.Validate()
@@ -88,7 +103,7 @@ func upgrade(writer io.Writer, iArgs *InstallArgs) error {
 		return err
 	}
 
-	if !promptUpgrade(writer) {
+	if !promptUpgradeForUpgrade(writer) {
 		return nil
 	}
 
@@ -102,6 +117,17 @@ func upgrade(writer io.Writer, iArgs *InstallArgs) error {
 		_ = os.Remove(oldProfileName)
 	}
 
+	return nil
+}
+
+func validateLocalDockerUpgradeOverlay(baseline *helm.Profile, overlayYAML string) error {
+	unsupported, err := helm.UnsupportedLocalDockerUpgradeOverlayPaths(baseline, overlayYAML)
+	if err != nil {
+		return err
+	}
+	if len(unsupported) > 0 {
+		return fmt.Errorf("local-docker upgrade does not support overlay fields: %s", strings.Join(unsupported, ", "))
+	}
 	return nil
 }
 
@@ -122,7 +148,7 @@ func promptUpgrade(writer io.Writer) bool {
 }
 
 func upgradeManifests(profile *helm.Profile, writer io.Writer, devel bool) error {
-	installer, err := installer.NewInstaller(profile, writer, false, devel, installer.UpgradeInstallerMode)
+	installer, err := newInstallerForUpgrade(profile, writer, false, devel, installer.UpgradeInstallerMode)
 	if err != nil {
 		return err
 	}

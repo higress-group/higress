@@ -19,6 +19,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/alibaba/higress/hgctl/pkg/helm/tpath"
@@ -185,6 +187,70 @@ func overlaySetFlagValues(iopYAML string, setFlags []string) (string, error) {
 	return string(out), nil
 }
 
+// GetProfileOverlay normalizes file and --set input into one Profile overlay.
+// Callers that need to validate user intent must do so before Profile defaulting.
+func GetProfileOverlay(fileOverlayYAML string, setFlags []string) (string, error) {
+	return overlaySetFlagValues(fileOverlayYAML, setFlags)
+}
+
+// UnsupportedLocalDockerUpgradeOverlayPaths returns caller-requested fields that
+// would not be consumed by a local-docker upgrade. The comparison uses the
+// stored typed Profile as the baseline, while the overlay retains only caller
+// input and therefore excludes fields injected by profile generation.
+func UnsupportedLocalDockerUpgradeOverlayPaths(baseline *Profile, overlayYAML string) ([]string, error) {
+	if strings.TrimSpace(overlayYAML) == "" {
+		return nil, nil
+	}
+
+	baselineValues := make(map[string]any)
+	if err := yaml.Unmarshal([]byte(util.ToYAML(baseline)), &baselineValues); err != nil {
+		return nil, err
+	}
+	overlayValues := make(map[string]any)
+	if err := yaml.Unmarshal([]byte(overlayYAML), &overlayValues); err != nil {
+		return nil, err
+	}
+
+	paths := make([]string, 0)
+	collectOverlayDiffPaths(baselineValues, overlayValues, "", &paths)
+	sort.Strings(paths)
+
+	unsupported := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path != "installPackagePath" && path != "charts.standalone.url" {
+			unsupported = append(unsupported, path)
+		}
+	}
+	if len(unsupported) == 0 {
+		return nil, nil
+	}
+	return unsupported, nil
+}
+
+func collectOverlayDiffPaths(baseline, overlay any, prefix string, paths *[]string) {
+	overlayMap, isMap := overlay.(map[string]any)
+	if !isMap {
+		if !reflect.DeepEqual(baseline, overlay) {
+			*paths = append(*paths, prefix)
+		}
+		return
+	}
+
+	baselineMap, _ := baseline.(map[string]any)
+	keys := make([]string, 0, len(overlayMap))
+	for key := range overlayMap {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		collectOverlayDiffPaths(baselineMap[key], overlayMap[key], path, paths)
+	}
+}
+
 // getInstallPackagePath returns the installPackagePath in the given IstioOperator YAML string.
 func getInstallPackagePath(profileYAML string) (string, error) {
 	profile, err := UnmarshalProfile(profileYAML)
@@ -302,7 +368,7 @@ func GenProfile(profileOrPath, fileOverlayYAML string, setFlags []string) (strin
 	}
 
 	// Combine file and --set overlays and translate any K8s settings in values to Profile format
-	overlayYAML, err := overlaySetFlagValues(fileOverlayYAML, setFlags)
+	overlayYAML, err := GetProfileOverlay(fileOverlayYAML, setFlags)
 	if err != nil {
 		return "", nil, err
 	}
@@ -338,7 +404,7 @@ func GenProfileFromProfileContent(profileContent, fileOverlayYAML string, setFla
 	}
 
 	// Combine file and --set overlays and translate any K8s settings in values to Profile format
-	overlayYAML, err := overlaySetFlagValues(fileOverlayYAML, setFlags)
+	overlayYAML, err := GetProfileOverlay(fileOverlayYAML, setFlags)
 	if err != nil {
 		return "", nil, err
 	}
