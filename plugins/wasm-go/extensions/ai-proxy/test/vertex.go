@@ -1499,8 +1499,8 @@ func RunVertexOpenAICompatibleModeOnHttpResponseBodyTests(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action2)
 		})
 
-		// 测试 Vertex OpenAI 兼容模式流式响应处理（Unicode 转义解码）
-		t.Run("vertex openai compatible mode streaming response - unicode escape decoding", func(t *testing.T) {
+		// 测试 Vertex OpenAI 兼容模式流式响应处理（Unicode 转义透传）
+		t.Run("vertex openai compatible mode streaming response - unicode escape passthrough", func(t *testing.T) {
 			host, status := test.NewTestHost(vertexOpenAICompatibleModeConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -1525,25 +1525,34 @@ func RunVertexOpenAICompatibleModeOnHttpResponseBodyTests(t *testing.T) {
 			host.CallOnHttpResponseHeaders(responseHeaders)
 
 			// 模拟带有 Unicode 转义的流式响应（Vertex AI OpenAI-compatible API 可能返回的格式）
-			// \u4e2d\u6587 = 中文
-			chunkWithUnicode := `data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1729986750,"model":"gemini-2.0-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"\u4e2d\u6587\u6d4b\u8bd5"},"finish_reason":null}]}`
+			// \u4e2d\u6587 = 中文, \ud83c\udf7d = 🍽
+			chunkWithUnicode := `data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1729986750,"model":"gemini-2.0-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"\u4e2d\u6587 \ud83c\udf7d\ufe0f"},"finish_reason":null}]}`
 
-			// 处理流式响应体 - 应该解码 Unicode 转义
+			// 处理流式响应体 - 应该透传，不改写合法 JSON 转义序列
 			action := host.CallOnHttpStreamingResponseBody([]byte(chunkWithUnicode), false)
 			require.Equal(t, types.ActionContinue, action)
 
-			// 验证响应体中的 Unicode 转义已被解码
+			// 验证 raw SSE 响应保持原样；客户端解析 JSON 后得到正常文本。
 			responseBody := host.GetResponseBody()
 			require.NotNil(t, responseBody)
 
 			responseStr := string(responseBody)
-			// 应该包含解码后的中文字符，而不是 \uXXXX 转义序列
-			require.Contains(t, responseStr, "中文测试", "Unicode escapes should be decoded to Chinese characters")
-			require.NotContains(t, responseStr, `\u4e2d`, "Should not contain Unicode escape sequences")
+			require.Equal(t, chunkWithUnicode, responseStr, "OpenAI-compatible stream response should pass through unchanged")
+			require.NotContains(t, responseStr, "�", "Pass-through must not introduce replacement characters")
+
+			var parsed struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(responseStr, "data: ")), &parsed))
+			require.Equal(t, "中文 🍽️", parsed.Choices[0].Delta.Content)
 		})
 
-		// 测试 Vertex OpenAI 兼容模式非流式响应处理（Unicode 转义解码）
-		t.Run("vertex openai compatible mode response body - unicode escape decoding", func(t *testing.T) {
+		// 测试 Vertex OpenAI 兼容模式非流式响应处理（Unicode 转义透传）
+		t.Run("vertex openai compatible mode response body - unicode escape passthrough", func(t *testing.T) {
 			host, status := test.NewTestHost(vertexOpenAICompatibleModeConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -1568,21 +1577,30 @@ func RunVertexOpenAICompatibleModeOnHttpResponseBodyTests(t *testing.T) {
 			host.CallOnHttpResponseHeaders(responseHeaders)
 
 			// 模拟带有 Unicode 转义的响应体
-			// \u76c8\u5229\u80fd\u529b = 盈利能力
-			responseBodyWithUnicode := `{"id":"chatcmpl-abc123","object":"chat.completion","created":1729986750,"model":"gemini-2.0-flash","choices":[{"index":0,"message":{"role":"assistant","content":"\u76c8\u5229\u80fd\u529b\u5206\u6790"},"finish_reason":"stop"}]}`
+			// \u76c8\u5229\u80fd\u529b = 盈利能力, \ud83c\udf1f = 🌟
+			responseBodyWithUnicode := `{"id":"chatcmpl-abc123","object":"chat.completion","created":1729986750,"model":"gemini-2.0-flash","choices":[{"index":0,"message":{"role":"assistant","content":"\u76c8\u5229\u80fd\u529b\u5206\u6790 \ud83c\udf1f"},"finish_reason":"stop"}]}`
 
-			// 处理响应体 - 应该解码 Unicode 转义
+			// 处理响应体 - 应该透传，不改写合法 JSON 转义序列
 			action := host.CallOnHttpResponseBody([]byte(responseBodyWithUnicode))
 			require.Equal(t, types.ActionContinue, action)
 
-			// 验证响应体中的 Unicode 转义已被解码
+			// 验证 raw JSON 响应保持原样；客户端解析 JSON 后得到正常文本。
 			processedResponseBody := host.GetResponseBody()
 			require.NotNil(t, processedResponseBody)
 
 			responseStr := string(processedResponseBody)
-			// 应该包含解码后的中文字符
-			require.Contains(t, responseStr, "盈利能力分析", "Unicode escapes should be decoded to Chinese characters")
-			require.NotContains(t, responseStr, `\u76c8`, "Should not contain Unicode escape sequences")
+			require.Equal(t, responseBodyWithUnicode, responseStr, "OpenAI-compatible response should pass through unchanged")
+			require.NotContains(t, responseStr, "�", "Pass-through must not introduce replacement characters")
+
+			var parsed struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
+			require.NoError(t, json.Unmarshal(processedResponseBody, &parsed))
+			require.Equal(t, "盈利能力分析 🌟", parsed.Choices[0].Message.Content)
 		})
 	})
 }
