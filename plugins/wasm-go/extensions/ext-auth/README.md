@@ -20,7 +20,7 @@ description: Ext 认证插件实现了调用外部授权服务进行认证鉴权
 | ------------------------------- | ------------------ | ---- | ------ | ------------------------------------------------------------ |
 | `http_service`                  | object             | 是   | -      | 外部授权服务配置                                             |
 | `match_type`                    | string             | 否   |        | 可选 `whitelist` 或 `blacklist`                              |
-| `match_list`                    | array of MatchRule | 否   |        | 一个包含 (`match_rule_domain`, `match_rule_path`, `match_rule_type`) 的列表 |
+| `match_list`                    | array of MatchRule | 否   |        | 请求匹配规则列表，支持按域名、方法、路径和请求头是否存在进行匹配 |
 | `failure_mode_allow`            | bool               | 否   | false  | 当设置为 true 时，即使与授权服务的通信失败，或者授权服务返回了 HTTP 5xx 错误，仍会接受客户端请求 |
 | `failure_mode_allow_header_add` | bool               | 否   | false  | 当 `failure_mode_allow` 和 `failure_mode_allow_header_add` 都设置为 true 时，若与授权服务的通信失败，或授权服务返回了 HTTP 5xx 错误，那么请求头中将会添加 `x-envoy-auth-failure-mode-allowed: true` |
 | `status_on_error`               | int                | 否   | 403    | 当授权服务无法访问或状态码为 5xx 时，设置返回给客户端的 HTTP 状态码。默认状态码是 `403` |
@@ -88,6 +88,14 @@ MatchRule 类型每一项的配置字段说明，在使用 `array of MatchRule` 
 | `match_rule_method` | []string | 否   | -      | 匹配请求方法                                                 |
 | `match_rule_path`   | string   | 否   | -      | 匹配请求路径的规则                                           |
 | `match_rule_type`   | string   | 否   | -      | 匹配请求路径的规则类型，可选 `exact` , `prefix` , `suffix`, `contains`, `regex` |
+| `match_rule_headers` | array of HeaderPresenceCondition | 否 | - | 按请求头是否存在进行匹配；数组不能为空，同一规则中的所有条件必须同时满足 |
+
+`HeaderPresenceCondition` 类型每一项的配置字段说明：
+
+| 名称     | 数据类型 | 必填 | 默认值 | 描述 |
+|----------|----------|------|--------|------|
+| `name`   | string   | 是   | -      | HTTP 请求头名称，忽略大小写；同一规则中不能配置大小写不同的重复名称 |
+| `exists` | bool     | 是   | -      | `true` 表示请求头存在，`false` 表示请求头不存在；请求头值为空字符串时仍视为存在 |
 
 ### 两种 `endpoint_mode` 的区别
 
@@ -104,7 +112,7 @@ MatchRule 类型每一项的配置字段说明，在使用 `array of MatchRule` 
 
 ### 黑白名单模式
 
-支持黑白名单模式配置，默认为白名单模式，白名单为空，即所有请求都需要经过验证，匹配域名支持泛域名例如 `*.bar.com` ，匹配规则支持 `exact` , `prefix` , `suffix`, `contains`, `regex`
+支持黑白名单模式配置，默认为白名单模式，白名单为空时所有请求都需要鉴权。`whitelist` 规则匹配时跳过鉴权、不匹配时执行鉴权；`blacklist` 规则匹配时执行鉴权、不匹配时跳过鉴权。一个规则内的域名、方法、路径和请求头条件之间为 AND，`match_list` 中的规则之间为 OR。匹配域名支持 `*.bar.com` 等泛域名，路径支持 `exact`、`prefix`、`suffix`、`contains`、`regex`。`authorization_request.allowed_headers` 仅控制转发给鉴权服务的请求头，与是否调用鉴权服务无关。
 
 **白名单模式**
 
@@ -142,6 +150,10 @@ match_list:
   # 所有以 legacy.example.com 为域名的 POST 请求需要验证
   - match_rule_domain: 'legacy.example.com'
     match_rule_method: ["POST"]
+  # 所有包含 x-custom-auth 请求头的请求需要验证
+  - match_rule_headers:
+      - name: 'x-custom-auth'
+        exists: true
 ```
 
 ## 配置示例

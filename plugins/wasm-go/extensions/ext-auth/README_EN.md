@@ -20,7 +20,7 @@ Plugin Execution Priority: `360`
 | --- | --- | --- | --- | --- |
 | `http_service` | object | Yes | - | Configuration for the external authorization service |
 | `match_type` | string | No |  | Can be `whitelist` or `blacklist` |
-| `match_list` | array of MatchRule | No |  | A list containing (`match_rule_domain`, `match_rule_path`, `match_rule_type`) |
+| `match_list` | array of MatchRule | No |  | Request matching rules for domains, methods, paths, and request-header presence |
 | `failure_mode_allow` | bool | No | false | When set to true, client requests will be accepted even if the communication with the authorization service fails or the authorization service returns an HTTP 5xx error |
 | `failure_mode_allow_header_add` | bool | No | false | When both `failure_mode_allow` and `failure_mode_allow_header_add` are set to true, if the communication with the authorization service fails or the authorization service returns an HTTP 5xx error, the `x-envoy-auth-failure-mode-allowed: true` header will be added to the request header |
 | `status_on_error` | int | No | 403 | Sets the HTTP status code returned to the client when the authorization service is inaccessible or has a 5xx status code. The default status code is `403` |
@@ -89,6 +89,14 @@ Configuration fields for each item of `MatchRule` type. When using `array of Mat
 | `match_rule_method` | []string | No | - | Matching rule for the request method |
 | `match_rule_path` | string | No | - | The rule for matching the request path |
 | `match_rule_type` | string | No | - | The type of the rule for matching the request path, can be `exact`, `prefix`, `suffix`, `contains`, `regex` |
+| `match_rule_headers` | array of HeaderPresenceCondition | No | - | Matches request-header presence; the array must not be empty and every condition in the rule must match |
+
+Configuration fields for each item of `HeaderPresenceCondition` type:
+
+| Name | Data Type | Required | Default Value | Description |
+| --- | --- | --- | --- | --- |
+| `name` | string | Yes | - | An HTTP request-header name, matched case-insensitively. Case-insensitive duplicates within one rule are not allowed |
+| `exists` | bool | Yes | - | `true` requires the header to be present and `false` requires it to be absent. A header with an empty value is still present |
 
 ### Differences between the two `endpoint_mode`
 
@@ -105,7 +113,7 @@ When `endpoint_mode` is `forward_auth`, the authentication request will use the 
 
 ### Blacklist and Whitelist Modes
 
-Supports blacklist and whitelist mode configuration. The default is the whitelist mode. If the whitelist is empty, all requests need to be verified. The matching domain supports wildcard domains such as `*.bar.com`, and the matching rule supports `exact`, `prefix`, `suffix`, `contains`, `regex`.
+Supports blacklist and whitelist modes. Whitelist is the default, and an empty whitelist sends every request to external authorization. A matching `whitelist` rule bypasses authorization, while a miss executes it; a matching `blacklist` rule executes authorization, while a miss bypasses it. Domain, method, path, and header conditions within one rule are ANDed, while entries in `match_list` are ORed. Domains support wildcards such as `*.bar.com`, and paths support `exact`, `prefix`, `suffix`, `contains`, and `regex`. `authorization_request.allowed_headers` only controls which headers are forwarded to the authorization service; it does not control whether that service is called.
 
 **Whitelist Mode**
 
@@ -143,6 +151,10 @@ match_list:
   # For the domain legacy.example.com, all POST requests need verification.
   - match_rule_domain: 'legacy.example.com'
     match_rule_method: ["POST"]
+  # Requests containing the x-custom-auth header need verification.
+  - match_rule_headers:
+      - name: 'x-custom-auth'
+        exists: true
 ```
 
 

@@ -14,7 +14,7 @@ func createMatcher(pattern string, caseSensitive bool) Matcher {
 	return pathMatcher
 }
 
-func TestIsAllowedByMode(t *testing.T) {
+func TestMatchesPreservesBypassSemantics(t *testing.T) {
 	tests := []struct {
 		name     string
 		config   MatchRules
@@ -322,8 +322,12 @@ func TestIsAllowedByMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.config.IsAllowedByMode(tt.domain, tt.method, tt.path)
-			assert.Equal(t, tt.expected, result)
+			bypassed := !tt.config.Matches(RequestAttributes{
+				Domain: tt.domain,
+				Method: tt.method,
+				Path:   tt.path,
+			})
+			assert.Equal(t, tt.expected, bypassed)
 		})
 	}
 }

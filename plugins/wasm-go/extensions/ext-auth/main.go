@@ -19,6 +19,7 @@ import (
 	"path"
 
 	"ext-auth/config"
+	"ext-auth/expr"
 	"ext-auth/util"
 
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -55,8 +56,10 @@ const (
 )
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.ExtAuthConfig) types.Action {
-	// If the request's domain and path match the MatchRules, skip authentication
-	if config.MatchRules.IsAllowedByMode(ctx.Host(), ctx.Method(), wrapper.GetRequestPathWithoutQuery()) {
+	matchRequest, err := buildMatchRequest(ctx, config.MatchRules)
+	if err != nil {
+		log.Errorf("failed to read request headers for match rules: %v; continuing external authorization", err)
+	} else if !config.MatchRules.Matches(matchRequest) {
 		ctx.DontReadRequestBody()
 		return types.ActionContinue
 	}
@@ -75,6 +78,24 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.ExtAuthConfig) 
 
 	ctx.DontReadRequestBody()
 	return checkExtAuth(ctx, config, nil, types.HeaderStopAllIterationAndWatermark)
+}
+
+func buildMatchRequest(ctx wrapper.HttpContext, matchRules expr.MatchRules) (expr.RequestAttributes, error) {
+	request := expr.RequestAttributes{
+		Domain: ctx.Host(),
+		Method: ctx.Method(),
+		Path:   wrapper.GetRequestPathWithoutQuery(),
+	}
+	if !matchRules.RequiresRequestHeaders() {
+		return request, nil
+	}
+
+	requestHeaders, err := proxywasm.GetHttpRequestHeaders()
+	if err != nil {
+		return expr.RequestAttributes{}, err
+	}
+	request.HeaderNames = expr.NewHeaderNameSet(requestHeaders)
+	return request, nil
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config config.ExtAuthConfig, body []byte) types.Action {

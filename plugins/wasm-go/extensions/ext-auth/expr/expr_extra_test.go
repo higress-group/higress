@@ -46,20 +46,21 @@ func TestMatchRulesDefaults_EmptyButNonNilRuleList(t *testing.T) {
 // the empty-list defaults case is an important degenerate edge.
 func TestMatchRulesDefaults_EmptyWhitelistDenies(t *testing.T) {
 	d := MatchRulesDefaults()
-	require.False(t, d.IsAllowedByMode("example.com", "GET", "/x"))
+	request := RequestAttributes{Domain: "example.com", Method: "GET", Path: "/x"}
+	require.True(t, d.Matches(request))
 }
 
-// === Module B — IsAllowedByMode default branch ==========================
+// === Module B — Matches default branch ==================================
 //
-// `default: return false` at match_rules.go:51 is unreachable through
+// `default: return true` is unreachable through
 // MatchRulesDefaults because Mode is whitelist there. A misconfigured /
-// hand-built MatchRules with an unknown mode must safely fall back to
-// "not allowed" so the request still goes through the auth server rather
-// than silently bypassing it.
+// hand-built MatchRules with an unknown mode must remain in the external
+// authorization scope rather than silently bypassing it.
 
-func TestIsAllowedByMode_UnknownModeFallsToFalse(t *testing.T) {
+func TestMatches_UnknownModeFailsClosed(t *testing.T) {
 	mr := MatchRules{Mode: "not-a-mode", RuleList: []Rule{}}
-	require.False(t, mr.IsAllowedByMode("example.com", "GET", "/x"))
+	request := RequestAttributes{Domain: "example.com", Method: "GET", Path: "/x"}
+	require.True(t, mr.Matches(request))
 }
 
 // === Module C — BuildStringMatcher edges ================================
