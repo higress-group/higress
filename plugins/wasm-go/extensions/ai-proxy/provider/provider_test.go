@@ -1,9 +1,12 @@
 package provider
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 )
@@ -820,4 +823,108 @@ func TestStripClaudeInternalMessageFields(t *testing.T) {
 	assert.Equal(t, "reasoning", gjson.GetBytes(preserved, "messages.0.reasoning_content").String())
 	assert.False(t, gjson.GetBytes(preserved, "messages.0.reasoning_signature").Exists())
 	assert.False(t, gjson.GetBytes(preserved, "messages.0.claude_content_blocks").Exists())
+}
+
+// mockProviderForTransform simulates a provider that sets :authority and :path
+// in both TransformRequestHeaders and TransformRequestBodyHeaders, like Deepl
+// or Triton which overwrite the host in the body stage.
+type mockProviderForTransform struct {
+	host       string
+	path       string
+	bodyHost   string // host set in TransformRequestBodyHeaders (empty = no overwrite)
+	bodyPath   string // path set in TransformRequestBodyHeaders (empty = no overwrite)
+}
+
+func (m *mockProviderForTransform) GetProviderType() string { return "mock" }
+
+func (m *mockProviderForTransform) TransformRequestHeaders(_ wrapper.HttpContext, _ ApiName, headers http.Header) {
+	util.OverwriteRequestHostHeader(headers, m.host)
+	if m.path != "" {
+		util.OverwriteRequestPathHeader(headers, m.path)
+	}
+}
+
+func (m *mockProviderForTransform) TransformRequestBodyHeaders(_ wrapper.HttpContext, _ ApiName, body []byte, headers http.Header) ([]byte, error) {
+	if m.bodyHost != "" {
+		util.OverwriteRequestHostHeader(headers, m.bodyHost)
+	}
+	if m.bodyPath != "" {
+		util.OverwriteRequestPathHeader(headers, m.bodyPath)
+	}
+	return body, nil
+}
+
+func TestTransformRequestHeadersAndBody_ProviderDomain(t *testing.T) {
+	t.Run("providerDomain_overrides_host_set_in_TransformRequestHeaders", func(t *testing.T) {
+		config := &ProviderConfig{
+			providerDomain: "proxy.example.com",
+		}
+		provider := &mockProviderForTransform{
+			host: "api.default.com",
+			path: "/v1/chat/completions",
+		}
+		headers := [][2]string{
+			{":authority", "gateway.local"},
+			{":path", "/v1/chat/completions"},
+		}
+		modifiedHeaders, _, err := config.transformRequestHeadersAndBody(nil, provider, headers, []byte("{}"))
+		assert.NoError(t, err)
+		assert.Equal(t, "proxy.example.com", modifiedHeaders.Get(":authority"))
+	})
+
+	t.Run("providerDomain_overrides_host_overwritten_in_TransformRequestBodyHeaders", func(t *testing.T) {
+		// Simulates Deepl/Triton which set :authority in TransformRequestBodyHeaders
+		config := &ProviderConfig{
+			providerDomain: "proxy.example.com",
+		}
+		provider := &mockProviderForTransform{
+			host:     "api.default.com",
+			bodyHost: "api.body-stage.com",
+		}
+		headers := [][2]string{
+			{":authority", "gateway.local"},
+			{":path", "/v1/chat/completions"},
+		}
+		modifiedHeaders, _, err := config.transformRequestHeadersAndBody(nil, provider, headers, []byte("{}"))
+		assert.NoError(t, err)
+		assert.Equal(t, "proxy.example.com", modifiedHeaders.Get(":authority"),
+			"providerDomain must override host set by TransformRequestBodyHeaders")
+	})
+
+	t.Run("providerDomain_and_providerBasePath_both_applied", func(t *testing.T) {
+		config := &ProviderConfig{
+			providerDomain:   "proxy.example.com",
+			providerBasePath: "/api/ai",
+		}
+		provider := &mockProviderForTransform{
+			host:     "api.default.com",
+			path:     "/v1/chat/completions",
+			bodyHost: "api.body-stage.com",
+			bodyPath: "/v1/chat/completions",
+		}
+		headers := [][2]string{
+			{":authority", "gateway.local"},
+			{":path", "/v1/chat/completions"},
+		}
+		modifiedHeaders, _, err := config.transformRequestHeadersAndBody(nil, provider, headers, []byte("{}"))
+		assert.NoError(t, err)
+		assert.Equal(t, "proxy.example.com", modifiedHeaders.Get(":authority"))
+		assert.Equal(t, "/api/ai/v1/chat/completions", modifiedHeaders.Get(":path"))
+	})
+
+	t.Run("no_providerDomain_preserves_provider_host", func(t *testing.T) {
+		config := &ProviderConfig{}
+		provider := &mockProviderForTransform{
+			host:     "api.default.com",
+			bodyHost: "api.body-stage.com",
+		}
+		headers := [][2]string{
+			{":authority", "gateway.local"},
+			{":path", "/v1/chat/completions"},
+		}
+		modifiedHeaders, _, err := config.transformRequestHeadersAndBody(nil, provider, headers, []byte("{}"))
+		assert.NoError(t, err)
+		assert.Equal(t, "api.body-stage.com", modifiedHeaders.Get(":authority"),
+			"without providerDomain, the last provider-set host should win")
+	})
 }
