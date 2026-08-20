@@ -70,6 +70,8 @@ var (
 		{provider.PathOpenAIModels, provider.ApiNameModels},
 		{provider.PathOpenAIFineTuningJobs, provider.ApiNameFineTuningJobs},
 		{provider.PathOpenAIResponses, provider.ApiNameResponses},
+		{provider.PathOpenAICompactResponse, provider.ApiNameCompactResponse},
+		{provider.PathOpenAIResponseInputTokens, provider.ApiNameResponseInputTokens},
 		{provider.PathOpenAIVideos, provider.ApiNameVideos},
 		// Anthropic style
 		{provider.PathAnthropicMessagesCountTokens, provider.ApiNameAnthropicCountTokens},
@@ -85,6 +87,9 @@ var (
 		// OpenAI style
 		{util.RegRetrieveBatchPath, provider.ApiNameRetrieveBatch},
 		{util.RegCancelBatchPath, provider.ApiNameCancelBatch},
+		{util.RegRetrieveResponsePath, provider.ApiNameRetrieveResponse},
+		{util.RegCancelResponsePath, provider.ApiNameCancelResponse},
+		{util.RegListResponseInputItemsPath, provider.ApiNameListResponseInputItems},
 		{util.RegRetrieveFilePath, provider.ApiNameRetrieveFile},
 		{util.RegRetrieveFileContentPath, provider.ApiNameRetrieveFileContent},
 		{util.RegRetrieveVideoPath, provider.ApiNameRetrieveVideo},

@@ -21,6 +21,21 @@ func TestIsStatefulAPI(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "retrieve_response_api",
+			apiName:  string(ApiNameRetrieveResponse),
+			expected: true,
+		},
+		{
+			name:     "cancel_response_api",
+			apiName:  string(ApiNameCancelResponse),
+			expected: true,
+		},
+		{
+			name:     "list_response_input_items_api",
+			apiName:  string(ApiNameListResponseInputItems),
+			expected: true,
+		},
+		{
 			name:     "files_api",
 			apiName:  string(ApiNameFiles),
 			expected: true,
@@ -130,6 +145,28 @@ func TestIsStatefulAPI(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestOpenAIProviderInitializer_DefaultCapabilitiesResponses(t *testing.T) {
+	capabilities := (&openaiProviderInitializer{}).DefaultCapabilities()
+
+	assert.Equal(t, PathOpenAIResponses, capabilities[string(ApiNameResponses)])
+	assert.Equal(t, PathOpenAIRetrieveResponse, capabilities[string(ApiNameRetrieveResponse)])
+	assert.Equal(t, PathOpenAICancelResponse, capabilities[string(ApiNameCancelResponse)])
+	assert.Equal(t, PathOpenAICompactResponse, capabilities[string(ApiNameCompactResponse)])
+	assert.Equal(t, PathOpenAIListResponseInputItems, capabilities[string(ApiNameListResponseInputItems)])
+	assert.Equal(t, PathOpenAIResponseInputTokens, capabilities[string(ApiNameResponseInputTokens)])
+}
+
+func TestProviderConfig_NeedToProcessResponsesRequestBody(t *testing.T) {
+	cfg := ProviderConfig{}
+
+	assert.True(t, cfg.needToProcessRequestBody(ApiNameResponses))
+	assert.True(t, cfg.needToProcessRequestBody(ApiNameCompactResponse))
+	assert.True(t, cfg.needToProcessRequestBody(ApiNameResponseInputTokens))
+	assert.False(t, cfg.needToProcessRequestBody(ApiNameRetrieveResponse))
+	assert.False(t, cfg.needToProcessRequestBody(ApiNameCancelResponse))
+	assert.False(t, cfg.needToProcessRequestBody(ApiNameListResponseInputItems))
 }
 
 func TestGetTokenWithConsumerAffinity(t *testing.T) {
@@ -318,6 +355,28 @@ func TestProviderBasePath_Config(t *testing.T) {
 		assert.Equal(t, "/api/v1", config.providerBasePath)
 		assert.Equal(t, "proxy.example.com", config.providerDomain)
 	})
+}
+
+func TestProviderConfig_FromJsonResponseCapabilities(t *testing.T) {
+	config := ProviderConfig{}
+	jsonStr := `{
+		"capabilities": {
+			"openai/v1/retrieveresponse": "/proxy/responses/{response_id}",
+			"openai/v1/cancelresponse": "/proxy/responses/{response_id}/cancel",
+			"openai/v1/compactresponse": "/proxy/responses/compact",
+			"openai/v1/listresponseinputitems": "/proxy/responses/{response_id}/input_items",
+			"openai/v1/responseinputtokens": "/proxy/responses/input_tokens",
+			"openai/v1/unknownresponse": "/proxy/unknown"
+		}
+	}`
+	config.FromJson(gjson.Parse(jsonStr))
+
+	assert.Equal(t, "/proxy/responses/{response_id}", config.capabilities[string(ApiNameRetrieveResponse)])
+	assert.Equal(t, "/proxy/responses/{response_id}/cancel", config.capabilities[string(ApiNameCancelResponse)])
+	assert.Equal(t, "/proxy/responses/compact", config.capabilities[string(ApiNameCompactResponse)])
+	assert.Equal(t, "/proxy/responses/{response_id}/input_items", config.capabilities[string(ApiNameListResponseInputItems)])
+	assert.Equal(t, "/proxy/responses/input_tokens", config.capabilities[string(ApiNameResponseInputTokens)])
+	assert.NotContains(t, config.capabilities, "openai/v1/unknownresponse")
 }
 
 func TestApplyProviderBasePath(t *testing.T) {
