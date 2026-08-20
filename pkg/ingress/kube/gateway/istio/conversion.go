@@ -1176,14 +1176,8 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 			Host: hostname,
 			Port: &istio.PortSelector{Number: destPort},
 		}, ipCfg, invalidBackendErr
-	default:
-		return &istio.Destination{}, nil, &ConfigError{
-			Reason:  InvalidDestinationKind,
-			Message: fmt.Sprintf("referencing unsupported backendRef: group %q kind %q", ptr.OrEmpty(to.Group), ptr.OrEmpty(to.Kind)),
-		}
-	}
 	// Start - Added by Higress
-	if equal((*string)(to.Group), "networking.higress.io") && nilOrEqual((*string)(to.Kind), "Service") {
+	case config.GroupVersionKind{Group: "networking.higress.io", Kind: "Service"}:
 		var port *istio.PortSelector
 		if to.Port != nil {
 			port = &istio.PortSelector{Number: uint32(*to.Port)}
@@ -1192,8 +1186,13 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 			Host: string(to.Name),
 			Port: port,
 		}, nil, nil
-	}
 	// End - Added by Higress
+	default:
+		return &istio.Destination{}, nil, &ConfigError{
+			Reason:  InvalidDestinationKind,
+			Message: fmt.Sprintf("referencing unsupported backendRef: group %q kind %q", ptr.OrEmpty(to.Group), ptr.OrEmpty(to.Kind)),
+		}
+	}
 
 	// All types currently require a Port, so we do this for everything; consider making this per-type if we have future types
 	// that do not require port.
@@ -2734,14 +2733,6 @@ func isCatchAllMatch(m *istio.HTTPMatchRequest) bool {
 		m.Port == 0 &&
 		m.Authority == nil &&
 		m.SourceNamespace == ""
-}
-
-func equal(have *string, expected string) bool {
-	return have != nil && *have == expected
-}
-
-func nilOrEqual(have *string, expected string) bool {
-	return have == nil || *have == expected
 }
 
 func generateRouteName(obj config.Namer, routeType string) string {
