@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: security-guard-secret
+  namespace: higress-system
+type: Opaque
+stringData:
+  accessKey: "mock-ak"
+  secretKey: "mock-sk"
+
+---
+# OpenAI format ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-security-guard-openai
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.openai.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+
+---
+# Custom protocol ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-security-guard-custom
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "custom.ai.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+
+---
+# Mock Aliyun security service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-security-service
+  namespace: higress-conformance-infra
+spec:
+  type: ExternalName
+  externalName: httpbin.org
+
+---
+# AI Security Guard plugin configuration
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-security-guard
+  namespace: higress-system
+spec:
+  priority: 300
+  matchRules:
+    - config:
+        serviceName: "mock-security-service.higress-conformance-infra.svc.cluster.local"
+        servicePort: 80
+        serviceHost: "httpbin.org"
+        accessKey: "{{secret.security-guard-secret.accessKey}}"
+        secretKey: "{{secret.security-guard-secret.secretKey}}"
+        checkRequest: true
+        checkResponse: false
+        riskLevelBar: "high"
+        timeout: 2000
+      ingress:
+        - higress-conformance-infra/wasmplugin-ai-security-guard-openai
+    - config:
+        serviceName: "mock-security-service.higress-conformance-infra.svc.cluster.local"
+        servicePort: 80
+        serviceHost: "httpbin.org"
+        accessKey: "{{secret.security-guard-secret.accessKey}}"
+        secretKey: "{{secret.security-guard-secret.secretKey}}"
+        checkRequest: true
+        checkResponse: false
+        requestContentJsonPath: "input.prompt"
+        responseContentJsonPath: "output.text"
+        protocol: "original"
+        denyMessage: "很抱歉，我无法回答您的问题"
+        riskLevelBar: "high"
+        timeout: 2000
+      ingress:
+        - higress-conformance-infra/wasmplugin-ai-security-guard-custom
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-security-guard:1.0.0
