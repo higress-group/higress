@@ -337,6 +337,25 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
+  name: wasmplugin-ai-proxy-ollama
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "ollama.e2e.host"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
   name: wasmplugin-ai-proxy-dify
   namespace: higress-conformance-ai-backend
 spec:
@@ -579,6 +598,18 @@ spec:
           type: zhipuai
       ingress:
         - higress-conformance-ai-backend/wasmplugin-ai-proxy-zhipuai
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          modelMapping:
+            "gpt-3": gemma3
+            "*": gemma3
+          type: ollama
+          ollamaServerHost: llm-mock-service.higress-conformance-ai-backend.svc.cluster.local
+          ollamaServerPort: 3000
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-ollama
     - config:
         provider:
           apiTokens:
