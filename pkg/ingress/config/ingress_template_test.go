@@ -182,8 +182,32 @@ func TestTemplateProcessor_ProcessConfig(t *testing.T) {
 					"api_key": "${secret.default/non-existent.api_key}",
 				}),
 			},
-			expectError: true,
+			expected: &extensions.WasmPlugin{
+                PluginName: "test-plugin",
+                PluginConfig: makeStructValue(t, map[string]interface{}{
+                    "api_key": "${secret.default/non-existent.api_key}",
+                }),
+            },
+			expectError: false,
 		},
+        {
+            name: "config with multiple fields and non-existent secret",
+            wasmPlugin: &extensions.WasmPlugin{
+                PluginName: "test-plugin",
+                PluginConfig: makeStructValue(t, map[string]interface{}{
+                    "api_key_non_existent": "${secret.default/non-existent.api_key}",
+                    "api_key":              "${secret.default/test-secret.api_key}",
+                }),
+            },
+            expected: &extensions.WasmPlugin{
+                PluginName: "test-plugin",
+                PluginConfig: makeStructValue(t, map[string]interface{}{
+                    "api_key_non_existent": "${secret.default/non-existent.api_key}",
+                    "api_key":              "test-api-key",
+                }),
+            },
+            expectError: false,
+        },
 	}
 
 	for _, tt := range tests {
