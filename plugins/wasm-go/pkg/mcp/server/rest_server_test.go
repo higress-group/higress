@@ -1142,6 +1142,8 @@ func TestRestServer_GetToolConfig(t *testing.T) {
 func TestRestServer_Clone_Independence(t *testing.T) {
 	orig := NewRestMCPServer("rest")
 	orig.SetPassthroughAuthHeader(true)
+	orig.SetDefaultDownstreamSecurity(SecurityRequirement{ID: "DS"})
+	orig.SetDefaultUpstreamSecurity(SecurityRequirement{ID: "US"})
 	orig.SetConfig([]byte(`{"v":1}`))
 	orig.AddSecurityScheme(SecurityScheme{ID: "K", Type: "apiKey", In: "header", Name: "X"})
 	require.NoError(t, orig.AddRestTool(RestTool{
@@ -1162,6 +1164,11 @@ func TestRestServer_Clone_Independence(t *testing.T) {
 	// Tools map was deep-copied at Clone time.
 	_, hasT := cloned.GetToolConfig("t")
 	assert.True(t, hasT)
+
+	// passthroughAuthHeader and security defaults must survive Clone.
+	assert.True(t, cloned.GetPassthroughAuthHeader(), "Clone must preserve passthroughAuthHeader")
+	assert.Equal(t, "DS", cloned.GetDefaultDownstreamSecurity().ID, "Clone must preserve defaultDownstreamSecurity")
+	assert.Equal(t, "US", cloned.GetDefaultUpstreamSecurity().ID, "Clone must preserve defaultUpstreamSecurity")
 }
 
 // ---------------------------------------------------------------------------

@@ -231,11 +231,22 @@ func TestMcpProxyServer_Clone_DeepCopiesToolsConfigAndSchemes(t *testing.T) {
 
 	// Surface fields are copied.
 	assert.Equal(t, orig.Name, cloned.Name)
-	// Existing request-isolation clone semantics intentionally omit runtime
-	// endpoint/transport/security fields; only the new strategy must survive so
-	// a modern-only proxy cannot silently become legacy.
+	// Runtime endpoint/transport fields are intentionally not cloned;
+	// they are set per-request by the configmap watcher.
 	assert.Equal(t, "", cloned.GetMcpServerURL())
 	assert.Equal(t, orig.GetProtocolStrategy(), cloned.GetProtocolStrategy())
+
+	// passthroughAuthHeader must survive Clone so that per-request security
+	// behavior is consistent across cloned server instances.
+	assert.Equal(t, orig.GetPassthroughAuthHeader(), cloned.GetPassthroughAuthHeader(),
+		"Clone must preserve passthroughAuthHeader")
+
+	// defaultDownstreamSecurity and defaultUpstreamSecurity must survive Clone
+	// so that operator-configured credentials remain authoritative.
+	assert.Equal(t, orig.GetDefaultDownstreamSecurity(), cloned.GetDefaultDownstreamSecurity(),
+		"Clone must preserve defaultDownstreamSecurity")
+	assert.Equal(t, orig.GetDefaultUpstreamSecurity(), cloned.GetDefaultUpstreamSecurity(),
+		"Clone must preserve defaultUpstreamSecurity")
 
 	// toolsConfig: deep copy — adding to clone doesn't bleed back to orig.
 	require.NoError(t, cloned.AddProxyTool(McpProxyToolConfig{Name: "extra", Description: "x"}))
@@ -248,6 +259,55 @@ func TestMcpProxyServer_Clone_DeepCopiesToolsConfigAndSchemes(t *testing.T) {
 	clonedScheme, _ := cloned.GetSecurityScheme("K")
 	assert.Equal(t, "apiKey", origScheme.Type, "original scheme must remain apiKey")
 	assert.Equal(t, "http", clonedScheme.Type, "clone reflects the override")
+}
+
+// -----------------------------------------------------------------------------
+// Clone — operator credential precedence over passthrough
+// -----------------------------------------------------------------------------
+
+// TestMcpProxyServer_Clone_OperatorCredentialPrecedence verifies that after
+// Clone, the server retains operator-configured upstream security, which must
+// take precedence over any client-provided passthrough Authorization header.
+// This is a security-critical property: an untrusted inbound credential must
+// not silently replace an operator-selected upstream credential.
+func TestMcpProxyServer_Clone_OperatorCredentialPrecedence(t *testing.T) {
+	orig := NewMcpProxyServer("orig")
+	orig.SetPassthroughAuthHeader(true)
+	orig.SetDefaultUpstreamSecurity(SecurityRequirement{ID: "upstream", Credential: "Bearer OPERATOR"})
+	orig.AddSecurityScheme(SecurityScheme{ID: "upstream", Type: "http", Scheme: "bearer"})
+
+	cloned, ok := orig.Clone().(*McpProxyServer)
+	require.True(t, ok)
+
+	// After Clone, the operator-configured upstream security must be present.
+	upstream := cloned.GetDefaultUpstreamSecurity()
+	assert.Equal(t, "upstream", upstream.ID, "Clone must preserve operator upstream security ID")
+	assert.Equal(t, "Bearer OPERATOR", upstream.Credential, "Clone must preserve operator credential")
+
+	// The passthroughAuthHeader flag must also survive so that the per-request
+	// logic can correctly decide precedence: operator credential wins when
+	// upstream security is configured; passthrough only applies as a fallback.
+	assert.True(t, cloned.GetPassthroughAuthHeader(),
+		"Clone must preserve passthroughAuthHeader so per-request precedence logic is correct")
+}
+
+// TestRestServer_Clone_OperatorCredentialPrecedence verifies the same property
+// for RestMCPServer: operator-configured upstream security must survive Clone
+// and remain authoritative over client passthrough credentials.
+func TestRestServer_Clone_OperatorCredentialPrecedence(t *testing.T) {
+	orig := NewRestMCPServer("rest")
+	orig.SetPassthroughAuthHeader(true)
+	orig.SetDefaultUpstreamSecurity(SecurityRequirement{ID: "upstream", Credential: "Bearer OPERATOR"})
+	orig.AddSecurityScheme(SecurityScheme{ID: "upstream", Type: "http", Scheme: "bearer"})
+
+	cloned, ok := orig.Clone().(*RestMCPServer)
+	require.True(t, ok)
+
+	upstream := cloned.GetDefaultUpstreamSecurity()
+	assert.Equal(t, "upstream", upstream.ID, "Clone must preserve operator upstream security ID")
+	assert.Equal(t, "Bearer OPERATOR", upstream.Credential, "Clone must preserve operator credential")
+	assert.True(t, cloned.GetPassthroughAuthHeader(),
+		"Clone must preserve passthroughAuthHeader so per-request precedence logic is correct")
 }
 
 // -----------------------------------------------------------------------------
