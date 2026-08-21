@@ -37,7 +37,7 @@ redis:
   # -- Affinity for Redis
   affinity: {}
   persistence:
-    # -- Enable persistence on Redis
+    # -- Enable persistence on Redis. When enabled, a PVC is mounted at /data.
     enabled: false
     # -- If defined, storageClassName: <storageClass>
     # -- If undefined (the default) or set to null, no storageClassName spec is set, choosing the default provisioner
@@ -47,3 +47,36 @@ redis:
       - ReadWriteOnce
     # -- Persistent Volume size
     size: 1Gi
+  # -- AOF (Append-Only File) persistence settings. Only effective when persistence.enabled=true.
+  # AOF logs every write operation, providing best durability (up to 1s data loss with everysec).
+  # Redis prefers AOF for recovery when both AOF and RDB are enabled.
+  aof:
+    # -- Enable AOF persistence. Default is true. Set to false if you prefer RDB-only persistence.
+    enabled: true
+    # -- AOF fsync policy: always, everysec, or no.
+    # "everysec" balances durability (≤1s data loss) and performance. See https://redis.io/docs/management/persistence/
+    fsync: everysec
+    # -- Rewrite AOF when size exceeds this percentage of base file. Default 100 = 2x size.
+    rewritePercentage: 100
+    # -- Minimum AOF file size to trigger rewrite. Default 64mb prevents frequent rewrites.
+    rewriteMinSize: 64mb
+  # -- RDB (Redis Database) snapshot persistence settings. Only effective when persistence.enabled=true.
+  # RDB provides compact point-in-time snapshots, useful for backups and faster restart.
+  # Can be enabled alongside AOF for dual persistence strategy.
+  rdb:
+    # -- Enable RDB snapshots. Default is true. Set to false if you prefer AOF-only persistence.
+    enabled: true
+    # -- RDB snapshot schedule as "seconds changes" pairs. Redis saves when ANY rule is matched.
+    # Common defaults: "900 1" (15min/1 key), "300 10" (5min/10 keys), "60 10000" (1min/10000 keys).
+    # Set to empty list [] to disable RDB. See https://redis.io/docs/management/persistence/
+    save:
+      - "900 1"
+      - "300 10"
+      - "60 10000"
+  # -- Extra redis-stack.conf directives appended after the generated config
+  # (requirepass, and AOF defaults when persistence is enabled).
+  # Directives here take precedence over generated defaults (Redis applies the last value).
+  # Example:
+  #   maxmemory 512mb
+  #   maxmemory-policy allkeys-lru
+  extraConfig: ""
