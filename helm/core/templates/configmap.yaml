@@ -3,7 +3,7 @@
     # Refer to https://github.com/spiffe/spiffe/blob/master/standards/SPIFFE-ID.md#21-trust-domain
     trustDomain: "cluster.local"
     accessLogEncoding: TEXT
-    {{- if .Values.global.o11y.enabled }}
+    {{- if or .Values.global.o11y.enabled (dig "promtail" "enabled" false .Values.global.o11y) }}
     accessLogFile: "/var/log/proxy/access.log"
     {{- else }}
     accessLogFile: "/dev/stdout"
