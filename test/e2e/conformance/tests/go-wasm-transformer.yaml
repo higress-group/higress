@@ -76,7 +76,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
-  name: wasmplugin-transform-request-arbitary-rule-order
+  name: wasmplugin-transform-request-arbitrary-rule-order
   namespace: higress-conformance-infra
 spec:
   ingressClassName: higress
@@ -96,7 +96,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
-  name: wasmplugin-transform-response-arbitary-rule-order
+  name: wasmplugin-transform-response-arbitrary-rule-order
   namespace: higress-conformance-infra
 spec:
   ingressClassName: higress
@@ -603,7 +603,7 @@ spec:
                 toKey: X-map
 
     - ingress:
-        - higress-conformance-infra/wasmplugin-transform-request-arbitary-rule-order
+        - higress-conformance-infra/wasmplugin-transform-request-arbitrary-rule-order
       configDisable: false
       config:
         reqRules:
@@ -663,7 +663,7 @@ spec:
               - key: k1
 
     - ingress:
-        - higress-conformance-infra/wasmplugin-transform-response-arbitary-rule-order
+        - higress-conformance-infra/wasmplugin-transform-response-arbitrary-rule-order
       configDisable: false
       config:
         respRules:
