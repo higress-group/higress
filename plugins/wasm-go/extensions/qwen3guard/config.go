@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -88,19 +90,11 @@ func parseConfig(json gjson.Result, c *pluginConfig, log log.Log) error {
 		return err
 	}
 	setString(json, "deny_message", "denyMessage", &c.denyMessage)
-	timeout, timeoutSet := getPositiveInt(json, "timeout_ms", "timeoutMs")
-	if timeoutSet {
-		if timeout <= 0 {
-			return errors.New("timeout_ms must be greater than 0")
-		}
-		c.timeoutMS = uint32(timeout)
+	if err := setPositiveUint32(json, "timeout_ms", "timeoutMs", &c.timeoutMS); err != nil {
+		return err
 	}
-	maxBodyBytes, maxBodyBytesSet := getPositiveInt(json, "max_body_bytes", "maxBodyBytes")
-	if maxBodyBytesSet {
-		if maxBodyBytes <= 0 {
-			return errors.New("max_body_bytes must be greater than 0")
-		}
-		c.maxBodyBytes = uint32(maxBodyBytes)
+	if err := setPositiveUint32(json, "max_body_bytes", "maxBodyBytes", &c.maxBodyBytes); err != nil {
+		return err
 	}
 	if riskLevelBar := strings.TrimSpace(json.Get("risk_level_bar").String()); riskLevelBar != "" {
 		normalized, ok := normalizeRiskLevelBar(riskLevelBar)
@@ -243,6 +237,27 @@ func setPositiveInt(json gjson.Result, snakeKey string, camelKey string, target 
 		return fmt.Errorf("%s must be greater than 0", snakeKey)
 	}
 	*target = value
+	return nil
+}
+
+func setPositiveUint32(json gjson.Result, snakeKey string, camelKey string, target *uint32) error {
+	value := json.Get(snakeKey)
+	if !value.Exists() {
+		value = json.Get(camelKey)
+	}
+	if !value.Exists() {
+		return nil
+	}
+
+	rawValue := value.Raw
+	if value.Type == gjson.String {
+		rawValue = value.String()
+	}
+	parsed, err := strconv.ParseUint(rawValue, 10, 32)
+	if err != nil || parsed == 0 {
+		return fmt.Errorf("%s must be between 1 and %d", snakeKey, uint64(math.MaxUint32))
+	}
+	*target = uint32(parsed)
 	return nil
 }
 

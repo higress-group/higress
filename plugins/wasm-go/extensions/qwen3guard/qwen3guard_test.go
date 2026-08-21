@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -113,6 +115,19 @@ func TestParseConfigValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var config pluginConfig
 			require.Error(t, parseConfig(gjson.Parse(tt.raw), &config, nil))
+		})
+	}
+}
+
+func TestParseConfigRejectsOversizedUint32Values(t *testing.T) {
+	oversizedValue := uint64(math.MaxUint32) + 100
+	for _, key := range []string{"timeout_ms", "timeoutMs", "max_body_bytes", "maxBodyBytes"} {
+		t.Run(key, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"serviceSource":"k8s","serviceName":"qwen3guard","servicePort":8000,%q:%d}`, key, oversizedValue)
+			var config pluginConfig
+
+			// parseConfig 的错误会使包装器拒绝插件启动。
+			require.Error(t, parseConfig(gjson.Parse(raw), &config, nil))
 		})
 	}
 }
