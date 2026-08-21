@@ -37,17 +37,17 @@ Higress 提供了运行 Ingress API 一致性测试和 wasmplugin 测试的 make
 4. kube-load-image: 将 dev higress-controller 镜像加载到 kind 集群中。
 5. install-dev: 使用 helm 安装带有 dev 镜像的 higress-controller，并安装最新的 higress-gateway、istiod。
 6. run-e2e-test:
-    1. 所有测试都在 `test/e2e/conformance/tests` 中定义，并在初始化阶段被注册到`ConformanceTests`中。`ConformanceTests` 是一个全局变量，用于存储所有的一致性测试用例。
+    1. 所有测试都在 `test/e2e/conformance/tests` 中定义，并在初始化阶段被注册到 `ConformanceTests` 中。`ConformanceTests` 是存储所有一致性测试用例的全局变量。
     2. 准备资源并将它们安装到集群中，例如后端服务/部署。
     3. 加载选择打开的一致性测试，并逐个运行它们，如果不符合预期，则失败。
 
 ### 如何编写测试用例
 
-要添加新的测试用例，首先需要在 `test/ingress/conformance/tests` 中添加 `xxx.go` 和 `xxx.yaml`。`xxx.yaml` 是您需要在集群中应用的 Ingress 资源，`xxx.go` 定义了 HigressConformanceTest。
+要添加新的测试用例，首先需要在 `test/e2e/conformance/tests` 中添加配对的 `xxx.go` 和 `xxx.yaml`。`xxx.yaml` 包含需要在集群中应用的资源，`xxx.go` 定义 `HigressConformanceTest`。
 
-然后，您应该将您定义的测试用例注册到`ConformanceTests`中，方法是在xxx.go中使用`init()` 函数调用`Register(YOUR_PLUGIN_SHORT_NAME)`。
+然后，在 `xxx.go` 的 `init()` 函数中调用 `Register(YOUR_TEST_CASE)`，将测试用例注册到 `ConformanceTests`。E2E 入口会直接运行该列表，无需手动修改 `e2e_test.go`。
 
-通过查看 `test/ingress/conformance/tests/httproute-simple-same-namespace.go` 和 `test/ingress/conformance/tests/httproute-simple-same-namespace.yaml` 中的代码，您可以快速了解并尝试编写一个测试用例。
+可以参考 `test/e2e/conformance/tests/httproute-simple-same-namespace.go` 和 `test/e2e/conformance/tests/httproute-simple-same-namespace.yaml` 中的完整示例。
 
 ### 如何实现测试环境的复用
 

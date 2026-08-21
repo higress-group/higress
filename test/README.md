@@ -38,17 +38,17 @@ It can be divided into below steps:
 4. kube-load-image: load dev higress-controller image it into kind cluster.
 5. install-dev: install higress-controller with dev image, and latest higress-gateway, istiod with helm.
 6. run-e2e-test:
-    1. Setup conformance suite, like define what conformance tests we want to run, in `e2e_test.go` / `higressTests Slice`. Each case we choose to open is defined in `test/ingress/conformance/tests`.
+    1. Load the conformance tests registered in `test/e2e/conformance/tests` into the global `ConformanceTests` slice.
     2. Prepare resources and install them into cluster, like backend services/deployments.
-    3. Load conformance tests we choose to open in `e2e_test.go` / `higressTests Slice`, and run them one by one, fail if it is not expected.
+    3. Run the registered conformance tests one by one and fail on unexpected results.
 
 ### How to write a test case
 
-To add a new test case, you firstly need to add `xxx.go` and `xxx.yaml` in `test/ingress/conformance/tests`. `xxx.yaml` is the Ingress resource you need to apply in the cluster, `xxx.go` defines the HigressConformanceTest.
+To add a new test case, first add a matching `xxx.go` and `xxx.yaml` pair in `test/e2e/conformance/tests`. `xxx.yaml` contains the resources applied to the cluster, and `xxx.go` defines the `HigressConformanceTest`.
 
-And after that, you should add your defined HigressConformanceTest to `e2e_test.go` / `higressTests Slice`.
+Register the test from its `xxx.go` file by calling `Register(YOUR_TEST_CASE)` in `init()`. The E2E runner executes the resulting `ConformanceTests` slice, so no manual edit to `e2e_test.go` is required.
 
-You can understand it quickly just by looking at codes in `test/ingress/conformance/tests/httproute-simple-same-namespace.go` and `test/ingress/conformance/tests/httproute-simple-same-namespace.yaml`, and try to write one.
+See `test/e2e/conformance/tests/httproute-simple-same-namespace.go` and `test/e2e/conformance/tests/httproute-simple-same-namespace.yaml` for a complete example.
 
 ### How to Implement Test Environment Reusability
 
