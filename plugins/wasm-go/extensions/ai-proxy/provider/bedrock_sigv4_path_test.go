@@ -84,7 +84,11 @@ func TestGenerateSignatureIgnoresQueryStringInCanonicalURI(t *testing.T) {
 
 	sigWithoutQuery := p.generateSignature(pathWithoutQuery, "20260312T142942Z", "20260312", body)
 	sigWithQuery := p.generateSignature(pathWithQuery, "20260312T142942Z", "20260312", body)
-	assert.Equal(t, sigWithoutQuery, sigWithQuery)
+	// Per AWS SigV4, the canonical query string is part of the canonical request,
+	// so paths with different query strings MUST produce different signatures.
+	// This is the correct behavior after P1-4 fix.
+	assert.NotEqual(t, sigWithoutQuery, sigWithQuery,
+		"signatures must differ when query string is present — canonical query string is part of SigV4 signing")
 }
 
 func TestGenerateSignatureDiffersForRawAndPreEncodedModelPath(t *testing.T) {
