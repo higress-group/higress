@@ -122,9 +122,19 @@ func (f *filter) processMcpRequestHeadersForRestUpstream(header api.RequestHeade
 		}
 		if endStream {
 			return api.Continue
-		} else {
-			return api.StopAndBuffer
 		}
+		// The request body only needs to be buffered when user-level rate
+		// limiting is enabled, since that path inspects the JSON-RPC method in
+		// the body (see DecodeData). For plain REST/streamable MCP proxying we
+		// never touch the body, so skip buffering it and stream it directly to
+		// the upstream. Buffering the full body would otherwise cause large
+		// requests to be rejected with a 413 once the body exceeds Envoy's
+		// buffer limit, which cannot be enlarged from the Go filter. See #3238.
+		if !f.ratelimit {
+			f.skipRequestBody = true
+			return api.Continue
+		}
+		return api.StopAndBuffer
 	}
 
 	if method != http.MethodGet {
