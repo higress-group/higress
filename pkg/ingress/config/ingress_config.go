@@ -868,6 +868,10 @@ func (m *IngressConfig) convertServiceEntry([]common.WrapperConfig) []config.Con
 	out := make([]config.Config, 0, len(serviceEntries))
 	hostSets := sets.Set[string]{}
 	for _, se := range serviceEntries {
+		if len(se.ServiceEntry.Hosts) == 0 {
+			IngressLog.Warnf("skip service entry with empty hosts from registry %s", se.RegistryName)
+			continue
+		}
 		out = append(out, config.Config{
 			Meta: config.Meta{
 				GroupVersionKind:  gvk.ServiceEntry,
@@ -886,7 +890,15 @@ func (m *IngressConfig) convertServiceEntry([]common.WrapperConfig) []config.Con
 	// add service entry by host from nacos3 for mcp server
 	seFromMcp := m.RegistryReconciler.GetAllConfigs(gvk.ServiceEntry)
 	for _, cfg := range seFromMcp {
-		se := cfg.Spec.(*networking.ServiceEntry)
+		se, ok := cfg.Spec.(*networking.ServiceEntry)
+		if !ok {
+			IngressLog.Warnf("skip config %s/%s with unexpected spec type", cfg.Namespace, cfg.Name)
+			continue
+		}
+		if len(se.Hosts) == 0 {
+			IngressLog.Warnf("skip config %s/%s with empty hosts", cfg.Namespace, cfg.Name)
+			continue
+		}
 		if !hostSets.Contains(se.Hosts[0]) {
 			out = append(out, *cfg)
 		}

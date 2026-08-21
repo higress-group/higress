@@ -290,6 +290,9 @@ func triggerRollout(clientset *kubernetes.Clientset, deploymentName string) erro
 	}
 
 	// Increment the deployment's revision to trigger a rollout
+	if deployment.Spec.Template.ObjectMeta.Labels == nil {
+		deployment.Spec.Template.ObjectMeta.Labels = make(map[string]string)
+	}
 	deployment.Spec.Template.ObjectMeta.Labels["version"] = time.Now().Format("20060102150405")
 
 	// Update the deployment
