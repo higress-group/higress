@@ -1,0 +1,23 @@
+# ai-header-session 示例配置：header 方案
+#
+# 逐级提取：按 header_rules 顺序逐条尝试，命中第一个「存在且非空」的 Header，
+# 取其整个值作为会话来源，再确定性派生统一会话头 X-AI-Session-Id。
+# 这些都是显式的会话/请求 ID 头，因此无需 pattern（直接取整值）。
+
+session_header: "X-AI-Session-Id"   # 统一输出的会话头名
+hash_algorithm: "fnv"               # fnv（默认）或 sha256
+match_mode: "header"
+
+header_rules:
+  - header: "x-claude-code-session-id"
+  - header: "x-claude-code-agent-id"
+  - header: "x-claude-code-parent-agent-id"
+  - header: "x-session-id"
+  - header: "x-conversation-id"
+  - header: "x-request-id"
+  - header: "x-client-request-id"
+  - header: "openai-conversation-id"
+  - header: "anthropic-request-id"
+
+log:
+  dump_unmatched: true              # 匹配失败（逐级均未命中）时，打印全部请求头
