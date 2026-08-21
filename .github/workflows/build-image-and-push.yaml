@@ -221,7 +221,8 @@ jobs:
           for image in ${IMAGES[@]}; do
             echo "Image: $image"
             if [ "$BUILT_IMAGE" == "" ]; then
-              TAG=${image#*:}
+              IMAGE_NAME=${image##*/}
+              TAG=${IMAGE_NAME##*:}
               HUB=${image%:*}
               HUB=${HUB%/*}
               BUILT_IMAGE="$HUB/pilot:$TAG"; if [ "$release_provenance" = true ]; then BUILT_IMAGE="$HUB/pilot:release-build-$GITHUB_SHA"; fi
@@ -316,7 +317,8 @@ jobs:
           for image in ${IMAGES[@]}; do
             echo "Image: $image"
             if [ "$BUILT_IMAGE" == "" ]; then
-              TAG=${image#*:}
+              IMAGE_NAME=${image##*/}
+              TAG=${IMAGE_NAME##*:}
               HUB=${image%:*}
               HUB=${HUB%/*}
               BUILT_IMAGE="$HUB/proxyv2:$TAG"; if [ "$release_provenance" = true ]; then BUILT_IMAGE="$HUB/proxyv2:release-build-$GITHUB_SHA"; fi
