@@ -342,7 +342,11 @@ func (g *GlobalConfAsker) Ask() error {
 		return nil
 	}
 
-	g.resp = as.(map[string]interface{})
+	resp, ok := as.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("failed to convert configuration to map[string]interface{}")
+	}
+	g.resp = resp
 	g.printer.Yesln(addConfSuccessful)
 
 	return nil

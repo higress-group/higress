@@ -629,6 +629,9 @@ func ParseLatestVersion(repoUrl string, version string, devel bool) (string, err
 
 	// get higress helm chart latest version
 	if entries, ok := indexFile.Entries[RepoChartIndexYamlHigressIndex]; ok {
+		if len(entries) == 0 {
+			return "", errors.New("no versions found for higress chart in repository index")
+		}
 		if devel {
 			return entries[0].AppVersion, nil
 		}
