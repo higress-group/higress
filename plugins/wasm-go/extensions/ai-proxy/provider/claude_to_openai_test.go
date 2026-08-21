@@ -1409,6 +1409,61 @@ func TestClaudeToOpenAIConverter_ConvertReasoningResponseToClaude(t *testing.T) 
 	}
 }
 
+func TestcomputeClaudeInputTokensAndCachedTokens(t *testing.T) {
+	tests := []struct {
+		name          string
+		usage         *usage
+		expectedInput int
+		expectedCache int
+	}{
+		{
+			name:          "nil usage",
+			expectedInput: 0,
+			expectedCache: 0,
+		},
+		{
+			name: "without cached tokens",
+			usage: &usage{
+				PromptTokens:     100,
+				CompletionTokens: 20,
+				TotalTokens:      120,
+			},
+			expectedInput: 100,
+			expectedCache: 0,
+		},
+		{
+			name: "openai usage with cached tokens",
+			usage: &usage{
+				PromptTokens:        100,
+				CompletionTokens:    20,
+				TotalTokens:         120,
+				PromptTokensDetails: &promptTokensDetails{CachedTokens: 60},
+			},
+			expectedInput: 40,
+			expectedCache: 60,
+		},
+		{
+			name: "provider usage with cached tokens not included in prompt",
+			usage: &usage{
+				PromptTokens:        100,
+				CompletionTokens:    20,
+				TotalTokens:         100,
+				PromptTokensDetails: &promptTokensDetails{CachedTokens: 60},
+			},
+			expectedInput: 100,
+			expectedCache: 60,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputTokens, cachedTokens := computeClaudeInputTokensAndCachedTokens(tt.usage)
+			assert.Equal(t, tt.expectedInput, inputTokens)
+			assert.Equal(t, tt.expectedCache, cachedTokens)
+		})
+	}
+}
+
 func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_WithCachedTokens(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
 
@@ -1432,7 +1487,7 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_BedrockStyl
 
 	// Bedrock-style usage: prompt_tokens does NOT include cached_tokens.
 	// total_tokens (180) != prompt_tokens (100) + completion_tokens (20),
-	// so computeClaudeInputTokens should NOT subtract cached_tokens.
+	// so computeClaudeInputTokensAndCachedTokens should NOT subtract cached_tokens.
 	streamChunk := "data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
 		"data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":180,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\n"
 

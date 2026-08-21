@@ -267,7 +267,7 @@ type claudeTextGenContent struct {
 type claudeTextGenUsage struct {
 	InputTokens              int    `json:"input_tokens,omitempty"`
 	OutputTokens             int    `json:"output_tokens,omitempty"`
-	CacheReadInputTokens     int    `json:"cache_read_input_tokens,omitempty"`
+	CacheReadInputTokens     int    `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int    `json:"cache_creation_input_tokens,omitempty"`
 	ServiceTier              string `json:"service_tier,omitempty"`
 }
@@ -826,10 +826,12 @@ func (c *claudeProvider) responseClaude2OpenAI(ctx wrapper.HttpContext, origResp
 
 	// Include usage information if available
 	if origResponse.Usage.InputTokens > 0 || origResponse.Usage.OutputTokens > 0 {
+		totalPromptTokens := origResponse.Usage.InputTokens + origResponse.Usage.CacheReadInputTokens + origResponse.Usage.CacheCreationInputTokens
 		response.Usage = &usage{
-			PromptTokens:     origResponse.Usage.InputTokens,
+			PromptTokens:     totalPromptTokens,
 			CompletionTokens: origResponse.Usage.OutputTokens,
-			TotalTokens:      origResponse.Usage.InputTokens + origResponse.Usage.OutputTokens,
+			TotalTokens:      totalPromptTokens + origResponse.Usage.OutputTokens,
+			PromptTokensDetails: &promptTokensDetails{CachedTokens: origResponse.Usage.CacheReadInputTokens},
 		}
 	}
 
@@ -860,8 +862,9 @@ func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, or
 		if origResponse.Message != nil {
 			c.messageId = origResponse.Message.Id
 			c.usage = usage{
-				PromptTokens:     origResponse.Message.Usage.InputTokens,
+				PromptTokens:     origResponse.Message.Usage.InputTokens + origResponse.Message.Usage.CacheReadInputTokens + origResponse.Message.Usage.CacheCreationInputTokens,
 				CompletionTokens: origResponse.Message.Usage.OutputTokens,
+				PromptTokensDetails: &promptTokensDetails{CachedTokens: origResponse.Message.Usage.CacheReadInputTokens},
 			}
 			c.serviceTier = origResponse.Message.Usage.ServiceTier
 		}
@@ -999,9 +1002,10 @@ func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, or
 			Choices:     []chatCompletionChoice{},
 			ServiceTier: c.serviceTier,
 			Usage: &usage{
-				PromptTokens:     c.usage.PromptTokens,
-				CompletionTokens: c.usage.CompletionTokens,
-				TotalTokens:      c.usage.TotalTokens,
+				PromptTokens:        c.usage.PromptTokens,
+				CompletionTokens:    c.usage.CompletionTokens,
+				TotalTokens:         c.usage.TotalTokens,
+				PromptTokensDetails: c.usage.PromptTokensDetails,
 			},
 		}
 	case "content_block_stop":

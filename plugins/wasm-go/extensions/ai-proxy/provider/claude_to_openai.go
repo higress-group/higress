@@ -357,24 +357,32 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body [
 	return result, nil
 }
 
-// computeClaudeInputTokens computes Claude-compatible input_tokens from OpenAI usage.
+// computeClaudeInputTokensAndCachedTokens computes Claude-compatible input_tokens and cache tokens from OpenAI usage.
 //
 // In OpenAI's API, prompt_tokens includes cached_tokens (subset relationship).
 // In Claude's API, input_tokens should NOT include cache tokens.
 // We detect the OpenAI-standard semantics by checking if total_tokens == prompt_tokens + completion_tokens.
 // For providers like Bedrock where prompt_tokens does NOT include cache tokens
 // (total_tokens != prompt_tokens + completion_tokens), we return prompt_tokens as-is.
-func computeClaudeInputTokens(u *usage) int {
+func computeClaudeInputTokensAndCachedTokens(u *usage) (int, int) {
 	if u == nil {
-		return 0
+		return 0, 0
 	}
-	promptTokens := u.PromptTokens
+
+	cachedTokens := 0
 	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
-		if u.TotalTokens > 0 && u.TotalTokens == promptTokens+u.CompletionTokens {
-			return promptTokens - u.PromptTokensDetails.CachedTokens
+		cachedTokens = u.PromptTokensDetails.CachedTokens
+	}
+
+	inputTokens := u.PromptTokens
+	if cachedTokens > 0 && u.TotalTokens > 0 && u.TotalTokens == inputTokens+u.CompletionTokens {
+		inputTokens -= cachedTokens
+		if inputTokens < 0 {
+			inputTokens = 0
 		}
 	}
-	return promptTokens
+
+	return inputTokens, cachedTokens
 }
 
 // ConvertOpenAIResponseToClaude converts an OpenAI response back to Claude format
@@ -396,12 +404,11 @@ func (c *ClaudeToOpenAIConverter) ConvertOpenAIResponseToClaude(ctx wrapper.Http
 
 	// Only include usage if it's available
 	if openaiResponse.Usage != nil {
+		inputTokens, cachedTokens := computeClaudeInputTokensAndCachedTokens(openaiResponse.Usage)
 		claudeResponse.Usage = claudeTextGenUsage{
-			InputTokens:  computeClaudeInputTokens(openaiResponse.Usage),
-			OutputTokens: openaiResponse.Usage.CompletionTokens,
-		}
-		if openaiResponse.Usage.PromptTokensDetails != nil {
-			claudeResponse.Usage.CacheReadInputTokens = openaiResponse.Usage.PromptTokensDetails.CachedTokens
+			InputTokens:          inputTokens,
+			OutputTokens:         openaiResponse.Usage.CompletionTokens,
+			CacheReadInputTokens: cachedTokens,
 		}
 	}
 
@@ -605,8 +612,9 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 
 		// Only include usage if it's available
 		if openaiResponse.Usage != nil {
+			inputTokens, _ := computeClaudeInputTokensAndCachedTokens(openaiResponse.Usage)
 			message.Usage = claudeTextGenUsage{
-				InputTokens:  computeClaudeInputTokens(openaiResponse.Usage),
+				InputTokens:  inputTokens,
 				OutputTokens: 0,
 			}
 		}
@@ -851,8 +859,9 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 				Content: []claudeTextGenContent{},
 			}
 			if openaiResponse.Usage != nil {
+				inputTokens, _ := computeClaudeInputTokensAndCachedTokens(openaiResponse.Usage)
 				message.Usage = claudeTextGenUsage{
-					InputTokens:  computeClaudeInputTokens(openaiResponse.Usage),
+					InputTokens:  inputTokens,
 					OutputTokens: 0,
 				}
 			}
@@ -1008,12 +1017,11 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 		log.Debugf("[OpenAI->Claude] Processing usage info - input: %d, output: %d",
 			openaiResponse.Usage.PromptTokens, openaiResponse.Usage.CompletionTokens)
 
+		inputTokens, cachedTokens := computeClaudeInputTokensAndCachedTokens(openaiResponse.Usage)
 		usage := &claudeTextGenUsage{
-			InputTokens:  computeClaudeInputTokens(openaiResponse.Usage),
-			OutputTokens: openaiResponse.Usage.CompletionTokens,
-		}
-		if openaiResponse.Usage.PromptTokensDetails != nil {
-			usage.CacheReadInputTokens = openaiResponse.Usage.PromptTokensDetails.CachedTokens
+			InputTokens:          inputTokens,
+			OutputTokens:         openaiResponse.Usage.CompletionTokens,
+			CacheReadInputTokens: cachedTokens,
 		}
 
 		// Send message_delta with both stop_reason and usage (Claude protocol requirement)
