@@ -594,5 +594,8 @@ func GetTC3Authorizationcode(secretId string, secretKey string, timestamp int64,
 }
 
 func (m *hunyuanProvider) GetApiName(path string) ApiName {
+	if strings.Contains(path, PathOpenAIEmbeddings) {
+		return ApiNameEmbeddings
+	}
 	return ApiNameChatCompletion
 }
