@@ -186,15 +186,34 @@ func (d *ChromaProvider) parseQueryResponse(responseBody []byte, log log.Log) ([
 	}
 
 	log.Debugf("[Chroma] queryResp Ids len: %d", len(queryResp.Ids))
-	if len(queryResp.Ids) == 1 && len(queryResp.Ids[0]) == 0 {
+	if len(queryResp.Ids) != 1 {
+		return nil, fmt.Errorf("invalid query response: expected exactly one ids batch, got %d", len(queryResp.Ids))
+	}
+	ids := queryResp.Ids[0]
+	if len(ids) == 0 {
 		return nil, errors.New("no query results found in response")
 	}
-	results := make([]QueryResult, 0, len(queryResp.Ids[0]))
-	for i := range queryResp.Ids[0] {
+	if len(queryResp.Distances) != len(queryResp.Ids) {
+		return nil, fmt.Errorf("invalid query response: distances batch count %d does not match ids batch count %d", len(queryResp.Distances), len(queryResp.Ids))
+	}
+	if len(queryResp.Documents) != len(queryResp.Ids) {
+		return nil, fmt.Errorf("invalid query response: documents batch count %d does not match ids batch count %d", len(queryResp.Documents), len(queryResp.Ids))
+	}
+	distances := queryResp.Distances[0]
+	documents := queryResp.Documents[0]
+	if len(distances) != len(ids) {
+		return nil, fmt.Errorf("invalid query response: distances element count %d does not match ids element count %d", len(distances), len(ids))
+	}
+	if len(documents) != len(ids) {
+		return nil, fmt.Errorf("invalid query response: documents element count %d does not match ids element count %d", len(documents), len(ids))
+	}
+
+	results := make([]QueryResult, 0, len(ids))
+	for i := range ids {
 		result := QueryResult{
-			Text:   queryResp.Ids[0][i],
-			Score:  queryResp.Distances[0][i],
-			Answer: queryResp.Documents[0][i],
+			Text:   ids[i],
+			Score:  distances[i],
+			Answer: documents[i],
 		}
 		results = append(results, result)
 	}
