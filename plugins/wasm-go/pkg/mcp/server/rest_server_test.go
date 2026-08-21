@@ -1295,3 +1295,63 @@ func TestHasContentType_CaseAndCharsetSuffix(t *testing.T) {
 var _ = url.Parse
 var _ = sjson.Set
 var _ = strings.TrimSpace
+
+// Regression test for https://github.com/higress-group/higress/issues/4004:
+// an object-typed argument carrying a raw JSON Schema "required" array must
+// parse successfully and expose the nested required list in the input schema.
+func TestRestToolArgObjectRequired(t *testing.T) {
+	toolJSON := `{
+		"name": "queryListCgHead",
+		"description": "query with paging",
+		"args": [
+			{
+				"name": "pageQuery",
+				"description": "paging parameters",
+				"type": "object",
+				"properties": {
+					"pageNum": {"type": "integer", "description": "page number", "default": 1},
+					"pageSize": {"type": "integer", "description": "page size", "default": 10}
+				},
+				"required": ["pageNum", "pageSize"]
+			},
+			{
+				"name": "keyword",
+				"type": "string",
+				"required": true
+			}
+		]
+	}`
+
+	var tool RestTool
+	require.NoError(t, json.Unmarshal([]byte(toolJSON), &tool))
+	require.Len(t, tool.Args, 2)
+
+	pageQuery := tool.Args[0]
+	assert.Equal(t, "object", pageQuery.Type)
+	assert.False(t, pageQuery.Required, "object-level required array must not mark the arg itself required")
+	assert.Equal(t, []string{"pageNum", "pageSize"}, pageQuery.ObjectRequired)
+	assert.NotNil(t, pageQuery.Properties)
+
+	keyword := tool.Args[1]
+	assert.True(t, keyword.Required)
+	assert.Nil(t, keyword.ObjectRequired)
+
+	mcpTool := RestMCPTool{toolConfig: tool}
+	schema := mcpTool.InputSchema()
+
+	properties, ok := schema["properties"].(map[string]interface{})
+	require.True(t, ok)
+	pageQuerySchema, ok := properties["pageQuery"].(map[string]interface{})
+	require.True(t, ok, "pageQuery must be present in the input schema")
+	assert.NotNil(t, pageQuerySchema["properties"])
+	assert.Equal(t, []string{"pageNum", "pageSize"}, pageQuerySchema["required"])
+
+	// top-level required only contains the boolean-required arg
+	assert.Equal(t, []string{"keyword"}, schema["required"])
+}
+
+func TestRestToolArgRequiredInvalidValue(t *testing.T) {
+	var arg RestToolArg
+	err := json.Unmarshal([]byte(`{"name": "a", "required": 123}`), &arg)
+	require.Error(t, err)
+}
