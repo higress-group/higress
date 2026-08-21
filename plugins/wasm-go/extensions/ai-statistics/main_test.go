@@ -907,6 +907,103 @@ func TestMetrics(t *testing.T) {
 	})
 }
 
+func TestResponsesMetricsWithDefaultPathSuffixes(t *testing.T) {
+	defaultResponseAttributesConfig := []byte(`{
+		"use_default_response_attributes": true
+	}`)
+
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("records non-streaming Responses API token metrics", func(t *testing.T) {
+			host, status := test.NewTestHost(defaultResponseAttributesConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.SetRouteName("responses-route")
+			host.SetClusterName("responses-cluster")
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/responses"},
+				{":method", "POST"},
+				{"x-mse-consumer", "responses-user"},
+			}))
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{
+				"model": "gpt-4o"
+			}`)))
+			require.Equal(t, types.ActionContinue, host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}))
+			require.Equal(t, types.ActionContinue, host.CallOnHttpResponseBody([]byte(`{
+				"model": "gpt-4o",
+				"usage": {
+					"input_tokens": 10,
+					"output_tokens": 20,
+					"total_tokens": 30
+				}
+			}`)))
+			host.CompleteHttp()
+
+			metricPrefix := "route.responses-route.upstream.responses-cluster.model.gpt-4o.consumer.responses-user.metric."
+			inputTokenValue, err := host.GetCounterMetric(metricPrefix + "input_token")
+			require.NoError(t, err)
+			require.Equal(t, uint64(10), inputTokenValue)
+			outputTokenValue, err := host.GetCounterMetric(metricPrefix + "output_token")
+			require.NoError(t, err)
+			require.Equal(t, uint64(20), outputTokenValue)
+			totalTokenValue, err := host.GetCounterMetric(metricPrefix + "total_token")
+			require.NoError(t, err)
+			require.Equal(t, uint64(30), totalTokenValue)
+		})
+
+		t.Run("records streaming Responses API token metrics", func(t *testing.T) {
+			host, status := test.NewTestHost(defaultResponseAttributesConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.SetRouteName("responses-stream-route")
+			host.SetClusterName("responses-stream-cluster")
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/responses"},
+				{":method", "POST"},
+				{"x-mse-consumer", "responses-stream-user"},
+			}))
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{
+				"model": "gpt-4o"
+			}`)))
+			require.Equal(t, types.ActionContinue, host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			}))
+
+			completedEvent := []byte(`data: {
+				"type": "response.completed",
+				"response": {
+					"model": "gpt-4o",
+					"usage": {
+						"input_tokens": 11,
+						"output_tokens": 21,
+						"total_tokens": 32
+					}
+				}
+			}`)
+			require.Equal(t, types.ActionContinue, host.CallOnHttpStreamingResponseBody(completedEvent, true))
+			host.CompleteHttp()
+
+			metricPrefix := "route.responses-stream-route.upstream.responses-stream-cluster.model.gpt-4o.consumer.responses-stream-user.metric."
+			inputTokenValue, err := host.GetCounterMetric(metricPrefix + "input_token")
+			require.NoError(t, err)
+			require.Equal(t, uint64(11), inputTokenValue)
+			outputTokenValue, err := host.GetCounterMetric(metricPrefix + "output_token")
+			require.NoError(t, err)
+			require.Equal(t, uint64(21), outputTokenValue)
+			totalTokenValue, err := host.GetCounterMetric(metricPrefix + "total_token")
+			require.NoError(t, err)
+			require.Equal(t, uint64(32), totalTokenValue)
+		})
+	})
+}
+
 func TestCompleteFlow(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试完整的统计流程
@@ -2157,8 +2254,20 @@ func TestExtractClaudeStreamingToolCalls(t *testing.T) {
 	})
 }
 
+// TestConfigWithDefaultAttributes uses RunGoTest because GetMatchConfig is only
+// available on the Go host path (same pattern as main_extra_test.go path-suffix tests).
 func TestConfigWithDefaultAttributes(t *testing.T) {
-	test.RunTest(t, func(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		assertDefaultPathSuffixes := func(t *testing.T, conf *AIStatisticsConfig) {
+			t.Helper()
+			require.Equal(t, defaultEnabledPathSuffixes, conf.enablePathSuffixes)
+			// Suffix match: chat completions and Responses API must be enabled (#4183).
+			require.True(t, isPathEnabled("/v1/chat/completions", conf.enablePathSuffixes))
+			require.True(t, isPathEnabled("/v1/messages", conf.enablePathSuffixes))
+			require.True(t, isPathEnabled("/v1/responses", conf.enablePathSuffixes))
+			require.False(t, isPathEnabled("/v1/embeddings", conf.enablePathSuffixes))
+		}
+
 		t.Run("use default attributes config", func(t *testing.T) {
 			defaultConfig := []byte(`{
 				"use_default_attributes": true
@@ -2166,6 +2275,10 @@ func TestConfigWithDefaultAttributes(t *testing.T) {
 			host, status := test.NewTestHost(defaultConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			rawConf, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			assertDefaultPathSuffixes(t, rawConf.(*AIStatisticsConfig))
 		})
 
 		t.Run("use default response attributes config", func(t *testing.T) {
@@ -2175,8 +2288,54 @@ func TestConfigWithDefaultAttributes(t *testing.T) {
 			host, status := test.NewTestHost(defaultRespConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			rawConf, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			assertDefaultPathSuffixes(t, rawConf.(*AIStatisticsConfig))
+		})
+
+		t.Run("explicit enable_path_suffixes overrides default list", func(t *testing.T) {
+			customConfig := []byte(`{
+				"use_default_response_attributes": true,
+				"enable_path_suffixes": ["/completions"]
+			}`)
+			host, status := test.NewTestHost(customConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			rawConf, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			conf := rawConf.(*AIStatisticsConfig)
+			require.Equal(t, []string{"/completions"}, conf.enablePathSuffixes)
+			require.True(t, isPathEnabled("/v1/chat/completions", conf.enablePathSuffixes))
+			require.False(t, isPathEnabled("/v1/responses", conf.enablePathSuffixes))
+		})
+
+		t.Run("explicit empty enable_path_suffixes enables all paths", func(t *testing.T) {
+			customConfig := []byte(`{
+				"use_default_response_attributes": true,
+				"enable_path_suffixes": []
+			}`)
+			host, status := test.NewTestHost(customConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			rawConf, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			conf := rawConf.(*AIStatisticsConfig)
+			require.Empty(t, conf.enablePathSuffixes)
+			require.True(t, isPathEnabled("/v1/embeddings", conf.enablePathSuffixes))
 		})
 	})
+}
+
+// TestIsPathEnabled_ResponsesSuffix pins the path gate used by onHttpRequestHeaders.
+// Without /responses in the default suffix list, Responses token metrics are skipped.
+func TestIsPathEnabled_ResponsesSuffix(t *testing.T) {
+	defaultSuffixes := defaultEnabledPathSuffixes
+	require.True(t, isPathEnabled("/v1/responses", defaultSuffixes))
+	require.True(t, isPathEnabled("/openai/v1/responses?api-version=2024-01-01", defaultSuffixes))
+	require.False(t, isPathEnabled("/v1/responses", []string{"/completions", "/messages"}))
 }
 
 func TestIsErrorResponse(t *testing.T) {

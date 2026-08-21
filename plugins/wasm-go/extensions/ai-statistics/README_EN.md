@@ -24,12 +24,16 @@ Users can also expand observable values ​​through configuration:
 
 | Name             | Type  | Required | Default | Description |
 |----------------|-------|------|-----|------------------------|
+| `use_default_attributes` | bool | optional | false | Enables the complete default attribute set, including messages, answer, and question. Intended for debugging and auditing scenarios. |
+| `use_default_response_attributes` | bool | optional | false | Enables the lightweight default attribute set containing model and token statistics without buffering streaming response bodies. Recommended for high-concurrency production environments. |
 | `attributes` | []Attribute | optional  | -   | Information that the user wants to record in log/span |
 | `disable_openai_usage` | bool | optional  | false   | When using a non-OpenAI-compatible protocol, the support for model and token is non-standard. Setting the configuration to true can prevent errors. |
 | `value_length_limit` | int | optional  | 4000   | length limit for each value |
-| `enable_path_suffixes`   | []string    | optional | ["/v1/chat/completions","/v1/completions","/v1/embeddings","/v1/models","/generateContent","/streamGenerateContent"] | Only effective for requests with these specific path suffixes, can be configured as "\*" to match all paths                                         |
+| `enable_path_suffixes`   | []string    | optional | `[]` (all paths when default attributes are off); when `use_default_attributes` / `use_default_response_attributes` is on and this field is omitted: `["/completions","/messages","/responses"]` | Only effective for requests with these path suffixes; `"*"` matches all paths. Empty list means all paths. Default suffixes cover Chat Completions, Anthropic Messages, and OpenAI Responses |
 | `enable_content_types` | []string    | optional | ["text/event-stream","application/json"]                                                                             | Only buffer response body for these content types                                                                                                   |
 | `session_id_header` | string | optional  | -   | Specify the header name to read session ID from. If not configured, it will automatically search in the following priority: `x-openclaw-session-key`, `x-clawdbot-session-key`, `x-moltbot-session-key`, `x-agent-session`. Session ID can be used to trace multi-turn Agent conversations |
+
+When either default-attribute mode is enabled and `enable_path_suffixes` is omitted, the plugin processes paths ending in `/completions`, `/messages`, and `/responses`. This covers Chat Completions, Anthropic Messages, and OpenAI Responses. Explicitly configure `enable_path_suffixes` (or use `"*"`) to process other paths. An explicitly configured empty list continues to process all paths.
 
 Attribute Configuration instructions:
 
@@ -353,8 +357,10 @@ The plugin automatically identifies each independent tool call by the `index` fi
 
 ```yaml
 enable_path_suffixes:
-  - "/v1/chat/completions"
-  - "/v1/embeddings"
+  - "/completions"
+  - "/messages"
+  - "/responses"
+  - "/embeddings"
   - "/generateContent"
 ```
 
@@ -377,8 +383,10 @@ enable_path_suffixes:
 
 ```yaml
 enable_path_suffixes:
-  - "/v1/chat/completions"
-  - "/v1/embeddings"
+  - "/completions"
+  - "/messages"
+  - "/responses"
+  - "/embeddings"
   - "/generateContent"
 enable_content_types:
   - "text/event-stream"
