@@ -60,8 +60,13 @@ type Global struct {
 
 // Downstream configures the behavior of the downstream connection.
 type Downstream struct {
-	// IdleTimeout limits the time that a connection may be idle and stream idle.
+	// IdleTimeout limits the time that a connection may be idle.
+	// This controls the connection-level idle timeout (common_http_protocol_options.idleTimeout).
 	IdleTimeout uint32 `json:"idleTimeout"`
+	// StreamIdleTimeout limits the time that a stream may be idle.
+	// This controls the stream-level idle timeout (streamIdleTimeout).
+	// If set to 0, the IdleTimeout value is used for backward compatibility.
+	StreamIdleTimeout uint32 `json:"streamIdleTimeout,omitempty"`
 	// MaxRequestHeadersKb limits the size of request headers allowed.
 	MaxRequestHeadersKb uint32 `json:"maxRequestHeadersKb,omitempty"`
 	// ConnectionBufferLimits configures the buffer size limits for connections.
@@ -154,6 +159,7 @@ func deepCopyGlobal(global *Global) (*Global, error) {
 	newGlobal := NewDefaultGlobalOption()
 	if global.Downstream != nil {
 		newGlobal.Downstream.IdleTimeout = global.Downstream.IdleTimeout
+		newGlobal.Downstream.StreamIdleTimeout = global.Downstream.StreamIdleTimeout
 		newGlobal.Downstream.MaxRequestHeadersKb = global.Downstream.MaxRequestHeadersKb
 		newGlobal.Downstream.ConnectionBufferLimits = global.Downstream.ConnectionBufferLimits
 		if global.Downstream.Http2 != nil {
@@ -522,6 +528,10 @@ func (g *GlobalOptionController) generateDisableXEnvoyHeadersEnvoyFilter(disable
 func (g *GlobalOptionController) constructDownstream(downstream *Downstream) string {
 	downstreamConfig := ""
 	idleTimeout := downstream.IdleTimeout
+	streamIdleTimeout := downstream.StreamIdleTimeout
+	if streamIdleTimeout == 0 {
+		streamIdleTimeout = idleTimeout
+	}
 	maxRequestHeadersKb := downstream.MaxRequestHeadersKb
 
 	if downstream.Http2 != nil {
@@ -546,7 +556,7 @@ func (g *GlobalOptionController) constructDownstream(downstream *Downstream) str
 				"streamIdleTimeout": "%ds"
 			}
 		}
-`, idleTimeout, maxConcurrentStreams, initialStreamWindowSize, initialConnectionWindowSize, maxRequestHeadersKb, idleTimeout)
+`, idleTimeout, maxConcurrentStreams, initialStreamWindowSize, initialConnectionWindowSize, maxRequestHeadersKb, streamIdleTimeout)
 		return downstreamConfig
 	}
 
@@ -562,7 +572,7 @@ func (g *GlobalOptionController) constructDownstream(downstream *Downstream) str
 				"streamIdleTimeout": "%ds"
 			}
 		}
-`, idleTimeout, maxRequestHeadersKb, idleTimeout)
+`, idleTimeout, maxRequestHeadersKb, streamIdleTimeout)
 
 	return downstreamConfig
 }
