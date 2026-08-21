@@ -699,6 +699,21 @@ func TestK8sObject_ResolveK8sConflict(t *testing.T) {
                     maxUnavailable: 0
                     minAvailable: 0`),
 		},
+		{
+			desc: "non-object spec is ignored",
+			o1: getK8sObject(`
+                  apiVersion: policy/v1
+                  kind: PodDisruptionBudget
+                  metadata:
+                    name: invalid-pdb
+                  spec: invalid`),
+			o2: getK8sObject(`
+                  apiVersion: policy/v1
+                  kind: PodDisruptionBudget
+                  metadata:
+                    name: invalid-pdb
+                  spec: invalid`),
+		},
 	}
 	for _, tt := range cases {
 		t.Run(tt.desc, func(t *testing.T) {

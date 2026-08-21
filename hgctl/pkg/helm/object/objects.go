@@ -531,10 +531,10 @@ func resolvePDBConflict(o *K8sObject) *K8sObject {
 	if o.json == nil {
 		return o
 	}
-	if o.object.Object["spec"] == nil {
+	spec, ok := o.object.Object["spec"].(map[string]any)
+	if !ok {
 		return o
 	}
-	spec := o.object.Object["spec"].(map[string]any)
 	isDefault := func(item any) bool {
 		var ii intstr.IntOrString
 		switch item := item.(type) {
