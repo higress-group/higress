@@ -452,10 +452,14 @@ func (m *chatMessage) ParseContent() []chatMessageContent {
 				}
 			case contentTypeImageUrl:
 				if subObj, ok := contentMap[contentTypeImageUrl].(map[string]any); ok {
+					url, ok := subObj["url"].(string)
+					if !ok {
+						continue
+					}
 					msg := chatMessageContent{
 						Type: contentTypeImageUrl,
 						ImageUrl: &chatMessageContentImageUrl{
-							Url: subObj["url"].(string),
+							Url: url,
 						},
 					}
 					if detail, ok := subObj["detail"].(string); ok {
@@ -465,20 +469,29 @@ func (m *chatMessage) ParseContent() []chatMessageContent {
 				}
 			case contentTypeInputAudio:
 				if subObj, ok := contentMap[contentTypeInputAudio].(map[string]any); ok {
+					data, dataOk := subObj["data"].(string)
+					format, formatOk := subObj["format"].(string)
+					if !dataOk || !formatOk {
+						continue
+					}
 					contentList = append(contentList, chatMessageContent{
 						Type: contentTypeInputAudio,
 						InputAudio: &chatMessageContentAudio{
-							Data:   subObj["data"].(string),
-							Format: subObj["format"].(string),
+							Data:   data,
+							Format: format,
 						},
 					})
 				}
 			case contentTypeFile:
 				if subObj, ok := contentMap[contentTypeFile].(map[string]any); ok {
+					fileId, ok := subObj["file_id"].(string)
+					if !ok {
+						continue
+					}
 					contentList = append(contentList, chatMessageContent{
 						Type: contentTypeFile,
 						File: &chatMessageContentFile{
-							FileId: subObj["file_id"].(string),
+							FileId: fileId,
 							// FileName: subObj["file_name"].(string),
 							// FileData: subObj["file_data"].(string),
 						},

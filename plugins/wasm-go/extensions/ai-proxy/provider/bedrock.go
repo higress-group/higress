@@ -921,8 +921,12 @@ func (b *bedrockProvider) buildBedrockTextGenerationRequest(origRequest *chatCom
 			if len(msg.ClaudeContentBlocks) > 0 {
 				toolResultContents = claudeContentBlocksToBedrockContents(msg.ClaudeContentBlocks)
 			}
-			if len(messages) > 0 && messages[len(messages)-1].Role == roleUser && messages[len(messages)-1].Content[0].ToolResult != nil {
-				messages[len(messages)-1].Content = append(messages[len(messages)-1].Content, toolResultContents...)
+			lastMessageIndex := len(messages) - 1
+			if lastMessageIndex >= 0 &&
+				messages[lastMessageIndex].Role == roleUser &&
+				len(messages[lastMessageIndex].Content) > 0 &&
+				messages[lastMessageIndex].Content[0].ToolResult != nil {
+				messages[lastMessageIndex].Content = append(messages[lastMessageIndex].Content, toolResultContents...)
 			} else {
 				messages = append(messages, bedrockMessage{
 					Role:    roleUser,
@@ -930,7 +934,10 @@ func (b *bedrockProvider) buildBedrockTextGenerationRequest(origRequest *chatCom
 				})
 			}
 		default:
-			messages = append(messages, chatMessage2BedrockMessage(msg))
+			message := chatMessage2BedrockMessage(msg)
+			if len(message.Content) > 0 {
+				messages = append(messages, message)
+			}
 		}
 	}
 
