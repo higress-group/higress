@@ -16,6 +16,7 @@ package hgctl
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -33,49 +34,45 @@ var (
 func GetXDSResource(resourceType envoyConfigType, configDump []byte) (any, error) {
 	cd := map[string]any{}
 	if err := json.Unmarshal(configDump, &cd); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode config dump: %w", err)
 	}
 	if resourceType == AllEnvoyConfigType {
 		return cd, nil
 	}
-	configs := cd["configs"]
-	globalConfigs := configs.([]any)
-
-	switch resourceType {
-	case BootstrapEnvoyConfigType:
-		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.BootstrapConfigDump" {
-				return config, nil
-			}
-		}
-	case EndpointEnvoyConfigType:
-		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.EndpointsConfigDump" {
-				return config, nil
-			}
-		}
-
-	case ClusterEnvoyConfigType:
-		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.ClustersConfigDump" {
-				return config, nil
-			}
-		}
-	case ListenerEnvoyConfigType:
-		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.ListenersConfigDump" {
-				return config, nil
-			}
-		}
-	case RouteEnvoyConfigType:
-		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.RoutesConfigDump" {
-				return config, nil
-			}
-		}
-	default:
-		return nil, fmt.Errorf("unknown resourceType %s", resourceType)
+	configs, ok := cd["configs"]
+	if !ok {
+		return nil, errors.New("config dump is missing configs")
+	}
+	globalConfigs, ok := configs.([]any)
+	if !ok {
+		return nil, errors.New("config dump configs must be an array")
 	}
 
-	return nil, fmt.Errorf("unknown resourceType %s", resourceType)
+	var typeURL string
+	switch resourceType {
+	case BootstrapEnvoyConfigType:
+		typeURL = "type.googleapis.com/envoy.admin.v3.BootstrapConfigDump"
+	case EndpointEnvoyConfigType:
+		typeURL = "type.googleapis.com/envoy.admin.v3.EndpointsConfigDump"
+	case ClusterEnvoyConfigType:
+		typeURL = "type.googleapis.com/envoy.admin.v3.ClustersConfigDump"
+	case ListenerEnvoyConfigType:
+		typeURL = "type.googleapis.com/envoy.admin.v3.ListenersConfigDump"
+	case RouteEnvoyConfigType:
+		typeURL = "type.googleapis.com/envoy.admin.v3.RoutesConfigDump"
+	default:
+		return nil, fmt.Errorf("unknown resource type %q", resourceType)
+	}
+
+	for i, config := range globalConfigs {
+		configObject, ok := config.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("config dump configs[%d] must be an object", i)
+		}
+		if configObject["@type"] == typeURL {
+			return config, nil
+		}
+	}
+
+	return nil, fmt.Errorf("config dump is missing %s resource", resourceType)
 }
