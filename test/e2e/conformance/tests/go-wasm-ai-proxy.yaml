@@ -391,6 +391,25 @@ spec:
                 port:
                   number: 3000
 ---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-vertex
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "aiplatform.googleapis.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
 apiVersion: extensions.higress.io/v1alpha1
 kind: WasmPlugin
 metadata:
@@ -607,4 +626,14 @@ spec:
           type: openai
       ingress:
         - higress-conformance-ai-backend/wasmplugin-ai-proxy-openai
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          modelMapping:
+            "gpt-3": gemini-2.0-flash
+            "*": gemini-2.0-flash
+          type: vertex
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-vertex
   url: file:///opt/plugins/wasm-go/extensions/ai-proxy/plugin.wasm
