@@ -24,7 +24,7 @@ Users can also expand observable values ​​through configuration:
 
 | Name             | Type  | Required | Default | Description |
 |----------------|-------|------|-----|------------------------|
-| `attributes` | []Attribute | optional  | -   | Information that the user wants to record in log/span |
+| `attributes` | []Attribute | optional  | -   | Information that the user wants to record in log/span. When `use_default_attributes` or `use_default_response_attributes` is enabled, attributes configured here are appended to the default attribute set, so there is no need to re-declare the full default list |
 | `disable_openai_usage` | bool | optional  | false   | When using a non-OpenAI-compatible protocol, the support for model and token is non-standard. Setting the configuration to true can prevent errors. |
 | `value_length_limit` | int | optional  | 4000   | length limit for each value |
 | `enable_path_suffixes`   | []string    | optional | ["/v1/chat/completions","/v1/completions","/v1/embeddings","/v1/models","/generateContent","/streamGenerateContent"] | Only effective for requests with these specific path suffixes, can be configured as "\*" to match all paths                                         |
