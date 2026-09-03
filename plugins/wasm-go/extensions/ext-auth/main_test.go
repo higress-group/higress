@@ -16,8 +16,11 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
+
+	"ext-auth/config"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
@@ -260,6 +263,87 @@ func TestParseConfig(t *testing.T) {
 			require.NotNil(t, config)
 		})
 	})
+}
+
+func TestCallExtAuthServerErrorHandlerFailOpenResumesOnlyPausedRequests(t *testing.T) {
+	originalReplaceHeader := replaceHttpRequestHeader
+	originalResume := resumeHttpRequest
+	originalSendResponse := sendResponse
+	defer func() {
+		replaceHttpRequestHeader = originalReplaceHeader
+		resumeHttpRequest = originalResume
+		sendResponse = originalSendResponse
+	}()
+
+	resumeCount := 0
+	replacedHeaders := map[string]string{}
+	sendResponseCalled := false
+
+	replaceHttpRequestHeader = func(name, value string) error {
+		replacedHeaders[name] = value
+		return nil
+	}
+	resumeHttpRequest = func() error {
+		resumeCount++
+		return nil
+	}
+	sendResponse = func(statusCode uint32, statusCodeDetailData string, headers http.Header, body []byte) error {
+		sendResponseCalled = true
+		return nil
+	}
+
+	cfg := config.ExtAuthConfig{
+		FailureModeAllow:          true,
+		FailureModeAllowHeaderAdd: true,
+	}
+
+	callExtAuthServerErrorHandler(cfg, http.StatusInternalServerError, nil, nil, false)
+	require.Equal(t, 0, resumeCount, "synchronous call failures return ActionContinue and must not resume an unpaused request")
+	require.Equal(t, "true", replacedHeaders[HeaderFailureModeAllow])
+	require.False(t, sendResponseCalled)
+
+	callExtAuthServerErrorHandler(cfg, http.StatusInternalServerError, nil, nil, true)
+	require.Equal(t, 1, resumeCount, "asynchronous fail-open callbacks must still resume the paused request")
+	require.False(t, sendResponseCalled)
+}
+
+func TestCallExtAuthServerErrorHandlerFailClosedSendsLocalResponse(t *testing.T) {
+	originalReplaceHeader := replaceHttpRequestHeader
+	originalResume := resumeHttpRequest
+	originalSendResponse := sendResponse
+	defer func() {
+		replaceHttpRequestHeader = originalReplaceHeader
+		resumeHttpRequest = originalResume
+		sendResponse = originalSendResponse
+	}()
+
+	resumeCount := 0
+	var gotStatusCode uint32
+	var gotDetail string
+
+	replaceHttpRequestHeader = func(name, value string) error {
+		t.Fatalf("fail-closed path must not replace request header %s=%s", name, value)
+		return nil
+	}
+	resumeHttpRequest = func() error {
+		resumeCount++
+		return nil
+	}
+	sendResponse = func(statusCode uint32, statusCodeDetailData string, headers http.Header, body []byte) error {
+		gotStatusCode = statusCode
+		gotDetail = statusCodeDetailData
+		return nil
+	}
+
+	cfg := config.ExtAuthConfig{
+		FailureModeAllow: false,
+		StatusOnError:    http.StatusServiceUnavailable,
+	}
+
+	callExtAuthServerErrorHandler(cfg, http.StatusInternalServerError, nil, []byte("unavailable"), false)
+	require.Equal(t, 0, resumeCount)
+	require.Equal(t, uint32(http.StatusServiceUnavailable), gotStatusCode)
+	require.Equal(t, "ext-auth.unauthorized", gotDetail)
 }
 
 func TestOnHttpRequestHeaders(t *testing.T) {

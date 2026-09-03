@@ -45,6 +45,12 @@ const (
 	HeaderFailureModeAllow = "x-envoy-auth-failure-mode-allowed"
 )
 
+var (
+	replaceHttpRequestHeader = proxywasm.ReplaceHttpRequestHeader
+	resumeHttpRequest        = proxywasm.ResumeHttpRequest
+	sendResponse             = util.SendResponse
+)
+
 // Currently, x-forwarded-xxx headers only apply for forward_auth.
 const (
 	HeaderOriginalMethod   = "x-original-method"
@@ -123,7 +129,7 @@ func checkExtAuth(ctx wrapper.HttpContext, cfg config.ExtAuthConfig, body []byte
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			if statusCode != http.StatusOK {
 				log.Errorf("failed to call ext auth server, status: %d", statusCode)
-				callExtAuthServerErrorHandler(cfg, statusCode, responseHeaders, responseBody)
+				callExtAuthServerErrorHandler(cfg, statusCode, responseHeaders, responseBody, true)
 				return
 			}
 
@@ -141,7 +147,7 @@ func checkExtAuth(ctx wrapper.HttpContext, cfg config.ExtAuthConfig, body []byte
 	if err != nil {
 		log.Errorf("failed to call ext auth server: %v", err)
 		// Since the handling logic for call errors and HTTP status code 500 is the same, we directly use 500 here.
-		callExtAuthServerErrorHandler(cfg, http.StatusInternalServerError, nil, nil)
+		callExtAuthServerErrorHandler(cfg, http.StatusInternalServerError, nil, nil, false)
 		return types.ActionContinue
 	}
 	return pauseAction
@@ -196,12 +202,14 @@ func buildExtAuthRequestHeaders(ctx wrapper.HttpContext, cfg config.ExtAuthConfi
 	return extAuthReqHeaders
 }
 
-func callExtAuthServerErrorHandler(config config.ExtAuthConfig, statusCode int, extAuthRespHeaders http.Header, responseBody []byte) {
+func callExtAuthServerErrorHandler(config config.ExtAuthConfig, statusCode int, extAuthRespHeaders http.Header, responseBody []byte, requestPaused bool) {
 	if statusCode >= http.StatusInternalServerError && config.FailureModeAllow {
 		if config.FailureModeAllowHeaderAdd {
-			_ = proxywasm.ReplaceHttpRequestHeader(HeaderFailureModeAllow, "true")
+			_ = replaceHttpRequestHeader(HeaderFailureModeAllow, "true")
 		}
-		proxywasm.ResumeHttpRequest()
+		if requestPaused {
+			resumeHttpRequest()
+		}
 		return
 	}
 
@@ -221,5 +229,5 @@ func callExtAuthServerErrorHandler(config config.ExtAuthConfig, statusCode int, 
 	if statusCode >= http.StatusInternalServerError {
 		statusToUse = int(config.StatusOnError)
 	}
-	_ = util.SendResponse(uint32(statusToUse), "ext-auth.unauthorized", respHeaders, responseBody)
+	_ = sendResponse(uint32(statusToUse), "ext-auth.unauthorized", respHeaders, responseBody)
 }
