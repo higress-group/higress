@@ -289,14 +289,23 @@ The command removes all the Kubernetes components associated with the chart and 
 | pluginServer.service.port | int | `80` |  |
 | pluginServer.tag | string | `""` |  |
 | redis.redis.affinity | object | `{}` | Affinity for Redis |
+| redis.redis.aof | object | `{"enabled":false,"fsync":"everysec","rewriteMinSize":"64mb","rewritePercentage":100}` | AOF (Append-Only File) persistence settings. Only effective when persistence.enabled=true. AOF logs every write operation, providing best durability (up to 1s data loss with everysec). Redis prefers AOF for recovery when both AOF and RDB are enabled. |
+| redis.redis.aof.enabled | bool | `false` | Enable AOF persistence. Default is false (opt-in). Set to true to enable AOF persistence. |
+| redis.redis.aof.fsync | string | `"everysec"` | AOF fsync policy: always, everysec, or no. "everysec" balances durability (≤1s data loss) and performance. See https://redis.io/docs/management/persistence/ |
+| redis.redis.aof.rewriteMinSize | string | `"64mb"` | Minimum AOF file size to trigger rewrite. Default 64mb prevents frequent rewrites. |
+| redis.redis.aof.rewritePercentage | int | `100` | Rewrite AOF when size exceeds this percentage of base file. Default 100 = 2x size. |
+| redis.redis.extraConfig | string | `""` | Extra redis-stack.conf directives appended after the generated config (requirepass, and AOF defaults when persistence is enabled). Directives here take precedence over generated defaults (Redis applies the last value). Example:   maxmemory 512mb   maxmemory-policy allkeys-lru |
 | redis.redis.image | string | `"redis-stack-server"` | Specify the image |
 | redis.redis.name | string | `"redis-stack-server"` |  |
 | redis.redis.nodeSelector | object | `{}` | NodeSelector Node labels for Redis |
 | redis.redis.password | string | `""` | Specify the password, if not set, no password is used |
 | redis.redis.persistence.accessModes | list | `["ReadWriteOnce"]` | Persistent Volume access modes |
-| redis.redis.persistence.enabled | bool | `false` | Enable persistence on Redis, default is false |
+| redis.redis.persistence.enabled | bool | `false` | Enable persistence on Redis. When enabled, a PVC is mounted at /data. The `dir /data` directive is written only when aof.enabled or rdb.enabled is true; if both are disabled, persistence must be driven via extraConfig (add `dir /data` there yourself). |
 | redis.redis.persistence.size | string | `"1Gi"` | Persistent Volume size |
 | redis.redis.persistence.storageClass | string | `""` | If undefined (the default) or set to null, no storageClassName spec is set, choosing the default provisioner |
+| redis.redis.rdb | object | `{"enabled":false,"save":["900 1","300 10","60 10000"]}` | RDB (Redis Database) snapshot persistence settings. Only effective when persistence.enabled=true. RDB provides compact point-in-time snapshots, useful for backups and faster restart. Can be enabled alongside AOF for dual persistence strategy. |
+| redis.redis.rdb.enabled | bool | `false` | Enable RDB snapshots. Default is false (opt-in). Set to true to enable RDB snapshots. |
+| redis.redis.rdb.save | list | `["900 1","300 10","60 10000"]` | RDB snapshot schedule as "seconds changes" pairs. Redis saves when ANY rule is matched. Only takes effect when rdb.enabled=true. Common defaults: "900 1" (15min/1 key), "300 10" (5min/10 keys), "60 10000" (1min/10000 keys). Set to empty list [] to disable RDB snapshots (renders `save ""`). See https://redis.io/docs/management/persistence/ |
 | redis.redis.replicas | int | `1` | Specify the number of replicas |
 | redis.redis.resources | object | `{}` | Specify the resources |
 | redis.redis.service | object | `{"port":6379,"type":"ClusterIP"}` | Service parameters |
