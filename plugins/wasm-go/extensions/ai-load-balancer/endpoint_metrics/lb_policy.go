@@ -19,6 +19,7 @@ const (
 type MetricsEndpointLoadBalancer struct {
 	metricPolicy     string
 	targetMetric     string
+	engine           string
 	endpointRequests *utils.FixedQueue[string]
 	maxRate          float64
 }
@@ -32,6 +33,11 @@ func NewMetricsEndpointLoadBalancer(json gjson.Result) (MetricsEndpointLoadBalan
 	}
 	if json.Get("target_metric").Exists() {
 		lb.targetMetric = json.Get("target_metric").String()
+	}
+	if json.Get("engine").Exists() {
+		lb.engine = json.Get("engine").String()
+	} else {
+		lb.engine = scheduling.EngineVLLM
 	}
 	if json.Get("rate_limit").Exists() {
 		lb.maxRate = json.Get("rate_limit").Float()
@@ -67,7 +73,7 @@ func (lb MetricsEndpointLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpCont
 			hostMetrics[hostInfo[0]] = gjson.Get(hostInfo[1], "metrics").String()
 		}
 	}
-	scheduler, err := scheduling.GetScheduler(hostMetrics, lb.metricPolicy, lb.targetMetric)
+	scheduler, err := scheduling.GetScheduler(hostMetrics, lb.metricPolicy, lb.targetMetric, lb.engine)
 	if err != nil {
 		log.Debugf("initial scheduler failed: %v", err)
 		return types.ActionContinue
