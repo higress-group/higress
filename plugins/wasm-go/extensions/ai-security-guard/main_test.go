@@ -43,6 +43,7 @@ var basicConfig = func() json.RawMessage {
 		"sensitiveDataLevelBar":     "S3",
 		"timeout":                   2000,
 		"bufferLimit":               1000,
+		"bufferFlushTimeInterval":   10000,
 	})
 	return data
 }()
@@ -62,6 +63,47 @@ var requestOnlyConfig = func() json.RawMessage {
 		"sensitiveDataLevelBar":     "S3",
 		"timeout":                   1000,
 		"bufferLimit":               500,
+		"bufferFlushTimeInterval":   1000,
+	})
+	return data
+}()
+
+// 测试配置：启用响应检查，时间窗口 1s 触发 flush
+var intervalFlushConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"serviceName":               "security-service",
+		"servicePort":               8080,
+		"serviceHost":               "security.example.com",
+		"accessKey":                 "test-ak",
+		"secretKey":                 "test-sk",
+		"checkRequest":              true,
+		"checkResponse":             true,
+		"contentModerationLevelBar": "high",
+		"promptAttackLevelBar":      "high",
+		"sensitiveDataLevelBar":     "S3",
+		"timeout":                   2000,
+		"bufferLimit":               1000,
+		"bufferFlushTimeInterval":   1000, // 1s
+	})
+	return data
+}()
+
+// 测试配置：启用响应检查，小 bufferLimit 触发分批 flush
+var smallBufferLimitConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"serviceName":               "security-service",
+		"servicePort":               8080,
+		"serviceHost":               "security.example.com",
+		"accessKey":                 "test-ak",
+		"secretKey":                 "test-sk",
+		"checkRequest":              true,
+		"checkResponse":             true,
+		"contentModerationLevelBar": "high",
+		"promptAttackLevelBar":      "high",
+		"sensitiveDataLevelBar":     "S3",
+		"timeout":                   2000,
+		"bufferLimit":               10,
+		"bufferFlushTimeInterval":   60000,
 	})
 	return data
 }()
@@ -422,6 +464,7 @@ func TestParseConfig(t *testing.T) {
 			require.Equal(t, "S3", securityConfig.SensitiveDataLevelBar)
 			require.Equal(t, uint32(2000), securityConfig.Timeout)
 			require.Equal(t, 1000, securityConfig.BufferLimit)
+			require.Equal(t, 10000, securityConfig.BufferFlushTimeInterval)
 			require.Equal(t, cfg.DefaultResponseFallbackJsonPaths(), securityConfig.ResponseContentFallbackJsonPaths)
 			require.Equal(t, cfg.DefaultStreamingResponseFallbackJsonPaths(), securityConfig.ResponseStreamContentFallbackJsonPaths)
 			require.Equal(t, cfg.OpenAIDenyResponseFormatLegacy, securityConfig.OpenAIDenyResponseFormat)
@@ -1122,6 +1165,92 @@ func TestMCP(t *testing.T) {
 			}, []byte(securityResponse))
 
 			// It injects DenySSEResponse.
+		})
+	})
+}
+
+func TestOnHttpStreamingResponseBody(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		// 1) basicConfig：只在 endOfStream 时才触发检查 / 推送
+		t.Run("basic config waits until endOfStream", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 请求头
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			// 流式响应头，触发 HandleTextGenerationResponseHeader
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+
+			// 上游持续返回多个 chunk，但 bufferLimit 很大、时间窗口 10s，非常难触发中途 flush
+			chunk1 := []byte(`data: {"choices":[{"delta":{"content":"Hello"}}]}`)
+			host.CallOnHttpStreamingResponseBody(chunk1, false)
+			// 中途不应触发安全检查调用
+			attrs := host.GetHttpCalloutAttributes()
+			require.Len(t, attrs, 0)
+
+			chunk2 := []byte(`data: {"choices":[{"delta":{"content":" World"}}]}`)
+			host.CallOnHttpStreamingResponseBody(chunk2, true)
+
+			// 只有在 endOfStream=true 且所有 chunk 累积后才发起安全检查调用
+			// 注意：由于 endOfStream 逻辑会触发两次 flush（183-202行），所以会有 2 次 callout
+			attrs = host.GetHttpCalloutAttributes()
+			require.GreaterOrEqual(t, len(attrs), 1)
+
+			// 模拟安全检查通过，触发回调，把聚合后的内容推给 client
+			securityResponse := `{"Code": 200, "Message": "Success", "RequestId": "req-123", "Data": {"RiskLevel": "low"}}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(securityResponse))
+
+			// 此时才应该有响应体输出给 client
+			responseBody := host.GetResponseBody()
+			require.NotEmpty(t, responseBody)
+
+			host.CompleteHttp()
+		})
+
+		// 2) bufferLimit = 10：按长度阈值分批推送
+		t.Run("streaming flush by buffer limit", func(t *testing.T) {
+			host, status := test.NewTestHost(smallBufferLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+
+			// 每个 chunk 的 content 长度约为 5，bufferLimit=10
+			chunk1 := []byte(`data: {"choices":[{"delta":{"content":"12345"}}]}`)
+			host.CallOnHttpStreamingResponseBody(chunk1, false)
+			attrs := host.GetHttpCalloutAttributes()
+			require.Len(t, attrs, 0)
+
+			// 第二个 chunk 叠加后，bufferRuneLen≈10，达到 bufferLimit -> 触发一次 flush
+			chunk2 := []byte(`data: {"choices":[{"delta":{"content":"67890"}}]}`)
+			host.CallOnHttpStreamingResponseBody(chunk2, false)
+
+			attrs = host.GetHttpCalloutAttributes()
+			require.Len(t, attrs, 1)
+
+			// 从调用次数上可以证明：在 bufferLimit 很小时，上游返回的多个 chunk 会被分批推送（每超过阈值就发一次安全检查）
+			host.CompleteHttp()
 		})
 	})
 }
