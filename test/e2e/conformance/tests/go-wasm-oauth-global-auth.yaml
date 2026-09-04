@@ -1,0 +1,90 @@
+# Copyright (c) 2022 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+  name: wasmplugin-oauth1
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "foo1.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/foo"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+  name: wasmplugin-oauth2
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "foo2.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/foo"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: oauth
+  namespace: higress-system
+spec:
+  defaultConfig:
+    consumers:
+      - name: consumer1
+        client_id: 9515b564-0b1d-11ee-9c4c-00163e1250b5
+        client_secret: 9e55de56-0b1d-11ee-b8ec-00163e1250b5
+      - name: consumer2
+        client_id: 8521b564-0b1d-11ee-9c4c-00163e1250b5
+        client_secret: 8520b564-0b1d-11ee-9c4c-00163e1250b5
+    issuer: Higress-Gateway
+    auth_path: /oauth2/token
+    global_credentials: true
+    auth_header_name: Authorization
+    token_ttl: 7200
+    clock_skew_seconds: 3153600000
+    keep_token: true
+    global_auth: false
+  matchRules:
+      - ingress:
+        - "higress-conformance-infra/wasmplugin-oauth1"
+        config:
+          allow:
+          - consumer1
+      - ingress:
+        - "higress-conformance-infra/wasmplugin-oauth2"
+        config:
+        # warn：allow字段可以不写或者allow字段下面的列表为空，起到的效果是相同的。但是测试发现如果有config字段，但是config下不写任何字段会导致插件失效
+          allow:
+          # - consumer2
+  url: file:///opt/plugins/wasm-go/extensions/oauth/plugin.wasm
