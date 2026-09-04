@@ -116,6 +116,7 @@ func (h *HttpRemoteCallHandle) HandleToolCall(ctx *RpcContext, parameters map[st
 	if err != nil {
 		return nil, err
 	}
+	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		return nil, err
@@ -190,7 +191,7 @@ func selectOneInstance(ctx *RpcContext) (*Instance, error) {
 
 	instances := *ctx.Instances
 	if len(instances) > 1 {
-		instanceId = rand.Intn(len(instances) - 1)
+		instanceId = rand.Intn(len(instances))
 	}
 	select_instance := instances[instanceId]
 	return &select_instance, nil
