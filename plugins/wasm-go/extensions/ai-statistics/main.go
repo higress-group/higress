@@ -465,6 +465,10 @@ type AIStatisticsConfig struct {
 	enableContentTypes []string
 	// Session ID header name (if configured, takes priority over default headers)
 	sessionIdHeader string
+	// Maximum request body buffer size in bytes. Configurable via
+	// `max_request_body_bytes`; supports matchRules route-level overrides.
+	// Defaults to defaultMaxBodyBytes when unset.
+	maxRequestBodyBytes uint32
 }
 
 func generateMetricName(route, cluster, model, consumer, metricName string) string {
@@ -561,6 +565,15 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 		config.valueLengthLimit = int(configJson.Get("value_length_limit").Int())
 	} else {
 		config.valueLengthLimit = 32000
+	}
+
+	// Set max_request_body_bytes (request body buffer limit). Supports
+	// matchRules route-level overrides. Defaults to defaultMaxBodyBytes.
+	if configJson.Get("max_request_body_bytes").Exists() {
+		config.maxRequestBodyBytes = uint32(configJson.Get("max_request_body_bytes").Uint())
+	}
+	if config.maxRequestBodyBytes == 0 {
+		config.maxRequestBodyBytes = defaultMaxBodyBytes
 	}
 
 	// Parse attributes or use defaults
@@ -699,8 +712,10 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config AIStatisticsConfig) ty
 	}
 
 	// Always buffer request body to extract model field
-	// This is essential for metrics and logging
-	ctx.SetRequestBodyBufferLimit(defaultMaxBodyBytes)
+	// This is essential for metrics and logging.
+	// The limit is configurable via `max_request_body_bytes` (with matchRules
+	// route-level overrides) so large non-AI uploads are not rejected with 413.
+	ctx.SetRequestBodyBufferLimit(config.maxRequestBodyBytes)
 
 	// Extract session ID from headers
 	sessionId := extractSessionId(config.sessionIdHeader)
