@@ -146,6 +146,53 @@ func TestParseConfig(t *testing.T) {
 	})
 }
 
+func TestParseConfigRejectsInvalidRanges(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		tests := []struct {
+			name        string
+			values      map[string]interface{}
+			redisValues map[string]interface{}
+		}{
+			{name: "zero nonce ttl", values: map[string]interface{}{"nonce_ttl": 0}},
+			{name: "negative nonce ttl", values: map[string]interface{}{"nonce_ttl": -1}},
+			{name: "zero nonce min length", values: map[string]interface{}{"nonce_min_length": 0}},
+			{name: "negative nonce min length", values: map[string]interface{}{"nonce_min_length": -1}},
+			{name: "zero nonce max length", values: map[string]interface{}{"nonce_max_length": 0}},
+			{name: "negative nonce max length", values: map[string]interface{}{"nonce_max_length": -1}},
+			{
+				name: "nonce min length exceeds max length",
+				values: map[string]interface{}{
+					"nonce_min_length": 129,
+					"nonce_max_length": 128,
+				},
+			},
+			{name: "reject code below HTTP range", values: map[string]interface{}{"reject_code": 99}},
+			{name: "reject code above HTTP range", values: map[string]interface{}{"reject_code": 600}},
+			{name: "zero redis timeout", redisValues: map[string]interface{}{"timeout": 0}},
+			{name: "negative redis port", redisValues: map[string]interface{}{"service_port": -1}},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				redisConfig := map[string]interface{}{"service_name": "redis.static"}
+				for key, value := range tt.redisValues {
+					redisConfig[key] = value
+				}
+				config := map[string]interface{}{"redis": redisConfig}
+				for key, value := range tt.values {
+					config[key] = value
+				}
+
+				data, err := json.Marshal(config)
+				require.NoError(t, err)
+				host, status := test.NewTestHost(data)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusFailed, status)
+			})
+		}
+	})
+}
+
 func TestOnHttpRequestHeaders(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试强制 nonce 模式 - 缺少 nonce 头
