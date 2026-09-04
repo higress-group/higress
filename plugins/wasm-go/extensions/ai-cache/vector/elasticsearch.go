@@ -178,22 +178,34 @@ type esQueryResponse struct {
 }
 
 func (d *ESProvider) parseQueryResponse(responseBody []byte, log log.Log) ([]QueryResult, error) {
-	log.Infof("[ES] responseBody: %s", string(responseBody))
+	if log != nil {
+		log.Infof("[ES] responseBody: %s", string(responseBody))
+	}
 	var queryResp esQueryResponse
 	err := json.Unmarshal(responseBody, &queryResp)
 	if err != nil {
 		return []QueryResult{}, err
 	}
-	log.Debugf("[ES] queryResp Hits len: %d", len(queryResp.Hits.Hits))
+	if log != nil {
+		log.Debugf("[ES] queryResp Hits len: %d", len(queryResp.Hits.Hits))
+	}
 	if len(queryResp.Hits.Hits) == 0 {
 		return nil, errors.New("no query results found in response")
 	}
 	results := make([]QueryResult, 0, queryResp.Hits.Total.Value)
 	for _, hit := range queryResp.Hits.Hits {
+		question, ok := hit.Source["question"].(string)
+		if !ok {
+			return nil, fmt.Errorf("[ES] hit %q has missing or non-string question", hit.ID)
+		}
+		answer, ok := hit.Source["answer"].(string)
+		if !ok {
+			return nil, fmt.Errorf("[ES] hit %q has missing or non-string answer", hit.ID)
+		}
 		result := QueryResult{
-			Text:   hit.Source["question"].(string),
+			Text:   question,
 			Score:  hit.Score,
-			Answer: hit.Source["answer"].(string),
+			Answer: answer,
 		}
 		results = append(results, result)
 	}
