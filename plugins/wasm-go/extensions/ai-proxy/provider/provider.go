@@ -1296,6 +1296,10 @@ func (c *ProviderConfig) handleRequestBody(
 		if c.providerBasePath != "" {
 			headers.Set(":path", c.applyProviderBasePath(headers.Get(":path")))
 		}
+		// Apply providerDomain if configured (overrides any domain set by the provider in TransformRequestBodyHeaders)
+		if c.providerDomain != "" {
+			util.OverwriteRequestHostHeader(headers, c.providerDomain)
+		}
 		util.ReplaceRequestHeaders(headers)
 	} else {
 		body, err = c.defaultTransformRequestBody(ctx, apiName, body)
