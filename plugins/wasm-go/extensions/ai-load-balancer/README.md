@@ -9,7 +9,7 @@ description: 针对LLM服务的负载均衡策略
 **注意**：
 - Higress网关版本需要>=v2.1.5
 
-对LLM服务提供热插拔的负载均衡策略，如果关闭插件，负载均衡策略会退化为服务本身的负载均衡策略（轮训、本地最小请求数、随机、一致性hash等）。
+对LLM服务提供热插拔的负载均衡策略，如果关闭插件，负载均衡策略会退化为服务本身的负载均衡策略（轮询、本地最小请求数、随机、一致性hash等）。
 
 配置如下：
 
@@ -106,7 +106,7 @@ lb_config:
     },
     {
       "role": "user",
-      "content": "write a short story aboud 100 words"
+      "content": "write a short story about 100 words"
     }
   ]
 }
@@ -170,7 +170,7 @@ sequenceDiagram
 |--------------------|-----------------|------------------|-------------|-------------------------------------|
 | `metric_policy`      | string | 必填 | | 如何使用llm暴露的metrics做负载均衡，当前支持`[default, least, most]` |
 | `target_metric`      | string | 选填 | | 要使用的metric名称，`metric_policy` 取值为 `least` 或者 `most` 时生效 |
-| `rate_limit`      | string | 选填 | 1 | 单个节点处理请求比例上限，取值范围0~1 |
+| `rate_limit`      | float | 选填 | 1 | 单个节点处理请求比例上限，取值范围0~1 |
 
 
 ## 配置示例
@@ -216,7 +216,7 @@ lb_config:
 |--------------------|-----------------|------------------|-------------|-------------------------------------|
 | `mode`      | string | 必填 | | 如何使用服务级指标做负载均衡，当前支持`[LeastBusy, LeastTotalLatency, LeastFirstTokenLatency, AdaptiveScore]` |
 | `service_list`      | []string | 必填 | | 路由后端服务列表 |
-| `rate_limit`      | string | 选填 | 1 | 单个服务处理请求比例上限，取值范围0~1 |
+| `rate_limit`      | float | 选填 | 1 | 单个服务处理请求比例上限，取值范围0~1 |
 | `cluster_header` | string | 选填 | `x-higress-target-cluster` | 通过取该header的值得知需要路由到哪个后端服务 |
 | `queue_size`      | int | 选填 | 100 | 根据最近的多少个请求进行观测指标的计算 |
 | `ewma_beta` | float | 选填 | 0.5 | `AdaptiveScore` 中历史 EWMA 值的权重，取值范围 0~1 |
