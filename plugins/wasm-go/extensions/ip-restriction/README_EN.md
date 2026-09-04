@@ -20,6 +20,8 @@ Plugin execution priority: `210`
 | deny                | array   | No       | []                              | Blacklist                                    |
 | status              | int     | No       | 403                             | HTTP status code when access is denied      |
 | message             | string  | No       | Your IP address is blocked.     | Return message when access is denied         |
+| response_body       | string  | No       |                                 | Custom response body when access is denied. Overrides the default JSON when set. Useful for returning an HTML block page. |
+| content_type        | string  | No       | text/html; charset=utf-8        | Custom response Content-Type. Only takes effect when `response_body` is set. |
 
 ```yaml
 ip_source_type: origin-source
@@ -33,5 +35,16 @@ ip_source_type: header
 ip_header_name: x-real-iP
 deny:
   - 10.0.0.1
-  - 192.169.0.0/16
+  - 192.168.0.0/16
+```
+
+```yaml
+# Return a custom HTML block page when access is denied
+ip_source_type: header
+ip_header_name: x-forwarded-for
+allow:
+  - 10.0.0.0/8
+status: 403
+response_body: "<html><body><h1>Access Restricted</h1><p>Please access via the intranet.</p></body></html>"
+content_type: "text/html; charset=utf-8"
 ```
