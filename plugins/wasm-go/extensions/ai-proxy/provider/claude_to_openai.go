@@ -429,120 +429,122 @@ func (c *ClaudeToOpenAIConverter) ConvertOpenAIResponseToClaude(ctx wrapper.Http
 }
 
 // ConvertOpenAIStreamResponseToClaude converts OpenAI streaming response to Claude format
-func (c *ClaudeToOpenAIConverter) ConvertOpenAIStreamResponseToClaude(ctx wrapper.HttpContext, chunk []byte) ([]byte, error) {
+func (c *ClaudeToOpenAIConverter) ConvertOpenAIStreamResponseToClaude(ctx wrapper.HttpContext, chunk []byte, isLastChunk bool) ([]byte, error) {
 	log.Debugf("[OpenAI->Claude] Original OpenAI streaming chunk: %s", string(chunk))
 
-	// For streaming responses, we need to handle the Server-Sent Events format
-	lines := strings.Split(string(chunk), "\n")
+	// Reassemble SSE events across callbacks: one callback is an arbitrary byte
+	// chunk, not a complete event. The final callback flushes any retained tail
+	// so a truncated trailing [DONE] still finalizes the stream.
 	var result strings.Builder
+	for _, event := range frameSSEEvents(ctx, ctxKeyClaudeConvertSSEFraming, chunk, isLastChunk) {
+		for _, line := range strings.Split(event, "\n") {
+			if strings.HasPrefix(line, "data: ") {
+				data := strings.TrimPrefix(line, "data: ")
 
-	for _, line := range lines {
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
+				// Handle [DONE] messages
+				if data == "[DONE]" {
+					log.Debugf("[OpenAI->Claude] Processing [DONE] message, finalizing stream")
 
-			// Handle [DONE] messages
-			if data == "[DONE]" {
-				log.Debugf("[OpenAI->Claude] Processing [DONE] message, finalizing stream")
-
-				// Send final content_block_stop events for any active blocks
-				if c.thinkingBlockStarted && !c.thinkingBlockStopped {
-					c.thinkingBlockStopped = true
-					log.Debugf("[OpenAI->Claude] Sending final thinking content_block_stop event at index %d", c.thinkingBlockIndex)
-					stopEvent := &claudeTextGenStreamResponse{
-						Type:  "content_block_stop",
-						Index: &c.thinkingBlockIndex,
-					}
-					stopData, _ := json.Marshal(stopEvent)
-					result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", stopEvent.Type, stopData))
-				}
-				if c.textBlockStarted && !c.textBlockStopped {
-					c.textBlockStopped = true
-					log.Debugf("[OpenAI->Claude] Sending final text content_block_stop event at index %d", c.textBlockIndex)
-					stopEvent := &claudeTextGenStreamResponse{
-						Type:  "content_block_stop",
-						Index: &c.textBlockIndex,
-					}
-					stopData, _ := json.Marshal(stopEvent)
-					result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", stopEvent.Type, stopData))
-				}
-				// Send final content_block_stop events for any remaining unclosed tool calls
-				for index, toolCall := range c.toolCallStates {
-					if toolCall.contentBlockStarted && !toolCall.contentBlockStopped {
-						log.Debugf("[OpenAI->Claude] Sending final tool content_block_stop event for index %d at Claude index %d",
-							index, toolCall.claudeContentIndex)
+					// Send final content_block_stop events for any active blocks
+					if c.thinkingBlockStarted && !c.thinkingBlockStopped {
+						c.thinkingBlockStopped = true
+						log.Debugf("[OpenAI->Claude] Sending final thinking content_block_stop event at index %d", c.thinkingBlockIndex)
 						stopEvent := &claudeTextGenStreamResponse{
 							Type:  "content_block_stop",
-							Index: &toolCall.claudeContentIndex,
+							Index: &c.thinkingBlockIndex,
 						}
 						stopData, _ := json.Marshal(stopEvent)
 						result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", stopEvent.Type, stopData))
 					}
-				}
-
-				// If we have a pending stop_reason but no usage, send message_delta with just stop_reason
-				if c.pendingStopReason != nil {
-					log.Debugf("[OpenAI->Claude] Sending final message_delta with pending stop_reason: %s", *c.pendingStopReason)
-					messageDelta := &claudeTextGenStreamResponse{
-						Type: "message_delta",
-						Delta: &claudeTextGenDelta{
-							StopReason:   c.pendingStopReason,
-							StopSequence: json.RawMessage("null"),
-						},
+					if c.textBlockStarted && !c.textBlockStopped {
+						c.textBlockStopped = true
+						log.Debugf("[OpenAI->Claude] Sending final text content_block_stop event at index %d", c.textBlockIndex)
+						stopEvent := &claudeTextGenStreamResponse{
+							Type:  "content_block_stop",
+							Index: &c.textBlockIndex,
+						}
+						stopData, _ := json.Marshal(stopEvent)
+						result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", stopEvent.Type, stopData))
 					}
-					stopData, _ := json.Marshal(messageDelta)
-					result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", messageDelta.Type, stopData))
+					// Send final content_block_stop events for any remaining unclosed tool calls
+					for index, toolCall := range c.toolCallStates {
+						if toolCall.contentBlockStarted && !toolCall.contentBlockStopped {
+							log.Debugf("[OpenAI->Claude] Sending final tool content_block_stop event for index %d at Claude index %d",
+								index, toolCall.claudeContentIndex)
+							stopEvent := &claudeTextGenStreamResponse{
+								Type:  "content_block_stop",
+								Index: &toolCall.claudeContentIndex,
+							}
+							stopData, _ := json.Marshal(stopEvent)
+							result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", stopEvent.Type, stopData))
+						}
+					}
+
+					// If we have a pending stop_reason but no usage, send message_delta with just stop_reason
+					if c.pendingStopReason != nil {
+						log.Debugf("[OpenAI->Claude] Sending final message_delta with pending stop_reason: %s", *c.pendingStopReason)
+						messageDelta := &claudeTextGenStreamResponse{
+							Type: "message_delta",
+							Delta: &claudeTextGenDelta{
+								StopReason:   c.pendingStopReason,
+								StopSequence: json.RawMessage("null"),
+							},
+						}
+						stopData, _ := json.Marshal(messageDelta)
+						result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", messageDelta.Type, stopData))
+						c.pendingStopReason = nil
+					}
+
+					if c.messageStartSent && !c.messageStopSent {
+						c.messageStopSent = true
+						log.Debugf("[OpenAI->Claude] Sending final message_stop event")
+						messageStopEvent := &claudeTextGenStreamResponse{
+							Type: "message_stop",
+						}
+						stopData, _ := json.Marshal(messageStopEvent)
+						result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", messageStopEvent.Type, stopData))
+					}
+
+					// Reset all state for next request
+					c.messageStartSent = false
+					c.messageStopSent = false
+					c.messageId = ""
 					c.pendingStopReason = nil
+					c.nextContentIndex = 0
+					c.thinkingBlockIndex = -1
+					c.thinkingBlockStarted = false
+					c.thinkingBlockStopped = false
+					c.textBlockIndex = -1
+					c.textBlockStarted = false
+					c.textBlockStopped = false
+					c.toolBlockIndex = -1
+					c.toolBlockStarted = false
+					c.toolBlockStopped = false
+					c.toolCallStates = make(map[int]*toolCallInfo)
+					c.activeToolIndex = nil
+					log.Debugf("[OpenAI->Claude] Reset converter state for next request")
+
+					continue
 				}
 
-				if c.messageStartSent && !c.messageStopSent {
-					c.messageStopSent = true
-					log.Debugf("[OpenAI->Claude] Sending final message_stop event")
-					messageStopEvent := &claudeTextGenStreamResponse{
-						Type: "message_stop",
-					}
-					stopData, _ := json.Marshal(messageStopEvent)
-					result.WriteString(fmt.Sprintf("event: %s\ndata: %s\n\n", messageStopEvent.Type, stopData))
+				// Some providers keep sending duplicate usage chunks after the stream
+				// has already been finalized. Ignore those trailing chunks.
+				if c.messageStopSent {
+					log.Debugf("[OpenAI->Claude] Ignoring chunk after message_stop: %s", data)
+					continue
 				}
 
-				// Reset all state for next request
-				c.messageStartSent = false
-				c.messageStopSent = false
-				c.messageId = ""
-				c.pendingStopReason = nil
-				c.nextContentIndex = 0
-				c.thinkingBlockIndex = -1
-				c.thinkingBlockStarted = false
-				c.thinkingBlockStopped = false
-				c.textBlockIndex = -1
-				c.textBlockStarted = false
-				c.textBlockStopped = false
-				c.toolBlockIndex = -1
-				c.toolBlockStarted = false
-				c.toolBlockStopped = false
-				c.toolCallStates = make(map[int]*toolCallInfo)
-				c.activeToolIndex = nil
-				log.Debugf("[OpenAI->Claude] Reset converter state for next request")
+				var openaiStreamResponse chatCompletionResponse
+				if err := json.Unmarshal([]byte(data), &openaiStreamResponse); err != nil {
+					log.Debugf("unable to unmarshal openai stream response: %v, data: %s", err, data)
+					continue
+				}
 
-				continue
+				claudeStreamResponses := c.buildClaudeStreamResponse(ctx, &openaiStreamResponse)
+				log.Debugf("[OpenAI->Claude] Generated %d Claude stream events from OpenAI chunk", len(claudeStreamResponses))
+
+				writeClaudeStreamEvents(&result, claudeStreamResponses)
 			}
-
-			// Some providers keep sending duplicate usage chunks after the stream
-			// has already been finalized. Ignore those trailing chunks.
-			if c.messageStopSent {
-				log.Debugf("[OpenAI->Claude] Ignoring chunk after message_stop: %s", data)
-				continue
-			}
-
-			var openaiStreamResponse chatCompletionResponse
-			if err := json.Unmarshal([]byte(data), &openaiStreamResponse); err != nil {
-				log.Debugf("unable to unmarshal openai stream response: %v, data: %s", err, data)
-				continue
-			}
-
-			claudeStreamResponses := c.buildClaudeStreamResponse(ctx, &openaiStreamResponse)
-			log.Debugf("[OpenAI->Claude] Generated %d Claude stream events from OpenAI chunk", len(claudeStreamResponses))
-
-			writeClaudeStreamEvents(&result, claudeStreamResponses)
 		}
 	}
 

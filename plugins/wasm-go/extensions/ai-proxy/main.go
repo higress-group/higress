@@ -492,7 +492,7 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 				modifiedChunk = promoteThinkingInStreamingChunk(ctx, modifiedChunk, isLastChunk)
 			}
 			// Convert to Claude format if needed
-			claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, modifiedChunk)
+			claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, modifiedChunk, isLastChunk)
 			if convertErr != nil {
 				return modifiedChunk
 			}
@@ -539,7 +539,7 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 		}
 
 		// Convert to Claude format if needed
-		claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, result)
+		claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, result, isLastChunk)
 		if convertErr != nil {
 			return result
 		}
@@ -573,7 +573,7 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 	}
 
 	// Convert to Claude format if needed
-	claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, result)
+	claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, result, isLastChunk)
 	if convertErr != nil {
 		return result
 	}
@@ -685,7 +685,7 @@ func needsClaudeResponseConversion(ctx wrapper.HttpContext) bool {
 }
 
 // Helper function to convert OpenAI streaming response to Claude format
-func convertStreamingResponseToClaude(ctx wrapper.HttpContext, data []byte) ([]byte, error) {
+func convertStreamingResponseToClaude(ctx wrapper.HttpContext, data []byte, isLastChunk bool) ([]byte, error) {
 	if !needsClaudeResponseConversion(ctx) {
 		return data, nil
 	}
@@ -705,7 +705,7 @@ func convertStreamingResponseToClaude(ctx wrapper.HttpContext, data []byte) ([]b
 		ctx.SetContext(claudeConverterKey, converter)
 	}
 
-	claudeChunk, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, data)
+	claudeChunk, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, data, isLastChunk)
 	if err != nil {
 		log.Errorf("failed to convert streaming response to claude format: %v", err)
 		return data, err

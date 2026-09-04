@@ -176,32 +176,33 @@ func (t *tritonProvider) ParseResponse2OpenAI(tritonRes *TritonGenerateResponse)
 
 func (t *tritonProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name ApiName, chunk []byte, isLastChunk bool) ([]byte, error) {
 	log.Infof("[tritonProvider] receive chunk body: %s", string(chunk))
-	if isLastChunk || len(chunk) == 0 {
-		return nil, nil
-	}
 	if name != ApiNameChatCompletion {
 		return chunk, nil
 	}
+	if len(chunk) == 0 && !isLastChunk {
+		return nil, nil
+	}
 	responseBuilder := &strings.Builder{}
-	lines := strings.Split(string(chunk), "\n")
-	for _, data := range lines {
-		if len(data) < 6 {
-			// ignore blank line or wrong format
-			continue
+	for _, event := range frameSSEEvents(ctx, ctxKeyTritonSSEFraming, chunk, isLastChunk) {
+		for _, data := range strings.Split(event, "\n") {
+			if len(data) < 6 {
+				// ignore blank line or wrong format
+				continue
+			}
+			data = data[6:]
+			var tritonRes TritonGenerateResponse
+			if err := json.Unmarshal([]byte(data), &tritonRes); err != nil {
+				log.Errorf("unable to unmarshal triton response: %v", err)
+				continue
+			}
+			response := t.buildOpenAIStreamResponse(ctx, &tritonRes)
+			responseBody, err := json.Marshal(response)
+			if err != nil {
+				log.Errorf("unable to marshal response: %v", err)
+				return nil, err
+			}
+			responseBuilder.WriteString(fmt.Sprintf("%s %s\n\n", streamDataItemKey, responseBody))
 		}
-		data = data[6:]
-		var tritonRes TritonGenerateResponse
-		if err := json.Unmarshal([]byte(data), &tritonRes); err != nil {
-			log.Errorf("unable to unmarshal triton response: %v", err)
-			continue
-		}
-		response := t.buildOpenAIStreamResponse(ctx, &tritonRes)
-		responseBody, err := json.Marshal(response)
-		if err != nil {
-			log.Errorf("unable to marshal response: %v", err)
-			return nil, err
-		}
-		responseBuilder.WriteString(fmt.Sprintf("%s %s\n\n", streamDataItemKey, responseBody))
 	}
 	modifiedResponseChunk := responseBuilder.String()
 	log.Debugf("[tritonStreamingProvider] modified response chunk: %s", modifiedResponseChunk)
