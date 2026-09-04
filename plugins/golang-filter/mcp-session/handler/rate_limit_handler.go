@@ -70,6 +70,9 @@ type LimitContext struct {
 
 // TODO: needs to be refactored, rate limit should be registered as a request hook in MCP server
 func (h *MCPRatelimitHandler) HandleRatelimit(req *http.Request, body []byte) bool {
+	if h.redisClient == nil {
+		return true
+	}
 	parts := strings.Split(req.URL.Path, "/")
 	if len(parts) < 3 {
 		h.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusForbidden, "", nil, 0, "")
