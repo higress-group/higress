@@ -357,10 +357,13 @@ func (s *RestMCPServer) GetConfig(v any) {
 // Clone implements Server interface
 func (s *RestMCPServer) Clone() Server {
 	newServer := &RestMCPServer{
-		name:            s.name,
-		base:            s.base.CloneBase(),
-		toolsConfig:     make(map[string]RestTool),
-		securitySchemes: make(map[string]SecurityScheme), // Initialize the map
+		name:                      s.name,
+		base:                      s.base.CloneBase(),
+		toolsConfig:               make(map[string]RestTool),
+		securitySchemes:           make(map[string]SecurityScheme), // Initialize the map
+		defaultDownstreamSecurity: s.defaultDownstreamSecurity,
+		defaultUpstreamSecurity:   s.defaultUpstreamSecurity,
+		passthroughAuthHeader:     s.passthroughAuthHeader,
 	}
 	for k, v := range s.toolsConfig {
 		newServer.toolsConfig[k] = v
