@@ -14,7 +14,7 @@ Plugin execution priority: `420`
 | Name      | Data Type   | Requirements                                                                                                | Default Value | Description                       |
 |-----------|-------------|----------------------------------------------------------------------------------------------------------|---------------|-----------------------------------|
 | suffix    | string      | Optional, indicates the file extensions to match, such as `jpg`, `png`, etc.<br/>If multiple extensions are needed, separate them with `\|`, for example `png\|jpg`.<br/>If not specified, it matches all extensions. | -             | Configures the request file extensions to match            |
-| expires   | string      | Required, indicates the maximum caching time.<br/>When the input string is a number, the unit is seconds; for example, if you want to cache for 1 hour, enter 3600.<br/>You can also enter epoch or max<br/>, with the same semantics as in nginx. | -             | Configures the maximum caching time                |
+| expires   | string      | Required, indicates the maximum caching time.<br/>A non-negative integer specifies seconds, up to 9223372036; 0 expires immediately. For example, enter 3600 to cache for 1 hour.<br/>You can also enter epoch or max<br/>, with the same semantics as in nginx. | -             | Configures the maximum caching time                |
 
 ## Configuration Example
 1. Cache files with extensions `jpg`, `png`, `jpeg`, with a caching time of one hour
