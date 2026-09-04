@@ -326,6 +326,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 			// 如果插件发送了响应，验证响应内容
 			require.Equal(t, uint32(200), localResponse.StatusCode)
 			require.Contains(t, string(localResponse.Data), "success")
+			require.NotContains(t, localResponse.Headers, [2]string{}, "回调响应头中不应出现空键值对")
 
 			host.CompleteHttp()
 		})
