@@ -412,34 +412,36 @@ func (c *claudeProvider) TransformResponseBody(ctx wrapper.HttpContext, apiName 
 }
 
 func (c *claudeProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name ApiName, chunk []byte, isLastChunk bool) ([]byte, error) {
-	if isLastChunk || len(chunk) == 0 {
-		return nil, nil
-	}
 	// only process the response from chat completion, skip other responses
 	if name != ApiNameChatCompletion {
 		return chunk, nil
 	}
 
 	responseBuilder := &strings.Builder{}
-	lines := strings.Split(string(chunk), "\n")
-	for _, data := range lines {
-		// only process the line starting with "data:"
-		if strings.HasPrefix(data, "data:") {
-			// extract json data from the line
-			jsonData := strings.TrimPrefix(data, "data:")
-			var claudeResponse claudeTextGenStreamResponse
-			if err := json.Unmarshal([]byte(jsonData), &claudeResponse); err != nil {
-				log.Errorf("unable to unmarshal claude response: %v", err)
-				continue
-			}
-			response := c.streamResponseClaude2OpenAI(ctx, &claudeResponse)
-			if response != nil {
-				responseBody, err := json.Marshal(response)
-				if err != nil {
-					log.Errorf("unable to marshal response: %v", err)
-					return nil, err
+	// A callback is an arbitrary byte chunk, not a complete SSE event; reassemble
+	// events across callbacks so a split event (e.g. message_start carrying
+	// usage.input_tokens) is never dropped. The final callback flushes any
+	// retained tail so the terminal event is converted instead of discarded.
+	for _, event := range frameSSEEvents(ctx, ctxKeyClaudeSSEFraming, chunk, isLastChunk) {
+		for _, data := range strings.Split(event, "\n") {
+			// only process the line starting with "data:"
+			if strings.HasPrefix(data, "data:") {
+				// extract json data from the line
+				jsonData := strings.TrimPrefix(data, "data:")
+				var claudeResponse claudeTextGenStreamResponse
+				if err := json.Unmarshal([]byte(jsonData), &claudeResponse); err != nil {
+					log.Errorf("unable to unmarshal claude response: %v", err)
+					continue
 				}
-				c.appendResponse(responseBuilder, string(responseBody))
+				response := c.streamResponseClaude2OpenAI(ctx, &claudeResponse)
+				if response != nil {
+					responseBody, err := json.Marshal(response)
+					if err != nil {
+						log.Errorf("unable to marshal response: %v", err)
+						return nil, err
+					}
+					c.appendResponse(responseBuilder, string(responseBody))
+				}
 			}
 		}
 	}

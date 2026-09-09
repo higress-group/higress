@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -328,56 +327,18 @@ func (m *hunyuanProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name 
 
 	// log.Debugf("#debug nash5# [OnStreamingResponseBody] chunk is: %s", string(chunk))
 
-	// 从上下文获取现有缓冲区数据
-	newBufferedBody := chunk
-	if bufferedBody, has := ctx.GetContext(ctxKeyStreamingBody).([]byte); has {
-		newBufferedBody = append(bufferedBody, chunk...)
-	}
-
-	// 初始化处理下标，以及将要返回的处理过的chunks
-	newEventPivot := -1
-	var outputBuffer []byte
-
-	// 从buffer区取出若干完整的chunk，将其转为openAI格式后返回
-	// 处理可能包含多个事件的缓冲区
-	for {
-		eventStartIndex := bytes.Index(newBufferedBody, []byte(ssePrefix))
-		if eventStartIndex == -1 {
-			break // 没有找到新事件，跳出循环
-		}
-
-		// 移除缓冲区前面非事件部分
-		newBufferedBody = newBufferedBody[eventStartIndex+len(ssePrefix):]
-
-		// 查找事件结束的位置（即下一个事件的开始）
-		newEventPivot = bytes.Index(newBufferedBody, []byte("\n\n"))
-		if newEventPivot == -1 {
-			if !isLastChunk {
-				// 未找到事件结束标识，跳出循环等待更多数据
-				break
+	// 从缓冲区取出若干完整的SSE事件（跨chunk重组），将其转为openAI格式后返回
+	outputBuffer := []byte{}
+	for _, event := range frameSSEEvents(ctx, ctxKeyHunyuanSSEFraming, chunk, isLastChunk) {
+		for _, data := range strings.Split(event, "\n") {
+			if !strings.HasPrefix(data, ssePrefix) {
+				continue
 			}
-			// 若是最后一个chunk，不一定有2个换行符，将剩余内容整体作为一个事件处理
-			newEventPivot = len(newBufferedBody)
+			// 转换并追加到输出缓冲区
+			convertedData, _ := m.convertChunkFromHunyuanToOpenAI(ctx, []byte(data[len(ssePrefix):]))
+			outputBuffer = append(outputBuffer, convertedData...)
 		}
-
-		// 提取并处理一个完整的事件
-		eventData := newBufferedBody[:newEventPivot]
-		// log.Debugf("@@@ <<< ori chun is: %s", string(newBufferedBody[:newEventPivot]))
-		if newEventPivot == len(newBufferedBody) {
-			// 剩余内容已全部作为最后一个事件消费，无需再跳过结束标识
-			newBufferedBody = nil
-		} else {
-			newBufferedBody = newBufferedBody[newEventPivot+2:] // 跳过结束标识
-		}
-
-		// 转换并追加到输出缓冲区
-		convertedData, _ := m.convertChunkFromHunyuanToOpenAI(ctx, eventData)
-		// log.Debugf("@@@ >>> converted one chunk: %s", string(convertedData))
-		outputBuffer = append(outputBuffer, convertedData...)
 	}
-
-	// 刷新剩余的不完整事件回到上下文缓冲区以便下次继续处理
-	ctx.SetContext(ctxKeyStreamingBody, newBufferedBody)
 
 	log.Debugf("=== modified response chunk: %s", string(outputBuffer))
 	return outputBuffer, nil
