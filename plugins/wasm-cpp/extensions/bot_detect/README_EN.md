@@ -55,5 +55,5 @@ deny:
 With this configuration, the following requests will be blocked:
 ```bash
 curl http://example.com -H 'User-Agent: spd-tools/1.1'
-curl http://exmaple.com -H 'User-Agent: spd-tools'
+curl http://example.com -H 'User-Agent: spd-tools'
 ```
