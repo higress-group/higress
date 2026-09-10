@@ -29,6 +29,7 @@ description: AI可观测配置参考
 | `attributes` | []Attribute | 非必填  | -   | 用户希望记录在log/span中的信息 |
 | `disable_openai_usage` | bool | 非必填  | false   | 非openai兼容协议时，model、token的支持非标，配置为true时可以避免报错 |
 | `value_length_limit` | int | 非必填  | 4000   | 记录的单个value的长度限制 |
+| `max_request_body_bytes` | int | 非必填  | 104857600 (100 MiB)   | 请求体缓冲的最大字节数。支持通过 matchRules 进行路由级覆盖，避免大体积非 AI 上传（如 multipart/form-data）被 Envoy 以 413 拒绝 |
 | `enable_path_suffixes` | []string    | 非必填   | []     | 只对这些特定路径后缀的请求生效，可以配置为 "\*" 以匹配所有路径（通配符检查会优先进行以提高性能）。如果为空数组，则对所有路径生效 |
 | `enable_content_types` | []string    | 非必填   | []     | 只对这些内容类型的响应进行缓冲处理。如果为空数组，则对所有内容类型生效                                                           |
 | `session_id_header` | string | 非必填  | -   | 指定读取 session ID 的 header 名称。如果不配置，将按以下优先级自动查找：`x-openclaw-session-key`、`x-clawdbot-session-key`、`x-moltbot-session-key`、`x-agent-session`。session ID 可用于追踪多轮 Agent 对话 |

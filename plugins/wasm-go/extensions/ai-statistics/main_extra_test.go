@@ -128,3 +128,56 @@ func TestConvertToUInt_NilAndSlice_FallToDefault(t *testing.T) {
 	require.False(t, ok)
 	require.Equal(t, uint64(0), v)
 }
+
+// === Module C — max_request_body_bytes configurable buffer limit =========
+//
+// The request-body buffer limit was previously a hard-coded 100 MiB
+// (defaultMaxBodyBytes), which rejected large non-AI uploads with HTTP 413.
+// These tests pin the configurable-limit contract: an explicit value is
+// honored, an unset value falls back to the default, and an explicit 0
+// (which would disable buffering and break model extraction) is guarded
+// back to the default.
+func TestParseConfig_MaxRequestBodyBytes_DefaultWhenUnset(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{
+			"enable_path_suffixes": ["*"]
+		}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		conf, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		c := conf.(*AIStatisticsConfig)
+		require.Equal(t, defaultMaxBodyBytes, c.maxRequestBodyBytes)
+	})
+}
+
+func TestParseConfig_MaxRequestBodyBytes_HonorsExplicitValue(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{
+			"max_request_body_bytes": 524288000
+		}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		conf, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		c := conf.(*AIStatisticsConfig)
+		require.Equal(t, uint32(524288000), c.maxRequestBodyBytes)
+	})
+}
+
+func TestParseConfig_MaxRequestBodyBytes_ZeroFallsBackToDefault(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{
+			"max_request_body_bytes": 0
+		}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		conf, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		c := conf.(*AIStatisticsConfig)
+		require.Equal(t, defaultMaxBodyBytes, c.maxRequestBodyBytes)
+	})
+}
