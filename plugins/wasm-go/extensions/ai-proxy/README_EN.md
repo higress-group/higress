@@ -186,6 +186,10 @@ For Fireworks AI, the corresponding `type` is `fireworks`. It has no unique conf
 
 For Galadriel, the corresponding `type` is `galadriel`. It has no unique configuration fields.
 
+#### DaoXE
+
+For DaoXE, the corresponding `type` is `daoxe`. It has no unique configuration fields.
+
 #### ERNIE Bot
 
 For ERNIE Bot, the corresponding `type` is `baidu`. It has no unique configuration fields.
@@ -1156,6 +1160,62 @@ provider:
   ],
   "created": 1728558433,
   "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": null
+}
+```
+
+### Using OpenAI Protocol Proxy for DaoXE Service
+
+**Configuration Information**
+
+```yaml
+provider:
+  type: daoxe
+  apiTokens:
+    - "YOUR_DAOXE_API_TOKEN"
+  modelMapping:
+    "gpt-4": "claude-sonnet-4"
+    "gpt-3.5-turbo": "gpt-4o-mini"
+    "*": "gpt-4o-mini"
+```
+
+**Example Request**
+
+```json
+{
+  "model": "gpt-4o-mini",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello, who are you?"
+    }
+  ]
+}
+```
+
+**Example Response**
+
+```json
+{
+  "id": "chatcmpl-example",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Hello! I am an AI assistant.",
+        "refusal": null,
+        "role": "assistant",
+        "function_call": null,
+        "tool_calls": null
+      }
+    }
+  ],
+  "created": 1728558433,
+  "model": "gpt-4o-mini",
   "object": "chat.completion",
   "service_tier": null,
   "system_fingerprint": null

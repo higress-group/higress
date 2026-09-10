@@ -202,6 +202,10 @@ Fireworks AI 所对应的 `type` 为 `fireworks`。它并无特有的配置字�
 
 Galadriel 所对应的 `type` 为 `galadriel`。它并无特有的配置字段。
 
+#### DaoXE
+
+DaoXE 所对应的 `type` 为 `daoxe`。它并无特有的配置字段。
+
 #### 文心一言（Baidu）
 
 文心一言所对应的 `type` 为 `baidu`。它并无特有的配置字段。
@@ -1206,6 +1210,62 @@ provider:
   ],
   "created": 1728558433,
   "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": null
+}
+```
+
+### 使用 OpenAI 协议代理 DaoXE 服务
+
+**配置信息**
+
+```yaml
+provider:
+  type: daoxe
+  apiTokens:
+    - "YOUR_DAOXE_API_TOKEN"
+  modelMapping:
+    "gpt-4": "claude-sonnet-4"
+    "gpt-3.5-turbo": "gpt-4o-mini"
+    "*": "gpt-4o-mini"
+```
+
+**请求示例**
+
+```json
+{
+  "model": "gpt-4o-mini",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你好，你是谁？"
+    }
+  ]
+}
+```
+
+**响应示例**
+
+```json
+{
+  "id": "chatcmpl-example",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "你好！我是一个AI助手。",
+        "refusal": null,
+        "role": "assistant",
+        "function_call": null,
+        "tool_calls": null
+      }
+    }
+  ],
+  "created": 1728558433,
+  "model": "gpt-4o-mini",
   "object": "chat.completion",
   "service_tier": null,
   "system_fingerprint": null
