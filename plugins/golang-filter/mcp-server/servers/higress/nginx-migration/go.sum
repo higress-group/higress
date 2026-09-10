@@ -63,8 +63,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f h1:lO4WD4F/rVNCu3HqELle0jiPLLBs70cWOduZpkS1E78=
 github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f/go.mod h1:cuUVRXasLTGF7a8hSLbxyZXjz+1KgoB3wDUb6vlszIc=
-github.com/envoyproxy/envoy v1.36.2 h1:87+0C7ZCbGJdDfD9sVsvqGLVvGk2OIKuxzzm9oNpvDM=
-github.com/envoyproxy/envoy v1.36.2/go.mod h1:mgMEye9tOlNiUTG+iYhQYgCzQcX46MMS0Jo6bVwRt1U=
+github.com/envoyproxy/envoy v1.36.10 h1:igZsbN2lxwrYgVGYKtR8OEoCbHm622/janwLHWhv9GU=
+github.com/envoyproxy/envoy v1.36.10/go.mod h1:mgMEye9tOlNiUTG+iYhQYgCzQcX46MMS0Jo6bVwRt1U=
 github.com/envoyproxy/go-control-plane v0.9.0/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1mIlRU8Am5FuJP05cCM98=
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=

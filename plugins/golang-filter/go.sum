@@ -297,8 +297,8 @@ github.com/hashicorp/go-version v1.6.0/go.mod h1:fltr4n8CU8Ke44wwGCBoEymUuxUHl09
 github.com/hashicorp/golang-lru v0.5.0/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
 github.com/hashicorp/golang-lru v0.5.1/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
 github.com/hashicorp/hcl v1.0.0/go.mod h1:E5yfLk+7swimpb2L/Alb/PJmXilQ/rhwaUYs4T20WEQ=
-github.com/higress-group/envoy v0.0.0-20260811163927-9e54c67a6c89 h1:XWCm/iynQBXOOkrztP0Mc9jDIrgLcvzj4la55ecCxY0=
-github.com/higress-group/envoy v0.0.0-20260811163927-9e54c67a6c89/go.mod h1:mgMEye9tOlNiUTG+iYhQYgCzQcX46MMS0Jo6bVwRt1U=
+github.com/higress-group/envoy v0.0.0-20260908125308-9bd2ded78607 h1:WBnOE/sF5slOSSQbf/UMbBmAk0bbkWvHC/i9qXrzexk=
+github.com/higress-group/envoy v0.0.0-20260908125308-9bd2ded78607/go.mod h1:mgMEye9tOlNiUTG+iYhQYgCzQcX46MMS0Jo6bVwRt1U=
 github.com/higress-group/mcp-go v0.0.0-20250428145706-792ce64b4b30 h1:N4NMq8M1nZyyChPyzn+EUUdHi5asig2uLR5hOyRmsXI=
 github.com/higress-group/mcp-go v0.0.0-20250428145706-792ce64b4b30/go.mod h1:O9gri9UOzthw728vusc2oNu99lVh8cKCajpxNfC90gE=
 github.com/hpcloud/tail v1.0.0/go.mod h1:ab1qPbhIpdTxEkNHXyeSf5vhxWSCs/tWer42PpOxQnU=

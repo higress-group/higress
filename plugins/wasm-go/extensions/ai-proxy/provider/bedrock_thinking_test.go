@@ -56,7 +56,7 @@ func TestBedrockStreamPreservesClaudeNativeThinkingSignature(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	_, err = converter.ConvertOpenAIStreamResponseToClaude(ctx, textChunk)
+	_, err = converter.ConvertOpenAIStreamResponseToClaude(ctx, textChunk, false)
 	require.NoError(t, err)
 
 	signatureChunk, err := provider.convertEventFromBedrockToOpenAI(ctx, ConverseStreamEvent{
@@ -66,7 +66,7 @@ func TestBedrockStreamPreservesClaudeNativeThinkingSignature(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, signatureChunk)
+	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, signatureChunk, false)
 	require.NoError(t, err)
 
 	events := parseClaudeSSEEvents(t, converted)
@@ -90,7 +90,7 @@ func TestBedrockStreamPreservesClaudeNativeIndexesAndStops(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk)
+	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk, false)
 	require.NoError(t, err)
 	events := parseClaudeSSEEvents(t, converted)
 	require.Len(t, events, 2)
@@ -106,7 +106,7 @@ func TestBedrockStreamPreservesClaudeNativeIndexesAndStops(t *testing.T) {
 		ContentBlockStop:  &contentBlockStop{ContentBlockIndex: 2},
 	})
 	require.NoError(t, err)
-	converted, err = converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk)
+	converted, err = converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk, false)
 	require.NoError(t, err)
 	events = parseClaudeSSEEvents(t, converted)
 	require.Len(t, events, 1)
@@ -208,7 +208,7 @@ func TestBedrockStreamRedactedThinkingStopsOnce(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk)
+	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk, false)
 	require.NoError(t, err)
 	events := parseClaudeSSEEvents(t, converted)
 	require.Len(t, events, 1)
@@ -220,7 +220,7 @@ func TestBedrockStreamRedactedThinkingStopsOnce(t *testing.T) {
 		ContentBlockStop:  &contentBlockStop{ContentBlockIndex: 1},
 	})
 	require.NoError(t, err)
-	converted, err = converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk)
+	converted, err = converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk, false)
 	require.NoError(t, err)
 	events = parseClaudeSSEEvents(t, converted)
 	require.Len(t, events, 1)
@@ -519,7 +519,7 @@ func TestBedrockStreamSkipsOrphanClaudeContentBlockStop(t *testing.T) {
 		ContentBlockStop:  &contentBlockStop{ContentBlockIndex: 3},
 	})
 	require.NoError(t, err)
-	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk)
+	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, chunk, false)
 	require.NoError(t, err)
 	assert.Empty(t, parseClaudeSSEEvents(t, converted))
 }
@@ -541,7 +541,7 @@ func TestBedrockStreamBatchedEventsKeepClaudeMessageStartFirst(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, append(roleChunk, reasoningChunk...))
+	converted, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, append(roleChunk, reasoningChunk...), false)
 	require.NoError(t, err)
 	events := parseClaudeSSEEvents(t, converted)
 	require.Len(t, events, 3)

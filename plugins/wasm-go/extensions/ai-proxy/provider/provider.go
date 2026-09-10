@@ -194,6 +194,17 @@ const (
 	ctxKeyHasContentDelta        = "hasContentDelta"
 	ctxKeyBufferedReasoning      = "bufferedReasoning"
 
+	// SSE framing keys: one per call site so coexisting framers on the same
+	// request never alias each other's retained tail.
+	ctxKeyClaudeSSEFraming        = "sseFraming/claude"
+	ctxKeyGeminiSSEFraming        = "sseFraming/gemini"
+	ctxKeySparkSSEFraming         = "sseFraming/spark"
+	ctxKeyMinimaxSSEFraming       = "sseFraming/minimax"
+	ctxKeyTritonSSEFraming        = "sseFraming/triton"
+	ctxKeyDifySSEFraming          = "sseFraming/dify"
+	ctxKeyHunyuanSSEFraming       = "sseFraming/hunyuan"
+	ctxKeyClaudeConvertSSEFraming = "sseFraming/claudeConvert"
+
 	objectChatCompletion      = "chat.completion"
 	objectChatCompletionChunk = "chat.completion.chunk"
 

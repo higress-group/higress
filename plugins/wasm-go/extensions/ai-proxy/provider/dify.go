@@ -160,11 +160,11 @@ func (d *difyProvider) responseDify2OpenAI(ctx wrapper.HttpContext, response *Di
 }
 
 func (d *difyProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name ApiName, chunk []byte, isLastChunk bool) ([]byte, error) {
-	if isLastChunk || len(chunk) == 0 {
-		return nil, nil
-	}
 	if name != ApiNameChatCompletion {
 		return chunk, nil
+	}
+	if len(chunk) == 0 && !isLastChunk {
+		return nil, nil
 	}
 	// sample event response:
 	// data: {"event": "agent_thought", "id": "8dcf3648-fbad-407a-85dd-73a6f43aeb9f", "task_id": "9cf1ddd7-f94b-459b-b942-b77b26c59e9b", "message_id": "1fb10045-55fd-4040-99e6-d048d07cbad3", "position": 1, "thought": "", "observation": "", "tool": "", "tool_input": "", "created_at": 1705639511, "message_files": [], "conversation_id": "c216c595-2d89-438c-b33c-aae5ddddd142"}
@@ -172,25 +172,26 @@ func (d *difyProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name Api
 	// sample end event response:
 	// data: {"event": "message_end", "id": "5e52ce04-874b-4d27-9045-b3bc80def685", "conversation_id": "45701982-8118-4bc5-8e9b-64562b4555f2", "metadata": {"usage": {"prompt_tokens": 1033, "prompt_unit_price": "0.001", "prompt_price_unit": "0.001", "prompt_price": "0.0010330", "completion_tokens": 135, "completion_unit_price": "0.002", "completion_price_unit": "0.001", "completion_price": "0.0002700", "total_tokens": 1168, "total_price": "0.0013030", "currency": "USD", "latency": 1.381760165997548}, "retriever_resources": [{"position": 1, "dataset_id": "101b4c97-fc2e-463c-90b1-5261a4cdcafb", "dataset_name": "iPhone", "document_id": "8dd1ad74-0b5f-4175-b735-7d98bbbb4e00", "document_name": "iPhone List", "segment_id": "ed599c7f-2766-4294-9d1d-e5235a61270a", "score": 0.98457545, "content": "\"Model\",\"Release Date\",\"Display Size\",\"Resolution\",\"Processor\",\"RAM\",\"Storage\",\"Camera\",\"Battery\",\"Operating System\"\n\"iPhone 13 Pro Max\",\"September 24, 2021\",\"6.7 inch\",\"1284 x 2778\",\"Hexa-core (2x3.23 GHz Avalanche + 4x1.82 GHz Blizzard)\",\"6 GB\",\"128, 256, 512 GB, 1TB\",\"12 MP\",\"4352 mAh\",\"iOS 15\""}]}}
 	responseBuilder := &strings.Builder{}
-	lines := strings.Split(string(chunk), "\n")
-	for _, data := range lines {
-		if len(data) < 6 {
-			// ignore blank line or wrong format
-			continue
+	for _, event := range frameSSEEvents(ctx, ctxKeyDifySSEFraming, chunk, isLastChunk) {
+		for _, data := range strings.Split(event, "\n") {
+			if len(data) < 6 {
+				// ignore blank line or wrong format
+				continue
+			}
+			data = data[6:]
+			var difyResponse DifyChunkChatResponse
+			if err := json.Unmarshal([]byte(data), &difyResponse); err != nil {
+				log.Errorf("unable to unmarshal dify response: %v", err)
+				continue
+			}
+			response := d.streamResponseDify2OpenAI(ctx, &difyResponse)
+			responseBody, err := json.Marshal(response)
+			if err != nil {
+				log.Errorf("unable to marshal response: %v", err)
+				return nil, err
+			}
+			d.appendResponse(responseBuilder, string(responseBody))
 		}
-		data = data[6:]
-		var difyResponse DifyChunkChatResponse
-		if err := json.Unmarshal([]byte(data), &difyResponse); err != nil {
-			log.Errorf("unable to unmarshal dify response: %v", err)
-			continue
-		}
-		response := d.streamResponseDify2OpenAI(ctx, &difyResponse)
-		responseBody, err := json.Marshal(response)
-		if err != nil {
-			log.Errorf("unable to marshal response: %v", err)
-			return nil, err
-		}
-		d.appendResponse(responseBuilder, string(responseBody))
 	}
 	modifiedResponseChunk := responseBuilder.String()
 	log.Debugf("=== modified response chunk: %s", modifiedResponseChunk)

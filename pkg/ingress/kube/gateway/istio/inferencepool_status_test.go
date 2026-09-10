@@ -69,8 +69,7 @@ func TestInferencePoolStatusReconciliation(t *testing.T) {
 			targetPool: NewInferencePool("test-pool", InNamespace(DefaultTestNS)),
 			expectations: func(t *testing.T, status *inferencev1.InferencePoolStatus) {
 				require.Len(t, status.Parents, 1, "Expected one parent reference")
-				assert.Equal(t, "main-gateway", string(status.Parents[0].ParentRef.Name))
-				assert.Equal(t, DefaultTestNS, string(status.Parents[0].ParentRef.Namespace))
+				assertGatewayParentRef(t, status.Parents[0].ParentRef, DefaultTestNS, "main-gateway")
 				assertConditionContains(t, status.Parents[0].Conditions, metav1.Condition{
 					Type:    string(inferencev1.InferencePoolConditionAccepted),
 					Status:  metav1.ConditionTrue,
@@ -240,8 +239,7 @@ func TestInferencePoolStatusReconciliation(t *testing.T) {
 			targetPool: NewInferencePool("test-pool", InNamespace(AppTestNS)),
 			expectations: func(t *testing.T, status *inferencev1.InferencePoolStatus) {
 				require.Len(t, status.Parents, 1, "Expected one parent reference")
-				assert.Equal(t, "main-gateway", string(status.Parents[0].ParentRef.Name))
-				assert.Equal(t, GatewayTestNS, string(status.Parents[0].ParentRef.Namespace))
+				assertGatewayParentRef(t, status.Parents[0].ParentRef, GatewayTestNS, "main-gateway")
 			},
 		},
 		{
@@ -255,8 +253,7 @@ func TestInferencePoolStatusReconciliation(t *testing.T) {
 			targetPool: NewInferencePool("test-pool", InNamespace(DefaultTestNS)),
 			expectations: func(t *testing.T, status *inferencev1.InferencePoolStatus) {
 				require.Len(t, status.Parents, 1, "Expected one parent reference")
-				assert.Equal(t, "main-gateway", string(status.Parents[0].ParentRef.Name))
-				assert.Equal(t, GatewayTestNS, string(status.Parents[0].ParentRef.Namespace))
+				assertGatewayParentRef(t, status.Parents[0].ParentRef, GatewayTestNS, "main-gateway")
 			},
 		},
 		{
@@ -486,6 +483,85 @@ func TestInferencePoolStatusReconciliation(t *testing.T) {
 			tc.expectations(t, poolStatus)
 		})
 	}
+}
+
+func TestInferencePoolStatusCorrectsLegacyGatewayParent(t *testing.T) {
+	testCases := []struct {
+		name   string
+		groups []string
+	}{
+		{name: "legacy parent", groups: []string{"networking.istio.io"}},
+		{name: "legacy and correct parents", groups: []string{"networking.istio.io", "gateway.networking.k8s.io"}},
+		{name: "correct and legacy parents", groups: []string{"gateway.networking.k8s.io", "networking.istio.io"}},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stop := test.NewStop(t)
+			services := krt.NewStaticCollection[*corev1.Service](nil,
+				[]*corev1.Service{NewService("endpoint-picker")}, krt.WithStop(stop))
+			gateways := krt.NewStaticCollection[*gateway.Gateway](nil,
+				[]*gateway.Gateway{
+					NewGateway("main-gateway", WithGatewayClass("higress")),
+					NewGateway("other-gateway", WithGatewayClass("other-class")),
+				}, krt.WithStop(stop))
+			routes := []*gateway.HTTPRoute{
+				NewHTTPRoute("test-route",
+					WithParentRefAndStatus("main-gateway", DefaultTestNS, IstioController),
+					WithRouteParentCondition(string(gateway.RouteConditionAccepted), metav1.ConditionTrue, "Accepted", "Accepted"),
+					WithBackendRef("test-pool", DefaultTestNS)),
+			}
+			pool := NewInferencePool("test-pool",
+				WithParentStatus("other-gateway", DefaultTestNS, WithAcceptedConditions()))
+			pool.Generation = 1
+			otherParent := *pool.Status.Parents[0].DeepCopy()
+			for _, group := range tc.groups {
+				WithParentStatus("main-gateway", DefaultTestNS, WithAcceptedConditions())(pool)
+				parent := &pool.Status.Parents[len(pool.Status.Parents)-1]
+				parentGroup := inferencev1.Group(group)
+				parent.ParentRef.Group = &parentGroup
+				parent.ParentRef.Kind = "Gateway"
+			}
+
+			// Feed each result back as persisted status to exercise repeated reconciliation.
+			for round := 0; round < 3; round++ {
+				result := calculateInferencePoolStatus(pool, findGatewayParents(pool, routes), services, gateways, routes)
+				require.Len(t, result.Parents, 2, "Expected one managed parent and the other controller's parent in round %d", round)
+				assert.Contains(t, result.Parents, otherParent, "Other controller's status must remain unchanged")
+				var managedParents []inferencev1.ParentStatus
+				for _, parent := range result.Parents {
+					if parent.ParentRef.Name == "main-gateway" {
+						managedParents = append(managedParents, parent)
+					}
+				}
+				require.Len(t, managedParents, 1, "Expected one parent for the managed Gateway in round %d", round)
+				parent := managedParents[0]
+				assertGatewayParentRef(t, parent.ParentRef, DefaultTestNS, "main-gateway")
+				require.Len(t, parent.Conditions, 2)
+				for _, condition := range parent.Conditions {
+					assert.Equal(t, metav1.ConditionTrue, condition.Status)
+					assert.Equal(t, pool.Generation, condition.ObservedGeneration)
+				}
+				assertConditionContains(t, parent.Conditions, metav1.Condition{
+					Type:   string(inferencev1.InferencePoolConditionAccepted),
+					Reason: string(inferencev1.InferencePoolReasonAccepted),
+				})
+				assertConditionContains(t, parent.Conditions, metav1.Condition{
+					Type:   string(inferencev1.InferencePoolConditionResolvedRefs),
+					Reason: string(inferencev1.InferencePoolReasonResolvedRefs),
+				})
+				pool.Status = *result.DeepCopy()
+			}
+		})
+	}
+}
+
+func assertGatewayParentRef(t *testing.T, ref inferencev1.ParentReference, namespace, name string) {
+	t.Helper()
+	require.NotNil(t, ref.Group)
+	assert.Equal(t, "gateway.networking.k8s.io", string(*ref.Group))
+	assert.Equal(t, "Gateway", string(ref.Kind))
+	assert.Equal(t, namespace, string(ref.Namespace))
+	assert.Equal(t, name, string(ref.Name))
 }
 
 func assertConditionContains(t *testing.T, conditions []metav1.Condition, expected metav1.Condition, msgAndArgs ...interface{}) {

@@ -230,7 +230,7 @@ func Test_convertResponseBodyToClaude_glue(t *testing.T) {
 func Test_convertStreamingResponseToClaude_glue(t *testing.T) {
 	chunk := []byte("data: {\"x\":1}\n\n")
 	ctx := test.NewMockHttpContext()
-	out, err := convertStreamingResponseToClaude(ctx, chunk)
+	out, err := convertStreamingResponseToClaude(ctx, chunk, false)
 	if err != nil || string(out) != string(chunk) {
 		t.Fatalf("without conversion flag: err=%v out=%q", err, string(out))
 	}
