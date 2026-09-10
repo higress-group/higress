@@ -43,12 +43,34 @@ type Tracing struct {
 	Sampling float64 `json:"sampling,omitempty"`
 	// The timeout for the gRPC request. Default is 500ms
 	Timeout int32 `json:"timeout,omitempty"`
+
+	// Custom tags to be added to spans.
+	CustomTag []CustomTag `json:"customTag,omitempty"`
 	// The tracer implementation to be used by Envoy.
 	//
 	// Types that are assignable to Tracer:
 	Zipkin        *Zipkin        `json:"zipkin,omitempty"`
 	Skywalking    *Skywalking    `json:"skywalking,omitempty"`
 	OpenTelemetry *OpenTelemetry `json:"opentelemetry,omitempty"`
+}
+
+// CustomTag defines a custom tag to be added to spans.
+// Only one of Literal, Environment, or RequestHeader should be set.
+type CustomTag struct {
+	// The name of the custom tag.
+	Tag string `json:"tag,omitempty"`
+	// The literal value of the custom tag.
+	Literal string `json:"literal,omitempty"`
+	// The environment variable to be used as the value of the custom tag.
+	Environment *CustomTagValue `json:"environment,omitempty"`
+	// The request header to be used as the value of the custom tag.
+	RequestHeader *CustomTagValue `json:"requestHeader,omitempty"`
+}
+
+// CustomTagValue defines the key and default value for environment variable or request header custom tag.
+type CustomTagValue struct {
+	Key          string `json:"key,omitempty"`
+	DefaultValue string `json:"defaultValue,omitempty"`
 }
 
 // Zipkin defines configuration for a Zipkin tracer.
@@ -121,6 +143,51 @@ func validTracing(t *Tracing) error {
 	if tracerNum != 1 && t.Enable == true {
 		return errors.New("only one of skywalking，zipkin and opentelemetry configuration can be set")
 	}
+
+	if t.CustomTag != nil && len(t.CustomTag) > 0 {
+		customTagNames := make(map[string]struct{})
+		for _, tag := range t.CustomTag {
+			if err := validCustomTag(tag); err != nil {
+				return err
+			}
+			if _, exists := customTagNames[tag.Tag]; exists {
+				return errors.New("custom tag name must be unique")
+			}
+			customTagNames[tag.Tag] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validCustomTag(tag CustomTag) error {
+	if tag.Tag == "" {
+		return errors.New("custom tag name can not be empty")
+	}
+
+	tagValueCount := 0
+
+	if tag.Literal != "" {
+		tagValueCount++
+	}
+
+	if tag.Environment != nil {
+		if tag.Environment.Key == "" {
+			return errors.New("custom tag environment key can not be empty")
+		}
+		tagValueCount++
+	}
+
+	if tag.RequestHeader != nil {
+		if tag.RequestHeader.Key == "" {
+			return errors.New("custom tag requestHeader key can not be empty")
+		}
+		tagValueCount++
+	}
+
+	if tagValueCount != 1 {
+		return errors.New("only one of literal, environment and requestHeader can be set")
+	}
+
 	return nil
 }
 
@@ -397,10 +464,11 @@ func (t *TracingController) constructTracingTracer(tracing *Tracing, namespace s
 			},
 			"random_sampling": {
 				"value": %.1f
-			}
+			},
+            "custom_tags": %v
 		}
 	}
-}`, namespace, skywalking.AccessToken, tracingClusterName(skywalking.Port, skywalking.Service), timeout, tracing.Sampling)
+}`, namespace, skywalking.AccessToken, tracingClusterName(skywalking.Port, skywalking.Service), timeout, tracing.Sampling, constructJsonCustomTags(tracing.CustomTag))
 	}
 
 	if tracing.Zipkin != nil {
@@ -423,10 +491,11 @@ func (t *TracingController) constructTracingTracer(tracing *Tracing, namespace s
 			},
 			"random_sampling": {
 				"value": %.1f
-			}
+			},
+            "custom_tags": %v
 		}
 	}
-}`, tracingClusterName(zipkin.Port, zipkin.Service), tracing.Sampling)
+}`, tracingClusterName(zipkin.Port, zipkin.Service), tracing.Sampling, constructJsonCustomTags(tracing.CustomTag))
 	}
 
 	if tracing.OpenTelemetry != nil {
@@ -451,10 +520,70 @@ func (t *TracingController) constructTracingTracer(tracing *Tracing, namespace s
 			},
 			"random_sampling": {
 				"value": %.1f
-			}
+			},
+            "custom_tags": %s
 		}
 	}
-}`, namespace, tracingClusterName(opentelemetry.Port, opentelemetry.Service), timeout, tracing.Sampling)
+}`, namespace, tracingClusterName(opentelemetry.Port, opentelemetry.Service), timeout, tracing.Sampling, constructJsonCustomTags(tracing.CustomTag))
 	}
 	return tracingConfig
+}
+
+type EnvoyCustomTag struct {
+	Tag           string       `json:"tag,omitempty"`
+	Literal       *LiteralInfo `json:"literal,omitempty"`
+	Environment   *EnvTagInfo  `json:"environment,omitempty"`
+	RequestHeader *HeaderInfo  `json:"request_header,omitempty"`
+}
+
+type LiteralInfo struct {
+	Value string `json:"value,omitempty"`
+}
+
+type EnvTagInfo struct {
+	Name         string `json:"name,omitempty"`
+	DefaultValue string `json:"default_value,omitempty"`
+}
+
+type HeaderInfo struct {
+	Name         string `json:"name,omitempty"`
+	DefaultValue string `json:"default_value,omitempty"`
+}
+
+func constructJsonCustomTags(tag []CustomTag) string {
+	if tag == nil || len(tag) == 0 {
+		return "[]"
+	}
+
+	var envoyTags []EnvoyCustomTag
+	for _, t := range tag {
+		envoyTag := EnvoyCustomTag{
+			Tag: t.Tag,
+		}
+
+		if t.Literal != "" {
+			envoyTag.Literal = &LiteralInfo{
+				Value: t.Literal,
+			}
+		}
+
+		if t.Environment != nil {
+			envoyTag.Environment = &EnvTagInfo{
+				Name:         t.Environment.Key,
+				DefaultValue: t.Environment.DefaultValue,
+			}
+		}
+
+		if t.RequestHeader != nil {
+			envoyTag.RequestHeader = &HeaderInfo{
+				Name:         t.RequestHeader.Key,
+				DefaultValue: t.RequestHeader.DefaultValue,
+			}
+		}
+
+		envoyTags = append(envoyTags, envoyTag)
+	}
+
+	jsonTag, _ := json.Marshal(envoyTags)
+	return string(jsonTag)
 }
