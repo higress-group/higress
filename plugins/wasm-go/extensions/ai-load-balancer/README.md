@@ -170,6 +170,7 @@ sequenceDiagram
 |--------------------|-----------------|------------------|-------------|-------------------------------------|
 | `metric_policy`      | string | 必填 | | 如何使用llm暴露的metrics做负载均衡，当前支持`[default, least, most]` |
 | `target_metric`      | string | 选填 | | 要使用的metric名称，`metric_policy` 取值为 `least` 或者 `most` 时生效 |
+| `engine`      | string | 选填 | vllm | 暴露 metrics 的推理引擎，当前支持`[vllm, sglang]` |
 | `rate_limit`      | string | 选填 | 1 | 单个节点处理请求比例上限，取值范围0~1 |
 
 
@@ -204,6 +205,18 @@ lb_policy: metrics_based
 lb_config:
   metric_policy: least
   target_metric: vllm:num_requests_running
+  rate_limit: 0.6 # 单个节点承载的最大请求比例
+```
+
+当后端推理引擎是 SGLang 而非 vLLM 时，设置 `engine: sglang` ，metrics 会按照 SGLang 的指标名称解析
+（对应的 `target_metric` 为 `sglang:num_queue_reqs` / `sglang:num_running_reqs`）
+
+```yaml
+lb_type: endpoint
+lb_policy: metrics_based
+lb_config:
+  metric_policy: default
+  engine: sglang
   rate_limit: 0.6 # 单个节点承载的最大请求比例
 ```
 

@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/endpoint_metrics/backend"
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/endpoint_metrics/backend/sglang"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/endpoint_metrics/backend/vllm"
 
 	"github.com/prometheus/common/expfmt"
@@ -34,6 +35,11 @@ const (
 	MetricPolicyDefault = "default"
 	MetricPolicyLeast   = "least"
 	MetricPolicyMost    = "most"
+)
+
+const (
+	EngineVLLM   = "vllm"
+	EngineSGLang = "sglang"
 )
 
 const (
@@ -137,7 +143,7 @@ func (s *Scheduler) Schedule(req *LLMRequest) (targetPod backend.Pod, err error)
 	return pods[i].Pod, nil
 }
 
-func GetScheduler(hostMetrics map[string]string, metricPolicy string, targetMetric string) (*Scheduler, error) {
+func GetScheduler(hostMetrics map[string]string, metricPolicy string, targetMetric string, engine string) (*Scheduler, error) {
 	if len(hostMetrics) == 0 {
 		return nil, errors.New("backend is not support llm scheduling")
 	}
@@ -158,7 +164,12 @@ func GetScheduler(hostMetrics map[string]string, metricPolicy string, targetMetr
 				MetricName: targetMetric,
 			},
 		}
-		pm, err = vllm.PromToPodMetrics(metricFamilies, pm)
+		switch engine {
+		case EngineSGLang:
+			pm, err = sglang.PromToPodMetrics(metricFamilies, pm)
+		default:
+			pm, err = vllm.PromToPodMetrics(metricFamilies, pm)
+		}
 		if err != nil {
 			return nil, err
 		}
