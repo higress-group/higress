@@ -923,6 +923,10 @@ func (m *IngressConfig) convertServiceEntry([]common.WrapperConfig) []config.Con
 	out := make([]config.Config, 0, len(serviceEntries))
 	hostSets := sets.Set[string]{}
 	for _, se := range serviceEntries {
+		if len(se.ServiceEntry.Hosts) == 0 {
+			IngressLog.Warnf("Skipping service entry with empty hosts: %s", se.ServiceName)
+			continue
+		}
 		out = append(out, config.Config{
 			Meta: config.Meta{
 				GroupVersionKind:  gvk.ServiceEntry,
@@ -942,6 +946,9 @@ func (m *IngressConfig) convertServiceEntry([]common.WrapperConfig) []config.Con
 	seFromMcp := m.RegistryReconciler.GetAllConfigs(gvk.ServiceEntry)
 	for _, cfg := range seFromMcp {
 		se := cfg.Spec.(*networking.ServiceEntry)
+		if len(se.Hosts) == 0 {
+			continue
+		}
 		if !hostSets.Contains(se.Hosts[0]) {
 			out = append(out, *cfg)
 		}
@@ -1643,6 +1650,10 @@ func (m *IngressConfig) constructHttp2RpcEnvoyFilter(http2rpcConfig *annotations
 	}
 
 	httpRoute := route.HTTPRoute
+	if len(httpRoute.Route) == 0 {
+		IngressLog.Errorf("Http2RpcConfig %s has no route destination", http2rpcConfig.Name)
+		return nil, errors.New("invalid http2rpcConfig has no route destination")
+	}
 	httpRouteDestination := httpRoute.Route[0]
 	typeStruct, err := m.constructHttp2RpcMethods(http2rpcCRD.GetDubbo())
 	if err != nil {
@@ -1784,6 +1795,10 @@ func (m *IngressConfig) constructHttp2RpcMethods(dubbo *higressv1.DubboService) 
 		}
 		method["parameter_mapping"] = params
 		path_matcher := make(map[string]interface{})
+		if len(serviceMethod.HttpMethods) == 0 {
+			IngressLog.Errorf("Http2Rpc serviceMethod %s has no http methods", serviceMethod.GetHttpPath())
+			continue
+		}
 		path_matcher["match_http_method_spec"] = Http2RpcMethodMap()[serviceMethod.HttpMethods[0]]
 		path_matcher["match_pattern"] = serviceMethod.GetHttpPath()
 		method["path_matcher"] = path_matcher
