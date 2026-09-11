@@ -49,6 +49,28 @@ services:
       - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/evidence:ro
       - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/runtime:ro
 
+  gateway-auto-baseline:
+    image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:v2.2.3
+    entrypoint: ["/usr/local/bin/envoy"]
+    command: ["-c", "/evidence/envoy-auto-baseline.yaml", "--log-level", "info", "--concurrency", "1"]
+    depends_on:
+      backend-primary:
+        condition: service_healthy
+    volumes:
+      - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/evidence:ro
+      - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/runtime:ro
+
+  gateway-auto-explicit-baseline:
+    image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:v2.2.3
+    entrypoint: ["/usr/local/bin/envoy"]
+    command: ["-c", "/evidence/envoy-auto-explicit-baseline.yaml", "--log-level", "info", "--concurrency", "1"]
+    depends_on:
+      backend-primary:
+        condition: service_healthy
+    volumes:
+      - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/evidence:ro
+      - ${RUNTIME_EVIDENCE:?set RUNTIME_EVIDENCE}:/runtime:ro
+
   gateway-baseline:
     image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:v2.2.3
     entrypoint: ["/usr/local/bin/envoy"]

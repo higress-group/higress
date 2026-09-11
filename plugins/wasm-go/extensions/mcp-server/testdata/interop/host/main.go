@@ -60,7 +60,14 @@ var configs = map[string]json.RawMessage{
 }
 
 type pluginHandler struct {
-	mu sync.Mutex
+	mu           sync.Mutex
+	autoRequests int
+}
+
+func init() {
+	for _, name := range []string{"modern", "legacy", "switch", "error"} {
+		configs["/proxy-auto-"+name] = json.RawMessage(`{"server":{"name":"interop-auto","type":"mcp-proxy","transport":"http","protocolStrategy":"auto","mcpServerURL":"http://fixture.invalid/mcp"}}`)
+	}
 }
 
 func main() {
@@ -128,21 +135,55 @@ func (h *pluginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host.CallOnHttpRequestBody(body)
 	log.Printf("%s %s method=%s protocol=%s", r.Method, r.URL.Path, gjson.GetBytes(body, "method").String(), r.Header.Get("Mcp-Protocol-Version"))
 
-	if err := completeFixtureCallouts(host); err != nil {
+	profile := "modern"
+	if r.URL.Path == "/proxy-auto-legacy" {
+		profile = "legacy"
+	}
+	if r.URL.Path == "/proxy-auto-error" {
+		profile = "error"
+	}
+	if r.URL.Path == "/proxy-auto-switch" && gjson.GetBytes(body, "method").String() != "server/discover" {
+		h.autoRequests++
+		if h.autoRequests%2 == 0 {
+			profile = "legacy"
+		}
+	}
+	if err := completeFixtureCallouts(host, r.URL.Path, profile, gjson.GetBytes(body, "method").String()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writePluginResponse(w, host)
 }
 
-func completeFixtureCallouts(host wasmtest.TestHost) error {
+func completeFixtureCallouts(host wasmtest.TestHost, path, profile, business string) error {
+	var observed []string
+	verify := func() error {
+		var expected []string
+		if path != "/direct" && business != "server/discover" {
+			if strings.HasPrefix(path, "/proxy-auto-") {
+				expected = append(expected, "server/discover")
+			}
+			if profile == "error" {
+			} else {
+				if path == "/proxy-legacy" || profile == "legacy" {
+					expected = append(expected, "initialize", "notifications/initialized")
+				}
+				expected = append(expected, business)
+			}
+		}
+		if strings.Join(observed, ",") != strings.Join(expected, ",") {
+			return fmt.Errorf("callout sequence %v, want %v", observed, expected)
+		}
+		return nil
+	}
 	for step := 0; step < 4; step++ {
 		callouts := host.GetHttpCalloutAttributes()
 		if len(callouts) == 0 {
-			return nil
+			return verify()
 		}
 		callout := callouts[0]
 		method := gjson.GetBytes(callout.Body, "method").String()
+		observed = append(observed, method)
 		id := gjson.GetBytes(callout.Body, "id").Raw
 		if id == "" {
 			id = "null"
@@ -151,6 +192,20 @@ func completeFixtureCallouts(host wasmtest.TestHost) error {
 		var status string
 		var response []byte
 		switch method {
+		case "server/discover":
+			if !hasHeader(callout.Headers, "Mcp-Method", "server/discover") {
+				return fmt.Errorf("probe inherited business method")
+			}
+			if profile == "legacy" {
+				status = "200"
+				response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}`, id))
+			} else if profile == "error" {
+				status = "400"
+				response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32020,"message":"header mismatch"}}`, id))
+			} else {
+				status = "200"
+				response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"ttlMs":0,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"fixture-modern","version":"1"}}}}`, id))
+			}
 		case "initialize":
 			status = "200"
 			response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":%q,"capabilities":{"tools":{}},"serverInfo":{"name":"fixture-legacy","version":"1.0.0"}}}`, id, legacyVersion))
@@ -183,7 +238,7 @@ func completeFixtureCallouts(host wasmtest.TestHost) error {
 	if len(host.GetHttpCalloutAttributes()) != 0 {
 		return fmt.Errorf("fixture callout sequence exceeded four steps")
 	}
-	return nil
+	return verify()
 }
 
 func hasHeader(headers [][2]string, name, value string) bool {

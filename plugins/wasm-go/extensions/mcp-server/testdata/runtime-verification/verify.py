@@ -841,6 +841,15 @@ def main():
         ("proxy-legacy-to-modern-is-explicitly-unsupported", unsupported_legacy_to_modern),
         ("proxy-auth-errors-and-cross-origin-isolation", auth_and_isolation),
     ]
+    if os.environ.get("RUNTIME_AUTO_EXPLICIT_BASELINE") == "1":
+        cases = [(name, callback) for name, callback in cases if name.startswith("proxy-")]
+        for name, callback in cases:
+            record(name, callback)
+        (EVIDENCE / "auto-explicit-baseline.json").write_text(json.dumps({"cases": RESULTS, "exchanges": EXCHANGES}, indent=2, sort_keys=True))
+        return 1 if any(result["status"] != "PASS" for result in RESULTS) else 0
+    import verify_auto
+    cases += verify_auto.cases(sys.modules[__name__])
+    (EVIDENCE / "expected-main-cases.json").write_text(json.dumps([name for name, _ in cases]))
     for name, callback in cases:
         record(name, callback)
     primary = backend_state()

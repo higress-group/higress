@@ -7,6 +7,8 @@ on:
       - 'plugins/wasm-go/extensions/**'
       - 'plugins/wasm-go/examples/**'
       - 'plugins/wasm-go/pkg/mcp/**'
+      - 'samples/mcp/protocol/2026-07-28/auto.yaml'
+      - 'test/e2e/conformance/tests/go-wasm-mcp-2026-07-28.*'
       - '.github/workflows/wasm-plugin-unit-test.yml'
       - 'go.mod'
       - 'go.sum'
@@ -16,6 +18,8 @@ on:
       - 'plugins/wasm-go/extensions/**'
       - 'plugins/wasm-go/examples/**'
       - 'plugins/wasm-go/pkg/mcp/**'
+      - 'samples/mcp/protocol/2026-07-28/auto.yaml'
+      - 'test/e2e/conformance/tests/go-wasm-mcp-2026-07-28.*'
       - '.github/workflows/wasm-plugin-unit-test.yml'
       - 'go.mod'
       - 'go.sum'
@@ -80,7 +84,7 @@ jobs:
         for file in $CHANGED_FILES; do
           if [[ $file =~ ^plugins/wasm-go/(extensions|examples)/([^/]+)/ ]]; then
             add_plugin "${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
-          elif [[ $file =~ ^plugins/wasm-go/pkg/mcp/ ]]; then
+          elif [[ $file =~ ^plugins/wasm-go/pkg/mcp/ || $file =~ ^samples/mcp/protocol/2026-07-28/auto.yaml$ || $file =~ ^test/e2e/conformance/tests/go-wasm-mcp-2026-07-28\. ]]; then
             add_plugin "extensions/mcp-server"
           fi
         done
@@ -228,6 +232,17 @@ jobs:
     - name: Test production MCP packages
       working-directory: plugins/wasm-go/pkg/mcp
       run: go test -count=1 ./...
+
+    - name: Race-test request cancellation and protocol state
+      working-directory: plugins/wasm-go/pkg/mcp
+      run: CGO_ENABLED=1 go test -race -count=1 ./server ./protocol
+
+    - name: Test auto runtime fixture and lifecycle oracles
+      working-directory: plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification
+      run: |
+        python3 auto_self_test.py
+        python3 orchestration_self_test.py
+        bash lifecycle_self_test.sh
 
     - name: Test mcp-server conformance and legacy regressions
       working-directory: plugins/wasm-go/extensions/mcp-server
