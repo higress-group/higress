@@ -439,3 +439,25 @@ func TestAutoFixedAuthenticationIsPreparedOnce(t *testing.T) {
 	assert.Equal(t, "first", mustHeaderValue(t, business.Headers, "X-Fixed"))
 	completeAutoResult(host, business, `{"tools":[],"resultType":"complete"}`)
 }
+
+func TestAutoMalformedProtocolCandidatesNeverInitialize(t *testing.T) {
+	for _, mode := range []string{"modern-header", "trailing-json", "batch"} {
+		t.Run(mode, func(t *testing.T) {
+			host := newAutoTestHost(t, "")
+			probe := autoStartList(t, host, 151)
+			body := autoError(gjson.GetBytes(probe.Body, "id").Raw, -32602, "")
+			headers := [][2]string{{"Content-Type", "application/json"}}
+			switch mode {
+			case "modern-header":
+				headers = append(headers, [2]string{protocol.HeaderProtocolVersion, "2026-07-28"})
+			case "trailing-json":
+				body = append(body, []byte(` {}`)...)
+			case "batch":
+				body = append(append([]byte("["), body...), ']')
+			}
+			completeCallout(host, probe, "400", headers, body)
+			require.NotNil(t, host.GetLocalResponse())
+			assert.Empty(t, host.GetHttpCalloutAttributes(), "malformed/modern errors must not authorize a handshake")
+		})
+	}
+}

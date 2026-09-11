@@ -369,6 +369,9 @@ func autoModernEvidence(r autoHTTPResponse, e *autoEnvelope) bool {
 	if version == string(protocol.Version20260728) {
 		return true
 	}
+	if e == nil {
+		return false
+	}
 	if _, present := e.members["_meta"]; present {
 		return true
 	}
@@ -440,12 +443,18 @@ func classifyAutoProbe(r autoHTTPResponse, id []byte) autoProbeDecision {
 		return autoProbeDecision{profile: ProtocolStrategyModern, version: protocol.Version20260728, reason: "modern_discovered"}
 	}
 	if r.status == 400 || r.status == 404 || r.status == 405 {
+		if autoModernEvidence(r, envelope) {
+			if envelope != nil && envelope.rpcError != nil {
+				return autoProbeDecision{failure: protocolAutoFailure(r, envelope)}
+			}
+			return failed("invalid_probe_response")
+		}
 		// Valid JSON with a wrong response ID or conflicting envelope is not a
 		// legacy transport signal. Plain HTML/empty responses remain candidates.
 		contentType, _ := autoHeader(r.headers, "Content-Type")
 		if err != nil && (strings.Contains(strings.ToLower(contentType), "text/event-stream") ||
 			(err.Error() != "invalid_json" && err.Error() != "invalid_content_type") ||
-			(gjson.ValidBytes(r.body) && gjson.GetBytes(r.body, "jsonrpc").String() == "2.0")) {
+			(gjson.GetBytes(r.body, "jsonrpc").Exists() || bytes.HasPrefix(bytes.TrimSpace(r.body), []byte("[")))) {
 			return failed("invalid_probe_response")
 		}
 		return autoProbeDecision{profile: ProtocolStrategyLegacy, version: protocol.Version20250326, reason: "legacy_http_candidate"}
