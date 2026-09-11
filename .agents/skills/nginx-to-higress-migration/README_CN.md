@@ -414,7 +414,7 @@ EOF
 ### 1. 分析当前设置
 ```bash
 # 克隆此技能
-git clone https://github.com/alibaba/higress.git
+git clone https://github.com/higress-group/higress.git
 cd higress/.claude/skills/nginx-to-higress-migration
 
 # 检查 snippet 使用情况（复杂模式指标）

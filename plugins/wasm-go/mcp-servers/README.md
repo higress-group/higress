@@ -80,8 +80,8 @@ import (
     "net/http"
     
     "my-mcp-server/config"
-    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/server"
-    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
+    "github.com/higress-group/higress/plugins/wasm-go/pkg/mcp/server"
+    "github.com/higress-group/higress/plugins/wasm-go/pkg/mcp/utils"
 )
 
 // Define your tool structure with input parameters
@@ -145,8 +145,8 @@ For better organization, you can create a separate file to load all your tools:
 package tools
 
 import (
-    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
-    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/server"
+    "github.com/higress-group/higress/plugins/wasm-go/pkg/mcp"
+    "github.com/higress-group/higress/plugins/wasm-go/pkg/mcp/server"
 )
 
 func LoadTools(server *mcp.MCPServer) server.Server {
@@ -170,7 +170,7 @@ import (
     amap "amap-tools/tools"
     quark "quark-search/tools"
     
-    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
+    "github.com/higress-group/higress/plugins/wasm-go/pkg/mcp"
 )
 
 func main() {}
@@ -188,7 +188,7 @@ The configuration for the all-in-one plugin follows the same pattern as individu
 
 ## REST-to-MCP Configuration
 
-Higress supports a special REST-to-MCP configuration that allows you to convert REST APIs to MCP tools without writing any code. This is useful for quickly integrating existing REST APIs with AI assistants. This capability is built into all MCP servers and can be used with the all-in-one plugin. The implementation is available at [rest_server.go](https://github.com/alibaba/higress/blob/wasm-go-1.24/plugins/wasm-go/pkg/mcp/server/rest_server.go).
+Higress supports a special REST-to-MCP configuration that allows you to convert REST APIs to MCP tools without writing any code. This is useful for quickly integrating existing REST APIs with AI assistants. This capability is built into all MCP servers and can be used with the all-in-one plugin. The implementation is available at [rest_server.go](https://github.com/higress-group/higress/blob/wasm-go-1.24/plugins/wasm-go/pkg/mcp/server/rest_server.go).
 
 ### Configuration Format
 
@@ -375,7 +375,7 @@ package main
 import (
     "my-mcp-server/tools"
     
-    "github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
+    "github.com/higress-group/higress/plugins/wasm-go/pkg/mcp"
 )
 
 func main() {}
@@ -412,7 +412,7 @@ Your MCP server must use a specific version of the wasm-go SDK that supports Go 
 
 ```bash
 # Add the required dependency
-go get github.com/alibaba/higress/plugins/wasm-go
+go get github.com/higress-group/higress/plugins/wasm-go
 ```
 
 Make sure your go.mod file specifies Go 1.24:
@@ -423,7 +423,7 @@ module my-mcp-server
 go 1.24
 
 require (
-    github.com/alibaba/higress/plugins/wasm-go v1.4.4-0.20250324133957-dab499f6ade6
+    github.com/higress-group/higress/plugins/wasm-go v1.4.4-0.20250324133957-dab499f6ade6
     // other dependencies
 )
 ```
