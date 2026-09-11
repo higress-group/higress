@@ -194,5 +194,5 @@ higress-daily-report/
 ## 相关链接
 
 - [Clawdbot 文档](https://docs.clawd.bot)
-- [Higress 项目](https://github.com/alibaba/higress)
+- [Higress 项目](https://github.com/higress-group/higress)
 - [GitHub CLI 文档](https://cli.github.com/manual/)
