@@ -85,6 +85,7 @@ var (
 		// OpenAI style
 		{util.RegRetrieveBatchPath, provider.ApiNameRetrieveBatch},
 		{util.RegCancelBatchPath, provider.ApiNameCancelBatch},
+		{util.RegRetrieveModelPath, provider.ApiNameRetrieveModel},
 		{util.RegRetrieveFilePath, provider.ApiNameRetrieveFile},
 		{util.RegRetrieveFileContentPath, provider.ApiNameRetrieveFileContent},
 		{util.RegRetrieveVideoPath, provider.ApiNameRetrieveVideo},

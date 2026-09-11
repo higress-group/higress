@@ -132,6 +132,13 @@ func TestIsStatefulAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderInitializer_DefaultCapabilitiesModels(t *testing.T) {
+	capabilities := (&openaiProviderInitializer{}).DefaultCapabilities()
+
+	assert.Equal(t, PathOpenAIModels, capabilities[string(ApiNameModels)])
+	assert.Equal(t, PathOpenAIRetrieveModel, capabilities[string(ApiNameRetrieveModel)])
+}
+
 func TestGetTokenWithConsumerAffinity(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -318,6 +325,20 @@ func TestProviderBasePath_Config(t *testing.T) {
 		assert.Equal(t, "/api/v1", config.providerBasePath)
 		assert.Equal(t, "proxy.example.com", config.providerDomain)
 	})
+}
+
+func TestProviderConfig_FromJsonModelCapabilities(t *testing.T) {
+	config := ProviderConfig{}
+	jsonStr := `{
+		"capabilities": {
+			"openai/v1/retrievemodel": "/proxy/models/{model_id}",
+			"openai/v1/unknownmodel": "/proxy/unknown"
+		}
+	}`
+	config.FromJson(gjson.Parse(jsonStr))
+
+	assert.Equal(t, "/proxy/models/{model_id}", config.capabilities[string(ApiNameRetrieveModel)])
+	assert.NotContains(t, config.capabilities, "openai/v1/unknownmodel")
 }
 
 func TestApplyProviderBasePath(t *testing.T) {
