@@ -28,7 +28,7 @@ Security issues are always treated seriously. As our usual principle, we discour
 ## Reporting general issues
 
 To be honest, we regard every user of Higress as a very kind contributor. After experiencing Higress, you may have 
-some feedback for the project. Then feel free to open an issue via [NEW ISSUE](https://github.com/alibaba/higress/issues/new/choose).
+some feedback for the project. Then feel free to open an issue via [NEW ISSUE](https://github.com/higress-group/higress/issues/new/choose).
 
 Since we collaborate project Higress in a distributed way, we appreciate **WELL-WRITTEN**, **DETAILED**, **EXPLICIT** issue reports. To make the communication more efficient, we wish everyone could search if your issue is an existing one in the searching list. If you find it existing, please add your details in comments under the existing issue instead of opening a brand new one.
 
@@ -79,15 +79,15 @@ Since you are ready to improve Higress with a PR, we suggest you could take a lo
 
 To put forward a PR, we assume you have registered a GitHub ID. Then you could finish the preparation in the following steps:
 
-1. **FORK** Higress to your repository. To make this work, you just need to click the button Fork in right-left of[alibaba/higress](https://github.com/alibaba/higress) main page. Then you will end up with your repository in 
+1. **FORK** Higress to your repository. To make this work, you just need to click the button Fork in right-left of[higress-group/higress](https://github.com/higress-group/higress) main page. Then you will end up with your repository in 
    `https://github.com/<your-username>/higress`, in which `your-username` is your GitHub username.
 
 1. **CLONE** your own repository to develop locally. Use `git clone git@github.com:<your-username>/higress.git` to clone repository to your local machine. Then you can create new branches to finish the change you wish to make.
 
-1. **Set Remote** upstream to be `git@github.com:alibaba/higress.git` using the following two commands:
+1. **Set Remote** upstream to be `git@github.com:higress-group/higress.git` using the following two commands:
 
 ```bash
-git remote add upstream git@github.com:alibaba/higress.git
+git remote add upstream git@github.com:higress-group/higress.git
 git remote set-url --push upstream no-pushing
 ```
 
@@ -97,7 +97,7 @@ With this remote setting, you can check your git remote configuration like this:
 $ git remote -v
 origin     git@github.com:<your-username>/higress.git (fetch)
 origin     git@github.com:<your-username>/higress.git (push)
-upstream   git@github.com:alibaba/higress.git (fetch)
+upstream   git@github.com:higress-group/higress.git (fetch)
 upstream   no-pushing (push)
 ```
 
@@ -105,7 +105,7 @@ Adding this, we can easily synchronize local branches with upstream branches.
 
 ### Branch Definition
 
-Right now we assume every contribution via pull request is for [branch main](https://github.com/alibaba/higress/tree/main) in Higress. Before contributing, be aware of branch definition would help a lot.
+Right now we assume every contribution via pull request is for [branch main](https://github.com/higress-group/higress/tree/main) in Higress. Before contributing, be aware of branch definition would help a lot.
 
 As a contributor, keep in mind again that every contribution via pull request is for branch main. While in project Higress, there are several other branches, we generally call them release branches (such as 0.6.0,0.6.1), feature branches, hotfix branches.
 
