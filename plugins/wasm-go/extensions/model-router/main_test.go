@@ -663,8 +663,8 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			modelHeader, found := getHeader(headers, "x-higress-llm-model")
-			require.True(t, found, "x-higress-llm-model header should be set")
+			modelHeader, found := getHeader(headers, "x-model")
+			require.True(t, found, "x-model header should be set")
 			require.Equal(t, "qwen-vl-max", modelHeader)
 		})
 
@@ -690,7 +690,7 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			modelHeader, found := getHeader(headers, "x-higress-llm-model")
+			modelHeader, found := getHeader(headers, "x-model")
 			require.True(t, found)
 			require.Equal(t, "qwen-coder", modelHeader)
 		})
@@ -717,7 +717,7 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			modelHeader, found := getHeader(headers, "x-higress-llm-model")
+			modelHeader, found := getHeader(headers, "x-model")
 			require.True(t, found)
 			require.Equal(t, "qwen-turbo", modelHeader)
 		})
@@ -744,8 +744,8 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			_, found := getHeader(headers, "x-higress-llm-model")
-			require.False(t, found, "x-higress-llm-model should not be set when no rule matches and no default")
+			_, found := getHeader(headers, "x-model")
+			require.False(t, found, "x-model should not be set when no rule matches and no default")
 		})
 
 		t.Run("normal routing when model is not higress/auto", func(t *testing.T) {
@@ -804,7 +804,7 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			modelHeader, found := getHeader(headers, "x-higress-llm-model")
+			modelHeader, found := getHeader(headers, "x-model")
 			require.True(t, found)
 			require.Equal(t, "qwen-turbo", modelHeader) // matches 翻译 rule
 		})
