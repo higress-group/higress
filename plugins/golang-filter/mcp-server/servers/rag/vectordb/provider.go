@@ -8,18 +8,11 @@ import (
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-server/servers/rag/schema"
 )
 
-// Provider types constants
 const (
-	PROVIDER_TYPE_CHROMA        = "chroma"
-	PROVIDER_TYPE_PINECONE      = "pinecone"
-	PROVIDER_TYPE_WEAVIATE      = "weaviate"
-	PROVIDER_TYPE_QDRANT        = "qdrant"
-	PROVIDER_TYPE_MILVUS        = "milvus"
-	PROVIDER_TYPE_FAISS         = "faiss"
-	PROVIDER_TYPE_ELASTICSEARCH = "elasticsearch"
+	PROVIDER_TYPE_QDRANT = "qdrant"
+	PROVIDER_TYPE_MILVUS = "milvus"
 )
 
-// VectorStoreBase defines the base interface for vector store implementations
 type VectorStoreProvider interface {
 	// CreateVectorStore creates a new vector store
 	CreateCollection(ctx context.Context, dim int) error
@@ -55,11 +48,10 @@ type VectorDBProviderInitializer interface {
 	CreateProvider(cfg *config.VectorDBConfig, dim int) (VectorStoreProvider, error)
 }
 
-var (
-	vectorDBProviderInitializers = map[string]VectorDBProviderInitializer{
-		PROVIDER_TYPE_MILVUS: &milvusProviderInitializer{},
-	}
-)
+var vectorDBProviderInitializers = map[string]VectorDBProviderInitializer{
+	PROVIDER_TYPE_MILVUS: &milvusProviderInitializer{},
+	PROVIDER_TYPE_QDRANT: &qdrantProviderInitializer{},
+}
 
 // CreateVectorDBProvider creates a vector database provider instance
 func NewVectorDBProvider(cfg *config.VectorDBConfig, dim int) (VectorStoreProvider, error) {
