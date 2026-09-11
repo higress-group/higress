@@ -109,7 +109,7 @@ Then subsequent requests with the same prefix will also be routed to pod 1:
     },
     {
       "role": "user",
-      "content": "write a short story aboud 100 words"
+      "content": "write a short story about 100 words"
     }
   ]
 }
@@ -174,7 +174,7 @@ sequenceDiagram
 |--------------------|-----------------|------------------|-------------|-------------------------------------|
 | `metric_policy`      | string | required | | How to use the metrics exposed by LLM for load balancing, currently supporting `[default, least, most]` |
 | `target_metric`      | string | optional | | The metric name to use. This is valid only when `metric_policy` is `least` or `most` |
-| `rate_limit`      | string | optional | 1 | The maximum percentage of requests a single node can receive, 0~1 |
+| `rate_limit`      | float | optional | 1 | The maximum percentage of requests a single node can receive, 0~1 |
 
 ## Configuration Example
 
@@ -214,11 +214,11 @@ lb_config:
 
 ## Configuration
 
-| 名称                | 数据类型         | 填写要求          | 默认值       | 描述                                 |
+| Name                | Type         | Required          | Default       | Description                                 |
 |--------------------|-----------------|------------------|-------------|-------------------------------------|
 | `mode`      | string | required | | how to use cluster metrics, value of `[LeastBusy, LeastTotalLatency, LeastFirstTokenLatency, AdaptiveScore]` |
 | `service_list`      | []string | required | | service list of current route |
-| `rate_limit`      | string | optional | 1 | The maximum percentage of requests a single node can receive, value of 0~1 |
+| `rate_limit`      | float | optional | 1 | The maximum percentage of requests a single node can receive, value of 0~1 |
 | `cluster_header` | string | optional | `x-higress-target-cluster` | By retrieving the value of this header, we can determine which backend service to route to |
 | `queue_size`      | int | optional | 100 | The metrics is calculated based on the number of most recent requests. |
 | `ewma_beta` | float | optional | 0.5 | Historical EWMA weight used by `AdaptiveScore`, value of 0~1 |
