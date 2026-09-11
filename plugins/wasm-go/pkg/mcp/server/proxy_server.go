@@ -47,7 +47,21 @@ type ProtocolStrategy string
 const (
 	ProtocolStrategyLegacy ProtocolStrategy = "legacy"
 	ProtocolStrategyModern ProtocolStrategy = "modern"
+	ProtocolStrategyAuto   ProtocolStrategy = "auto"
 )
+
+// AutoDetectionConfig is copied with the server and is never updated by requests.
+type AutoDetectionConfig struct {
+	ProbeTimeoutMs uint32
+}
+
+func (s *McpProxyServer) GetAutoDetectionConfig() AutoDetectionConfig {
+	c := s.autoDetection
+	if c.ProbeTimeoutMs == 0 {
+		c.ProbeTimeoutMs = 1000
+	}
+	return c
+}
 
 // ToolArg represents an argument for a proxy tool
 type ToolArg struct {
@@ -85,8 +99,9 @@ type McpProxyServer struct {
 	mcpServerURL              string              // Backend MCP server URL
 	timeout                   int                 // Request timeout in milliseconds
 	transport                 TransportProtocol   // Transport protocol (http or sse)
-	protocolStrategy          ProtocolStrategy    // Upstream protocol profile (legacy or modern)
-	passthroughAuthHeader     bool                // If true, pass through Authorization header even without downstream security
+	protocolStrategy          ProtocolStrategy    // Configured strategy, never a detected profile
+	autoDetection             AutoDetectionConfig
+	passthroughAuthHeader     bool // If true, pass through Authorization header even without downstream security
 }
 
 // NewMcpProxyServer creates a new MCP proxy server
@@ -215,6 +230,7 @@ func (s *McpProxyServer) Clone() Server {
 		toolsConfig:      make(map[string]McpProxyToolConfig),
 		securitySchemes:  make(map[string]SecurityScheme),
 		protocolStrategy: s.GetProtocolStrategy(),
+		autoDetection:    s.GetAutoDetectionConfig(),
 	}
 	for k, v := range s.toolsConfig {
 		newServer.toolsConfig[k] = v
@@ -280,11 +296,13 @@ func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error
 		}
 	}
 	_, modernDownstream := ModernRequestContext(wrapperCtx)
-	wrapperCtx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(wrapperCtx, modernDownstream && s.GetProtocolStrategy() == ProtocolStrategyModern))
+	wrapperCtx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(wrapperCtx, modernDownstream && (s.GetProtocolStrategy() == ProtocolStrategyModern || s.GetProtocolStrategy() == ProtocolStrategyAuto)))
 
 	// Create protocol handler using server fields
 	handler := NewMcpProtocolHandler(s.GetMcpServerURL(), s.GetTimeout())
 	handler.SetProtocolStrategy(s.GetProtocolStrategy())
+	handler.transport = s.GetTransport()
+	handler.autoDetection = s.GetAutoDetectionConfig()
 
 	// Prepare authentication information for gateway-to-backend communication
 	var authInfo *ProxyAuthInfo
@@ -383,11 +401,13 @@ func (t *McpProxyTool) Call(httpCtx HttpContext, server Server) error {
 		}
 	}
 	_, modernDownstream := ModernRequestContext(ctx)
-	ctx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(ctx, modernDownstream && proxyServer.GetProtocolStrategy() == ProtocolStrategyModern))
+	ctx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(ctx, modernDownstream && (proxyServer.GetProtocolStrategy() == ProtocolStrategyModern || proxyServer.GetProtocolStrategy() == ProtocolStrategyAuto)))
 
 	// Create protocol handler using server fields
 	handler := NewMcpProtocolHandler(proxyServer.GetMcpServerURL(), proxyServer.GetTimeout())
 	handler.SetProtocolStrategy(proxyServer.GetProtocolStrategy())
+	handler.transport = proxyServer.GetTransport()
+	handler.autoDetection = proxyServer.GetAutoDetectionConfig()
 
 	// Prepare authentication information for gateway-to-backend communication
 	// toolConfig.RequestTemplate.Security represents gateway-to-backend authentication, falls back to server's defaultUpstreamSecurity

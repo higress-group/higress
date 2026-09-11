@@ -373,7 +373,7 @@ func TestSetupMcpProxyServer_InvalidTransport(t *testing.T) {
 }
 
 func TestSetupMcpProxyServer_InvalidProtocolStrategy(t *testing.T) {
-	j := mustGJSON(t, `{"transport":"http","protocolStrategy":"auto","mcpServerURL":"http://b"}`)
+	j := mustGJSON(t, `{"transport":"http","protocolStrategy":"unknown","mcpServerURL":"http://b"}`)
 	_, err := setupMcpProxyServer("s", j, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "protocolStrategy")

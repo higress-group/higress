@@ -65,10 +65,12 @@ const (
 
 // McpProtocolHandler handles MCP protocol initialization and communication
 type McpProtocolHandler struct {
-	backendURL string
-	timeout    int
-	sessionID  string
-	strategy   ProtocolStrategy
+	backendURL    string
+	timeout       int
+	sessionID     string
+	strategy      ProtocolStrategy
+	transport     TransportProtocol
+	autoDetection AutoDetectionConfig
 }
 
 // NewMcpProtocolHandler creates a new MCP protocol handler
