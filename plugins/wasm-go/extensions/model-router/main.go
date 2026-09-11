@@ -229,7 +229,11 @@ func handleJsonBody(ctx wrapper.HttpContext, config ModelRouterConfig, body []by
 
 		if targetModel != "" {
 			// Set the matched model to the header for routing
-			_ = proxywasm.ReplaceHttpRequestHeader("x-higress-llm-model", targetModel)
+			modelHeader := "x-higress-llm-model"
+			if config.modelToHeader != "" {
+				modelHeader = config.modelToHeader
+			}
+			_ = proxywasm.ReplaceHttpRequestHeader(modelHeader, targetModel)
 			// Update the model field in the request body
 			newBody, err := sjson.SetBytes(body, config.modelKey, targetModel)
 			if err != nil {
