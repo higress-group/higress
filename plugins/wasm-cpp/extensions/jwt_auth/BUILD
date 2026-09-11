@@ -15,7 +15,7 @@
 load("@proxy_wasm_cpp_sdk//bazel:defs.bzl", "proxy_wasm_cc_binary")
 load("//bazel:wasm.bzl", "declare_wasm_image_targets")
 
-wasm_cc_binary(
+proxy_wasm_cc_binary(
     name = "jwt_auth.wasm",
     srcs = [
         "plugin.cc",
