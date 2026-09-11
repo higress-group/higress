@@ -7,7 +7,9 @@ checked-out source, loads it into Envoy from the fixed
 listeners, and records sanitized, machine-readable evidence. The full registry
 name and resolved digest are retained in the evidence manifest.
 
-The expected clean exact-head result is **26 PASS / 0 FAIL**.
+A clean exact-head run must pass every enumerated case with **0 FAIL**.
+`expected-main-cases.json` binds the traffic case IDs to the final matrix; a
+missing or duplicate case is a failure, even if all remaining cases pass.
 
 ## Purpose and validation boundary
 
@@ -66,7 +68,7 @@ flowchart LR
     R --> G["Generated static and file-backed LDS configs"]
     W --> E["Higress gateway image / Envoy / proxy-Wasm"]
     G --> E
-    V["Python verifier"] -->|"55 main, 6 generation, and differential corpus traffic"| E
+    V["Python verifier"] -->|"main, generation, auto and differential corpus traffic"| E
     E --> P["Deterministic primary backend"]
     E --> S["Deterministic secondary backend"]
     P --> V
@@ -100,10 +102,14 @@ failed directory must not be reused, modified, or deleted.
    `-trimpath`. It also builds a corpus variant of each revision with the same
    hashed registered-tool fixture needed to represent a bounded `json.Number`
    that REST JSON decoding cannot preserve. The script records all six Wasm
-   SHA256 values and removes the temporary archived source trees before startup.
+   SHA256 values. A seventh Wasm is built independently from auto pre-change
+   revision `dc0999326b1a8df4269c13d0cf6ee2b725259f6e`; it must reject auto and
+   match the candidate on the five existing explicit/default proxy cases. All
+   temporary archived source trees are removed before startup.
 3. [`generate_envoy.py`](./generate_envoy.py) writes the main static Envoy
-   configuration plus an isolated configuration that must reject
-   `protocolStrategy: auto`. Before any image pull or runtime traffic,
+   configuration with positive auto listeners, an unknown-strategy negative
+   control, and isolated auto pre-change rejection and explicit-strategy
+   differential configurations. Before any image pull or runtime traffic,
    [`run.sh`](./run.sh) necessarily runs the descriptor oracle's positive cases
    and asserts that both verifier and finalizer return non-zero for deleted
    fields, truncated arrays, and numeric-token-to-string tampering. Descriptor
@@ -122,8 +128,8 @@ failed directory must not be reused, modified, or deleted.
    retried. Every phase uses an inspected stop gate: a non-zero stop command is
    tolerated only when container inspection proves the service is no longer
    running, and logs are captured only after that gate. This keeps the maximum
-   live Wasm footprint bounded on a 4 GiB Podman VM. Nine main listeners select
-   registered, REST, composed, and proxy configurations.
+   live Wasm footprint bounded on a 4 GiB Podman VM. Main listeners select
+   registered, REST, composed, explicit proxy and auto configurations.
 5. [`verify.py`](./verify.py) first drives the candidate Wasm through valid ->
    validation-unavailable -> valid file-backed LDS generations in one Envoy
    process, then sends the main matrix traffic. The backends record safe event
@@ -132,10 +138,11 @@ failed directory must not be reused, modified, or deleted.
 6. The gateways are stopped before their logs are collected, ensuring buffered
    access records are flushed. Compose resources are then removed.
 7. [`finalize_evidence.py`](./finalize_evidence.py) adds the affected rejection,
-   v2.0.0 oracle, malformed-control, generation-transition, and auto-rejection
-   results, checks access-log coverage, writes the manifest and checksums, and
+   v2.0.0 oracle, malformed-control, generation-transition, unknown-strategy,
+   auto pre-change rejection and explicit-strategy differential results, checks
+   case completeness and access-log coverage, writes the manifest and checksums, and
    returns non-zero for any failed matrix or coverage assertion.
-8. A completed run deletes all six temporary Wasm files. Build artifacts must
+8. A completed run deletes all seven temporary Wasm files. Build artifacts must
    never be committed.
 
 ## Directory components
@@ -156,17 +163,22 @@ failed directory must not be reused, modified, or deleted.
   and asserts recorded start/verify/stop/log order including early termination
   after a failed stop.
 - [`compose_config_self_test.py`](./compose_config_self_test.py) parses the
-  provider-resolved Compose JSON and requires each of the eleven Envoy command
+  provider-resolved Compose JSON and requires the explicit set of thirteen Envoy command
   arrays to contain the independent tokens `--concurrency` and `1`.
 - [`generate_envoy.py`](./generate_envoy.py) generates listeners, routes,
-  clusters, plugin configuration, and the invalid-auto configuration.
+  clusters, plugin configuration, and isolated negative/baseline configurations.
 - [`typed_canonical.py`](./typed_canonical.py) defines the shared type-tagged
   JSON canonical form, including the numeric lexeme wrapper.
 - [`descriptor_self_test.py`](./descriptor_self_test.py) creates and removes
   the positive and intentionally tampered inputs exercised by `run.sh`.
 - [`descriptor_gate.sh`](./descriptor_gate.sh) requires exact exit code `42`
   for every tampered input and rejects false acceptance or checker failure.
-- [`verify.py`](./verify.py) executes the eleven traffic-driven cases and writes
+- [`verify_auto.py`](./verify_auto.py) supplies named auto success, failure,
+  isolation, cancellation, and no-replay cases; [`auto_backend.py`](./auto_backend.py)
+  supplies the safe ledger, public credential aliases and phase barriers.
+  [`auto_self_test.py`](./auto_self_test.py) checks these barriers and proves that
+  the fixture records execution before deliberately closing the response.
+- [`verify.py`](./verify.py) executes the existing and auto traffic cases and writes
   the client ledger, case matrix, and final backend snapshots.
 - [`finalize_evidence.py`](./finalize_evidence.py) adds the isolated and corpus
   configuration/generation cases, verifies access coverage, and writes the
@@ -251,16 +263,12 @@ python3 ./plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/de
   cleanup "$RUNTIME_EVIDENCE"
 ```
 
-`git status --short` must print nothing. The final JSON line should report
-`"pass": 26`, `"fail": 0`, and `"access_coverage": "PASS"`; the command
-should exit with status 0. The verifier prints an intermediate
-`SUMMARY pass=11 fail=0` before the finalizer adds the affected baseline,
-oracle, corpus, malformed-control, dynamic-generation, and auto-configuration
-cases.
-
-The finalizer also prints the absolute evidence path. The expected ledger
-contains 55 recorded client exchanges and 55 Envoy access records. The matrix
-contains 59 backend events across its per-case snapshots.
+`git status --short` must print nothing. The final JSON line must report
+`"fail": 0` and `"access_coverage": "PASS"`, and the command must exit with status 0.
+The verifier prints an intermediate summary before the finalizer adds isolated,
+differential and completeness cases. Accept the named case set, not a historical
+pass count. Access coverage must match every recorded client request ID exactly;
+backend sequences and execution counters are asserted separately per scenario.
 
 ### Choose the evidence directory
 
@@ -296,7 +304,7 @@ still records the cached resolved digests. This flag is rejected unless
 
 ## Runtime matrix
 
-The final matrix contains these 26 cases. The first eleven are driven
+The final matrix retains the following existing cases. The first eleven are driven
 through the main gateway:
 
 1. **Registered modern discover/list/call** verifies a compiled-in Amap tool,
@@ -369,9 +377,31 @@ through the main gateway:
     file-backed LDS source in one Envoy process and proves validated ->
     validation-unavailable -> validated descriptors, call behavior, and backend
     counts of 1 -> 0 -> 1. Container ID, PID, and start time must remain stable.
-26. **Auto strategy rejection** verifies that the deferred
-    `protocolStrategy: auto` configuration is rejected before any upstream
-    request.
+26. **Unknown strategy rejection** verifies that an unrecognized
+    `protocolStrategy` is rejected before any upstream request.
+
+Auto adds two isolated baseline cases and one case-completeness gate. The exact
+pre-change Wasm must reject auto; its five explicit/default proxy cases must
+match the candidate in responses, operation headers and backend sequences, with
+complete access logs for both runs. Existing REST schema baseline/oracle phases
+remain independent.
+
+The named auto traffic cases in `verify_auto.py` cover modern 2-call and legacy
+4-call success, selected 2025-06-18 headers, ordinary HTTP fallback, JSON/SSE
+framing, malformed/oversized discovery, authentication/rate-limit/network/errors,
+initialize/notification failures, per-request capability changes, concurrent
+requests, user/tool authentication and session isolation, local discovery and
+allowTools, continuation rejection, cursor errors, and business execution before
+response loss without replay. Every scenario includes its backend operation
+ledger; failure before business requires zero `tools/call` events.
+
+Cancellation is tested at discover, initialize, initialized notification, and
+business using a backend phase barrier. The verifier disconnects the downstream,
+waits for its active-request gauge to reach zero, releases the backend, waits
+for both backend response completion and the upstream active-request gauge to
+reach zero, then uses a local discover on the same listener as an event-loop
+fence. Only then does it assert the terminal ledger. A callout already submitted
+may execute; no hostcall cancellation API or fixed sleep is assumed.
 
 Successful modern results are also checked for `resultType: complete`, effective
 server identity, and the applicable `ttlMs: 0` / `cacheScope: private` fields.
@@ -398,15 +428,21 @@ A completed evidence directory contains:
   sanitization, and cleanup identity.
 - `matrix.json`: all case statuses and details, including sanitized per-case
   backend event snapshots and client exchanges.
-- `client-exchanges.json`: the 55-exchange ledger with stable request IDs,
+- `expected-main-cases.json`: the exact main case ID set, checked for omissions
+  and duplicates before finalization.
+- `client-exchanges.json`: the complete main ledger with stable request IDs,
   selected request metadata, selected response headers, response bodies, and a
   canonical response-body SHA256.
 - `access-coverage.json`: the recorded-exchange and Envoy-access counts plus any
   missing, duplicate, or unexpected request IDs.
 - `backend-primary-final.json` and `backend-secondary-final.json`: final safe
   event state for each deterministic backend.
-- `backend-auto-state.json`: proof that the rejected auto configuration made no
-  upstream request.
+- `backend-auto-state.json`: proof that the unknown-strategy configuration made
+  no upstream request.
+- `backend-auto-baseline-state.json` and `gateway-auto-baseline.log`: pre-change
+  auto rejection with zero upstream events.
+- `auto-explicit-baseline.json` and `gateway-auto-explicit-baseline.log`: exact
+  pre-change explicit/default proxy responses, backend ledger and access log.
 - `backend-baseline-state.json` and `gateway-baseline.log`: affected-revision
   zero-upstream and compiler-rejection proof.
 - `oracle-verification.json`, `backend-oracle-state.json`, and
@@ -422,7 +458,8 @@ A completed evidence directory contains:
 - `generation-transition.json`, `generation-process-*.txt`, and
   `gateway-generation.log`: per-generation descriptors, responses, backend
   events, exchanges, runtime log, and stable process identity.
-- `envoy.yaml`, `envoy-auto.yaml`, `envoy-baseline.yaml`, `envoy-oracle.yaml`,
+- `envoy.yaml`, `envoy-auto.yaml`, `envoy-auto-baseline.yaml`,
+  `envoy-auto-explicit-baseline.yaml`, `envoy-baseline.yaml`, `envoy-oracle.yaml`,
   `envoy-control-*.yaml`, `envoy-generation.yaml`, and
   `lds-generation-*.yaml`: the exact static and dynamic Envoy configurations.
 - `compose-config.yaml` and `compose-config.json`: the provider-resolved Compose
@@ -442,6 +479,8 @@ The main `manifest.json` fields have these meanings:
 
 - `source_sha` and `source_tree_clean` identify the committed code under test.
 - `plugin_sha256` identifies the exact temporary WASM bytes loaded by Envoy.
+- `auto_baseline_source_sha` and `auto_baseline_plugin_sha256` identify the
+  separately built pre-auto rejection and explicit-strategy differential module.
 - `baseline_source_sha` and `baseline_plugin_sha256` identify the independently
   built pinned rejection baseline.
 - `oracle_source_sha` and `oracle_plugin_sha256` identify the independently
@@ -483,8 +522,8 @@ else
 fi
 ```
 
-Then verify source identity, the 26/0 matrix, the 55/55 main access ledger, backend
-event count, plugin/image identities, and cleanup proof:
+Then verify source identity, complete case coverage, the main access ledger,
+plugin/image identities, and cleanup proof:
 
 ```bash
 python3 - "$EVIDENCE_DIR" "$(git rev-parse HEAD)" <<'PY'
@@ -510,16 +549,23 @@ assert manifest["source_sha"] == expected_source
 assert manifest["source_tree_clean"] is True
 assert manifest["baseline_source_sha"] == "c55d9825c90868f50edbff9764a6b3cf2eb13162"
 assert manifest["oracle_source_sha"] == "39ec41aab6eb1d40499bed2847085696de0ebb96"
-assert matrix["summary"] == {"pass": 26, "fail": 0}
+assert manifest["auto_baseline_source_sha"] == "dc0999326b1a8df4269c13d0cf6ee2b725259f6e"
+assert matrix["summary"] == {"pass": len(matrix["cases"]), "fail": 0}
+expected_main = json.loads((root / "expected-main-cases.json").read_text())
+case_names = [case["case"] for case in matrix["cases"]]
+assert len(case_names) == len(set(case_names))
+assert set(expected_main).issubset(case_names)
+assert all(case["status"] == "PASS" for case in matrix["cases"])
 assert coverage["status"] == "PASS"
-assert coverage["recordedClientExchangeCount"] == 55
-assert coverage["accessRecordCount"] == 55
+exchanges = json.loads((root / "client-exchanges.json").read_text())["exchanges"]
+assert coverage["recordedClientExchangeCount"] == len(exchanges)
+assert coverage["accessRecordCount"] == len(exchanges)
 assert not coverage["missingRequestIds"]
 assert not coverage["duplicateRequestIds"]
 assert not coverage["unexpectedRequestIds"]
-assert backend_events == 59
 assert len(manifest["plugin_sha256"]) == 64
 assert len(manifest["baseline_plugin_sha256"]) == 64
+assert len(manifest["auto_baseline_plugin_sha256"]) == 64
 assert len(manifest["oracle_plugin_sha256"]) == 64
 assert len(manifest["corpus_fixture_sha256"]) == 64
 assert all(len(value) == 64 for value in manifest["corpus_plugin_sha256"].values())

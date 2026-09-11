@@ -20,7 +20,10 @@ for name, service in config.get("services", {}).items():
     command = service.get("command") or []
     envoy_commands.append((name, command))
 
-check(len(envoy_commands) == 11, f"expected 11 resolved Envoy services, got {len(envoy_commands)}")
+expected = {"gateway", "gateway-auto", "gateway-auto-baseline", "gateway-auto-explicit-baseline", "gateway-baseline", "gateway-oracle", "gateway-generation"}
+expected.update("gateway-control-" + revision for revision in ("candidate", "affected", "oracle"))
+expected.update("gateway-corpus-" + revision for revision in ("candidate", "affected", "oracle"))
+check({name for name, _ in envoy_commands} == expected, "resolved Envoy service set is incomplete or unexpected")
 for name, command in envoy_commands:
     positions = [index for index, token in enumerate(command) if token == "--concurrency"]
     check(len(positions) == 1, f"{name} has invalid concurrency flags: {command}")

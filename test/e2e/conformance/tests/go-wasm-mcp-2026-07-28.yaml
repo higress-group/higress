@@ -56,4 +56,188 @@ spec:
       configDisable: false
       ingress:
         - higress-conformance-infra/wasmplugin-mcp-2026-07-28
+    - config:
+        server:
+          name: e2e-auto-modern
+          type: mcp-proxy
+          transport: http
+          protocolStrategy: auto
+          mcpServerURL: http://mcp-auto-backend:8080/modern
+      configDisable: false
+      ingress:
+        - higress-conformance-infra/wasmplugin-mcp-auto-modern
+    - config:
+        server:
+          name: e2e-auto-legacy
+          type: mcp-proxy
+          transport: http
+          protocolStrategy: auto
+          mcpServerURL: http://mcp-auto-backend:8080/legacy
+      configDisable: false
+      ingress:
+        - higress-conformance-infra/wasmplugin-mcp-auto-legacy
   url: file:///opt/plugins/wasm-go/extensions/mcp-server/plugin.wasm
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-mcp-auto-modern
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: mcp-auto-modern.example.com
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-auto-backend
+                port:
+                  number: 8080
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-mcp-auto-legacy
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: mcp-auto-legacy.example.com
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-auto-backend
+                port:
+                  number: 8080
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-auto-backend
+  namespace: higress-conformance-infra
+data:
+  backend.py: |
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    sequences = {}
+    lock = threading.Lock()
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+        def do_POST(self):
+            if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+                chunks = []
+                while True:
+                    size = int(self.rfile.readline().strip().split(b";", 1)[0], 16)
+                    if size == 0:
+                        self.rfile.readline()
+                        break
+                    chunks.append(self.rfile.read(size))
+                    self.rfile.read(2)
+                body = b"".join(chunks)
+            else:
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            request = json.loads(body)
+            method, rpc_id = request["method"], request.get("id")
+            key = self.headers.get("baggage", "unset")
+            modern = self.path == "/modern"
+            with lock:
+                # Each actual discover starts a new fixture exchange, so the
+                # conformance framework's eventual-consistency retries remain
+                # distinct from plugin-level business replay.
+                if method == "server/discover":
+                    sequences[key] = []
+                sequences.setdefault(key, []).append(method)
+                sequence = list(sequences[key])
+            error = None
+            result = {}
+            if method == "server/discover":
+                if modern:
+                    result = {"resultType": "complete", "supportedVersions": ["2026-07-28"], "capabilities": {"tools": {}},
+                              "ttlMs": 0, "cacheScope": "private", "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "auto-backend", "version": "1"}}}
+                else:
+                    error = {"code": -32601, "message": "method not found"}
+            elif method == "initialize":
+                result = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "auto-backend", "version": "1"}}
+            elif method == "notifications/initialized":
+                self.send_response(202)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            elif method == "tools/call":
+                expected = ["server/discover", "tools/call"] if modern else ["server/discover", "initialize", "notifications/initialized", "tools/call"]
+                if sequence != expected:
+                    error = {"code": -32603, "message": "unexpected upstream sequence"}
+                else:
+                    result = {"content": [{"type": "text", "text": ("modern:2" if modern else "legacy:4")}]}
+                    if modern:
+                        result.update({"resultType": "complete", "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "auto-backend", "version": "1"}}})
+            else:
+                error = {"code": -32601, "message": "method not found"}
+            response = {"jsonrpc": "2.0", "id": rpc_id, "error" if error else "result": error or result}
+            data = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+    ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-auto-backend
+  namespace: higress-conformance-infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-auto-backend
+  template:
+    metadata:
+      labels:
+        app: mcp-auto-backend
+    spec:
+      containers:
+        - name: backend
+          image: python:3.12-alpine
+          command: ["python", "/fixture/backend.py"]
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          volumeMounts:
+            - name: fixture
+              mountPath: /fixture
+              readOnly: true
+      volumes:
+        - name: fixture
+          configMap:
+            name: mcp-auto-backend
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-auto-backend
+  namespace: higress-conformance-infra
+spec:
+  selector:
+    app: mcp-auto-backend
+  ports:
+    - port: 8080
+      targetPort: 8080

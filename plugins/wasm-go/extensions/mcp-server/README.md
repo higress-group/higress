@@ -59,13 +59,16 @@ Accept: application/json, text/event-stream
 
 ### Proxy profile 矩阵
 
-`protocolStrategy` 只描述上游 profile，本期是显式配置：
+`protocolStrategy` 只描述上游策略；未配置、空值和显式 `legacy` 都保持原行为：
 
 | Downstream | Upstream | 当前状态 |
 | --- | --- | --- |
 | modern | registered / REST / composed | 支持 |
 | modern | `protocolStrategy: modern` | 支持，每请求无状态转发 |
 | modern | `protocolStrategy: legacy` | 支持，在单次下游交换内执行隔离的 legacy handshake |
+| modern | `auto` + `http` | 每次转发型 Tool 请求先 discover，再选择 modern 或完成一次 legacy 握手 |
+| legacy | `auto` + `http` | 原 legacy 路径，不探测 modern |
+| 任意已支持下游 | `auto` + `sse` | 原 legacy SSE 路径，不猜测传输或 URL |
 | legacy | legacy upstream | 保留现有行为 |
 | legacy | modern-only upstream | 不支持，已暂缓 |
 
@@ -73,13 +76,47 @@ Outbound headers 按每个 RPC 重建。`Authorization` 只会根据显式 proxy
 
 ### 迁移与默认行为
 
-现有未配置 `protocolStrategy` 的 `mcp-proxy` 继续默认使用 `legacy`，legacy downstream→legacy upstream 的 initialize/session/transport 路径不变。只有已确认上游支持 `2026-07-28` 时才应显式切换为 `modern`。本期不会自动探测、回退或重试其他版本，也不应将运行期 session ID 写入配置或测试凭据。
+现有 `mcp-proxy` 无需迁移，默认仍为 `legacy`。确定上游支持 `2026-07-28` 的路由可显式选择 `modern`，避免探测开销。需要请求级识别时显式启用 `auto`；它不改变下游协议。回滚不识别 auto 的旧插件前，先将配置切回 `legacy` 并确认生效，再回滚镜像。不要将运行期 session ID 写入配置或测试凭据。
+
+### 可选 auto 协议识别
+
+```yaml
+server:
+  name: upstream-tools
+  type: mcp-proxy
+  transport: http
+  protocolStrategy: auto
+  mcpServerURL: https://mcp.example.com/mcp
+  timeout: 5000
+  autoDetection:
+    probeTimeoutMs: 1000
+```
+
+`autoDetection.probeTimeoutMs` 仅在 `auto + http` 下解析：缺省 1000 ms，必须是可表示为 uint32 的正整数，实际探测超时取它与有效 `timeout` 的较小值。单独配置 autoDetection 不启用 auto；原 timeout 仍约束每次 callout，整条链路总耗时可能更长。
+
+每次真正转发的 `tools/list` 或 `tools/call` 都先完成现有权限检查，再使用一次解析的有效上游凭证发送 `server/discover`。modern 成功序列为 discover → Tool RPC（2 次）；legacy 成功序列为 discover → initialize → initialized → Tool RPC（4 次）。没有缓存、跨请求会话复用或合并；调用工具无需先 list。下游 discover 只查询网关自身能力，不访问上游。
+
+| 探测结果 | 处理 |
+| --- | --- |
+| 合法 discover，支持 2026-07-28 且声明 Tools | modern |
+| -32022 明确支持 2025-06-18 / 2025-03-26 | 优先 2025-06-18，完成一次兼容 HTTP legacy 握手 |
+| HTTP 200、ID 匹配的 -32601 且无 modern 证据；普通 400/404/405 且无 modern 错误 | 最多尝试一次 2025-03-26 初始化 |
+| modern 错误、HTTP 404 的合法 -32601、401/403/429、5xx、网络错误或超时 | 终止，不降级；保留适用的认证挑战和 Retry-After |
+| 错误 ID、损坏 JSON/SSE、batch、trailing JSON、探测响应超过 1 MiB | 终止，不通过解析失败猜测 legacy |
+
+legacy 握手严格检查返回版本、Tools 能力、serverInfo 和 initialized 成功；会话仅在本次请求内携带。业务发出后发生错误、断连或版本变化都不重放。现代 requestState/inputResponses 无法转到 legacy 时在业务前拒绝；cursor 错误不自动重开列表。
+
+有效凭证必须有 discover 权限。固定、工具级和透传凭证都应用于本次探测与业务；显式 Cookie 可使用 `apiKey` 的 `in: header, name: Cookie` 生成，原有 `in: cookie` 不受支持。探测不携带 Mcp-Name/Mcp-Param；auto 仅在实际 modern tools/call 转发适用参数头。
+
+同一上游池实例必须提供一致协议能力；探测与业务仍可能落到不同实例。JSON/SSE 在完整 callout 响应后解析，不提供实时进度或订阅。1 MiB 限制在复制探测 body 到 Wasm 前检查，不限制 Envoy 已接收的全部缓冲，也不限制 Tool 结果大小。取消阻止后续阶段并忽略迟到回调，不宣称能撤回已提交的宿主调用；其他层重试不属于本插件的单次派发保证。最终 RPC 仍沿用现有转发路径，独立的 [#4597](https://github.com/higress-group/higress/issues/4597) 不在本次范围内。
+
+独立示例见 [auto.yaml](../../../../samples/mcp/protocol/2026-07-28/auto.yaml)。
 
 ### 明确暂缓范围
 
 | 层级 | 不属于本期的能力 |
 | --- | --- |
-| Deferred P1 | `protocolStrategy: auto`、`2025-11-25` profile、完整 JSON Schema 2020-12 与 output validation、大规模 tools pagination/cursor、legacy downstream→modern-only bridge |
+| Deferred P1 | `2025-11-25` profile、完整 JSON Schema 2020-12 与 output validation、大规模 tools pagination/cursor、legacy downstream→modern-only bridge |
 | Deferred P2 | MRTR / `input_required` 生成、subscriptions/listen 与 `tools.listChanged`、通用 state/requestState 的 TTL、持久化与恢复 |
 | Separate Proposal | 完整 OAuth resource server/client、Tasks、MCP Apps、Resources、Prompts、Completion，以及独立 native `plugins/golang-filter/mcp-server` 的协议同步 |
 
