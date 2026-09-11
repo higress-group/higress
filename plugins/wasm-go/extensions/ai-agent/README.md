@@ -198,7 +198,7 @@ apis:
                   - ja 
             - name: unit
               in: query
-              description: 表示温度的的单位，有摄氏度和华氏度两种
+              description: 表示温度的单位，有摄氏度和华氏度两种
               required: true
               schema:
                 type: string
