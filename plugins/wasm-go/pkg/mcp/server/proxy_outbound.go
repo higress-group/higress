@@ -108,6 +108,12 @@ func (h *McpProtocolHandler) prepareAutoRequest(ctx wrapper.HttpContext, auth *P
 			p.authHeaders = append(p.authHeaders, [2]string{"Authorization", auth.ForwardAuthorization})
 		}
 	}
+	for _, header := range p.authHeaders {
+		name := strings.ToLower(header[0])
+		if strings.HasPrefix(name, "mcp-param-") || name == "mcp-name" || name == "mcp-method" || name == "mcp-protocol-version" || name == "mcp-session-id" || name == "last-event-id" || name == "x-envoy-allow-mcp-tools" {
+			return nil, errors.New("upstream authentication conflicts with MCP protocol headers")
+		}
+	}
 	var err error
 	p.target, err = resolveProxyTarget(finalURL)
 	return p, err

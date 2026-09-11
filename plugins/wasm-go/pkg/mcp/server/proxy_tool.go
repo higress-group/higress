@@ -71,6 +71,7 @@ type McpProtocolHandler struct {
 	strategy      ProtocolStrategy
 	transport     TransportProtocol
 	autoDetection AutoDetectionConfig
+	auto          *AutoExchange
 }
 
 // NewMcpProtocolHandler creates a new MCP protocol handler
@@ -423,6 +424,9 @@ func (h *McpProtocolHandler) Initialize(ctx wrapper.HttpContext, authInfo *Proxy
 // ForwardToolsList forwards tools/list request to backend MCP server
 func (h *McpProtocolHandler) ForwardToolsList(ctx wrapper.HttpContext, cursor *string, authInfo *ProxyAuthInfo) error {
 	log.Debugf("Forwarding tools/list request")
+	if h.eligibleAuto(ctx) {
+		return h.startAuto(ctx, authInfo)
+	}
 	registerProxyCancellation(ctx)
 	if proxyRequestCancelled(ctx) {
 		return errors.New("proxy request cancelled")
@@ -464,6 +468,9 @@ func (h *McpProtocolHandler) ForwardToolsList(ctx wrapper.HttpContext, cursor *s
 
 // executeToolsList executes the actual tools/list request
 func (h *McpProtocolHandler) executeToolsList(ctx wrapper.HttpContext) error {
+	if h.auto != nil {
+		return h.auto.dispatchBusiness(h)
+	}
 	var cursor *string
 	if cursorVal := ctx.GetContext(CtxMcpProxyCursor); cursorVal != nil {
 		cursorStr := cursorVal.(string)
@@ -585,6 +592,9 @@ listRequestReady:
 // ForwardToolsCall forwards tools/call request to backend MCP server
 func (h *McpProtocolHandler) ForwardToolsCall(ctx wrapper.HttpContext, toolName string, arguments map[string]interface{}, authInfo *ProxyAuthInfo) error {
 	log.Debugf("Forwarding tools/call request for tool %s", toolName)
+	if h.eligibleAuto(ctx) {
+		return h.startAuto(ctx, authInfo)
+	}
 	registerProxyCancellation(ctx)
 	if proxyRequestCancelled(ctx) {
 		return errors.New("proxy request cancelled")
@@ -625,6 +635,9 @@ func (h *McpProtocolHandler) ForwardToolsCall(ctx wrapper.HttpContext, toolName 
 
 // executeToolsCall executes the actual tools/call request
 func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
+	if h.auto != nil {
+		return h.auto.dispatchBusiness(h)
+	}
 	toolName := ctx.GetContext(CtxMcpProxyToolName).(string)
 	arguments := ctx.GetContext(CtxMcpProxyToolArgs).(map[string]interface{})
 
@@ -1073,7 +1086,9 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools *map[string
 				utils.OnMCPResponseError(ctx, errors.New("legacy downstream is unsupported by a modern-only upstream"), utils.ErrMethodNotFound, "mcp-proxy:legacy_to_modern:unsupported")
 				return nil
 			}
-			registerProxyCancellation(ctx)
+			if !(server.GetProtocolStrategy() == ProtocolStrategyAuto && server.GetTransport() == TransportHTTP && modernDownstream) {
+				registerProxyCancellation(ctx)
+			}
 			// Check transport type
 			if server.GetTransport() == TransportSSE {
 				return handleSSEToolsList(ctx, id, params, server, allowTools)
@@ -1114,7 +1129,9 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools *map[string
 				utils.OnMCPResponseError(ctx, errors.New("legacy downstream is unsupported by a modern-only upstream"), utils.ErrMethodNotFound, "mcp-proxy:legacy_to_modern:unsupported")
 				return nil
 			}
-			registerProxyCancellation(ctx)
+			if !(server.GetProtocolStrategy() == ProtocolStrategyAuto && server.GetTransport() == TransportHTTP && modernDownstream) {
+				registerProxyCancellation(ctx)
+			}
 			// Check transport type
 			if server.GetTransport() == TransportSSE {
 				return handleSSEToolsCall(ctx, id, params, server, allowTools)
