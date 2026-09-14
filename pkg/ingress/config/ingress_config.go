@@ -1907,6 +1907,35 @@ func constructBasicAuthEnvoyFilter(rules *common.BasicAuthRules, namespace strin
 	}, nil
 }
 
+// supportedUpstreamEcdhCurves lists the curves accepted in McpBridge.spec.registries[].ecdhCurves.
+// The set is intentionally narrower than istio's security.ValidECDHCurves: names such as
+// X25519Kyber768Draft00 or X25519MLKEM768 are rejected by TLS libraries that do not implement
+// them, and an unsupported name makes the transport socket fail to initialize, which in turn
+// rejects the whole cluster configuration and breaks every service using the cluster.
+var supportedUpstreamEcdhCurves = sets.New("P-256", "P-384", "P-521", "X25519")
+
+// resolveUpstreamEcdhCurves returns the curves to advertise towards the upstream of a proxied
+// service. Unsupported names are dropped so that a typo cannot break the TLS configuration of
+// every proxied service. An empty result means "not configured": the TLS context is then left to
+// Envoy and its linked TLS library, which is the behavior without this option.
+func resolveUpstreamEcdhCurves(configured []string) []string {
+	curves := make([]string, 0, len(configured))
+	for _, curve := range configured {
+		if curve == "" {
+			continue
+		}
+		if !supportedUpstreamEcdhCurves.Contains(curve) {
+			IngressLog.Warnf("Ignoring unsupported ECDH curve %q configured in the ecdhCurves of an McpBridge registry", curve)
+			continue
+		}
+		curves = append(curves, curve)
+	}
+	if len(curves) == 0 {
+		return nil
+	}
+	return curves
+}
+
 func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, serviceWrappers map[string]*common.ServiceWrapper, namespace string) []*config.Config {
 	var envoyFilters []*config.Config
 	for _, proxyWrapper := range proxyWrappers {
@@ -2003,6 +2032,21 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 					}
 					if proxyConfig.UpstreamSni != "" {
 						tlsTypedConfig["sni"] = proxyConfig.UpstreamSni
+					}
+					// The TLS context of a proxied service is rebuilt here, so the curves that Istio
+					// would derive from the DestinationRule/mesh config are dropped and Envoy falls
+					// back to the defaults of its linked TLS library, which may not offer every
+					// widely used curve (P-384 for instance). An upstream that only presents a
+					// certificate on such a curve then rejects the TLS 1.2 handshake with
+					// handshake_failure, because the curve of the certificate is not listed in the
+					// client's supported_groups (RFC 8422, section 5.1.1). Curves are emitted only
+					// when the registry declares them; otherwise the TLS context is left as it was.
+					if ecdhCurves := resolveUpstreamEcdhCurves(proxyConfig.UpstreamEcdhCurves); len(ecdhCurves) != 0 {
+						tlsTypedConfig["common_tls_context"] = map[string]interface{}{
+							"tls_params": map[string]interface{}{
+								"ecdh_curves": ecdhCurves,
+							},
+						}
 					}
 					patchObj["transport_socket"] = map[string]interface{}{
 						"name":         "envoy.transport_sockets.tls",
