@@ -2,6 +2,7 @@ package cache
 
 import (
 	"errors"
+	"math"
 	"strings"
 
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -45,7 +46,7 @@ type ProviderConfig struct {
 	password string
 	// @Title zh-CN 请求超时
 	// @Description zh-CN 请求缓存服务的超时时间，单位为毫秒。默认值是10000，即10秒
-	timeout uint32
+	timeout int64
 	// @Title zh-CN 缓存过期时间
 	// @Description zh-CN 缓存过期时间，单位为秒。默认值是0，即永不过期
 	cacheTTL int
@@ -73,7 +74,7 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	c.serviceHost = json.Get("serviceHost").String()
 	c.username = json.Get("username").String()
 	c.password = json.Get("password").String()
-	c.timeout = uint32(json.Get("timeout").Int())
+	c.timeout = json.Get("timeout").Int()
 	if !json.Get("timeout").Exists() {
 		c.timeout = 10000
 	}
@@ -96,6 +97,12 @@ func (c *ProviderConfig) Validate() error {
 	}
 	if c.serviceName == "" {
 		return errors.New("cache service name is required")
+	}
+	if c.servicePort <= 0 {
+		return errors.New("cache service port must be greater than 0")
+	}
+	if c.timeout <= 0 || c.timeout > math.MaxUint32 {
+		return errors.New("cache service timeout must be between 1 and 4294967295 milliseconds")
 	}
 	if c.cacheTTL < 0 {
 		return errors.New("cache TTL must be greater than or equal to 0")

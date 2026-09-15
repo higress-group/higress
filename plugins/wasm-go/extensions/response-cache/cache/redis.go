@@ -25,7 +25,7 @@ func (r *redisProviderInitializer) CreateProvider(cf ProviderConfig) (Provider, 
 			Host: cf.serviceHost,
 			Port: int64(cf.servicePort)}),
 	}
-	err := rp.Init(cf.username, cf.password, cf.timeout)
+	err := rp.Init(cf.username, cf.password, uint32(cf.timeout))
 	return &rp, err
 }
 
