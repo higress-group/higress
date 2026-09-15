@@ -191,9 +191,9 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 			log.Debugf("ai-token-ratelimit:   eval rule[%d] key=%s threshold=%d current=%d ttl=%ds",
 				i, matched[i].key, threshold, current, ttl)
 
-			if current > threshold {
+			if current >= threshold {
 				// 命中触发的第一条规则（按 collectMatchedRules 顺序，global 优先）
-				log.Debugf("ai-token-ratelimit: rule[%d] key=%s triggered (current=%d > threshold=%d), rejecting with code %d",
+				log.Debugf("ai-token-ratelimit: rule[%d] key=%s triggered (current=%d >= threshold=%d), rejecting with code %d",
 					i, matched[i].key, current, threshold, cfg.RejectedCode)
 				ctx.SetUserAttribute("token_ratelimit_status", "limited")
 				_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
