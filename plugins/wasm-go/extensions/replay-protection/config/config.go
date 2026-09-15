@@ -37,8 +37,12 @@ func ParseConfig(json gjson.Result, config *ReplayProtectionConfig) error {
 		return fmt.Errorf("redis service name is required")
 	}
 
-	servicePort := redisConfig.Get("service_port").Int()
-	if servicePort == 0 {
+	servicePortConfig := redisConfig.Get("service_port")
+	servicePort := servicePortConfig.Int()
+	if servicePortConfig.Exists() && servicePort <= 0 {
+		return fmt.Errorf("redis service port must be greater than 0")
+	}
+	if !servicePortConfig.Exists() {
 		if strings.HasSuffix(serviceName, ".static") {
 			servicePort = 80 // default logic port for static service
 		} else {
@@ -48,8 +52,12 @@ func ParseConfig(json gjson.Result, config *ReplayProtectionConfig) error {
 
 	username := redisConfig.Get("username").String()
 	password := redisConfig.Get("password").String()
-	timeout := redisConfig.Get("timeout").Int()
-	if timeout == 0 {
+	timeoutConfig := redisConfig.Get("timeout")
+	timeout := timeoutConfig.Int()
+	if timeoutConfig.Exists() && timeout <= 0 {
+		return fmt.Errorf("redis timeout must be greater than 0")
+	}
+	if !timeoutConfig.Exists() {
 		timeout = 1000
 	}
 
@@ -76,8 +84,14 @@ func ParseConfig(json gjson.Result, config *ReplayProtectionConfig) error {
 
 	config.ValidateBase64 = json.Get("validate_base64").Bool()
 
-	config.RejectCode = uint32(json.Get("reject_code").Int())
-	if config.RejectCode == 0 {
+	rejectCode := json.Get("reject_code")
+	if rejectCode.Exists() {
+		code := rejectCode.Int()
+		if code < 100 || code > 599 {
+			return fmt.Errorf("reject code must be between 100 and 599")
+		}
+		config.RejectCode = uint32(code)
+	} else {
 		config.RejectCode = 429
 	}
 
@@ -88,19 +102,37 @@ func ParseConfig(json gjson.Result, config *ReplayProtectionConfig) error {
 
 	config.ForceNonce = json.Get("force_nonce").Bool()
 
-	config.NonceTTL = int(json.Get("nonce_ttl").Int())
-	if config.NonceTTL == 0 {
+	nonceTTL := json.Get("nonce_ttl")
+	if nonceTTL.Exists() {
+		config.NonceTTL = int(nonceTTL.Int())
+		if config.NonceTTL <= 0 {
+			return fmt.Errorf("nonce ttl must be greater than 0")
+		}
+	} else {
 		config.NonceTTL = 900
 	}
 
-	config.NonceMinLen = int(json.Get("nonce_min_length").Int())
-	if config.NonceMinLen == 0 {
+	nonceMinLength := json.Get("nonce_min_length")
+	if nonceMinLength.Exists() {
+		config.NonceMinLen = int(nonceMinLength.Int())
+		if config.NonceMinLen <= 0 {
+			return fmt.Errorf("nonce min length must be greater than 0")
+		}
+	} else {
 		config.NonceMinLen = 8
 	}
 
-	config.NonceMaxLen = int(json.Get("nonce_max_length").Int())
-	if config.NonceMaxLen == 0 {
+	nonceMaxLength := json.Get("nonce_max_length")
+	if nonceMaxLength.Exists() {
+		config.NonceMaxLen = int(nonceMaxLength.Int())
+		if config.NonceMaxLen <= 0 {
+			return fmt.Errorf("nonce max length must be greater than 0")
+		}
+	} else {
 		config.NonceMaxLen = 128
+	}
+	if config.NonceMinLen > config.NonceMaxLen {
+		return fmt.Errorf("nonce min length must not exceed nonce max length")
 	}
 
 	return nil
