@@ -64,6 +64,19 @@ var basicGrayConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：带 404 HTML 回退页面的配置
+var htmlFallbackConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"grayKey": "userid",
+		"html":    "<html><body>fallback</body></html>",
+		"baseDeployment": map[string]interface{}{
+			"version":        "base",
+			"backendVersion": "base-backend",
+		},
+	})
+	return data
+}()
+
 // 测试配置：按比例灰度配置
 var weightGrayConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -446,6 +459,34 @@ func TestOnHttpResponseHeader(t *testing.T) {
 			})
 
 			require.Equal(t, types.ActionContinue, action)
+
+			host.CompleteHttp()
+		})
+
+		// 上游 404 响应可能不携带 content-type，回退页面仍应正常生效。
+		t.Run("404 html fallback without content type", func(t *testing.T) {
+			host, status := test.NewTestHost(htmlFallbackConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/"},
+				{":method", "GET"},
+				{"cookie", "userid=00000001"},
+			})
+
+			var action types.Action
+			require.NotPanics(t, func() {
+				action = host.CallOnHttpResponseHeaders([][2]string{
+					{":status", "404"},
+				})
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			responseHeaders := host.GetResponseHeaders()
+			require.True(t, test.HasHeaderWithValue(responseHeaders, ":status", "200"))
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "content-type", "text/html"))
 
 			host.CompleteHttp()
 		})
