@@ -154,6 +154,27 @@ func TestDistinctChat(t *testing.T) {
 	}
 }
 
+func TestGetIntQueryParameter(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		defaultValue int
+		want         int
+	}{
+		{name: "positive value", path: "/api/chat?cnt=2", defaultValue: 3, want: 2},
+		{name: "zero value", path: "/api/chat?cnt=0", defaultValue: 3, want: 0},
+		{name: "negative value", path: "/api/chat?cnt=-1", defaultValue: 3, want: 3},
+		{name: "invalid value", path: "/api/chat?cnt=invalid", defaultValue: 3, want: 3},
+		{name: "missing value", path: "/api/chat", defaultValue: 3, want: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, getIntQueryParameter("cnt", tt.path, tt.defaultValue))
+		})
+	}
+}
+
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		// 测试基本Redis配置解析

@@ -317,7 +317,7 @@ func getIntQueryParameter(name string, path string, defaultValue int) int {
 		return defaultValue
 	}
 	num, err := strconv.Atoi(queryStr)
-	if err != nil {
+	if err != nil || num < 0 {
 		return defaultValue
 	}
 	return num
