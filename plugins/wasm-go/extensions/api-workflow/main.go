@@ -241,7 +241,7 @@ func recursive(edge Edge, headers [][2]string, body []byte, depth uint32, config
 			// 存入这轮返回的body
 			ctx.SetContext(fmt.Sprintf("%s", edge.Target), responseBody)
 
-			headers_ := make([][2]string, len(responseHeaders))
+			headers_ := make([][2]string, 0, len(responseHeaders))
 			for key, value := range responseHeaders {
 				headers_ = append(headers_, [2]string{key, value[0]})
 			}
