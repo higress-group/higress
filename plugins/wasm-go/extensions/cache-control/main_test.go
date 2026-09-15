@@ -146,6 +146,36 @@ func TestParseConfig(t *testing.T) {
 	})
 }
 
+func TestParseConfigExpiresValidation(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		tests := []struct {
+			name       string
+			config     json.RawMessage
+			wantStatus types.OnPluginStartStatus
+		}{
+			{name: "missing", config: json.RawMessage(`{}`), wantStatus: types.OnPluginStartStatusFailed},
+			{name: "non-numeric", config: json.RawMessage(`{"expires":"abc"}`), wantStatus: types.OnPluginStartStatusFailed},
+			{name: "negative", config: json.RawMessage(`{"expires":"-1"}`), wantStatus: types.OnPluginStartStatusFailed},
+			{name: "duration overflow", config: json.RawMessage(`{"expires":"9223372037"}`), wantStatus: types.OnPluginStartStatusFailed},
+			{name: "integer overflow", config: json.RawMessage(`{"expires":"9223372036854775808"}`), wantStatus: types.OnPluginStartStatusFailed},
+			{name: "zero", config: json.RawMessage(`{"expires":"0"}`), wantStatus: types.OnPluginStartStatusOK},
+			{name: "numeric", config: basicConfig, wantStatus: types.OnPluginStartStatusOK},
+			{name: "numeric JSON value", config: json.RawMessage(`{"expires":3600}`), wantStatus: types.OnPluginStartStatusOK},
+			{name: "maximum duration", config: json.RawMessage(`{"expires":"9223372036"}`), wantStatus: types.OnPluginStartStatusOK},
+			{name: "max", config: maxExpiresConfig, wantStatus: types.OnPluginStartStatusOK},
+			{name: "epoch", config: epochExpiresConfig, wantStatus: types.OnPluginStartStatusOK},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				host, status := test.NewTestHost(tt.config)
+				defer host.Reset()
+				require.Equal(t, tt.wantStatus, status)
+			})
+		}
+	})
+}
+
 func TestOnHttpRequestHeaders(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试基本请求头处理（带查询参数）
