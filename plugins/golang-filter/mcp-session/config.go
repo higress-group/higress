@@ -77,9 +77,9 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 	enableUserLevelServer, ok := v.AsMap()["enable_user_level_server"].(bool)
 	if !ok {
 		enableUserLevelServer = false
-		if conf.redisClient == nil {
-			return nil, fmt.Errorf("redis configuration is not provided, enable_user_level_server is true")
-		}
+	}
+	if enableUserLevelServer && conf.redisClient == nil {
+		return nil, fmt.Errorf("redis configuration is not provided, enable_user_level_server is true")
 	}
 	conf.enableUserLevelServer = enableUserLevelServer
 
