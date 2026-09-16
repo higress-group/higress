@@ -24,6 +24,9 @@ var operators = map[string]interface{}{
 	"eq": func(a, b interface{}) bool {
 		return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 	},
+	"ne": func(a, b interface{}) bool {
+		return fmt.Sprintf("%v", a) != fmt.Sprintf("%v", b)
+	},
 	"ge":      func(a, b float64) bool { return a >= b },
 	"le":      func(a, b float64) bool { return a <= b },
 	"gt":      func(a, b float64) bool { return a > b },
