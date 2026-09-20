@@ -158,11 +158,54 @@ type function struct {
 	Description string                 `json:"description,omitempty"`
 	Name        string                 `json:"name"`
 	Parameters  map[string]interface{} `json:"parameters,omitempty"`
+	// Strict marks a tool whose arguments must be validated against the schema
+	// (OpenAI's `strict` flag). Bridges have to translate it into their target
+	// protocol instead of dropping it, otherwise callers silently lose the
+	// guarantee they asked for.
+	Strict bool `json:"strict,omitempty"`
 }
 
 type toolChoice struct {
 	Type     string   `json:"type"`
 	Function function `json:"function"`
+	// AllowedTools carries OpenAI's `tool_choice.allowed_tools` subset selector.
+	AllowedTools *allowedTools `json:"allowed_tools,omitempty"`
+}
+
+// allowedTools mirrors the OpenAI `tool_choice.allowed_tools` object. Targets
+// such as Claude and Gemini can only pick tools by name, so each bridge has to
+// narrow the declared tools, or translate the subset into an allow-list, itself.
+type allowedTools struct {
+	Mode  string             `json:"mode,omitempty"`
+	Tools []allowedToolEntry `json:"tools,omitempty"`
+}
+
+// allowedToolEntry accepts both the full OpenAI function reference
+// ({"type":"function","function":{"name":"..."}}) and the shorthand
+// ({"name":"..."}) that some OpenAI-compatible callers send.
+type allowedToolEntry struct {
+	Name     string   `json:"name,omitempty"`
+	Function function `json:"function"`
+}
+
+// getAllowedToolNames returns the function names listed in
+// tool_choice.allowed_tools, or nil when the request does not use that shape.
+func (c *chatCompletionRequest) getAllowedToolNames() []string {
+	tc := c.getToolChoiceObject()
+	if tc == nil || tc.AllowedTools == nil {
+		return nil
+	}
+	names := make([]string, 0, len(tc.AllowedTools.Tools))
+	for _, entry := range tc.AllowedTools.Tools {
+		name := entry.Function.Name
+		if name == "" {
+			name = entry.Name
+		}
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 type chatCompletionResponse struct {
@@ -365,6 +408,73 @@ type chatMessageContentFile struct {
 	FileName string `json:"file_name,omitempty"`
 }
 
+// splitDataURL splits an RFC 2397 data URL ("data:<media type>;base64,<data>")
+// into its media type and payload. Providers that take inline file bytes (Claude
+// documents, Gemini inlineData) need the two halves separately, and the payload
+// has to be forwarded byte for byte.
+func splitDataURL(raw string) (mediaType string, data string, isDataURL bool) {
+	if !strings.HasPrefix(raw, "data:") {
+		return "", "", false
+	}
+	commaIndex := strings.Index(raw, ",")
+	if commaIndex < 0 {
+		return "", "", false
+	}
+	mediaType = strings.TrimSuffix(raw[len("data:"):commaIndex], ";base64")
+	if mediaType == "" {
+		return "", "", false
+	}
+	return mediaType, raw[commaIndex+1:], true
+}
+
+// mediaTypeFromFileName maps a file name extension onto the media type that
+// Claude and Gemini require next to inline file bytes. It returns an empty
+// string for unknown extensions, so callers can report the part instead of
+// guessing a media type.
+func mediaTypeFromFileName(name string) string {
+	dotIndex := strings.LastIndex(name, ".")
+	if dotIndex < 0 || dotIndex == len(name)-1 {
+		return ""
+	}
+	return mediaTypeByExtension[strings.ToLower(name[dotIndex+1:])]
+}
+
+// filePartMediaType resolves the media type and the base64 payload of an OpenAI
+// `file` content part: the media type comes from the inline data URL when there
+// is one and from the file name otherwise. isInline is false when the part
+// carries no inline bytes at all (a bare file id, for example).
+func filePartMediaType(file *chatMessageContentFile) (mediaType string, data string, isInline bool) {
+	if file == nil || file.FileData == "" {
+		return "", "", false
+	}
+	if dataURLMediaType, payload, isDataURL := splitDataURL(file.FileData); isDataURL {
+		return dataURLMediaType, payload, true
+	}
+	return mediaTypeFromFileName(file.FileName), file.FileData, true
+}
+
+// mediaTypeByExtension covers the document and media types that the OpenAI
+// `file` part is used with when callers send a bare base64 payload.
+var mediaTypeByExtension = map[string]string{
+	"pdf":  "application/pdf",
+	"txt":  "text/plain",
+	"md":   "text/markdown",
+	"csv":  "text/csv",
+	"json": "application/json",
+	"html": "text/html",
+	"doc":  "application/msword",
+	"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	"xls":  "application/vnd.ms-excel",
+	"xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	"ppt":  "application/vnd.ms-powerpoint",
+	"pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	"png":  "image/png",
+	"jpg":  "image/jpeg",
+	"jpeg": "image/jpeg",
+	"gif":  "image/gif",
+	"webp": "image/webp",
+}
+
 type chatMessageContentImageUrl struct {
 	Url    string `json:"url,omitempty"`
 	Detail string `json:"detail,omitempty"`
@@ -475,13 +585,25 @@ func (m *chatMessage) ParseContent() []chatMessageContent {
 				}
 			case contentTypeFile:
 				if subObj, ok := contentMap[contentTypeFile].(map[string]any); ok {
+					// Read every field the part may carry: the previous unconditional
+					// subObj["file_id"].(string) assertion panicked (and aborted the
+					// whole request) for parts that only carried file_data.
+					file := &chatMessageContentFile{}
+					if fileId, ok := subObj["file_id"].(string); ok {
+						file.FileId = fileId
+					}
+					if fileData, ok := subObj["file_data"].(string); ok {
+						file.FileData = fileData
+					}
+					if fileName, ok := subObj["file_name"].(string); ok {
+						file.FileName = fileName
+					} else if fileName, ok := subObj["filename"].(string); ok {
+						// OpenAI itself spells this key `filename`.
+						file.FileName = fileName
+					}
 					contentList = append(contentList, chatMessageContent{
 						Type: contentTypeFile,
-						File: &chatMessageContentFile{
-							FileId: subObj["file_id"].(string),
-							// FileName: subObj["file_name"].(string),
-							// FileData: subObj["file_data"].(string),
-						},
+						File: file,
 					})
 				}
 			}

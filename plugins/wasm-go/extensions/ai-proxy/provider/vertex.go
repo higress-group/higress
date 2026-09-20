@@ -1142,8 +1142,19 @@ func (v *vertexProvider) buildVertexChatRequest(request *chatCompletionRequest) 
 	}
 	if request.Tools != nil {
 		functions := make([]function, 0, len(request.Tools))
-		for _, tool := range request.Tools {
-			functions = append(functions, tool.Function)
+		for _, t := range request.Tools {
+			if t.Function.Strict {
+				// Google's function declaration schema has no `strict` member: forwarding
+				// it verbatim would make the whole request invalid, so the flag is
+				// reported instead of silently changing the caller's contract.
+				log.Warnf("[ai-proxy] vertex: tool %q asked for strict argument validation, which Vertex cannot express, the tool is declared without it", t.Function.Name)
+			}
+			// Copy the fields explicitly so `strict` never reaches the declaration.
+			functions = append(functions, function{
+				Description: t.Function.Description,
+				Name:        t.Function.Name,
+				Parameters:  t.Function.Parameters,
+			})
 		}
 		vertexRequest.Tools = []vertexTool{
 			{
