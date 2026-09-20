@@ -2,7 +2,7 @@ module github.com/alibaba/higress/plugins/golang-filter
 
 go 1.23
 
-replace github.com/envoyproxy/envoy => github.com/higress-group/envoy v0.0.0-20260811163927-9e54c67a6c89
+replace github.com/envoyproxy/envoy => github.com/higress-group/envoy v0.0.0-20260908125308-9bd2ded78607
 
 replace github.com/mark3labs/mcp-go => github.com/higress-group/mcp-go v0.0.0-20250428145706-792ce64b4b30
 
