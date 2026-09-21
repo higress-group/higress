@@ -35,6 +35,7 @@ const (
 	CtxTokenUsage      = "token_usage_raw"
 	CtxAccumulatedBody = "accumulated_body"
 	CtxSkipPlugin      = "skip_token_report"
+	CtxStatusCode      = "response_status_code"
 	providerTypeKey    = "providerType"
 
 	// HTTP headers
@@ -79,6 +80,7 @@ func init() {
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
+		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingBody),
 		wrapper.ProcessResponseBody(onHttpResponseBody),
 	)
@@ -226,6 +228,29 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config TokenUsageReportConfig, b
 	return types.ActionContinue
 }
 
+func onHttpResponseHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfig) types.Action {
+	// Check if plugin is enabled
+	if config.reportApiUrl == "" {
+		return types.ActionContinue
+	}
+
+	// 检查是否设置了跳过标记
+	if ctx.GetContext(CtxSkipPlugin) != nil {
+		return types.ActionContinue
+	}
+
+	// Capture response status code for later use in response body processing
+	statusCode, err := proxywasm.GetHttpResponseHeader(":status")
+	if err != nil {
+		log.Debugf("ai-token-report: failed to get response status code: %v", err)
+	} else {
+		ctx.SetContext(CtxStatusCode, statusCode)
+		log.Debugf("ai-token-report: captured response status code: %s", statusCode)
+	}
+
+	return types.ActionContinue
+}
+
 func getProviderType() string {
 	propertyKey := "wasm." + providerTypeKey
 	if providerType, err := proxywasm.GetProperty([]string{propertyKey}); err == nil {
@@ -273,7 +298,7 @@ func accumulateChunk(ctx wrapper.HttpContext, data []byte) bool {
 	copy(accumulatedBody, existingBody)
 	copy(accumulatedBody[len(existingBody):], data)
 	ctx.SetContext(CtxAccumulatedBody, accumulatedBody)
-	log.Debugf("ai-token-report: accumulated body length=%d", len(accumulatedBody))
+// 	log.Debugf("ai-token-report: accumulated body length=%d", len(accumulatedBody))
 	return true
 }
 
@@ -607,6 +632,18 @@ func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageRepor
 			log.Errorf("Panic in reportTokenUsageFromContext (recovered): %v", r)
 		}
 	}()
+
+	// Skip if response status code is not 200
+	statusCode, ok := ctx.GetContext(CtxStatusCode).(string)
+	log.Debugf("response status code is %s", statusCode)
+	if !ok || statusCode != "200" {
+		if !ok {
+			log.Debugf("response status code not found in context, skipping token usage report")
+		} else {
+			log.Debugf("response status code is %s (not 200), skipping token usage report", statusCode)
+		}
+		return
+	}
 
 	// Skip if disableOpenaiUsage is enabled
 	if config.disableOpenaiUsage {

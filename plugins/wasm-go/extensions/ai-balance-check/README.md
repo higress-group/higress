@@ -7,6 +7,7 @@ The AI Balance Check plugin is a Higress WASM plugin that validates user balance
 ## Features
 
 - **Asynchronous Balance Checking**: Uses non-blocking HTTP calls to check user balance
+- **Block in Request Body Phase**: The async balance check is dispatched from `onHttpRequestBody` (not headers) so that `SendHttpResponse(402,...)` actually cancels the downstream request instead of racing with upstream forwarding
 - **Configurable Timeout**: Customizable API timeout duration
 - **Custom Failure Message**: Ability to configure custom error messages for balance failures
 - **Memory Safety**: Proper cleanup and panic recovery to prevent memory leaks
@@ -34,6 +35,13 @@ The AI Balance Check plugin is a Higress WASM plugin that validates user balance
 - **failMessage**: Custom message to return when balance check fails
   - Default: `Insufficient balance, please recharge`
   - Example: `Your account balance is too low. Please top up your account.`
+
+- **skipPaths**: List of request URI path prefixes that should bypass the balance check. Useful for endpoints that must not be blocked even when the user's balance is insufficient (e.g. async task polling endpoints like image-generation task result lookups).
+  - Default: `[]` (no paths skipped)
+  - Matching rule: prefix match against the path (query string is stripped before matching)
+  - Supports both array form and comma-separated string form
+  - Example (array): `["/v1/images/tasks", "/v1/async/"]`
+  - Example (string): `"/v1/images/tasks,/v1/async/"`
 
 ## Balance API Requirements
 
@@ -93,6 +101,9 @@ spec:
       userTokenHeader: Authorization
       apiTimeout: 5000
       failMessage: "Your account balance is too low. Please top up your account."
+      skipPaths:
+        - /v1/images/tasks
+        - /v1/async/
 ```
 
 ## Build

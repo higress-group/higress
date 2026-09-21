@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -21,6 +22,7 @@ const (
 
 const (
 	CtxKeyBalanceChecked = "balance_checked"
+	CtxKeyAPIKey         = "api_key"
 )
 
 // OpenAIError OpenAI 兼容的错误响应结构
@@ -39,6 +41,7 @@ type BalanceCheckConfig struct {
 	apiTimeout   int32
 	failMessage  string
 	failCode     int32
+	skipPaths    []string
 }
 
 func main() {}
@@ -48,6 +51,7 @@ func init() {
 		"ai-balance-check",
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
+		wrapper.ProcessRequestBody(onHttpRequestBody),
 	)
 }
 
@@ -80,6 +84,28 @@ func parseConfig(json gjson.Result, config *BalanceCheckConfig) error {
 		config.failCode = 402 // Default to Payment Required
 	}
 
+	// Parse skipPaths - list of URI path prefixes that should skip balance check
+	// 支持两种配置形式：
+	//   "skipPaths": ["/v1/images/tasks", "/v1/async/"]   (数组形式)
+	//   "skipPaths": "/v1/images/tasks,/v1/async/"         (逗号分隔字符串形式)
+	skipPathsResult := json.Get("skipPaths")
+	if skipPathsResult.IsArray() {
+		skipPathsResult.ForEach(func(_, value gjson.Result) bool {
+			path := strings.TrimSpace(value.String())
+			if path != "" {
+				config.skipPaths = append(config.skipPaths, path)
+			}
+			return true
+		})
+	} else if skipPathsResult.String() != "" {
+		for _, path := range strings.Split(skipPathsResult.String(), ",") {
+			path = strings.TrimSpace(path)
+			if path != "" {
+				config.skipPaths = append(config.skipPaths, path)
+			}
+		}
+	}
+
 	// Parse URL to get host and port
 	parsedUrl, err := url.Parse(config.apiUrl)
 	if err != nil {
@@ -108,14 +134,13 @@ func parseConfig(json gjson.Result, config *BalanceCheckConfig) error {
 		Port:        port,
 	})
 
-	log.Infof("ai-balance-check: configured, url=%s, service=%s, timeout=%dms, failMessage=%s",
-		config.apiUrl, config.serviceName, config.apiTimeout, config.failMessage)
+	log.Infof("ai-balance-check: configured, url=%s, service=%s, timeout=%dms, failMessage=%s, skipPaths=%v",
+		config.apiUrl, config.serviceName, config.apiTimeout, config.failMessage, config.skipPaths)
 	return nil
 }
 
 func sendErrorResponse(ctx wrapper.HttpContext, config *BalanceCheckConfig, message string) types.Action {
 	log.Warnf("ai-balance-check: sending error response: %s", message)
-
 	// 构建 OpenAI 兼容的错误响应
 	errorInner := struct {
 		Message string `json:"message"`
@@ -133,15 +158,50 @@ func sendErrorResponse(ctx wrapper.HttpContext, config *BalanceCheckConfig, mess
 		return types.ActionContinue
 	}
 
-	_ = proxywasm.SendHttpResponse(
+	if err := proxywasm.SendHttpResponse(
 		402,
 		[][2]string{{"Content-Type", "application/json"}},
 		jsonData,
 		-1,
-	)
+	); err != nil {
+		log.Errorf("ai-balance-check: SendHttpResponse failed in sendErrorResponse: %v", err)
+	}
 	return types.HeaderStopAllIterationAndWatermark
 }
 
+// shouldSkipPath 判断请求路径是否应跳过余额校验。
+// path 是 HTTP 请求路径（可能包含 query string）。
+// skipPaths 是需要跳过的路径前缀列表。
+// 匹配规则：去除 query 后做前缀匹配。
+func shouldSkipPath(path string, skipPaths []string) bool {
+	if len(skipPaths) == 0 {
+		return false
+	}
+	// 去掉 query string
+	pathOnly := path
+	if idx := strings.IndexByte(path, '?'); idx >= 0 {
+		pathOnly = path[:idx]
+	}
+	for _, prefix := range skipPaths {
+		if prefix == "" {
+			continue
+		}
+		if strings.HasPrefix(pathOnly, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// onHttpRequestHeaders 在请求 header 阶段执行异步余额校验。
+//
+// 为什么放在 header 阶段(而非 body 阶段):
+//   Envoy filter chain 按 "阶段(frame type)" 推进。所有 filter 的 decodeHeaders 先同步
+//   跑完,然后再依次跑 decodeData。body 阶段的 ActionPause(=StopIterationAndBuffer) 只能
+//   暂停 "当前 filter 自己" 的迭代,无法阻止排在后面的 filter(例如 ai-proxy)的 decodeData
+//   被调用,从而导致 ai-proxy 改写 body、router filter 把请求发给 upstream。
+//   header 阶段返回 HeaderStopAllIterationAndWatermark 则会暂停整条 filter chain 的
+//   header + body + trailers,直到本插件显式调用 ResumeHttpRequest() / SendHttpResponse()。
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config BalanceCheckConfig) types.Action {
 	// Skip if plugin is disabled
 	if config.apiUrl == "" {
@@ -151,6 +211,14 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config BalanceCheckConfig) ty
 
 	// Check if already validated to avoid duplicate checks
 	if ctx.GetContext(CtxKeyBalanceChecked) != nil {
+		return types.ActionContinue
+	}
+
+	// 获取请求路径，检查是否在 skipPaths 白名单内（前缀匹配）
+	// 跳过余额校验的 URI（例如：作画任务结果轮询接口）
+	requestPath, _ := proxywasm.GetHttpRequestHeader(":path")
+	if requestPath != "" && shouldSkipPath(requestPath, config.skipPaths) {
+		log.Infof("ai-balance-check: skipping balance check for path (matched skipPaths): %s", requestPath)
 		return types.ActionContinue
 	}
 
@@ -166,11 +234,22 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config BalanceCheckConfig) ty
 		return sendErrorResponse(ctx, &config, config.failMessage)
 	}
 
-	// Mark as checked to avoid duplicate validation
+	// 标记为已校验，避免后续重复执行
 	ctx.SetContext(CtxKeyBalanceChecked, true)
+	ctx.SetContext(CtxKeyAPIKey, apiKey)
 
-	// Perform balance check
+	// 余额校验在 header 阶段发起，不需要读取请求 body
+	ctx.DontReadRequestBody()
+
+	log.Infof("ai-balance-check: starting async balance check (header phase)")
 	return checkBalance(ctx, config, apiKey)
+}
+
+// onHttpRequestBody 在请求 body 阶段不做任何业务处理。
+// 余额校验已挪到 onHttpRequestHeaders 阶段；这里保留注册只是为了向后兼容，
+// 实际不会被执行（header 阶段已 ctx.DontReadRequestBody()）。
+func onHttpRequestBody(ctx wrapper.HttpContext, config BalanceCheckConfig, body []byte) types.Action {
+	return types.ActionContinue
 }
 
 func checkBalance(ctx wrapper.HttpContext, config BalanceCheckConfig, apiKey string) types.Action {
@@ -203,11 +282,15 @@ func checkBalance(ctx wrapper.HttpContext, config BalanceCheckConfig, apiKey str
 
 	if err != nil {
 		log.Errorf("ai-balance-check: failed to dispatch balance check request: %v - PASSING REQUEST DUE TO DISPATCH ERROR", err)
+		// dispatch 失败时直接放行请求，不再暂停 filter chain
 		return types.ActionContinue
 	}
 
-	// Pause the request until callback completes
-	return types.ActionPause
+	// 暂停整条 filter chain（header + body + trailers），直到异步回调显式 ResumeHttpRequest 或 SendHttpResponse。
+	// 注意：必须使用 HeaderStopAllIterationAndWatermark，而不是 ActionPause。
+	// 因为 header 阶段的 ActionPause 等价于 HeaderStopIteration，只能拦住后续 filter 的 header，
+	// 拦不住后续 filter 的 body。HeaderStopAllIterationAndWatermark 才能拦住所有阶段。
+	return types.HeaderStopAllIterationAndWatermark
 }
 
 func handleBalanceCheckResponse(ctx wrapper.HttpContext, config BalanceCheckConfig, statusCode int, responseBody []byte) {
@@ -258,12 +341,17 @@ func handleBalanceCheckResponse(ctx wrapper.HttpContext, config BalanceCheckConf
 			_ = proxywasm.ResumeHttpRequest()
 			return
 		}
-		_ = proxywasm.SendHttpResponse(
+		if err := proxywasm.SendHttpResponse(
 			402,
 			[][2]string{{"Content-Type", "application/json"}},
 			jsonData,
 			-1,
-		)
+		); err != nil {
+			// SendHttpResponse 失败通常意味着 stream 状态不对（例如请求已经被上游处理）。
+			// 此时再 ResumeHttpRequest 也无法纠正，但为避免请求一直被 pause 悬挂，这里放行。
+			log.Errorf("ai-balance-check: SendHttpResponse failed in block path: %v - request may leak upstream", err)
+			_ = proxywasm.ResumeHttpRequest()
+		}
 		return
 	}
 
