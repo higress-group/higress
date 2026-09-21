@@ -727,7 +727,6 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 		}
 	}
 
-	for _, tool := range origRequest.Tools {
 	// OpenAI's `tool_choice.allowed_tools` has no Claude counterpart: Claude only
 	// picks tools by name. Narrow the declared tools to the caller-approved subset
 	// so the model cannot call a tool that the caller ruled out, and translate the
