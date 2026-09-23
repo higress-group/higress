@@ -39,10 +39,12 @@ for (const path of ['direct', 'proxy-modern', 'proxy-legacy', 'proxy-auto-modern
     }
 
     if (path === 'proxy-auto-error') {
-      let failed = false;
+      let probeError;
       try { await client.callTool({ name: 'get_weather', arguments: { location: 'New York' } }); }
-      catch { failed = true; }
-      if (!failed) throw new Error('auto probe error unexpectedly dispatched business');
+      catch (error) { probeError = error; }
+      if (probeError?.code !== -32020) {
+        throw new Error(`auto probe: got ${probeError}, want JSON-RPC HeaderMismatch (-32020)`);
+      }
       console.log(`typescript-client 2.0.0: ${path} stopped before business`);
       continue;
     }

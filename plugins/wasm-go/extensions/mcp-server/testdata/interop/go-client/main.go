@@ -16,11 +16,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -63,8 +65,10 @@ func exercise(endpoint string) error {
 	}
 
 	if strings.HasSuffix(endpoint, "proxy-auto-error") {
-		if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_weather", Arguments: map[string]any{"location": "New York"}}); err == nil {
-			return fmt.Errorf("auto probe failure unexpectedly dispatched business")
+		_, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_weather", Arguments: map[string]any{"location": "New York"}})
+		var rpcError *jsonrpc.Error
+		if !errors.As(err, &rpcError) || rpcError.Code != -32020 {
+			return fmt.Errorf("auto probe: got %v, want JSON-RPC HeaderMismatch (-32020)", err)
 		}
 		return nil
 	}

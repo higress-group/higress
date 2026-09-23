@@ -7,6 +7,7 @@ plugin_dir=$(cd -- "$script_dir/../.." && pwd)
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/higress-mcp-interop.XXXXXX")
 ready_file="$temp_dir/endpoint"
 host_log="$temp_dir/host.log"
+host_binary="$temp_dir/host"
 
 cleanup() {
   status=$?
@@ -19,12 +20,13 @@ cleanup() {
     echo "interop diagnostics retained in $temp_dir" >&2
     return "$status"
   fi
-  rm -f -- "$ready_file" "$host_log"
+  rm -f -- "$ready_file" "$host_log" "$host_binary"
   rmdir "$temp_dir"
 }
 trap cleanup EXIT
 
-(cd "$plugin_dir" && go run ./testdata/interop/host -ready-file "$ready_file") >"$host_log" 2>&1 &
+(cd "$plugin_dir" && go test -count=1 ./testdata/interop/host && go build -o "$host_binary" ./testdata/interop/host)
+"$host_binary" -ready-file "$ready_file" >"$host_log" 2>&1 &
 host_pid=$!
 
 for _ in $(seq 1 80); do
@@ -47,3 +49,4 @@ MCP_INTEROP_ROOT=$(cat "$ready_file")
 
 (cd "$script_dir/go-client" && go run .)
 (cd "$script_dir/typescript" && npm ci --ignore-scripts --registry=https://registry.npmjs.org && node client.mjs)
+python3 "$script_dir/check_probe.py" "$MCP_INTEROP_ROOT"

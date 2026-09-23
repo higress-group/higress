@@ -3,10 +3,13 @@
 import json
 import socket
 import threading
+import uuid
 
 LOCK = threading.Lock()
 CONFIG = {"mode": "modern", "case": "unset"}
 BARRIERS = {}
+WAITING_REQUESTS = {}
+ISSUED_SESSIONS = {}
 RELEASED = {}
 RETURNED = {}
 EXECUTIONS = {}
@@ -21,6 +24,8 @@ def control(handler, path, body):
                 barrier.set()
             CONFIG = json.loads(body)
             BARRIERS.clear()
+            WAITING_REQUESTS.clear()
+            ISSUED_SESSIONS.clear()
             RELEASED.clear()
             RETURNED.clear()
             EXECUTIONS.clear()
@@ -40,21 +45,25 @@ def control(handler, path, body):
 def state():
     with LOCK:
         return {"case": CONFIG["case"], "waiting": list(BARRIERS),
+                "waitingRequests": {stage: sorted(keys) for stage, keys in WAITING_REQUESTS.items()},
                 "released": dict(RELEASED), "returned": dict(RETURNED), "executions": dict(EXECUTIONS)}
 
 
 def event_fields(handler, request):
     params = request.get("params") or {}
     credential = handler.headers.get("Authorization", "")
+    key = handler.headers.get("baggage")
+    session = handler.headers.get("Mcp-Session-Id")
     with LOCK:
         case = CONFIG["case"]
-    return {"autoCase": case, "requestKey": handler.headers.get("baggage"),
+        session_matches = bool(session) and session == ISSUED_SESSIONS.get(key)
+    return {"autoCase": case, "requestKey": key,
             "authority": handler.headers.get("Host"),
             "authAlias": {"Bearer auto-alice": "alice", "Bearer auto-bob": "bob",
                           "Bearer runtime-upstream-token": "fixed", "Bearer auto-tool": "tool"}.get(credential, "none"),
             "modernMetaPresent": "_meta" in params,
             "continuationPresent": "requestState" in params or "inputResponses" in params,
-            "sessionAlias": "current" if handler.headers.get("Mcp-Session-Id", "").startswith("auto-session-") else "none"}
+            "sessionMatchesRequest": session_matches}
 
 
 def raw_response(handler, status, data, media="application/json", headers=None):
@@ -91,6 +100,7 @@ def handle_response(handler, request):
         config = dict(CONFIG)
         if config.get("barrier") == method:
             barrier = BARRIERS.setdefault(method, threading.Event())
+            WAITING_REQUESTS.setdefault(method, set()).add(key)
         else:
             barrier = None
     if barrier:
@@ -98,6 +108,7 @@ def handle_response(handler, request):
             return raw_response(handler, 504, b"")
         with LOCK:
             RELEASED[method] = True
+            WAITING_REQUESTS[method].discard(key)
     mode = config["mode"]
 
     def error(code, status=400, data=None, wrong_id=False):
@@ -165,7 +176,14 @@ def handle_response(handler, request):
             version = "2025-11-25"
         result = {"protocolVersion": version, "capabilities": {"tools": {}},
                   "serverInfo": {"name": "auto-legacy", "version": "1"}}
-        headers = {"Mcp-Session-Id": "auto-session-" + key} if mode == "legacy-session" else {}
+        headers = {}
+        if mode == "legacy-session":
+            # Keep the issued value private; the ledger only exposes whether
+            # a later request used its own session, including under concurrency.
+            session = "auto-session-" + uuid.uuid4().hex
+            with LOCK:
+                ISSUED_SESSIONS[key] = session
+            headers["Mcp-Session-Id"] = session
         return handler.send_json(200, {"jsonrpc": "2.0", "id": rpc_id, "result": result}, headers)
     if method == "notifications/initialized":
         if mode == "notify-fail":

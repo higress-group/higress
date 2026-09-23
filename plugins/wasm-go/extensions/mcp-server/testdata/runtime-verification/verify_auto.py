@@ -33,6 +33,24 @@ def wait_for(read, predicate, description, timeout=10):
     raise AssertionError("timed out waiting for " + description)
 
 
+def check_legacy_sessions(state, expected_auth):
+    """Check exact request ownership without copying session values to evidence."""
+    if set(event["requestKey"] for event in state["events"]) != set(expected_auth):
+        raise AssertionError("unexpected request in legacy session ledger")
+    for key, alias in expected_auth.items():
+        events = [event for event in state["events"] if event["requestKey"] == key]
+        if [event["rpcMethod"] for event in events] != [PROBE, INIT, NOTIFY, CALL]:
+            raise AssertionError(f"legacy request {key} shared or repeated a phase")
+        if any(event["authAlias"] != alias for event in events):
+            raise AssertionError(f"authentication snapshot changed for {key}")
+        if [event["sessionPresent"] for event in events] != [False, False, True, True]:
+            raise AssertionError(f"session scope is wrong for {key}")
+        if [event["sessionMatchesRequest"] for event in events] != [False, False, True, True]:
+            raise AssertionError(f"session does not belong to request {key}")
+    if state["auto"]["executions"] != {key: 1 for key in expected_auth}:
+        raise AssertionError("legacy business execution count is not exactly one per request")
+
+
 def cases(v):
     def configure(mode, barrier=None, reset=True):
         if reset:
@@ -131,16 +149,38 @@ def cases(v):
 
     def auth_isolation():
         configure("legacy-session")
-        for key, port, auth, expected in (("alice", 10011, "Bearer auto-alice", "alice"),
-                                          ("bob", 10011, "Bearer auto-bob", "bob"),
-                                          ("fixed", 10010, "Bearer auto-alice", "fixed"),
-                                          ("override", 10011, "Bearer auto-alice", "tool")):
+        for key, port, auth in (("alice", 10011, "Bearer auto-alice"),
+                                ("bob", 10011, "Bearer auto-bob"),
+                                ("fixed", 10010, "Bearer auto-alice"),
+                                ("override", 10011, "Bearer auto-alice")):
             status, _, response = rpc(key=key, port=port, headers={"Authorization": auth}, tool="proxy_override" if key == "override" else "proxy_echo")
             v.check(status == 200 and "result" in response, f"auth scenario failed: {response}")
-            events = [e for e in v.backend_state()["events"] if e["requestKey"] == key]
-            v.check(len(events) == 4 and all(e["authAlias"] == expected for e in events), "authentication snapshot changed")
-            v.check([e["sessionAlias"] for e in events] == ["none", "none", "current", "current"], "session scope is wrong")
+        check_legacy_sessions(v.backend_state(), {"alice": "alice", "bob": "bob", "fixed": "fixed", "override": "tool"})
         return details([PROBE, INIT, NOTIFY, CALL] * 4)
+
+    def concurrent_legacy_isolation():
+        configure("legacy-session", barrier=NOTIFY)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(rpc, key=key, port=10011, headers={"Authorization": "Bearer auto-" + key})
+                       for key in ("alice", "bob")]
+            try:
+                # Both initialized requests are in flight with independently
+                # issued sessions before either can advance to business.
+                blocked = wait_for(v.backend_state,
+                                   lambda state: state["auto"]["waitingRequests"].get(NOTIFY) == ["alice", "bob"],
+                                   "both legacy requests at initialized barrier")
+                v.check(not blocked["auto"]["executions"] and not any(future.done() for future in futures),
+                        "legacy requests did not overlap before business")
+                v.exchange("http://backend-primary:8080/__auto_release", {"stage": NOTIFY})
+                for future in futures:
+                    status, _, response = future.result()
+                    v.check(status == 200 and "result" in response, "concurrent legacy request failed")
+            finally:
+                v.exchange("http://backend-primary:8080/__auto_release", {"stage": NOTIFY})
+        check_legacy_sessions(v.backend_state(), {"alice": "alice", "bob": "bob"})
+        evidence = details()
+        evidence["concurrencyBoundary"] = "both initialized requests blocked before either business execution"
+        return evidence
 
     def boundaries():
         configure("modern")
@@ -240,6 +280,7 @@ def cases(v):
         [(f"auto-success-{mode}", success(mode)) for mode in ("modern", "legacy", "legacy-session", "version", "http400", "http404", "http405", "sse")]
         + [(f"auto-failure-{mode}", failure(mode)) for mode in FAILURES]
         + [("auto-fresh-and-concurrent", fresh_and_concurrent), ("auto-auth-session-isolation", auth_isolation),
+           ("auto-concurrent-legacy-session-isolation", concurrent_legacy_isolation),
            ("auto-local-permission-continuation-cursor", boundaries), ("auto-execution-loss-no-replay", no_replay), ("auto-probe-timeout", probe_timeout)]
         + [("auto-cancel-" + stage.replace("/", "-"), cancel(stage)) for stage in (PROBE, INIT, NOTIFY, CALL)]
     )

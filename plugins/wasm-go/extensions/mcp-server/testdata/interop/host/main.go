@@ -60,8 +60,10 @@ var configs = map[string]json.RawMessage{
 }
 
 type pluginHandler struct {
-	mu           sync.Mutex
-	autoRequests int
+	mu               sync.Mutex
+	autoRequests     int
+	fixtureFailures  []string
+	completeCallouts func(wasmtest.TestHost, string, string, string) error
 }
 
 func init() {
@@ -92,6 +94,16 @@ func main() {
 }
 
 func (h *pluginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/__fixture_status" && r.Method == http.MethodGet {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if len(h.fixtureFailures) != 0 {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]int{"failures": len(h.fixtureFailures)})
+		return
+	}
 	config, ok := configs[r.URL.Path]
 	if !ok {
 		http.NotFound(w, r)
@@ -114,6 +126,7 @@ func (h *pluginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	host, status := wasmtest.NewTestHost(config)
 	if status != types.OnPluginStartStatusOK {
+		h.fixtureFailures = append(h.fixtureFailures, "mcp-server test host failed to start")
 		http.Error(w, "mcp-server test host failed to start", http.StatusInternalServerError)
 		return
 	}
@@ -148,7 +161,14 @@ func (h *pluginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			profile = "legacy"
 		}
 	}
-	if err := completeFixtureCallouts(host, r.URL.Path, profile, gjson.GetBytes(body, "method").String()); err != nil {
+	complete := h.completeCallouts
+	if complete == nil {
+		complete = completeFixtureCallouts
+	}
+	if err := complete(host, r.URL.Path, profile, gjson.GetBytes(body, "method").String()); err != nil {
+		// Keep this failure after the response. An SDK's expected-error path
+		// must never turn a failed fixture assertion into a successful run.
+		h.fixtureFailures = append(h.fixtureFailures, err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

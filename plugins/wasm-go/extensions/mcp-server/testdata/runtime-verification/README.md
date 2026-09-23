@@ -178,6 +178,12 @@ failed directory must not be reused, modified, or deleted.
   supplies the safe ledger, public credential aliases and phase barriers.
   [`auto_self_test.py`](./auto_self_test.py) checks these barriers and proves that
   the fixture records execution before deliberately closing the response.
+  Session checks compare each initialized/business request with the exact
+  session issued to that request, exposing only a boolean in evidence. The
+  concurrent legacy case holds both Alice and Bob at the initialized barrier
+  before either can execute business, then requires each request's four-step
+  sequence and one execution. The self-test sends swapped sessions and an
+  extra business request over HTTP and requires the same oracle to reject them.
 - [`verify.py`](./verify.py) executes the existing and auto traffic cases and writes
   the client ledger, case matrix, and final backend snapshots.
 - [`finalize_evidence.py`](./finalize_evidence.py) adds the isolated and corpus

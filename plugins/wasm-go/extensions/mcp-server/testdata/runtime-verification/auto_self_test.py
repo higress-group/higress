@@ -62,6 +62,51 @@ class AutoFixtureTest(unittest.TestCase):
             self.assertIn("auto-cancel-" + stage.replace("/", "-"), names)
         self.assertIn("auto-execution-loss-no-replay", names)
         self.assertIn("auto-fresh-and-concurrent", names)
+        self.assertIn("auto-concurrent-legacy-session-isolation", names)
+
+    def test_session_oracle_rejects_swapped_sessions_and_replayed_business(self):
+        for fault in (None, verify_auto.NOTIFY, verify_auto.CALL, "replay"):
+            with self.subTest(fault=fault):
+                self.configure("legacy-session", verify_auto.NOTIFY)
+                sessions = {}
+                for key in ("alice", "bob"):
+                    self.rpc(verify_auto.PROBE, key, {"Authorization": "Bearer auto-" + key})
+                    status, headers, _ = self.rpc(verify_auto.INIT, key, {"Authorization": "Bearer auto-" + key})
+                    self.assertEqual(status, 200)
+                    sessions[key] = headers["Mcp-Session-Id"]
+                self.assertNotEqual(sessions["alice"], sessions["bob"])
+
+                def finish(key):
+                    for stage in (verify_auto.NOTIFY, verify_auto.CALL):
+                        owner = ("bob" if key == "alice" else "alice") if fault == stage else key
+                        status, _, _ = self.rpc(stage, key, {"Authorization": "Bearer auto-" + key,
+                                                            "Mcp-Session-Id": sessions[owner]})
+                        self.assertEqual(status, 202 if stage == verify_auto.NOTIFY else 200)
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    futures = [pool.submit(finish, key) for key in ("alice", "bob")]
+                    try:
+                        blocked = verify_auto.wait_for(self.state,
+                            lambda value: value["auto"]["waitingRequests"].get(verify_auto.NOTIFY) == ["alice", "bob"],
+                            "both legacy sessions blocked")
+                        self.assertEqual(blocked["auto"]["executions"], {})
+                        self.assertTrue(all(not future.done() for future in futures))
+                        self.request("/__auto_release", {"stage": verify_auto.NOTIFY})
+                        for future in futures:
+                            future.result()
+                    finally:
+                        self.request("/__auto_release", {"stage": verify_auto.NOTIFY})
+                if fault == "replay":
+                    self.rpc(verify_auto.CALL, "alice", {"Authorization": "Bearer auto-alice",
+                                                       "Mcp-Session-Id": sessions["alice"]})
+                state = self.state()
+                for session in sessions.values():
+                    self.assertNotIn(session, json.dumps(state))
+                if fault is None:
+                    verify_auto.check_legacy_sessions(state, {"alice": "alice", "bob": "bob"})
+                else:
+                    with self.assertRaisesRegex(AssertionError, "session does not belong|repeated a phase"):
+                        verify_auto.check_legacy_sessions(state, {"alice": "alice", "bob": "bob"})
 
     def test_phase_release_is_observable_before_reconfiguration(self):
         for stage in (verify_auto.PROBE, verify_auto.INIT, verify_auto.NOTIFY, verify_auto.CALL):
