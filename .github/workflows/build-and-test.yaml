@@ -56,6 +56,32 @@ jobs:
           files: ./coverage.xml
           verbose: true
 
+  hgctl-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Setup Go"
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Golang Caches
+        uses: actions/cache@v4
+        with:
+          path: |-
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-go
+
+      - run: git stash # restore patch
+
+      - name: Run hgctl Unit Tests
+        run: |-
+          go version
+          GOPROXY="https://proxy.golang.org,direct" make go.test.hgctl
+
   build:
     # The type of runner that the job will run on
     runs-on: ubuntu-22.04
