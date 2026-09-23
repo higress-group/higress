@@ -22,6 +22,7 @@ import (
 const (
 	DefaultMaxBodyBytes = 100 * 1024 * 1024 // 100MB
 	AutoModelPrefix     = "higress/auto"
+	DefaultModelHeader  = "x-higress-llm-model"
 )
 
 func main() {}
@@ -229,7 +230,7 @@ func handleJsonBody(ctx wrapper.HttpContext, config ModelRouterConfig, body []by
 
 		if targetModel != "" {
 			// Set the matched model to the header for routing
-			modelHeader := "x-higress-llm-model"
+			modelHeader := DefaultModelHeader
 			if config.modelToHeader != "" {
 				modelHeader = config.modelToHeader
 			}

@@ -705,7 +705,7 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			modelHeader, found := getHeader(headers, "x-higress-llm-model")
+			modelHeader, found := getHeader(headers, DefaultModelHeader)
 			require.True(t, found, "default model header should be set")
 			require.Equal(t, "qwen-vl-max", modelHeader)
 		})
@@ -816,8 +816,8 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.True(t, found)
 			require.Equal(t, "qwen-long", modelHeader)
 
-			// x-higress-llm-model should NOT be set (auto routing not triggered)
-			_, found = getHeader(headers, "x-higress-llm-model")
+			// DefaultModelHeader should NOT be set (auto routing not triggered)
+			_, found = getHeader(headers, DefaultModelHeader)
 			require.False(t, found)
 		})
 
