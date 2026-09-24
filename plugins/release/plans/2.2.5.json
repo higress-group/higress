@@ -1,0 +1,549 @@
+{
+  "schemaVersion": 1,
+  "gatewayVersion": "2.2.5",
+  "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+  "baseCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+  "previousRelease": "2.2.4",
+  "catalogSha256": "31406b6596e6c4bf3147bd032b6c5d0d28ef15d5bf9946c1dde967f4ab232fc6",
+  "planId": "sha256:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84",
+  "plugins": [
+    {
+      "logicalId": "ai-agent",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-agent",
+      "image": "plugins/ai-agent",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:b570153f1020b9894949faf2374833b46f2e3c486e01230bb814825c12fd5b42",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-agent/VERSION",
+        "plugins/wasm-go/extensions/ai-agent/dashscope/message.go",
+        "plugins/wasm-go/extensions/ai-agent/main.go",
+        "plugins/wasm-go/extensions/ai-agent/main_test.go"
+      ]
+    },
+    {
+      "logicalId": "ai-cache",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-cache",
+      "image": "plugins/ai-cache",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:5e6a3c09a53ecd343cbbff96fa14fcb0ddf17f37db188f4c8ea6f5192b472431",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-cache/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-data-masking",
+      "implementation": "rust",
+      "sourceDir": "plugins/wasm-rust/extensions/ai-data-masking",
+      "image": "plugins/ai-data-masking",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:e063e4a6cb8f9d2e60e305315cfad86f8e43fd505941ca170566f94d36697451",
+      "changedPaths": [
+        "plugins/wasm-rust/extensions/ai-data-masking/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-endpoint-picker",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-endpoint-picker",
+      "image": "plugins/ai-endpoint-picker",
+      "version": "2.0.1",
+      "inputHash": "sha256:b7e6dc2f83ab586d6c9ba30fc58f687cc986d65f17bc09e786d6786bdc4ad478",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-endpoint-picker/.gitignore",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/VERSION",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/config.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/config_test.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/go.mod",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/go.sum",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/main.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/main_test.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/metrics.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/prefixcache/benchmark_test.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/prefixcache/index.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/prefixcache/index_test.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/prefixcache/locality.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/prefixcache/locality_test.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/scheduling/feedback.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/scheduling/feedback_test.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/scheduling/parser.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/scheduling/parser_test.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/scheduling/pipeline.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/scheduling/pipeline_test.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/scheduling/types.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/snapshot.go",
+        "plugins/wasm-go/extensions/ai-endpoint-picker/snapshot_test.go"
+      ]
+    },
+    {
+      "logicalId": "ai-history",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-history",
+      "image": "plugins/ai-history",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:ebf7a87c2884699a324b4f916a0ef871b498b9b54801de127e5ce4eceee89b7d",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-history/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-intent",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-intent",
+      "image": "plugins/ai-intent",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:4861b5a3e43ccf39fbef2e5d35a9a217e7dc157f206cdfa62b359bf528646061",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-intent/VERSION",
+        "plugins/wasm-go/extensions/ai-intent/main.go",
+        "plugins/wasm-go/extensions/ai-intent/main_test.go"
+      ]
+    },
+    {
+      "logicalId": "ai-json-resp",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-json-resp",
+      "image": "plugins/ai-json-resp",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:571d995e02425c2db2f1115288125be89672b3ca0633a7666fc2702d51c5aea7",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-json-resp/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-load-balancer",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-load-balancer",
+      "image": "plugins/ai-load-balancer",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:682b2c3f31a54e842c9867eff279c189449cc65ea3ae5b10aac205a6b4427743",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-load-balancer/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-prompt-decorator",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-prompt-decorator",
+      "image": "plugins/ai-prompt-decorator",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:46a467368c3ad943c349c1062f2f8ca4f7b680da901ac7f4fe4fc82b78f6f2ac",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-prompt-decorator/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-prompt-template",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-prompt-template",
+      "image": "plugins/ai-prompt-template",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:f817721b3ab740e4fe09ba7596db1c0f6c6336d918234395167c9233615a72a0",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-prompt-template/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-proxy",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-proxy",
+      "image": "plugins/ai-proxy",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:6fa41e7d6d33c08aee2d1598ac8f7290d36b695b62235d3e76540af2cea9a457",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-proxy/VERSION",
+        "plugins/wasm-go/extensions/ai-proxy/provider/hunyuan.go"
+      ]
+    },
+    {
+      "logicalId": "ai-quota",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-quota",
+      "image": "plugins/ai-quota",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:84cbeafa0740e9225f4aebdd521ef97696754b3efaa56654ad0edf1269e788a3",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-quota/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-rag",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-rag",
+      "image": "plugins/ai-rag",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:04ddae799c96d581cc663a904e5e1b79743b47329511cf2e79a2a7fc1f7039ba",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-rag/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-search",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-search",
+      "image": "plugins/ai-search",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:aa13ed14b196ea99f0482d6447e84b0626d223d164a8930e91025f79dd162244",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-search/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-security-guard",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-security-guard",
+      "image": "plugins/ai-security-guard",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:05eba37814c7db35cc31bfceed78e37031cc733afafc0d24c64b20ea08149650",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-security-guard/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-statistics",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-statistics",
+      "image": "plugins/ai-statistics",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:86ce0a98ba0f6af74b2885b326fde5d66f193ca0803c0938acb8cca5be5835b7",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-statistics/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-token-ratelimit",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-token-ratelimit",
+      "image": "plugins/ai-token-ratelimit",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:7df4dc75c9fa776799d7238d0d309eec545a936a3f66517a23170f677cc7e70a",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-token-ratelimit/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ai-transformer",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-transformer",
+      "image": "plugins/ai-transformer",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:82a4b1152fab58f79fd8239a8f85bb87fed9a8acec957bc6c2fd8e16f3f1f06a",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ai-transformer/VERSION"
+      ]
+    },
+    {
+      "logicalId": "cache-control",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/cache-control",
+      "image": "plugins/cache-control",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:a5dbe09aef37a0b82b893b539bba38257b9b9fdb84ba8fcbac8713c1603f1064",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/cache-control/VERSION"
+      ]
+    },
+    {
+      "logicalId": "cluster-key-rate-limit",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/cluster-key-rate-limit",
+      "image": "plugins/cluster-key-rate-limit",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:df3fe8720ee52661571a793221ac59f4363df2dd7eacdec891f0a75a2521ca16",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/cluster-key-rate-limit/VERSION"
+      ]
+    },
+    {
+      "logicalId": "cors",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/cors",
+      "image": "plugins/cors",
+      "previousVersion": "2.0.2",
+      "version": "2.0.3",
+      "inputHash": "sha256:6fa9cbc3f1d8ec5e04bd824b045359865511ba36a28958a8fb3936e01d993c9c",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/cors/VERSION"
+      ]
+    },
+    {
+      "logicalId": "de-graphql",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/de-graphql",
+      "image": "plugins/de-graphql",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:a90f0a348e16009bbd75998d26684fa75dae5441330f4613c0c9142f7f4c5209",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/de-graphql/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ext-auth",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ext-auth",
+      "image": "plugins/ext-auth",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:b001ec9a729f8419f46dc612f5db6e965ddb15e5a98f1593ee892b0254db1d3f",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ext-auth/VERSION",
+        "plugins/wasm-go/extensions/ext-auth/config/config.go",
+        "plugins/wasm-go/extensions/ext-auth/config/match_rule_headers_test.go",
+        "plugins/wasm-go/extensions/ext-auth/expr/expr_extra_test.go",
+        "plugins/wasm-go/extensions/ext-auth/expr/match_rule_headers_test.go",
+        "plugins/wasm-go/extensions/ext-auth/expr/match_rules.go",
+        "plugins/wasm-go/extensions/ext-auth/expr/match_rules_test.go",
+        "plugins/wasm-go/extensions/ext-auth/header_match_test.go",
+        "plugins/wasm-go/extensions/ext-auth/main.go"
+      ]
+    },
+    {
+      "logicalId": "frontend-gray",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/frontend-gray",
+      "image": "plugins/frontend-gray",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:4b99eaef2562663f0764f2aa19beffcbbfe1f4f9572f816b2dccbad893e81525",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/frontend-gray/VERSION"
+      ]
+    },
+    {
+      "logicalId": "geo-ip",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/geo-ip",
+      "image": "plugins/geo-ip",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:6f22ee3ebfd7dfbdd783c614b24a423e50e6527b304ca6aa3b31423ea4a19277",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/geo-ip/VERSION"
+      ]
+    },
+    {
+      "logicalId": "gw-error-format",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/gw-error-format",
+      "image": "plugins/gw-error-format",
+      "previousVersion": "1.0.0",
+      "version": "1.0.1",
+      "inputHash": "sha256:abee913b761acd3dd0b0c0c801de46083e4f4124f48f9539235eb63aa0c2a9c3",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/gw-error-format/VERSION"
+      ]
+    },
+    {
+      "logicalId": "hmac-auth-apisix",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/hmac-auth-apisix",
+      "image": "plugins/hmac-auth-apisix",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:9e50f63b85b07f953361597c356364422ca83b17c473cc69b4d9a3b5f5aad27c",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/hmac-auth-apisix/VERSION"
+      ]
+    },
+    {
+      "logicalId": "ip-restriction",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ip-restriction",
+      "image": "plugins/ip-restriction",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:13d74d4b48182ace5439231f770568d2b45d5574ff87722e5686b8c5dc4d368d",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/ip-restriction/VERSION"
+      ]
+    },
+    {
+      "logicalId": "json-converter",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/jsonrpc-converter",
+      "image": "plugins/jsonrpc-converter",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:120ffaeed5d302458126cd17085e58ed11d279f3cb4de44d73d34214ccc6be4f",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/jsonrpc-converter/VERSION"
+      ]
+    },
+    {
+      "logicalId": "mcp-router",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/mcp-router",
+      "image": "plugins/mcp-router",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:1a8e89d8fbe2f680a360b680b0811d6204eb9213ebc1cb88e47ca06c7e240234",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/mcp-router/VERSION",
+        "plugins/wasm-go/pkg/mcp/protocol/capabilities.go",
+        "plugins/wasm-go/pkg/mcp/protocol/request_test.go"
+      ]
+    },
+    {
+      "logicalId": "mcp-server",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/mcp-server",
+      "image": "plugins/mcp-server",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:bfcf317472364c38ae9ec69e99a854f53a1c69721296be744e09e82c7f1bc19f",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/mcp-server/VERSION",
+        "plugins/wasm-go/pkg/mcp/protocol/capabilities.go",
+        "plugins/wasm-go/pkg/mcp/protocol/request_test.go"
+      ]
+    },
+    {
+      "logicalId": "model-mapper",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/model-mapper",
+      "image": "plugins/model-mapper",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:c1d00714fc6049fa8c15ff71cb22f4bc7f066904477c507e4ff16ec84e9df112",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/model-mapper/VERSION"
+      ]
+    },
+    {
+      "logicalId": "model-router",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/model-router",
+      "image": "plugins/model-router",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:44ffc127d449dcaa4104cd34aa7cca9fb9f16b37c7b66a50b9d9065df9c3565c",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/model-router/VERSION"
+      ]
+    },
+    {
+      "logicalId": "oidc",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/oidc",
+      "image": "plugins/oidc",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:d2f86a6f996c2fa5c562ee67160b70d3c14931d01df690231f1c00d66bfb1884",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/oidc/VERSION"
+      ]
+    },
+    {
+      "logicalId": "opa",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/opa",
+      "image": "plugins/opa",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:0edf1f20c4db62b86721d0f7c4952491d9f3bd35d316e16924bf883b85c93b5c",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/opa/VERSION"
+      ]
+    },
+    {
+      "logicalId": "request-validation",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/request-validation",
+      "image": "plugins/request-validation",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:dbc96346c1187b10fc9f3e3c312948204468e8a4ea9e573e58778d57c862634b",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/request-validation/VERSION"
+      ]
+    },
+    {
+      "logicalId": "response-cache",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/response-cache",
+      "image": "plugins/response-cache",
+      "previousVersion": "1.0.1",
+      "version": "1.0.2",
+      "inputHash": "sha256:c1e823741757fd1b339e46a4f95e6f06f466814d126bf3a96b74d6d5459e47da",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/response-cache/VERSION"
+      ]
+    },
+    {
+      "logicalId": "simple-jwt-auth",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/simple-jwt-auth",
+      "image": "plugins/simple-jwt-auth",
+      "previousVersion": "1.0.1",
+      "version": "1.0.2",
+      "inputHash": "sha256:f4030e746338be0f33b3b42f6f891ba34c1e03e0552fb44888281ab8cface754",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/simple-jwt-auth/VERSION"
+      ]
+    },
+    {
+      "logicalId": "traffic-tag",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/traffic-tag",
+      "image": "plugins/traffic-tag",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:438d43e0ad37a060ed4fafa969b76726f0b591d09a4e02961e272e4f7c3764ce",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/traffic-tag/VERSION"
+      ]
+    },
+    {
+      "logicalId": "transformer",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/transformer",
+      "image": "plugins/transformer",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:660ecf60aa63eefa35b9ebfd6c626952262afc8fa91bca5efd64ffa6a626b6d1",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/transformer/VERSION"
+      ]
+    },
+    {
+      "logicalId": "waf",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/waf",
+      "image": "plugins/waf",
+      "previousVersion": "2.0.1",
+      "version": "2.0.2",
+      "inputHash": "sha256:1c1a92f7bd3e310ad886392165bfb5155bff29b5dd28d5a7e98071c665fe7380",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/waf/VERSION"
+      ]
+    }
+  ],
+  "deferred": [
+    {
+      "logicalId": "replay-protection",
+      "version": "1.0.0-alpha",
+      "reason": "alpha-prerelease"
+    }
+  ]
+}

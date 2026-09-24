@@ -142,6 +142,13 @@ func TestMcpProxyServer_PassthroughAuthHeaderGetterAndSetter(t *testing.T) {
 	assert.False(t, s.GetPassthroughAuthHeader())
 }
 
+func TestMcpProxyServer_ProtocolStrategyDefaultsLegacy(t *testing.T) {
+	s := NewMcpProxyServer("p")
+	assert.Equal(t, ProtocolStrategyLegacy, s.GetProtocolStrategy())
+	s.SetProtocolStrategy(ProtocolStrategyModern)
+	assert.Equal(t, ProtocolStrategyModern, s.GetProtocolStrategy())
+}
+
 // -----------------------------------------------------------------------------
 // AddSecurityScheme — nil-map branch
 // -----------------------------------------------------------------------------
@@ -211,6 +218,7 @@ func TestMcpProxyServer_Clone_DeepCopiesToolsConfigAndSchemes(t *testing.T) {
 	orig.SetMcpServerURL("http://b")
 	orig.SetTimeout(1234)
 	orig.SetTransport(TransportSSE)
+	orig.SetProtocolStrategy(ProtocolStrategyModern)
 	orig.SetPassthroughAuthHeader(true)
 	orig.SetDefaultDownstreamSecurity(SecurityRequirement{ID: "K"})
 	orig.AddSecurityScheme(SecurityScheme{ID: "K", Type: "apiKey", In: "header", Name: "X"})
@@ -223,12 +231,11 @@ func TestMcpProxyServer_Clone_DeepCopiesToolsConfigAndSchemes(t *testing.T) {
 
 	// Surface fields are copied.
 	assert.Equal(t, orig.Name, cloned.Name)
-	// NOTE: Clone does not propagate mcpServerURL/timeout/transport/passthrough
-	// nor defaultDownstream/upstreamSecurity. That is intentional today (see
-	// proxy_server.go:188): cloning is used for per-request isolation of
-	// tool/security registries only. This test pins that contract — if Clone
-	// starts copying those fields, update here and document the change.
+	// Existing request-isolation clone semantics intentionally omit runtime
+	// endpoint/transport/security fields; only the new strategy must survive so
+	// a modern-only proxy cannot silently become legacy.
 	assert.Equal(t, "", cloned.GetMcpServerURL())
+	assert.Equal(t, orig.GetProtocolStrategy(), cloned.GetProtocolStrategy())
 
 	// toolsConfig: deep copy — adding to clone doesn't bleed back to orig.
 	require.NoError(t, cloned.AddProxyTool(McpProxyToolConfig{Name: "extra", Description: "x"}))

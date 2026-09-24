@@ -85,6 +85,8 @@ message RegistryConfig {
     repeated Services services = 2;
   }
   VPort vport = 27;
+  // Nacos client request timeout in milliseconds. Uses the controller default when unset.
+  int64 nacosTimeout = 28;
 }
 
 message ProxyConfig {

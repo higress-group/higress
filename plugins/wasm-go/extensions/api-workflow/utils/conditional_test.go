@@ -98,3 +98,25 @@ func TestReplacedStr(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkExecConditionalStr(b *testing.B) {
+	const condition = "or (eq production staging) (and (ge 42 10) (contain higress-gateway gateway))"
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got, err := ExecConditionalStr(condition)
+		if err != nil || !got {
+			b.Fatalf("ExecConditionalStr() = %v, %v", got, err)
+		}
+	}
+}
+
+func BenchmarkParseTmplStr(b *testing.B) {
+	const tmpl = `{"path":"{{request.path}}","method":"{{request.method}}","authorization":"{{request.header.authorization}}","body":"{{request.body}}"}`
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got := ParseTmplStr(tmpl)
+		if len(got) != 4 {
+			b.Fatalf("ParseTmplStr() returned %d entries", len(got))
+		}
+	}
+}

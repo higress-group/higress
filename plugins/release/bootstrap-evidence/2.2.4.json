@@ -1,0 +1,262 @@
+{
+  "plugins": {
+    "ai-agent": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-agent:2.0.0",
+      "digest": "sha256:aceb7a3feb3fa6330daa05fce20deb9bed7d47a2092958b89500d81cdf2a1cda"
+    },
+    "ai-cache": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-cache:2.0.0",
+      "digest": "sha256:dd2f501a35ba1c7d2d7abafd661ac6a35faa8ae74acc38a5f0ffdd16fbc425a1"
+    },
+    "ai-context-limit": {
+      "status": "missing",
+      "version": "1.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-context-limit:1.0.0"
+    },
+    "ai-data-masking": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-data-masking:2.0.0",
+      "digest": "sha256:a669b0d0a25c7bdfe078071918f8317a445db607b35baad94c413dcdf875c8f2"
+    },
+    "ai-history": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-history:2.0.0",
+      "digest": "sha256:5e42b99311cf4d96917e99e4daf3816fa20fb283c08e136faebc59d7365cc288"
+    },
+    "ai-intent": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-intent:2.0.0",
+      "digest": "sha256:936f8adad65afebd255d64cd985a5e243869b04a3dba2ccec2be1311e8165f9b"
+    },
+    "ai-json-resp": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-json-resp:2.0.0",
+      "digest": "sha256:1c91125f25f6253bed07c4054853cc13f2ebde0105a57e1a97abe2d234bb9b38"
+    },
+    "ai-load-balancer": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-load-balancer:2.0.0",
+      "digest": "sha256:762063833bd09630f2fb36697222e671fc7a994ebab6644d4127d4bbac63cb59"
+    },
+    "ai-prompt-decorator": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-prompt-decorator:2.0.0",
+      "digest": "sha256:094d462a390a21bf9b266e8e696e2efd8c4532a4a6e9c3fb2869e781d2d05a44"
+    },
+    "ai-prompt-template": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-prompt-template:2.0.0",
+      "digest": "sha256:ea2c12df510df88835841b9b81266032a2b231ad45b7220e2ca6076372e87112"
+    },
+    "ai-proxy": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-proxy:2.0.0",
+      "digest": "sha256:69c17eae7b8331f37f05a651a0a1aa731fe7aff2ce30452ff4bbba7c7271818d"
+    },
+    "ai-quota": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-quota:2.0.0",
+      "digest": "sha256:7f79af23dd01ea1aea0ba554bee563e64648b7e70f06b1bac542150c2339b167"
+    },
+    "ai-rag": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-rag:2.0.0",
+      "digest": "sha256:7ebf21123aa7c6645045d7997b38d92ddfd741e031eec898cfeacb924b94772b"
+    },
+    "ai-search": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-search:2.0.0",
+      "digest": "sha256:a60a8f2d8f7d126ba1f79fc8ff574afcc83348b0a861141ad6d368081371ac95"
+    },
+    "ai-security-guard": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-security-guard:2.0.0",
+      "digest": "sha256:831352dd46edb89616dd396f78235de5020920c8080cff878229b41f883cabbe"
+    },
+    "ai-statistics": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-statistics:2.0.0",
+      "digest": "sha256:6501d3a8e35c4724eb5fe5c9044e7588aedd29c9dd9ca6ae5e28fbd47df50725"
+    },
+    "ai-token-ratelimit": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-token-ratelimit:2.0.0",
+      "digest": "sha256:dbab63b4139f5568bb82f4471cb82e41149f1c0bc6941126c855b6614b54d329"
+    },
+    "ai-transformer": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-transformer:2.0.0",
+      "digest": "sha256:0de0c8e69ab2b47d9c7c3eac84479bb70ecf2814f24220dd837a0f1615f937c1"
+    },
+    "cache-control": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cache-control:2.0.0",
+      "digest": "sha256:a43ea8b5cc319446cbc3737bed7c9efd9e12ded592166fdb0611b4cb3a2da34a"
+    },
+    "cluster-key-rate-limit": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cluster-key-rate-limit:2.0.0",
+      "digest": "sha256:2fbe5dad3dfaaf0c8ac2b589d26aca04c701bca07f10eafa90684917e8269e38"
+    },
+    "cors": {
+      "status": "public",
+      "version": "2.0.1",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cors:2.0.1",
+      "digest": "sha256:e5c5fe76ad8e3e72d4eca3344a556f72b94fc0838c18b50b645f71e9f42ba9e0"
+    },
+    "de-graphql": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/de-graphql:2.0.0",
+      "digest": "sha256:583b5b64c58f070da5501bc01f139c0a2a8943398b2d510c84dc762b20591b97"
+    },
+    "ext-auth": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ext-auth:2.0.0",
+      "digest": "sha256:8f80a3fce99f59f28909ee11f1739f01a5b50b7b7e608a5ff129c6f290c50ced"
+    },
+    "frontend-gray": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/frontend-gray:2.0.0",
+      "digest": "sha256:680225be84a4c26bc4c2dccabf7c54761e435d509bfe238c568477cd23aa1a07"
+    },
+    "geo-ip": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/geo-ip:2.0.0",
+      "digest": "sha256:3441b448549a3c64dcfadd26fd98529e6387af5780f8d0444a9f1a771b927387"
+    },
+    "gw-error-format": {
+      "status": "missing",
+      "version": "1.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/gw-error-format:1.0.0"
+    },
+    "hmac-auth-apisix": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/hmac-auth-apisix:2.0.0",
+      "digest": "sha256:3514d42abf9f6d6730434b5f218626799bed901fd7df5aadb071dcfd4abd6454"
+    },
+    "ip-restriction": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ip-restriction:2.0.0",
+      "digest": "sha256:74bffa6c242410f0687795cfc5cc797b386d6f655fc99a5498a5609047091f64"
+    },
+    "json-converter": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/jsonrpc-converter:2.0.0",
+      "digest": "sha256:147c50aa5f473b4067d0e3b3daabe74cbd4504e0e2eb8813069529a443e2ec2d"
+    },
+    "log-request-response": {
+      "status": "missing",
+      "version": "1.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/log-request-response:1.0.0"
+    },
+    "mcp-router": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-router:2.0.0",
+      "digest": "sha256:a298a245803d6899140b9d66a4e5a4631613ce42cc04e60f577fb303c5fe4469"
+    },
+    "mcp-server": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-server:2.0.0",
+      "digest": "sha256:ee81701617d6fe5ceaab1d094a23a82a0a1ee7307918ae1031022be62fb5e4cd"
+    },
+    "model-mapper": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-mapper:2.0.0",
+      "digest": "sha256:b7712b3b5998f734df90033b885aa44e10025d7fa5d44d551fa1ec86cd6e752c"
+    },
+    "model-router": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-router:2.0.0",
+      "digest": "sha256:5a8b317a489f7db30e1feb4d6d423aa01bf731aa9ef9f9f18c67796f391b67e7"
+    },
+    "nginx-rewrite-compatible": {
+      "status": "missing",
+      "version": "1.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/nginx-rewrite-compatible:1.0.0"
+    },
+    "oidc": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/oidc:2.0.0",
+      "digest": "sha256:ee6489c329ba49d3e395c924f8383b4ab1e41fdc72199d35211faefd0e297983"
+    },
+    "opa": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/opa:2.0.0",
+      "digest": "sha256:b267154a7330d7c40960b74dc999f6bb68225383a3f4fafde3f06ef8721995f2"
+    },
+    "replay-protection": {
+      "status": "deferred",
+      "version": "1.0.0-alpha"
+    },
+    "request-validation": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/request-validation:2.0.0",
+      "digest": "sha256:d118eee7a454f56ef8bc7f664d7c8df1fa9406af1f6f595ac6706511084e13f0"
+    },
+    "response-cache": {
+      "status": "public",
+      "version": "1.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/response-cache:1.0.0",
+      "digest": "sha256:a6ced42642927938bea9e24be55fc19220c1ff7ef617cd88d6db8e09ebf47ec5"
+    },
+    "simple-jwt-auth": {
+      "status": "public",
+      "version": "1.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/simple-jwt-auth:1.0.0",
+      "digest": "sha256:3abf08b6bfd017f2e9e8ca5a9763a6451aa7506052876ede29078daf3a838f87"
+    },
+    "traffic-tag": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/traffic-tag:2.0.0",
+      "digest": "sha256:c3ed75a56c1fcb3970bb1a8f3c5a65b3eced7c167227644aa3faa93a302d470c"
+    },
+    "transformer": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/transformer:2.0.0",
+      "digest": "sha256:2166be753b4685347d08e32d24b32ea9b9a0f22a9e7939586ab6f3083fb39b58"
+    },
+    "waf": {
+      "status": "public",
+      "version": "2.0.0",
+      "publicRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/waf:2.0.0",
+      "digest": "sha256:b982d4cbc4f6eae48e57f3833b56fa749073f4c6c721a8a89452f39ce20fae2f"
+    }
+  }
+}

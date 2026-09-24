@@ -1,0 +1,59 @@
+# Copyright (c) 2022 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-mcp-2026-07-28
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: mcp-2026.example.com
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: mcp-server-2026-07-28
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  matchRules:
+    - config:
+        server:
+          name: e2e-mcp-2026
+          type: rest
+        tools:
+          - name: get_weather
+            description: Return deterministic fixture weather
+            args:
+              - name: location
+                description: City name
+                type: string
+                required: true
+            responseTemplate:
+              body: "weather for {{.args.location}}"
+      configDisable: false
+      ingress:
+        - higress-conformance-infra/wasmplugin-mcp-2026-07-28
+  url: file:///opt/plugins/wasm-go/extensions/mcp-server/plugin.wasm

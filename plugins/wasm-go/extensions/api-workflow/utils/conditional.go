@@ -17,6 +17,9 @@ import (
 // and arg1 arg2: arg1 && arg2
 // or arg1 arg2: arg1 || arg2
 // contain arg1 arg2: arg1 包含 arg2时为true
+var conditionalExpressionRegex = regexp.MustCompile(`\(([^()]*)\)`)
+var templateExpressionRegex = regexp.MustCompile(`\{\{(.*?)\}\}`)
+
 var operators = map[string]interface{}{
 	"eq": func(a, b interface{}) bool {
 		return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
@@ -33,8 +36,7 @@ var operators = map[string]interface{}{
 // 执行判断条件
 func ExecConditionalStr(conditionalStr string) (bool, error) {
 	// 正则表达式匹配括号内的表达式
-	re := regexp.MustCompile(`\(([^()]*)\)`)
-	matches := re.FindAllStringSubmatch(conditionalStr, -1)
+	matches := conditionalExpressionRegex.FindAllStringSubmatch(conditionalStr, -1)
 	// 找到最里面的(原子表达式)
 	for _, match := range matches {
 		subCondition := match[1]
@@ -96,8 +98,7 @@ func ExecConditionalStr(conditionalStr string) (bool, error) {
 // 返回 {{foo}} : foo
 func ParseTmplStr(tmpl string) map[string]string {
 	result := make(map[string]string)
-	re := regexp.MustCompile(`\{\{(.*?)\}\}`)
-	matches := re.FindAllStringSubmatch(tmpl, -1)
+	matches := templateExpressionRegex.FindAllStringSubmatch(tmpl, -1)
 	for _, match := range matches {
 		result[match[0]] = match[1]
 	}

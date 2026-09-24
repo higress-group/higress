@@ -15,6 +15,8 @@
 package annotations
 
 import (
+	"fmt"
+
 	"github.com/golang/protobuf/ptypes/duration"
 	networking "istio.io/api/networking/v1alpha3"
 	//"istio.io/istio/pilot/pkg/networking/core/v1alpha3/mseingress"
@@ -60,26 +62,53 @@ func (l localRateLimit) Parse(annotations Annotations, config *Ingress, _ *Globa
 		config.localRateLimit = local
 	}()
 
-	multiplier := defaultBurstMultiplier
-	if m, err := annotations.ParseIntForHigress(limitBurstMultiplier); err == nil {
+	multiplier := uint32(defaultBurstMultiplier)
+	if annotations.HasHigress(limitBurstMultiplier) {
+		m, err := annotations.ParseUint32ForHigress(limitBurstMultiplier)
+		if err != nil || m == 0 {
+			return fmt.Errorf("invalid %s annotation", limitBurstMultiplier)
+		}
 		multiplier = m
 	}
 
-	if rpm, err := annotations.ParseIntForHigress(limitRPM); err == nil {
-		local = &localRateLimitConfig{
-			MaxTokens:     uint32(rpm * multiplier),
-			TokensPerFill: uint32(rpm),
-			FillInterval:  minute,
+	if annotations.HasHigress(limitRPM) {
+		rpm, err := annotations.ParseUint32ForHigress(limitRPM)
+		if err != nil {
+			return fmt.Errorf("invalid %s annotation", limitRPM)
 		}
-	} else if rps, err := annotations.ParseIntForHigress(limitRPS); err == nil {
-		local = &localRateLimitConfig{
-			MaxTokens:     uint32(rps * multiplier),
-			TokensPerFill: uint32(rps),
-			FillInterval:  second,
+		local, err = buildLocalRateLimitConfig(rpm, multiplier, minute)
+		if err != nil {
+			return err
+		}
+	} else {
+		rps, err := annotations.ParseUint32ForHigress(limitRPS)
+		if err != nil {
+			return fmt.Errorf("invalid %s annotation", limitRPS)
+		}
+		local, err = buildLocalRateLimitConfig(rps, multiplier, second)
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+func buildLocalRateLimitConfig(rate, multiplier uint32, interval *duration.Duration) (*localRateLimitConfig, error) {
+	if rate == 0 {
+		return nil, fmt.Errorf("local rate limit must be greater than zero")
+	}
+	if multiplier == 0 {
+		return nil, fmt.Errorf("local rate limit burst multiplier must be greater than zero")
+	}
+	if rate > ^uint32(0)/multiplier {
+		return nil, fmt.Errorf("local rate limit burst exceeds uint32")
+	}
+	return &localRateLimitConfig{
+		MaxTokens:     rate * multiplier,
+		TokensPerFill: rate,
+		FillInterval:  interval,
+	}, nil
 }
 
 func (l localRateLimit) ApplyRoute(route *networking.HTTPRoute, config *Ingress) {

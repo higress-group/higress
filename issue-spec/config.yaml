@@ -1,0 +1,47 @@
+schema: issue-spec
+context:
+  repository: Higress community contributions
+  protocol: >-
+    The built-in issue-spec phase order and canonical artifact carriers are
+    authoritative. Project guidance may add constraints only within an
+    existing step and must keep genuine unresolved decisions in blocking typed
+    QUESTION comments.
+rules:
+  materially_agent_assisted_gate: >-
+    For material AI or coding-agent participation begun after the policy merge,
+    implementation starts only after explicit Higress maintainer approval of
+    Proposal and Design Issues. The approved Design and authorized
+    implementation TASKs provide implementation lineage to applicable SPECs.
+    A canonical-repository maintainer or administrator may use the documented
+    verified exception only after the GitHub.com gh-authenticated identity and
+    collaborator-permission `role_name` is maintain or admin, and the PR
+    author matches that login; the PR records its number or URL, login, returned
+    role_name, PR author, positive token-override attestation, and bypass
+    rationale. Every verification failure, missing result, or mismatch makes the
+    exception unavailable; the accepting or merging maintainer independently
+    validates current live evidence with token overrides unset. This does not
+    waive bug-fix runtime verification.
+  verification: >-
+    The Design contains a concrete Verification Plan before implementation
+    verification begins. Corresponding verification TASKs are completed with
+    exact commands, results, evidence links, and hashes before maintainers are
+    asked to accept verification or review.
+  design_carrier: >-
+    For contributions subject to the material agent-assisted gate, the approved
+    Design Issue is the authoritative design carrier. An optional durable
+    capability spec is separate and, when maintainers request one, uses
+    issue-spec/specs/<plugin-qualified-capability>/spec.md with a unique
+    lowercase, hyphen-separated, plugin-identifying capability slug; it neither
+    replaces nor duplicates the Design Issue. This project leaves durable_specs
+    unset.
+  enforcement_boundary: >-
+    The CLI validates workflow configuration, canonical artifacts, and declared
+    lineage. Maintainers use the pull-request author declaration to enforce
+    applicability, human approval, evidence quality, verified-exception
+    appropriateness, review priority, review, and merge; this configuration
+    neither infers hidden agent use nor grants approval or merge authority.
+references:
+  - docs/developers/agent-assisted-contributions.md
+  - docs/developers/wasm-runtime-verification/README.md
+html_review:
+  enabled: false

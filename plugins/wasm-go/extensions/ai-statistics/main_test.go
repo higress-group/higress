@@ -16,11 +16,15 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/higress-group/wasm-go/pkg/tokenusage"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/require"
 )
@@ -747,6 +751,13 @@ func TestMetrics(t *testing.T) {
 			// 添加延迟，确保有足够的时间间隔来计算 llm_service_duration
 			time.Sleep(10 * time.Millisecond)
 
+			// 2.5 处理响应头（非流式 JSON，走缓冲响应体路径）
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
 			// 3. 处理响应体
 			responseBody := []byte(`{
 				"choices": [{"message": {"content": "Hello, how can I help you?"}}],
@@ -832,8 +843,8 @@ func TestMetrics(t *testing.T) {
 			// 应该返回 ActionContinue
 			require.Equal(t, types.ActionContinue, action)
 
-			// 4. 处理流式响应体 - 添加 usage 信息
-			firstChunk := []byte(`data: {"choices":[{"message":{"content":"Hello"}}],"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`)
+			// 4. 处理流式响应体 - 添加 usage 信息（SSE 事件以 \n\n 结尾）
+			firstChunk := []byte("data: {\"choices\":[{\"message\":{\"content\":\"Hello\"}}],\"model\":\"gpt-4\",\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n")
 			action = host.CallOnHttpStreamingResponseBody(firstChunk, false)
 
 			// 应该返回原始数据
@@ -842,8 +853,8 @@ func TestMetrics(t *testing.T) {
 			result := host.GetResponseBody()
 			require.Equal(t, firstChunk, result)
 
-			// 5. 处理最后一个流式块 - 添加 usage 信息
-			lastChunk := []byte(`data: {"choices":[{"message":{"content":"How can I help you?"}}],"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}}`)
+			// 5. 处理最后一个流式块 - 添加 usage 信息（SSE 事件以 \n\n 结尾）
+			lastChunk := []byte("data: {\"choices\":[{\"message\":{\"content\":\"How can I help you?\"}}],\"model\":\"gpt-4\",\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}\n\n")
 			action = host.CallOnHttpStreamingResponseBody(lastChunk, true)
 
 			// 应该返回原始数据
@@ -1035,8 +1046,8 @@ func TestCompleteFlow(t *testing.T) {
 			// 应该返回 ActionContinue
 			require.Equal(t, types.ActionContinue, action)
 
-			// 4. 处理流式响应体 - 添加 usage 信息
-			firstChunk := []byte(`data: {"choices":[{"message":{"content":"Hello"}}],"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`)
+			// 4. 处理流式响应体 - 添加 usage 信息（SSE 事件以 \n\n 结尾）
+			firstChunk := []byte("data: {\"choices\":[{\"message\":{\"content\":\"Hello\"}}],\"model\":\"gpt-4\",\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n")
 			action = host.CallOnHttpStreamingResponseBody(firstChunk, false)
 
 			// 应该返回原始数据
@@ -1045,8 +1056,8 @@ func TestCompleteFlow(t *testing.T) {
 			result := host.GetResponseBody()
 			require.Equal(t, firstChunk, result)
 
-			// 5. 处理最后一个流式块 - 添加 usage 信息
-			lastChunk := []byte(`data: {"choices":[{"message":{"content":"How can I help you?"}}],"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}}`)
+			// 5. 处理最后一个流式块 - 添加 usage 信息（SSE 事件以 \n\n 结尾）
+			lastChunk := []byte("data: {\"choices\":[{\"message\":{\"content\":\"How can I help you?\"}}],\"model\":\"gpt-4\",\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}\n\n")
 			action = host.CallOnHttpStreamingResponseBody(lastChunk, true)
 
 			// 应该返回原始数据
@@ -2164,6 +2175,984 @@ func TestConfigWithDefaultAttributes(t *testing.T) {
 			host, status := test.NewTestHost(defaultRespConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
+		})
+	})
+}
+
+func TestIsErrorResponse(t *testing.T) {
+	// Test error body detection (OpenAI/Anthropic format)
+	t.Run("error object in body", func(t *testing.T) {
+		body := []byte(`{"error": {"type": "api_error", "message": "Unauthorized"}}`)
+		require.True(t, isErrorResponse(body))
+	})
+
+	t.Run("error object with only code", func(t *testing.T) {
+		body := []byte(`{"error": {"code": "invalid_api_key"}}`)
+		require.True(t, isErrorResponse(body))
+	})
+
+	t.Run("error string in body", func(t *testing.T) {
+		body := []byte(`{"error": "Something went wrong"}`)
+		require.True(t, isErrorResponse(body))
+	})
+
+	t.Run("empty error string is not counted", func(t *testing.T) {
+		body := []byte(`{"error": ""}`)
+		require.False(t, isErrorResponse(body))
+	})
+
+	t.Run("null error is not counted", func(t *testing.T) {
+		body := []byte(`{"error": null}`)
+		require.False(t, isErrorResponse(body))
+	})
+
+	t.Run("no error field in body", func(t *testing.T) {
+		body := []byte(`{"choices": [{"message": {"content": "Hi"}}], "model": "gpt-4"}`)
+		require.False(t, isErrorResponse(body))
+	})
+
+	t.Run("nested error field not at root", func(t *testing.T) {
+		body := []byte(`{"choices": [{"error": "x"}]}`)
+		require.False(t, isErrorResponse(body))
+	})
+
+	// Empty body with HTTP status fallback is tested in TestIsErrorResponseWithHTTPStatus
+	// (requires wasm test environment for proxywasm.GetHttpResponseHeader)
+}
+
+func TestIsErrorResponseWithHTTPStatus(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("empty body with 401 status returns true", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+			})
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "401"},
+				{"content-type", "application/json"},
+			})
+
+			require.True(t, isErrorResponse([]byte{}))
+			host.CompleteHttp()
+		})
+
+		t.Run("empty body with 200 status returns false", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+			})
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+
+			require.False(t, isErrorResponse([]byte{}))
+			host.CompleteHttp()
+		})
+	})
+}
+
+func TestFailureCountMetric(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("error response body increments failure count only", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.SetRouteName("api-v1")
+			host.SetClusterName("cluster-1")
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+				{"x-mse-consumer", "user1"},
+			})
+
+			requestBody := []byte(`{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}`)
+			host.CallOnHttpRequestBody(requestBody)
+
+			time.Sleep(10 * time.Millisecond)
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "401"},
+				{"content-type", "application/json"},
+			})
+			errorBody := []byte(`{"error": {"type": "authentication_error", "message": "Invalid API key"}}`)
+			host.CallOnHttpResponseBody(errorBody)
+
+			host.CompleteHttp()
+
+			// Verify llm_failure_count is incremented
+			failureMetric := "route.api-v1.upstream.cluster-1.model.gpt-3.5-turbo.consumer.user1.metric.llm_failure_count"
+			failureValue, err := host.GetCounterMetric(failureMetric)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), failureValue)
+
+			// Verify success metrics are NOT present (usage info unavailable in error response)
+			durationCountMetric := "route.api-v1.upstream.cluster-1.model.gpt-3.5-turbo.consumer.user1.metric.llm_duration_count"
+			_, err = host.GetCounterMetric(durationCountMetric)
+			require.Error(t, err, "llm_duration_count should not exist for error response without usage")
+		})
+
+		t.Run("success response does not increment failure count", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.SetRouteName("api-v1")
+			host.SetClusterName("cluster-1")
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+				{"x-mse-consumer", "user1"},
+			})
+
+			requestBody := []byte(`{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}`)
+			host.CallOnHttpRequestBody(requestBody)
+
+			time.Sleep(10 * time.Millisecond)
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			responseBody := []byte(`{
+				"choices": [{"message": {"content": "Hello!"}}],
+				"usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+				"model": "gpt-4"
+			}`)
+			host.CallOnHttpResponseBody(responseBody)
+
+			host.CompleteHttp()
+
+			// Verify llm_failure_count is NOT present
+			failureMetric := "route.api-v1.upstream.cluster-1.model.gpt-4.consumer.user1.metric.llm_failure_count"
+			_, err := host.GetCounterMetric(failureMetric)
+			require.Error(t, err, "llm_failure_count should not exist for successful response")
+
+			// Verify success metrics exist
+			durationCountMetric := "route.api-v1.upstream.cluster-1.model.gpt-4.consumer.user1.metric.llm_duration_count"
+			durationCountValue, err := host.GetCounterMetric(durationCountMetric)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), durationCountValue)
+		})
+	})
+}
+
+func TestStreamingFailureCountMetric(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("sse error in middle chunk before done", func(t *testing.T) {
+			host, status := test.NewTestHost(streamingBodyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.SetRouteName("api-v1")
+			host.SetClusterName("cluster-1")
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"x-mse-consumer", "user1"},
+			})
+
+			requestBody := []byte(`{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}`)
+			host.CallOnHttpRequestBody(requestBody)
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream"},
+			})
+
+			// Simulate SSE stream: error appears in middle chunk, last chunk is [DONE]
+			// (events are terminated with the SSE delimiter \n\n).
+			chunk1 := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n")
+			host.CallOnHttpStreamingResponseBody(chunk1, false)
+
+			chunk2 := []byte("data: {\"error\":{\"type\":\"api_error\",\"message\":\"Something went wrong\"}}\n\n")
+			host.CallOnHttpStreamingResponseBody(chunk2, false)
+
+			chunk3 := []byte("data: [DONE]\n\n")
+			host.CallOnHttpStreamingResponseBody(chunk3, true)
+
+			host.CompleteHttp()
+
+			// Verify llm_failure_count is incremented despite [DONE] being the last chunk
+			failureMetric := "route.api-v1.upstream.cluster-1.model.gpt-4.consumer.user1.metric.llm_failure_count"
+			failureValue, err := host.GetCounterMetric(failureMetric)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), failureValue)
+		})
+	})
+}
+
+// ==================== SSE framer integration tests (Design #4249) ====================
+//
+// These tests drive onHttpStreamingBody through the proxy-wasm test host with
+// controlled byte boundaries and pin the consumer-level rows of the Design
+// test matrix: token usage and stream-error detection consume reassembled
+// complete SSE events from the request-scoped framer, so split and intact
+// delivery are observably equivalent, and original response bytes pass through
+// unchanged on every callback. Scanner-level rows (T-05..T-08, T-13..T-15,
+// T-22, T-23, T-25, T-26 byte-boundary details) are covered in
+// sse_framer_test.go; the tests below assert the end-to-end outcomes.
+
+// setupStreamingHost starts a request scoped to a streaming (SSE) response:
+// request headers + body (model gpt-4) + text/event-stream response headers,
+// with route api-v1 / cluster cluster-1 / consumer user1 for metric labels.
+// The caller must defer host.Reset().
+func setupStreamingHost(t *testing.T, config json.RawMessage) test.TestHost {
+	t.Helper()
+	host, status := test.NewTestHost(config)
+	require.Equal(t, types.OnPluginStartStatusOK, status)
+
+	host.SetRouteName("api-v1")
+	host.SetClusterName("cluster-1")
+
+	action := host.CallOnHttpRequestHeaders([][2]string{
+		{":authority", "example.com"},
+		{":path", "/v1/chat/completions"},
+		{":method", "POST"},
+		{"x-mse-consumer", "user1"},
+	})
+	require.Equal(t, types.ActionContinue, action)
+
+	action = host.CallOnHttpRequestBody([]byte(`{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}`))
+	require.Equal(t, types.ActionContinue, action)
+
+	action = host.CallOnHttpResponseHeaders([][2]string{
+		{":status", "200"},
+		{"content-type", "text/event-stream"},
+	})
+	require.Equal(t, types.ActionContinue, action)
+	return host
+}
+
+// sseEvent wraps a payload in one complete SSE event with an LF delimiter.
+func sseEvent(payload string) []byte {
+	return []byte("data: " + payload + "\n\n")
+}
+
+// concatStreamBytes concatenates byte slices into a fresh slice.
+func concatStreamBytes(parts ...[]byte) []byte {
+	var out []byte
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
+}
+
+// deliverStreamChunk feeds one host callback and asserts the fail-open
+// passthrough contract: the plugin must return the original bytes unchanged.
+func deliverStreamChunk(t *testing.T, host test.TestHost, chunk []byte, endOfStream bool) {
+	t.Helper()
+	action := host.CallOnHttpStreamingResponseBody(chunk, endOfStream)
+	require.Equal(t, types.ActionContinue, action)
+	require.Equal(t, chunk, host.GetResponseBody(), "original response bytes must pass through unchanged")
+}
+
+// deliverStreamChunks feeds each chunk as one host callback, with endOfStream
+// set on the last chunk, asserting passthrough on every callback.
+func deliverStreamChunks(t *testing.T, host test.TestHost, chunks ...[]byte) {
+	t.Helper()
+	for i, chunk := range chunks {
+		deliverStreamChunk(t, host, chunk, i == len(chunks)-1)
+	}
+}
+
+// aiLogInt64 reads a numeric attribute from the parsed ai_log property.
+func aiLogInt64(attrs map[string]interface{}, key string) (int64, bool) {
+	v, ok := attrs[key]
+	if !ok {
+		return 0, false
+	}
+	f, ok := v.(float64)
+	if !ok {
+		return 0, false
+	}
+	return int64(f), true
+}
+
+// assertTokenAttrs asserts the final recorded token usage in ai_log.
+func assertTokenAttrs(t *testing.T, attrs map[string]interface{}, input, output, total int64) {
+	t.Helper()
+	in, ok := aiLogInt64(attrs, tokenusage.CtxKeyInputToken)
+	require.True(t, ok, "input_token missing from ai_log")
+	require.Equal(t, input, in)
+	out, ok := aiLogInt64(attrs, tokenusage.CtxKeyOutputToken)
+	require.True(t, ok, "output_token missing from ai_log")
+	require.Equal(t, output, out)
+	tot, ok := aiLogInt64(attrs, tokenusage.CtxKeyTotalToken)
+	require.True(t, ok, "total_token missing from ai_log")
+	require.Equal(t, total, tot)
+}
+
+// assertNoTokenAttrs asserts no token usage was recorded (zero-fabrication).
+func assertNoTokenAttrs(t *testing.T, attrs map[string]interface{}) {
+	t.Helper()
+	for _, key := range []string{tokenusage.CtxKeyInputToken, tokenusage.CtxKeyOutputToken, tokenusage.CtxKeyTotalToken} {
+		_, ok := aiLogInt64(attrs, key)
+		require.False(t, ok, "%s must not be fabricated", key)
+	}
+}
+
+// getSpanValue reads an ARMS span property written by setSpanAttribute.
+func getSpanValue(host test.TestHost, key string) (string, bool) {
+	raw, err := host.GetProperty([]string{wrapper.TraceSpanTagPrefix + key})
+	if err != nil || len(raw) == 0 {
+		return "", false
+	}
+	return string(raw), true
+}
+
+// streamingMetricName builds the counter name for the standard test flow.
+func streamingMetricName(model, metric string) string {
+	return fmt.Sprintf("route.api-v1.upstream.cluster-1.model.%s.consumer.user1.metric.%s", model, metric)
+}
+
+// assertTokenMetrics asserts the recorded token counter metrics.
+func assertTokenMetrics(t *testing.T, host test.TestHost, model string, input, output, total uint64) {
+	t.Helper()
+	for metric, want := range map[string]uint64{
+		tokenusage.CtxKeyInputToken:  input,
+		tokenusage.CtxKeyOutputToken: output,
+		tokenusage.CtxKeyTotalToken:  total,
+	} {
+		got, err := host.GetCounterMetric(streamingMetricName(model, metric))
+		require.NoError(t, err)
+		require.Equal(t, want, got, "metric %s", metric)
+	}
+}
+
+// TestStreamingIntactUsageEventParity covers T-01: a single intact usage event
+// in one callback recovers the upstream values, and the ai_log content is
+// byte-equivalent to the pre-change behavior (dynamic duration fields aside).
+func TestStreamingIntactUsageEventParity(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("intact usage event", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+
+			contentEvent := sseEvent(`{"id":"chatcmpl-parity","choices":[{"delta":{"content":"Hello"}}],"model":"gpt-4"}`)
+			usageEvent := sseEvent(`{"choices":[],"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}}`)
+			deliverStreamChunks(t, host, contentEvent, usageEvent)
+
+			attrs := getAILogAttributes(t, host)
+			// Durations are time-based; assert presence and exclude them from
+			// the exact-content comparison.
+			_, ok := aiLogInt64(attrs, LLMFirstTokenDuration)
+			require.True(t, ok, "llm_first_token_duration missing")
+			_, ok = aiLogInt64(attrs, LLMServiceDuration)
+			require.True(t, ok, "llm_service_duration missing")
+			delete(attrs, LLMFirstTokenDuration)
+			delete(attrs, LLMServiceDuration)
+
+			// Byte-equivalence with pre-change behavior: the framed complete
+			// event is exactly the bytes the raw-chunk path used to see, and an
+			// event without details leaves empty detail maps in the log.
+			require.Equal(t, map[string]interface{}{
+				"api":                  "-",
+				"chat_round":           float64(1),
+				"response_type":        "stream",
+				"chat_id":              "chatcmpl-parity",
+				"model":                "gpt-4",
+				"input_token":          float64(5),
+				"output_token":         float64(8),
+				"total_token":          float64(13),
+				"input_token_details":  map[string]interface{}{},
+				"output_token_details": map[string]interface{}{},
+			}, attrs)
+
+			spanTotal, ok := getSpanValue(host, ArmsTotalToken)
+			require.True(t, ok)
+			require.Equal(t, "13", spanTotal)
+			spanInput, ok := getSpanValue(host, ArmsInputToken)
+			require.True(t, ok)
+			require.Equal(t, "5", spanInput)
+			spanOutput, ok := getSpanValue(host, ArmsOutputToken)
+			require.True(t, ok)
+			require.Equal(t, "8", spanOutput)
+			spanModel, ok := getSpanValue(host, ArmsModelName)
+			require.True(t, ok)
+			require.Equal(t, "gpt-4", spanModel)
+
+			assertTokenMetrics(t, host, "gpt-4", 5, 8, 13)
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestStreamingSplitUsageEventRecovery covers T-02, T-03, T-17 and T-23: a
+// usage event split across host callbacks at arbitrary byte boundaries is
+// reassembled by the framer and recovers exactly the same tokens as intact
+// delivery, including with shouldBufferStreamingBody disabled (the config used
+// here buffers nothing) and with one-byte callbacks.
+func TestStreamingSplitUsageEventRecovery(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		payload := `{"id":"chatcmpl-split","object":"chat.completion.chunk","created":1710000000,"model":"gpt-4","choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":11,"completion_tokens":22,"total_tokens":33}}`
+		event := sseEvent(payload)
+		require.Greater(t, len(event), 141, "pinned split offsets must be inside the event")
+
+		// assertRecovered runs one full request over the given chunks and
+		// asserts the recovered final usage matches the intact-delivery values.
+		assertRecovered := func(t *testing.T, chunks ...[]byte) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			deliverStreamChunks(t, host, chunks...)
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 11, 22, 33)
+			require.Equal(t, "gpt-4", attrs["model"])
+			host.CompleteHttp()
+		}
+
+		// T-02: splits inside the JSON body at the Design-pinned offsets.
+		for _, off := range []int{50, 100, 120, 130, 140} {
+			t.Run(fmt.Sprintf("split_at_offset_%d", off), func(t *testing.T) {
+				assertRecovered(t, event[:off], event[off:])
+			})
+		}
+
+		// T-03: a split inside the "data:" prefix reassembles by byte shape.
+		t.Run("split_inside_data_prefix", func(t *testing.T) {
+			assertRecovered(t, event[:2], event[2:])
+		})
+
+		// T-23: one event delivered across many 1-byte callbacks is emitted on
+		// the completing callback and recovers the same tokens.
+		t.Run("one_byte_per_callback", func(t *testing.T) {
+			chunks := make([][]byte, 0, len(event))
+			for i := 0; i < len(event); i++ {
+				chunks = append(chunks, event[i:i+1])
+			}
+			assertRecovered(t, chunks...)
+		})
+
+		// T-17: with shouldBufferStreamingBody == false (emptyAttributesConfig
+		// configures no streaming-body attribute), token recovery still works
+		// via the framer's bounded tail, end to end down to the metrics.
+		t.Run("buffering_disabled_still_recovers_usage", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+
+			deliverStreamChunks(t, host, event[:100], event[100:])
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 11, 22, 33)
+			assertTokenMetrics(t, host, "gpt-4", 11, 22, 33)
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestStreamingDelimiterSplitRecovery covers T-04 and T-05 at integration
+// level: LF and CRLF delimiters split across callbacks (at every byte
+// boundary) are recognized only once complete, and the event recovers the same
+// tokens as intact delivery. (Exact emission counts per split point are
+// asserted in sse_framer_test.go.)
+func TestStreamingDelimiterSplitRecovery(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		payload := `{"choices":[],"model":"gpt-4","usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}`
+
+		// T-04: an LF delimiter split across callbacks emits the event only
+		// after the second \n arrives; usage is recovered mid-stream, before
+		// end-of-stream.
+		t.Run("lf_delimiter_split", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+
+			deliverStreamChunk(t, host, []byte("data: "+payload+"\n"), false)
+			attrs := getAILogAttributes(t, host)
+			assertNoTokenAttrs(t, attrs)
+
+			deliverStreamChunk(t, host, []byte("\n"), false)
+			attrs = getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 3, 4, 7)
+
+			deliverStreamChunks(t, host, sseEvent("[DONE]"))
+			host.CompleteHttp()
+		})
+
+		// T-05: a CRLF delimiter split at every byte boundary recovers the
+		// event; intact CRLF and mixed delimiter forms behave the same.
+		crlfEvent := []byte("data: " + payload + "\r\n\r\n")
+		n := len(crlfEvent)
+		cases := []struct {
+			name  string
+			part1 []byte
+			part2 []byte
+		}{
+			{"crlf_intact", crlfEvent, nil},
+			{"cr_then_lf_crlf", crlfEvent[:n-3], crlfEvent[n-3:]}, // "\r" | "\n\r\n"
+			{"crlf_then_crlf", crlfEvent[:n-2], crlfEvent[n-2:]},  // "\r\n" | "\r\n"
+			{"crlf_cr_then_lf", crlfEvent[:n-1], crlfEvent[n-1:]}, // "\r\n\r" | "\n"
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				host := setupStreamingHost(t, emptyAttributesConfig)
+				defer host.Reset()
+				if tc.part2 == nil {
+					deliverStreamChunks(t, host, tc.part1)
+				} else {
+					deliverStreamChunks(t, host, tc.part1, tc.part2)
+				}
+				attrs := getAILogAttributes(t, host)
+				assertTokenAttrs(t, attrs, 3, 4, 7)
+				host.CompleteHttp()
+			})
+		}
+
+		// Mixed delimiter forms terminate an event exactly like pure LF.
+		for _, delim := range []string{"\n\r\n", "\r\n\n"} {
+			t.Run(fmt.Sprintf("mixed_delimiter_%q", delim), func(t *testing.T) {
+				host := setupStreamingHost(t, emptyAttributesConfig)
+				defer host.Reset()
+				deliverStreamChunks(t, host, []byte("data: "+payload+delim))
+				attrs := getAILogAttributes(t, host)
+				assertTokenAttrs(t, attrs, 3, 4, 7)
+				host.CompleteHttp()
+			})
+		}
+	})
+}
+
+// TestStreamingMultipleUsageEvents covers T-09 and the T-20 consistency rows:
+// with several usage events the final complete event wins (values are never
+// summed), repeated span-property writes overwrite to the final value, and
+// ai_log / span / metrics all reflect the same final usage state.
+func TestStreamingMultipleUsageEvents(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		first := sseEvent(`{"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`)
+		final := sseEvent(`{"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}}`)
+
+		assertFinalState := func(t *testing.T, host test.TestHost) {
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 8, 13)
+			spanTotal, ok := getSpanValue(host, ArmsTotalToken)
+			require.True(t, ok)
+			require.Equal(t, "13", spanTotal, "span property must hold the last event's value")
+			assertTokenMetrics(t, host, "gpt-4", 5, 8, 13)
+		}
+
+		t.Run("separate_callbacks", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+
+			deliverStreamChunk(t, host, first, false)
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 3, 8)
+			spanTotal, ok := getSpanValue(host, ArmsTotalToken)
+			require.True(t, ok)
+			require.Equal(t, "8", spanTotal)
+
+			deliverStreamChunks(t, host, final)
+			assertFinalState(t, host)
+			host.CompleteHttp()
+		})
+
+		t.Run("both_events_in_one_callback", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			deliverStreamChunks(t, host, concatStreamBytes(first, final))
+			assertFinalState(t, host)
+			host.CompleteHttp()
+		})
+
+		t.Run("second_event_split_across_callbacks", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			stream := concatStreamBytes(first, final)
+			split := len(first) + len(final)/2
+			deliverStreamChunks(t, host, stream[:split], stream[split:])
+			assertFinalState(t, host)
+			host.CompleteHttp()
+		})
+
+		// A final event silent on total never regresses the recorded total to
+		// 0: tokenusage computes it from the effective components (5+8).
+		t.Run("final_event_without_explicit_total", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			partial := sseEvent(`{"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":8}}`)
+			deliverStreamChunks(t, host, first, partial)
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 8, 13)
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestStreamingTokenDetailsPolicy covers T-10 (and the details part of T-20):
+// details present in event N and absent in usage-bearing event N+1 are
+// retained in both the context layer (EOS builtin attributes) and the
+// user-attribute layer (per-callback ai_log write); details present in N+1
+// replace the whole map and are never summed.
+func TestStreamingTokenDetailsPolicy(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("details_retained_when_later_event_omits_them", func(t *testing.T) {
+			host := setupStreamingHost(t, tokenDetailsConfig)
+			defer host.Reset()
+
+			withDetails := sseEvent(`{"model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":2}}}`)
+			withoutDetails := sseEvent(`{"model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17}}`)
+
+			deliverStreamChunk(t, host, withDetails, false)
+			attrs := getAILogAttributes(t, host)
+			require.Equal(t, map[string]interface{}{"cached_tokens": float64(4)}, attrs["input_token_details"])
+			require.Equal(t, map[string]interface{}{"reasoning_tokens": float64(2)}, attrs["output_token_details"])
+
+			// The usage-bearing event without details must not wipe the
+			// recorded details: the user-attribute layer (this per-callback
+			// ai_log write) retains the previous maps.
+			deliverStreamChunk(t, host, withoutDetails, false)
+			attrs = getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 10, 7, 17)
+			require.Equal(t, map[string]interface{}{"cached_tokens": float64(4)}, attrs["input_token_details"],
+				"user-attribute layer must retain previous details")
+			require.Equal(t, map[string]interface{}{"reasoning_tokens": float64(2)}, attrs["output_token_details"],
+				"user-attribute layer must retain previous details")
+
+			deliverStreamChunks(t, host, sseEvent("[DONE]"))
+			// At EOS the builtin attributes read the context layer, which must
+			// hold the same retained maps (layers synchronized), rendered as
+			// their JSON string form.
+			attrs = getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 10, 7, 17)
+			require.Equal(t, `{"cached_tokens":4}`, attrs["input_token_details"])
+			require.Equal(t, `{"reasoning_tokens":2}`, attrs["output_token_details"])
+			cached, ok := aiLogInt64(attrs, BuiltinCachedTokens)
+			require.True(t, ok)
+			require.Equal(t, int64(4), cached)
+			reasoning, ok := aiLogInt64(attrs, BuiltinReasoningTokens)
+			require.True(t, ok)
+			require.Equal(t, int64(2), reasoning)
+
+			// Output consistency (T-20): span and metrics reflect the same
+			// final usage as the log attributes.
+			spanTotal, ok := getSpanValue(host, ArmsTotalToken)
+			require.True(t, ok)
+			require.Equal(t, "17", spanTotal)
+			assertTokenMetrics(t, host, "gpt-4o", 10, 7, 17)
+			host.CompleteHttp()
+		})
+
+		t.Run("details_replaced_when_later_event_carries_them", func(t *testing.T) {
+			host := setupStreamingHost(t, tokenDetailsConfig)
+			defer host.Reset()
+
+			first := sseEvent(`{"model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":2}}}`)
+			// Output details present (replace), input details absent (retain).
+			second := sseEvent(`{"model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17,"completion_tokens_details":{"reasoning_tokens":6}}}`)
+			deliverStreamChunks(t, host, first, second)
+
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 10, 7, 17)
+			require.Equal(t, `{"cached_tokens":4}`, attrs["input_token_details"], "absent input details must be retained")
+			require.Equal(t, `{"reasoning_tokens":6}`, attrs["output_token_details"], "present output details must replace the whole map")
+			reasoning, ok := aiLogInt64(attrs, BuiltinReasoningTokens)
+			require.True(t, ok)
+			require.Equal(t, int64(6), reasoning, "details are replaced, never summed")
+			host.CompleteHttp()
+		})
+
+		t.Run("details_never_summed_across_events", func(t *testing.T) {
+			host := setupStreamingHost(t, tokenDetailsConfig)
+			defer host.Reset()
+
+			first := sseEvent(`{"model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4}}}`)
+			second := sseEvent(`{"model":"gpt-4o","usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17,"prompt_tokens_details":{"cached_tokens":9}}}`)
+			deliverStreamChunks(t, host, first, second)
+
+			attrs := getAILogAttributes(t, host)
+			require.Equal(t, `{"cached_tokens":9}`, attrs["input_token_details"], "details maps replace; values are never summed")
+			cached, ok := aiLogInt64(attrs, BuiltinCachedTokens)
+			require.True(t, ok)
+			require.Equal(t, int64(9), cached)
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestStreamingSplitErrorEvent covers T-11: an SSE error event split across
+// callbacks is reassembled and detected exactly as an intact one, and one
+// request produces exactly one llm_failure_count increment regardless of how
+// many error events matched. The config used here buffers nothing, so the
+// increment can only come from the framed-event hasStreamError flag (the EOS
+// bodyForMetric fallback sees only the final [DONE] chunk).
+func TestStreamingSplitErrorEvent(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		failureMetric := streamingMetricName("gpt-4", LLMFailureCount)
+		contentEvent := sseEvent(`{"choices":[{"delta":{"content":"Hello"}}]}`)
+		errorPayload := `{"error":{"type":"api_error","message":"Something went wrong"}}`
+		doneEvent := sseEvent("[DONE]")
+
+		assertOneFailure := func(t *testing.T, chunks ...[]byte) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			deliverStreamChunks(t, host, chunks...)
+			value, err := host.GetCounterMetric(failureMetric)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), value, "exactly one request-level failure increment")
+			host.CompleteHttp()
+		}
+
+		t.Run("intact_error_event", func(t *testing.T) {
+			assertOneFailure(t, contentEvent, sseEvent(errorPayload), doneEvent)
+		})
+
+		t.Run("split_error_event_is_equivalent", func(t *testing.T) {
+			event := sseEvent(errorPayload)
+			assertOneFailure(t, contentEvent, event[:12], event[12:len(event)-2], event[len(event)-2:], doneEvent)
+		})
+
+		t.Run("two_error_events_still_one_increment", func(t *testing.T) {
+			assertOneFailure(t, sseEvent(errorPayload), sseEvent(errorPayload), doneEvent)
+		})
+	})
+}
+
+// TestStreamingNoUpstreamUsage covers T-12 and T-18: when the upstream never
+// emits usage (including an abrupt end of stream mid-event, the #4145 shape),
+// recorded tokens remain zero and nothing is fabricated.
+func TestStreamingNoUpstreamUsage(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		assertZeroTokens := func(t *testing.T, host test.TestHost) {
+			attrs := getAILogAttributes(t, host)
+			assertNoTokenAttrs(t, attrs)
+			_, err := host.GetCounterMetric(streamingMetricName("gpt-4", tokenusage.CtxKeyTotalToken))
+			require.Error(t, err, "no token metric may be recorded without upstream usage")
+			_, err = host.GetCounterMetric(streamingMetricName("gpt-4", LLMFailureCount))
+			require.Error(t, err, "no failure may be recorded for a clean stream")
+		}
+
+		t.Run("no_usage_events", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			deliverStreamChunks(t, host,
+				sseEvent(`{"choices":[{"delta":{"content":"Hello"}}],"model":"gpt-4"}`),
+				sseEvent(`{"choices":[{"delta":{"content":" world"}}],"model":"gpt-4"}`),
+				sseEvent("[DONE]"))
+			assertZeroTokens(t, host)
+			host.CompleteHttp()
+		})
+
+		// #4145 shape: the stream ends abruptly with an incomplete tail; the
+		// tail is discarded at EOS and no usage is fabricated.
+		t.Run("abrupt_end_of_stream_mid_event", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			deliverStreamChunks(t, host,
+				sseEvent(`{"choices":[{"delta":{"content":"Hello"}}],"model":"gpt-4"}`),
+				[]byte(`data: {"choices":[{"delta":{"content":"Hel`))
+			assertZeroTokens(t, host)
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestStreamingToolCallsSplit covers T-16: tool-call extraction stays on the
+// end-of-stream accumulated-body path, so tool_calls content split across
+// callbacks yields exactly the intact-delivery result and arguments are not
+// double-appended.
+func TestStreamingToolCallsSplit(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		events := [][]byte{
+			sseEvent(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"get_weather","arguments":""}}]}}]}`),
+			sseEvent(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"locat"}}]}}]}`),
+			sseEvent(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ion\": \"Bei"}}]}}]}`),
+			sseEvent(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"jing\"}"}}]}}]}`),
+			sseEvent(`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`),
+		}
+
+		readToolCalls := func(t *testing.T, chunks ...[]byte) interface{} {
+			host := setupStreamingHost(t, builtinAttributesConfig)
+			defer host.Reset()
+			deliverStreamChunks(t, host, chunks...)
+			attrs := getAILogAttributes(t, host)
+			host.CompleteHttp()
+			return attrs["tool_calls"]
+		}
+
+		t.Run("split_delivery_matches_intact_delivery", func(t *testing.T) {
+			intact := readToolCalls(t, events...)
+
+			// Re-chunk the identical byte stream into 13-byte pieces that cut
+			// across event boundaries, JSON tokens and the data: prefixes.
+			stream := concatStreamBytes(events...)
+			var pieces [][]byte
+			for i := 0; i < len(stream); i += 13 {
+				end := i + 13
+				if end > len(stream) {
+					end = len(stream)
+				}
+				pieces = append(pieces, stream[i:end])
+			}
+			split := readToolCalls(t, pieces...)
+
+			require.Equal(t, intact, split, "tool_calls must equal intact delivery")
+			calls, ok := split.([]interface{})
+			require.True(t, ok)
+			require.Len(t, calls, 1)
+			call := calls[0].(map[string]interface{})
+			require.Equal(t, "call_abc123", call["id"])
+			require.Equal(t, "function", call["type"])
+			fn := call["function"].(map[string]interface{})
+			require.Equal(t, "get_weather", fn["name"])
+			require.Equal(t, `{"location": "Beijing"}`, fn["arguments"],
+				"arguments must be assembled exactly once, not double-appended")
+		})
+	})
+}
+
+// TestStreamingEOSIncompleteTail covers T-24: an unterminated event at
+// end-of-stream is discarded; no usage is fabricated for the partial event
+// and previously recorded values are preserved.
+func TestStreamingEOSIncompleteTail(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		usageEvent := sseEvent(`{"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}}`)
+		partialUsage := []byte(`data: {"model":"gpt-4","usage":{"prompt_tokens":99,"completion_tokens":99,"total_tokens":198}}`)
+
+		t.Run("partial_final_event_discarded", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			deliverStreamChunks(t, host, usageEvent, partialUsage)
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 8, 13)
+			assertTokenMetrics(t, host, "gpt-4", 5, 8, 13)
+			host.CompleteHttp()
+		})
+
+		t.Run("complete_event_then_partial_tail_same_callback", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			deliverStreamChunks(t, host, concatStreamBytes(usageEvent, partialUsage))
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 8, 13)
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestStreamingFailOpenOnPanic covers T-19: a panic in an observability
+// consumer is contained by the local recovery boundary in onHttpStreamingBody
+// and the original response bytes pass through unchanged. Wrapper-level
+// recovery is disabled via WASM_DISABLE_PANIC_RECOVERY so only the local
+// boundary can contain the panic in go mode; in wasm mode the injected
+// override has no effect and the passthrough assertions still hold.
+func TestStreamingFailOpenOnPanic(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("injected_consumer_panic_returns_original_data", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+
+			os.Setenv("WASM_DISABLE_PANIC_RECOVERY", "true")
+			defer os.Unsetenv("WASM_DISABLE_PANIC_RECOVERY")
+
+			orig := getTokenUsage
+			getTokenUsage = func(ctx wrapper.HttpContext, body []byte) tokenusage.TokenUsage {
+				panic("injected consumer panic")
+			}
+			defer func() { getTokenUsage = orig }()
+
+			usageChunk := sseEvent(`{"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`)
+			deliverStreamChunk(t, host, usageChunk, false)
+
+			// The request-scoped framer state is not corrupted by the panic: a
+			// later event is still processed and the EOS path completes.
+			getTokenUsage = orig
+			finalChunk := sseEvent(`{"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}}`)
+			deliverStreamChunks(t, host, finalChunk)
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 8, 13)
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestStreamingFramerResyncIntegration drives the RESYNC paths end to end:
+// T-13 (complete events emitted before an oversized suffix in the same
+// callback are still delivered), T-14 (after an overflow the framer resumes
+// within the callback that carries the next delimiter), T-25/T-26 (the exact
+// 1 MiB boundary), and exercises drain() with a non-zero overflow count at EOS
+// (T-21; the exact count is asserted in sse_framer_test.go).
+func TestStreamingFramerResyncIntegration(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		// paddedUsageEvent builds a usage event larger than 1 MiB whose padding
+		// contains no line endings (so no delimiter appears inside it).
+		paddedUsageEvent := func(prompt, completion, total int) []byte {
+			payload := fmt.Sprintf(`{"pad":"%s","model":"gpt-4","usage":{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d}}`,
+				strings.Repeat("x", maxIncompleteSSEEventBytes), prompt, completion, total)
+			return sseEvent(payload)
+		}
+
+		// T-25: an incomplete suffix of exactly 1 MiB is retained as the tail
+		// (no RESYNC), so the event completes on the next callback and usage is
+		// recovered.
+		t.Run("suffix_exactly_one_mib_retained_and_recovered", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			event := paddedUsageEvent(7, 8, 15)
+			deliverStreamChunks(t, host, event[:maxIncompleteSSEEventBytes], event[maxIncompleteSSEEventBytes:])
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 7, 8, 15)
+			host.CompleteHttp()
+		})
+
+		// T-26: a 1 MiB+1 incomplete suffix enters RESYNC and is dropped; the
+		// next delimiter-terminated event is still recovered.
+		t.Run("suffix_one_mib_plus_one_resyncs", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+			event := paddedUsageEvent(99, 99, 198)
+			deliverStreamChunk(t, host, event[:maxIncompleteSSEEventBytes+1], false)
+			// The remainder carries the oversized event's own terminating
+			// delimiter; RESYNC discards everything through it.
+			deliverStreamChunk(t, host, event[maxIncompleteSSEEventBytes+1:], false)
+			attrs := getAILogAttributes(t, host)
+			assertNoTokenAttrs(t, attrs)
+
+			final := sseEvent(`{"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}}`)
+			deliverStreamChunks(t, host, final)
+			attrs = getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 8, 13)
+			host.CompleteHttp()
+		})
+
+		// T-13 + T-14: a complete usage event emitted before the overflow is
+		// still delivered, and after the overflow the framer resumes processing
+		// bytes after the next delimiter within the same callback.
+		t.Run("events_before_overflow_and_same_callback_resume", func(t *testing.T) {
+			host := setupStreamingHost(t, emptyAttributesConfig)
+			defer host.Reset()
+
+			first := sseEvent(`{"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`)
+			oversizedTail := []byte(`data: {"pad":"` + strings.Repeat("x", maxIncompleteSSEEventBytes) + `"`)
+			deliverStreamChunk(t, host, concatStreamBytes(first, oversizedTail), false)
+			attrs := getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 3, 8)
+
+			second := sseEvent(`{"model":"gpt-4","usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}}`)
+			deliverStreamChunk(t, host, concatStreamBytes([]byte("\n\n"), second), false)
+			attrs = getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 8, 13)
+
+			// EOS: drain() reports the single RESYNC entry via one debug log
+			// line; previously recorded values are preserved.
+			deliverStreamChunks(t, host, sseEvent("[DONE]"))
+			attrs = getAILogAttributes(t, host)
+			assertTokenAttrs(t, attrs, 5, 8, 13)
+			host.CompleteHttp()
 		})
 	})
 }

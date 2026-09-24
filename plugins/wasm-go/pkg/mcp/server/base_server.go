@@ -14,8 +14,11 @@
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"sort"
+	"sync"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 
@@ -24,35 +27,56 @@ import (
 
 // BaseMCPServer provides common functionality for MCP servers
 type BaseMCPServer struct {
+	mu    sync.RWMutex
+	state runtimeSnapshot
+}
+
+// runtimeSnapshot is immutable after publication. Mutations publish a new
+// value so a request can keep one coherent tool/config view across a reload.
+type runtimeSnapshot struct {
 	tools  map[string]Tool
 	config []byte
+}
+
+type namedTool struct {
+	name string
+	tool Tool
 }
 
 // NewBaseMCPServer creates a new BaseMCPServer
 func NewBaseMCPServer() BaseMCPServer {
 	return BaseMCPServer{
-		tools: make(map[string]Tool),
+		state: runtimeSnapshot{tools: make(map[string]Tool)},
 	}
 }
 
 // AddMCPTool adds a tool to the server
 func (s *BaseMCPServer) AddMCPTool(name string, tool Tool) Server {
-	if _, exist := s.tools[name]; exist {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exist := s.state.tools[name]; exist {
 		log.Errorf("Conflict! There is a tool with the same name:%s", name)
 		return s
 	}
-	s.tools[name] = tool
+	tools := cloneTools(s.state.tools)
+	tools[name] = tool
+	s.state = runtimeSnapshot{tools: tools, config: s.state.config}
 	return s
 }
 
 // GetMCPTools returns all tools registered with the server
 func (s *BaseMCPServer) GetMCPTools() map[string]Tool {
-	return s.tools
+	return cloneTools(s.snapshot().tools)
 }
 
 // SetConfig sets the server configuration
 func (s *BaseMCPServer) SetConfig(config []byte) {
-	s.config = config
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state = runtimeSnapshot{
+		tools:  s.state.tools,
+		config: bytes.Clone(config),
+	}
 }
 
 // GetConfig gets the server configuration
@@ -70,7 +94,7 @@ func (s *BaseMCPServer) GetConfig(v any) {
 		}
 		log.Infof("parse server config from request, config:%s", serverConfig)
 	} else {
-		config = s.config
+		config = bytes.Clone(s.snapshot().config)
 	}
 	if len(config) == 0 {
 		return
@@ -89,12 +113,42 @@ func (s *BaseMCPServer) Clone() Server {
 
 // CloneBase creates a copy of the base server
 func (s *BaseMCPServer) CloneBase() BaseMCPServer {
-	newServer := BaseMCPServer{
-		tools:  make(map[string]Tool),
-		config: s.config,
+	snapshot := s.snapshot()
+	return BaseMCPServer{
+		state: runtimeSnapshot{
+			tools:  cloneTools(snapshot.tools),
+			config: bytes.Clone(snapshot.config),
+		},
 	}
-	for k, v := range s.tools {
-		newServer.tools[k] = v
+}
+
+func (s *BaseMCPServer) snapshot() runtimeSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state
+}
+
+func cloneTools(tools map[string]Tool) map[string]Tool {
+	cloned := make(map[string]Tool, len(tools))
+	for name, tool := range tools {
+		cloned[name] = tool
 	}
-	return newServer
+	return cloned
+}
+
+// snapshotTools captures membership once and orders it by the public tool
+// name. Later configuration publication cannot change an in-flight listing.
+func snapshotTools(server Server) []namedTool {
+	tools := server.GetMCPTools()
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	snapshot := make([]namedTool, 0, len(names))
+	for _, name := range names {
+		snapshot = append(snapshot, namedTool{name: name, tool: tools[name]})
+	}
+	return snapshot
 }

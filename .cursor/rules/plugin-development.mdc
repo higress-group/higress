@@ -11,125 +11,69 @@ alwaysApply: false
 
 # Plugin Development Standards
 
-## Strict Requirements for New Independent Plugins
+These rules apply when creating or materially changing a Wasm or golang-filter
+plugin. Follow the repository-wide build and test guidance in
+[`AGENTS.md`](../../AGENTS.md) and the
+[contributor guide](../../CONTRIBUTING_EN.md).
 
-When creating **new independent plugins** (e.g., newly implemented wasm plugins or golang-filter plugins), you **MUST** follow these standards:
+## Agent participation and issue-spec gate
 
-### 1. Design Documentation Directory Requirements
+Before implementation, determine whether an AI or coding agent will materially
+participate under the
+[agent-assisted contribution policy](../../docs/developers/agent-assisted-contributions.md).
+When material participation applies:
 
-- You **MUST** create a `design/` directory within the plugin directory
-- Directory structure example:
-  ```
-  plugins/wasm-go/extensions/my-new-plugin/
-    ├── design/
-    │   ├── design-doc.md          # Design document
-    │   ├── architecture.md         # Architecture (optional)
-    │   └── requirements.md         # Requirements (optional)
-    ├── main.go
-    ├── go.mod
-    └── README.md
-  ```
+- enter the Higress issue-spec workflow before implementation begins;
+- do not begin implementation until a Higress maintainer has approved the
+  Proposal Issue and Design Issue;
+- implement only through TASKs authorized by the approved Design and preserve
+  traceability to the applicable SPECs;
+- ensure the Design contains a concrete Verification Plan before verification
+  begins; and
+- complete the applicable implementation and verification TASKs with commands,
+  results, evidence links, and hashes before asking maintainers to accept the
+  verification or review.
 
-### 2. Design Documentation Content Requirements
+The maintainer-approved issue-spec Design Issue is the authoritative design
+carrier. No plugin-local `design/` directory, design document, or AI prompt file
+is required for this gate, and none should be created or required as a
+substitute for the approved Design Issue.
 
-The design documentation in the `design/` directory should include:
+Disclose the prompts or instructions given to the agent and provide an
+AI-assisted work summary in the pull request template, with secrets and
+sensitive data removed. Human-only work is outside this agent gate. The narrow
+trivial-edit exception is defined in the canonical policy and must be declared
+when used. A canonical-repository maintainer or administrator may use the
+verified maintainer/administrator exception only after completing the canonical
+policy's authenticated `gh` identity and collaborator-permission checks and
+recording the login, returned `role_name` of `maintain` or `admin`, and bypass
+rationale in the PR. The current PR author must match the verified login. This
+must include a positive attestation that both `GH_TOKEN` and `GITHUB_TOKEN`
+were unset for every verification command and fail closed on a missing, failed,
+or mismatched check; the accepting or merging maintainer independently validates
+current live evidence with token overrides unset. This does not waive bug-fix
+runtime verification.
 
-- **Plugin Purpose and Use Cases**: Clearly explain what problem the plugin solves
-- **Core Functionality Design**: Detailed description of main features and implementation approach
-- **Configuration Parameters**: List all configuration items and their meanings
-- **Technology Selection and Dependencies**: Explain the technology stack and third-party libraries used
-- **Boundary Conditions and Limitations**: Define the applicable scope and limitations of the plugin
-- **Testing Strategy**: How to verify plugin functionality
+## Optional durable capability specs
 
-### 3. Documentation Provided to AI Coding Tools
+A durable capability spec is separate from the approved Design Issue and is
+created only when maintainers request it. Use the supported canonical layout
+`issue-spec/specs/<plugin-qualified-capability>/spec.md`, with a unique
+lowercase, hyphen-separated slug that identifies the plugin and capability.
+Do not place durable specs in plugin-owned directories. Higress leaves
+`durable_specs` unset; do not enable repository mode or invent a path setting
+without explicit maintainer direction.
 
-If you are using AI Coding tools (such as Cursor, GitHub Copilot, etc.) to generate code:
+## Plugin README and testing
 
-- You **MUST** save the complete design documents, requirement descriptions, and prompts you provided to the AI in the `design/` directory
-- Recommended file naming:
-  - `ai-prompts.md` - AI prompts record
-  - `design-doc.md` - Complete design document
-  - `requirements.md` - Feature requirements list
+Keep the plugin README current with its purpose and use cases, configuration
+fields and defaults, dependencies, limitations, and runnable usage examples.
+Document compatibility requirements when the plugin depends on a particular
+Higress release or data-plane capability.
 
-### 4. Files NOT to Commit to Git
-
-Note: The following files should **NOT** be committed to Git:
-- AI Coding tool work summary documents (should be placed in PR description)
-- Temporary feature change summary documents
-
-Design documents in the `design/` directory **SHOULD** be committed to Git, as they serve as the design basis and technical documentation for the plugin.
-
-## Examples
-
-### Good Plugin Directory Structure Example
-
-```
-plugins/wasm-go/extensions/ai-security-guard/
-  ├── design/
-  │   ├── design-doc.md          # ✅ Detailed design document
-  │   ├── ai-prompts.md          # ✅ Prompts provided to AI
-  │   └── architecture.png        # ✅ Architecture diagram
-  ├── main.go
-  ├── config.go
-  ├── README.md
-  └── go.mod
-```
-
-### Design Document Template
-
-When creating `design/design-doc.md`, you can refer to the following template:
-
-```markdown
-# [Plugin Name] Design Document
-
-## Overview
-- Plugin purpose
-- Problem it solves
-- Target users
-
-## Functional Design
-### Core Feature 1
-- Feature description
-- Implementation approach
-- Key code logic
-
-### Core Feature 2
-...
-
-## Configuration Parameters
-| Parameter | Type | Required | Description | Default |
-|-----------|------|----------|-------------|---------|
-| ...       | ...  | ...      | ...         | ...     |
-
-## Technical Implementation
-- Technology selection
-- Dependencies
-- Performance considerations
-
-## Test Plan
-- Unit tests
-- Integration tests
-- Boundary tests
-
-## Limitations and Notes
-- Known limitations
-- Usage recommendations
-```
-
-## Execution Checklist
-
-When creating a new plugin, please confirm:
-
-- [ ] Created `design/` directory within the plugin directory
-- [ ] Placed design documentation in the `design/` directory
-- [ ] If using AI Coding tools, saved prompts/requirement documents in the `design/` directory
-- [ ] Prepared AI Coding tool work summary (for PR description)
-- [ ] Design documentation is complete with necessary technical details
-
-## Tips
-
-- Design documentation is important technical documentation for the plugin, helpful for:
-  - Understanding design intent during code review
-  - Quickly understanding implementation approach during future maintenance
-  - Learning and reference for other developers
-  - Tracing the reasoning behind design decisions
+Add unit, integration, and end-to-end coverage as applicable, and record
+deterministic rerun commands in the pull request. Bug fixes must follow the
+repository runtime-verification policy: reproduce the affected baseline and
+confirm the fixed version with the same pinned inputs and configuration. Wasm
+runtime claims require evidence through a real proxy-Wasm data path; helper or
+native-mock tests alone are not sufficient.

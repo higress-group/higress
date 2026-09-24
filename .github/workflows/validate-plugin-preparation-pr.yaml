@@ -1,0 +1,112 @@
+name: Validate Immutable Plugin Preparation PR
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/release/**'
+      - 'plugins/wasm-go/extensions/**'
+      - 'plugins/wasm-rust/extensions/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.24.0'
+      - uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20 # v1.2.3
+        with:
+          version: 1.2.3
+      - name: Validate catalog and changed snapshots only
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          (cd tools/plugin-release && go test ./... && go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json)
+          git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -E '^plugins/release/snapshots/[0-9]+\.[0-9]+\.[0-9]+\.json$' > /tmp/changed-snapshots || true
+          test -s /tmp/changed-snapshots || { echo "No snapshot changed; catalog-only validation complete."; exit 0; }
+          while read -r snapshot; do
+            mode=$(jq -r .provenanceMode "$snapshot")
+            source=$(jq -r .sourceCommit "$snapshot")
+            gateway=$(jq -r .gatewayVersion "$snapshot")
+            case "$mode" in
+              candidate | mixed)
+                plan="plugins/release/plans/$gateway.json"
+                evidence="plugins/release/evidence/$gateway.json"
+                test -f "$plan"; test -f "$evidence"
+                test "$(jq -r .sourceCommit "$plan")" = "$source"
+                test "$(jq -r .planId "$plan")" = "$(jq -r .planId "$snapshot")"
+                jq -e --slurpfile plan "$plan" --slurpfile evidence "$evidence" --slurpfile snapshot "$snapshot" '
+                  all($plan[0].plugins[];
+                    . as $entry |
+                    ($evidence[0].plugins[$entry.logicalId]) as $proof |
+                    ($snapshot[0].plugins[] | select(.logicalId == $entry.logicalId)) as $published |
+                    $proof != null and
+                    $proof.candidateRef == $published.candidateRef and
+                    $proof.digest == $published.digest and
+                    $proof.sourceCommit == $plan[0].sourceCommit and
+                    $proof.inputHash == $entry.inputHash and
+                    $published.version == $entry.version and
+                    (($published.backfill // false) == ($entry.backfill // false))
+                  )' "$snapshot" >/dev/null
+                args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$snapshot" --plan "../../$plan" --expected-source "$source" --committed-source "$GITHUB_SHA" --resolve --oci-source candidate)
+                marker=$(jq -r '.bootstrapEvidence.path // empty' "$snapshot")
+                if [ -n "$marker" ]; then
+                  # First managed release: bootstrap mode is explicit snapshot
+                  # provenance, never inferred from a missing previous-snapshot
+                  # file. The release tool recomputes the committed evidence
+                  # digest and binds every public/backfill/deferred claim to it.
+                  [[ "$marker" =~ ^plugins/release/bootstrap-evidence/[0-9]+\.[0-9]+\.[0-9]+\.json$ ]]
+                  test -f "$marker"
+                else
+                  previous=$(jq -r '.previousRelease // empty' "$snapshot")
+                  [[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+                  previous_path="plugins/release/snapshots/$previous.json"
+                  test -f "$previous_path"
+                  args+=(--previous "../../$previous_path")
+                fi
+                (cd tools/plugin-release && go run . "${args[@]}")
+                jq -c '.plugins[]' "$plan" >> /tmp/planned-artifacts
+                ;;
+              bootstrap-public)
+                test -f "plugins/release/bootstrap-evidence/$gateway.json"
+                (cd tools/plugin-release && go run . verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$snapshot" --expected-source "$source" --committed-source "$GITHUB_SHA" --resolve --oci-source public)
+                ;;
+              *) echo "unsupported snapshot provenance mode: $mode" >&2; exit 1 ;;
+            esac
+          done < /tmp/changed-snapshots
+      - name: Rebuild exactly the planned official artifacts without registry credentials
+        run: |
+          set -euo pipefail
+          test -s /tmp/changed-snapshots || exit 0
+          test -f /tmp/planned-artifacts || exit 0
+          # BEGIN plugin-build-contract
+          prepare_test_and_build_plugin() {
+            local implementation=$1 source=$2 build_name=$3
+            case "$implementation" in
+              go)
+                if [ -f "$source/prepare.sh" ]; then (cd "$source" && sh ./prepare.sh); fi
+                (cd "$source" && go test ./...)
+                make -C plugins/wasm-go PLUGIN_NAME="$build_name" build
+                ;;
+              rust)
+                make -C plugins/wasm-rust PLUGIN_NAME="$build_name" test build
+                ;;
+              *) echo "unsupported planned implementation: $implementation" >&2; return 1 ;;
+            esac
+          }
+          # END plugin-build-contract
+          sort -u /tmp/planned-artifacts | while read -r entry; do
+            implementation=$(jq -r .implementation <<<"$entry")
+            source=$(jq -r .sourceDir <<<"$entry")
+            name=$(basename "$source")
+            [[ "$source" = "plugins/wasm-$implementation/extensions/$name" ]]
+            prepare_test_and_build_plugin "$implementation" "$source" "$name"
+            test -s "$source/plugin.wasm"
+          done

@@ -16,9 +16,63 @@ package nacos
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nacos-group/nacos-sdk-go/model"
 )
+
+func TestWithNacosTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout int64
+		want    int64
+	}{
+		{
+			name:    "uses custom timeout",
+			timeout: 45000,
+			want:    45000,
+		},
+		{
+			name:    "uses default for zero timeout",
+			timeout: 0,
+			want:    DefaultNacosTimeout,
+		},
+		{
+			name:    "uses default for negative timeout",
+			timeout: -1,
+			want:    DefaultNacosTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &watcher{}
+			WithNacosTimeout(tt.timeout)(w)
+
+			if w.NacosTimeout != tt.want {
+				t.Fatalf("expected timeout %d, got %d", tt.want, w.NacosTimeout)
+			}
+		})
+	}
+}
+
+func TestFetchRetryBackoff(t *testing.T) {
+	tests := []struct {
+		retry int
+		want  time.Duration
+	}{
+		{retry: 0, want: 0},
+		{retry: -1, want: 0},
+		{retry: 1, want: time.Second},
+		{retry: 3, want: 3 * time.Second},
+	}
+
+	for _, tt := range tests {
+		if got := fetchRetryBackoff(tt.retry); got != tt.want {
+			t.Fatalf("retry %d: expected backoff %v, got %v", tt.retry, tt.want, got)
+		}
+	}
+}
 
 func Test_generateServiceEntry_Weight(t *testing.T) {
 	w := &watcher{}

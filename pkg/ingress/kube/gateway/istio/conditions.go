@@ -410,6 +410,20 @@ func generateSupportedKinds(l k8s.Listener) ([]k8s.RouteGroupKind, bool) {
 	return supported, true
 }
 
+func requestsUnsupportedTLSRouteTermination(l k8s.Listener) bool {
+	if l.Protocol != k8s.TLSProtocolType || l.TLS == nil ||
+		l.TLS.Mode == nil || *l.TLS.Mode != k8s.TLSModeTerminate ||
+		l.AllowedRoutes == nil {
+		return false
+	}
+	for _, kind := range l.AllowedRoutes.Kinds {
+		if routeGroupKindEqual(toRouteKind(gvk.TLSRoute), kind) {
+			return true
+		}
+	}
+	return false
+}
+
 func FilterInPlaceByIndex[E any](s []E, keep func(int) bool) []E {
 	i := 0
 	for j := 0; j < len(s); j++ {

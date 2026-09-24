@@ -28,11 +28,11 @@ type stubTool struct {
 	output map[string]any
 }
 
-func (s *stubTool) Create(_ []byte) Tool                       { return s }
-func (s *stubTool) Call(_ HttpContext, _ Server) error         { return nil }
-func (s *stubTool) Description() string                        { return s.desc }
-func (s *stubTool) InputSchema() map[string]any                { return s.input }
-func (s *stubTool) OutputSchema() map[string]any               { return s.output }
+func (s *stubTool) Create(_ []byte) Tool               { return s }
+func (s *stubTool) Call(_ HttpContext, _ Server) error { return nil }
+func (s *stubTool) Description() string                { return s.desc }
+func (s *stubTool) InputSchema() map[string]any        { return s.input }
+func (s *stubTool) OutputSchema() map[string]any       { return s.output }
 
 func newPopulatedRegistry(t *testing.T) *GlobalToolRegistry {
 	t.Helper()
@@ -112,6 +112,35 @@ func TestComposedMCPServer_GetMCPTools_AggregatesWithPrefix(t *testing.T) {
 	dt2, ok := tools["alpha___fetch"].(*DescriptiveTool)
 	require.True(t, ok)
 	assert.Nil(t, dt2.OutputSchema())
+}
+
+func TestComposedMCPServer_GetMCPTools_PreservesLegacyOnlyCompatibility(t *testing.T) {
+	r := &GlobalToolRegistry{}
+	r.Initialize()
+	r.RegisterTool("rest", "legacy", &RestMCPTool{
+		name: "legacy",
+		toolConfig: RestTool{
+			Name:        "legacy",
+			Description: "legacy",
+			LegacyOnly:  true,
+			Args: []RestToolArg{{
+				Name:  "value",
+				Type:  "array",
+				Items: map[string]any{"oneOf": []any{}},
+			}},
+		},
+	})
+	cs := NewComposedMCPServer("compound", []ServerToolConfig{{
+		ServerName: "rest",
+		Tools:      []string{"legacy"},
+	}}, r)
+
+	tool, ok := cs.GetMCPTools()["rest___legacy"].(*DescriptiveTool)
+	require.True(t, ok)
+	assert.True(t, tool.legacyOnlyInputSchema())
+	created, ok := tool.Create(nil).(*DescriptiveTool)
+	require.True(t, ok)
+	assert.True(t, created.legacyOnlyInputSchema(), "Create must retain compatibility metadata")
 }
 
 func TestComposedMCPServer_GetMCPTools_MissingToolIsSkipped(t *testing.T) {
@@ -216,6 +245,7 @@ func TestDescriptiveTool_Create_ReturnsNewInstanceWithSameFields(t *testing.T) {
 		description:  "d",
 		inputSchema:  map[string]any{"k": "v"},
 		outputSchema: map[string]any{"o": "w"},
+		legacyOnly:   true,
 	}
 	created := dt.Create([]byte(`{"ignored":true}`))
 	require.NotNil(t, created)
@@ -225,6 +255,7 @@ func TestDescriptiveTool_Create_ReturnsNewInstanceWithSameFields(t *testing.T) {
 	assert.Equal(t, dt.Description(), cdt.Description())
 	assert.Equal(t, dt.InputSchema(), cdt.InputSchema())
 	assert.Equal(t, dt.OutputSchema(), cdt.OutputSchema())
+	assert.True(t, cdt.legacyOnlyInputSchema())
 }
 
 func TestDescriptiveTool_Call_ReturnsError(t *testing.T) {

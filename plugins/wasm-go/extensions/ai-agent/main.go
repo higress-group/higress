@@ -20,8 +20,9 @@ import (
 
 // 用于统计函数的递归调用次数
 const (
-	ToolCallsCount   = "ToolCallsCount"
-	StreamContextKey = "Stream"
+	ToolCallsCount         = "ToolCallsCount"
+	StreamContextKey       = "Stream"
+	messageStoreContextKey = "ai-agent.message-store"
 )
 
 // react的正则规则
@@ -64,6 +65,11 @@ func parseConfig(gjson gjson.Result, c *PluginConfig, log log.Log) error {
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.Log) types.Action {
 	ctx.DisableReroute()
 	return types.ActionContinue
+}
+
+func requestMessages(ctx wrapper.HttpContext) (*dashscope.ChatMessages, bool) {
+	messages, ok := ctx.GetContext(messageStoreContextKey).(*dashscope.ChatMessages)
+	return messages, ok && messages != nil
 }
 
 func firstReq(ctx wrapper.HttpContext, config PluginConfig, prompt string, rawRequest Request, log log.Log) types.Action {
@@ -168,11 +174,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 
 	ctx.SetContext(ToolCallsCount, 0)
 
-	// 清理历史对话记录
-	dashscope.MessageStore.Clear()
-
-	// 将请求加入到历史对话存储器中
-	dashscope.MessageStore.AddForUser(prompt)
+	messages := make(dashscope.ChatMessages, 0, 1)
+	messages.AddForUser(prompt)
+	ctx.SetContext(messageStoreContextKey, &messages)
 
 	// 开始第一次请求
 	ret := firstReq(ctx, config, prompt, rawRequest, log)
@@ -288,11 +292,17 @@ func toolsCallResult(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmI
 
 	observation := "Observation: " + string(responseBody)
 
-	dashscope.MessageStore.AddForUser(observation)
+	messages, ok := requestMessages(ctx)
+	if !ok {
+		log.Debug("missing request-local message store")
+		proxywasm.ResumeHttpRequest()
+		return
+	}
+	messages.AddForUser(observation)
 
 	completion := dashscope.Completion{
 		Model:     llmInfo.Model,
-		Messages:  dashscope.MessageStore,
+		Messages:  *messages,
 		MaxTokens: llmInfo.MaxTokens,
 	}
 
@@ -388,7 +398,12 @@ func outputParser(response string, log log.Log) (string, string) {
 }
 
 func toolsCall(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonResp JsonResp, aPIsParam []APIsParam, aPIClient []wrapper.HttpClient, content string, rawResponse Response, log log.Log) (types.Action, string) {
-	dashscope.MessageStore.AddForAssistant(content)
+	messages, ok := requestMessages(ctx)
+	if !ok {
+		log.Debug("missing request-local message store")
+		return types.ActionContinue, ""
+	}
+	messages.AddForAssistant(content)
 
 	action, actionInput := outputParser(content, log)
 
@@ -396,7 +411,10 @@ func toolsCall(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmInfo LL
 	if action == "Final Answer" {
 		return types.ActionContinue, actionInput
 	}
-	count := ctx.GetContext(ToolCallsCount).(int)
+	count, ok := ctx.GetContext(ToolCallsCount).(int)
+	if !ok {
+		count = 0
+	}
 	count++
 	log.Debugf("toolCallsCount:%d, config.LLMInfo.MaxIterations=%d", count, llmInfo.MaxIterations)
 	// 函数递归调用次数，达到了预设的循环次数，强制结束
@@ -446,7 +464,7 @@ func toolsCall(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmInfo LL
 									// 删除已经使用过的
 									delete(data, param)
 									// 替换模板中的占位符
-									urlParts[i] = url.QueryEscape(value.(string))
+									urlParts[i] = url.QueryEscape(fmt.Sprintf("%v", value))
 								}
 							}
 						}

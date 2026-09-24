@@ -37,6 +37,9 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["*"]
     verbs: ["get", "watch", "list", "create", "update", "delete", "patch"]
+  - apiGroups: ["gateway.networking.x-k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "watch", "list", "create", "update", "delete", "patch"]
 
   # Gateway api inference extension
   - apiGroups: ["inference.networking.k8s.io"]
@@ -141,6 +144,12 @@ rules:
   - apiGroups: ["apps"]
     verbs: [ "get", "watch", "list", "update", "patch", "create", "delete" ]
     resources: [ "deployments" ]
+  - apiGroups: ["autoscaling"]
+    verbs: [ "get", "watch", "list", "update", "patch", "create", "delete" ]
+    resources: [ "horizontalpodautoscalers" ]
+  - apiGroups: ["policy"]
+    verbs: [ "get", "watch", "list", "update", "patch", "create", "delete" ]
+    resources: [ "poddisruptionbudgets" ]
   - apiGroups: [""]
     verbs: [ "get", "watch", "list", "update", "patch", "create", "delete" ]
     resources: [ "serviceaccounts"]

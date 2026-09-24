@@ -1,0 +1,46 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-2026-modern-to-legacy
+  namespace: mcp-demo
+spec:
+  ingressClassName: higress
+  rules:
+    - host: legacy-bridge.mcp.demo
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: legacy-mcp
+                port:
+                  number: 8080
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: mcp-2026-modern-to-legacy
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  matchRules:
+    - config:
+        server:
+          name: legacy-bridge-demo
+          type: mcp-proxy
+          transport: http
+          protocolStrategy: legacy
+          mcpServerURL: http://legacy-mcp.mcp-demo.svc.cluster.local:8080/legacy
+        tools:
+          - name: proxy_echo
+            description: Echo a deterministic value through a legacy MCP server
+            args:
+              - name: value
+                description: Value to echo
+                type: string
+                required: true
+      configDisable: false
+      ingress:
+        - mcp-demo/mcp-2026-modern-to-legacy
+  url: file:///opt/plugins/mcp-server/2026-07-28/plugin.wasm

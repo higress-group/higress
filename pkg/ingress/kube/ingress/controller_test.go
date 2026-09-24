@@ -1026,6 +1026,77 @@ func TestSSLPassthroughIgnoresNonRootPath(t *testing.T) {
 	}
 }
 
+func TestHTTPRouteUsesMCPDestinationForResourceBackend(t *testing.T) {
+	c := controller{}
+	apiGroup := "networking.higress.io"
+	wrapper := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "ai-route",
+			},
+			Spec: ingress.IngressSpec{
+				Rules: []ingress.IngressRule{
+					{
+						Host: "ai.example.com",
+						IngressRuleValue: ingress.IngressRuleValue{
+							HTTP: &ingress.HTTPIngressRuleValue{
+								Paths: []ingress.HTTPIngressPath{
+									{
+										Path: "/v1/chat/completions",
+										Backend: ingress.IngressBackend{
+											Resource: &v1.TypedLocalObjectReference{
+												APIGroup: &apiGroup,
+												Kind:     "McpBridge",
+												Name:     "default",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			Destination: &annotations.DestinationConfig{
+				McpDestination: []*v1alpha3.HTTPRouteDestination{
+					{
+						Destination: &v1alpha3.Destination{
+							Host: "llm-supplier-xxx.internal.dns",
+							Port: &v1alpha3.PortSelector{Number: 443},
+						},
+						Weight: 100,
+					},
+				},
+				WeightSum: 100,
+			},
+		},
+	}
+
+	routeOptions := &common.ConvertOptions{}
+	if err := c.ConvertHTTPRoute(routeOptions, wrapper); err != nil {
+		t.Fatalf("ConvertHTTPRoute() error = %v", err)
+	}
+
+	httpRoutes := routeOptions.HTTPRoutes["ai.example.com"]
+	if len(httpRoutes) != 1 {
+		t.Fatalf("http route count mismatch, want 1, got %d", len(httpRoutes))
+	}
+	routeDestinations := httpRoutes[0].HTTPRoute.Route
+	if len(routeDestinations) != 1 {
+		t.Fatalf("route destination count mismatch, want 1, got %d", len(routeDestinations))
+	}
+	destination := routeDestinations[0].Destination
+	if got := destination.Host; got != "llm-supplier-xxx.internal.dns" {
+		t.Fatalf("destination host mismatch, want llm-supplier-xxx.internal.dns, got %s", got)
+	}
+	if got := destination.GetPort().GetNumber(); got != 443 {
+		t.Fatalf("destination port mismatch, want 443, got %d", got)
+	}
+}
+
 func testApplyCanaryIngress(t *testing.T, c common.IngressController) {
 	testcases := []struct {
 		description string

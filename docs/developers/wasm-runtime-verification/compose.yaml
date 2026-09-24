@@ -1,0 +1,44 @@
+services:
+  envoy:
+    image: ${HIGRESS_GATEWAY_IMAGE:?Set a pinned Higress gateway image}
+    entrypoint: /usr/local/bin/envoy
+    command:
+      - -c
+      - /etc/envoy/envoy.yaml
+      - --component-log-level
+      - wasm:debug
+    depends_on:
+      - httpbin
+    init: true
+    restart: "no"
+    networks:
+      - wasmtest
+    ports:
+      - target: 10000
+        published: ${ENVOY_PORT:-10000}
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - target: 9901
+        published: ${ENVOY_ADMIN_PORT:-9901}
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ./envoy.yaml
+        target: /etc/envoy/envoy.yaml
+        read_only: true
+      - type: bind
+        source: ${WASM_PATH:?Set a repository-relative Wasm path}
+        target: /etc/envoy/main.wasm
+        read_only: true
+
+  httpbin:
+    image: ${HTTPBIN_IMAGE:?Set a pinned httpbin image}
+    init: true
+    restart: "no"
+    networks:
+      - wasmtest
+
+networks:
+  wasmtest:
+    internal: true

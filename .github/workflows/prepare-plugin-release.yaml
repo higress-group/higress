@@ -1,0 +1,576 @@
+name: Prepare Immutable Plugin Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      gateway_version:
+        description: "Stable Higress version for the reviewed preparation PR"
+        required: true
+        type: string
+      target_ref:
+        description: "Exact Higress commit/ref to prepare"
+        required: true
+        type: string
+      previous_snapshot:
+        description: "Checked-in previous managed snapshot path (empty for first-release bootstrap)"
+        required: false
+        type: string
+      bootstrap_comparison_base:
+        description: "One-time full commit of the last stable Higress release (bootstrap only)"
+        required: false
+        type: string
+      version_overrides:
+        description: "Reviewed logicalId-to-stable-version JSON (proposed VERSION edits)"
+        required: false
+        default: "{}"
+        type: string
+      dry_run:
+        description: "Validate and render only; never upload candidates or create a PR"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-plugin-release-${{ inputs.gateway_version }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+      - uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20 # v1.2.3
+        with:
+          version: 1.2.3
+      - name: Preflight ORAS public manifest resolution
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$TARGET_REF"
+          attempted=0
+          present=0
+          absent=0
+          authenticated_capture=0
+          while IFS=$'\t' read -r registry image source_dir; do
+            [[ "$registry" =~ ^[a-z0-9][a-z0-9.-]*(\:[0-9]+)?$ ]]
+            [[ "$image" =~ ^plugins/[a-z0-9][a-z0-9._-]*$ ]]
+            [[ "$source_dir" =~ ^plugins/wasm-(go|rust)/extensions/[a-z0-9][a-z0-9._-]*$ ]]
+            version="$(tr -d '\r\n' < "$source_dir/VERSION")"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+            prerelease="${version#*-}"
+            if [ "$prerelease" != "$version" ] && [ "${prerelease%%.*}" = "alpha" ]; then
+              # Deferred alpha builds have no public artifact to preflight.
+              continue
+            fi
+            public_ref="$registry/$image:$version"
+            attempted=$((attempted + 1))
+            lookup_error=$(mktemp)
+            if descriptor=$(oras manifest fetch "$public_ref" --descriptor 2>"$lookup_error"); then
+              jq -er '.digest | strings and test("^sha256:[0-9a-f]{64}$")' <<<"$descriptor" >/dev/null
+              present=$((present + 1))
+              rm -f "$lookup_error"
+              continue
+            fi
+            # This job intentionally has no registry credential. A refusal is
+            # neither presence nor absence: defer the definitive decision to
+            # the protected authenticated bootstrap capture and keep checking
+            # every deterministic reference.
+            auth_error=$(<"$lookup_error")
+            auth_error=${auth_error//"$public_ref"/}
+            if grep -Eiq 'unauthorized|forbidden|denied|authentication required|authorization required' <<<"$auth_error" ||
+               grep -Eiq 'HTTP(/[0-9.]+)?[[:space:]]+(401|403)([^[:digit:]]|$)|(^|[^[:alpha:]])status( code)?[[:space:]:=]+(401|403)([^[:digit:]]|$)' <<<"$auth_error"; then
+              authenticated_capture=$((authenticated_capture + 1))
+              rm -f "$lookup_error"
+              echo "public registry preflight requires authenticated capture; authorization failure is never absence: $public_ref" >&2
+              continue
+            fi
+            # Registry absence is accepted only with an explicit 404-class
+            # marker or ACR's provider-structured registry error naming this
+            # exact fully qualified reference.
+            if grep -Eiq '404|manifest unknown|name unknown|repository does not exist' "$lookup_error" ||
+               { grep -Fq 'Error response from registry:' "$lookup_error" && grep -Fq "$public_ref: not found" "$lookup_error"; }; then
+              absent=$((absent + 1))
+              rm -f "$lookup_error"
+              continue
+            fi
+            cat "$lookup_error" >&2; rm -f "$lookup_error"
+            echo "public registry preflight failed without explicit absence evidence: $public_ref" >&2
+            exit 1
+          done < <(
+            jq -er '
+              . as $catalog
+              | .plugins[] | select(.releaseEligible)
+              | [$catalog.registry, .image, .sourceDir] | @tsv
+            ' plugins/release/catalog.json | sort
+          )
+          echo "Read-only ORAS preflight classified $attempted deterministic public references: $present present, $absent explicitly absent, $authenticated_capture require authenticated capture; deferred alpha plugins were skipped." >> "$GITHUB_STEP_SUMMARY"
+  prepare:
+    needs: preflight
+    runs-on: ubuntu-latest
+    # No environment gate: candidate builds publish only into the
+    # content-addressed candidates/ namespace, which nothing public resolves.
+    # The human gate for a release is the preparation PR review plus the
+    # latest-move environment approval in promote. Consequently the candidate
+    # registry credentials and the release App secrets this job reads must be
+    # repository- or organization-scoped, not environment-scoped.
+    steps:
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        if: ${{ !inputs.dry_run }}
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+          token: ${{ inputs.dry_run && github.token || steps.app-token.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.24.0"
+      - uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20 # v1.2.3
+        with:
+          version: 1.2.3
+      - name: Validate immutable inputs
+        env:
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          PREVIOUS: ${{ inputs.previous_snapshot }}
+          BOOTSTRAP_BASE: ${{ inputs.bootstrap_comparison_base }}
+          OVERRIDES: ${{ inputs.version_overrides }}
+        run: |
+          set -euo pipefail
+          [[ "$GATEWAY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$TARGET_REF"
+          git fetch --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$TARGET_REF"
+          if [ -n "$PREVIOUS" ]; then
+            [[ "$PREVIOUS" =~ ^plugins/release/snapshots/[0-9]+\.[0-9]+\.[0-9]+\.json$ ]]
+            test -f "$PREVIOUS"
+            test -z "$BOOTSTRAP_BASE"
+          else
+            [[ "$BOOTSTRAP_BASE" =~ ^[0-9a-f]{40}$ ]]
+            git cat-file -e "$BOOTSTRAP_BASE^{commit}"
+            git merge-base --is-ancestor "$BOOTSTRAP_BASE" "$TARGET_REF"
+            base_version=$(git show "$BOOTSTRAP_BASE:VERSION")
+            [[ "$base_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          fi
+          printf '%s' "$OVERRIDES" | jq -Rse -cS 'fromjson | if type == "object" and all(to_entries[]; (.key | test("^[a-z0-9][a-z0-9._-]*$")) and (.value | type == "string" and test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))) then . else error("version_overrides must map safe logical plugin IDs to stable SemVer strings") end' > /tmp/overrides.json
+      - name: Validate catalog and deterministically plan
+        env:
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          PREVIOUS: ${{ inputs.previous_snapshot }}
+          BOOTSTRAP_BASE: ${{ inputs.bootstrap_comparison_base }}
+          CANDIDATE_REGISTRY: ${{ vars.PLUGIN_CANDIDATE_REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.CANDIDATE_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CANDIDATE_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          (cd tools/plugin-release && go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json)
+          mkdir -p plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence
+          if [ -z "$PREVIOUS" ]; then
+            # The bootstrap capture resolves the complete public catalog
+            # read-only. A 401/403 there is an authorization/configuration
+            # error, never an absent artifact. Reuse the existing protected
+            # candidate ACR configuration for this read-only command path; the
+            # capture itself performs no push, retag, or delete operation.
+            [[ "$CANDIDATE_REGISTRY" =~ ^[a-z0-9][a-z0-9.-]*(\:[0-9]+)?$ ]]
+            test "$CANDIDATE_REGISTRY" = "$(jq -er .registry plugins/release/catalog.json)"
+            test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
+            echo "$REGISTRY_PASSWORD" | oras login "$CANDIDATE_REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+            (cd tools/plugin-release && go run . capture-bootstrap-evidence --root ../.. --catalog ../../plugins/release/catalog.json --source "$TARGET_REF" --output /tmp/bootstrap-evidence.json)
+            base_version=$(git show "$BOOTSTRAP_BASE:VERSION"); base_version=${base_version#v}
+            (cd tools/plugin-release && go run . bootstrap-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$base_version" --source "$TARGET_REF" --existing-evidence /tmp/bootstrap-evidence.json --output /tmp/bootstrap-snapshot.json)
+            args=(plan --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$GATEWAY_VERSION" --target "$TARGET_REF" --base "$BOOTSTRAP_BASE" --overrides /tmp/overrides.json --output /tmp/plan.json --previous /tmp/bootstrap-snapshot.json)
+            (cd tools/plugin-release && go run . "${args[@]}")
+            cp /tmp/bootstrap-evidence.json "plugins/release/bootstrap-evidence/$GATEWAY_VERSION.json"
+          else
+            args=(plan --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$GATEWAY_VERSION" --target "$TARGET_REF" --overrides /tmp/overrides.json --output /tmp/plan.json --previous "../../$PREVIOUS")
+            (cd tools/plugin-release && go run . "${args[@]}")
+          fi
+          cp /tmp/plan.json "plugins/release/plans/$GATEWAY_VERSION.json"
+          sha256sum /tmp/plan.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Confirm dry-run boundary
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "Dry run: bootstrap capture may authenticate with the protected candidate ACR credential, but no candidate/public write or PR step runs." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload reviewed dry-run material
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: plugin-release-prepare-${{ inputs.gateway_version }}
+          if-no-files-found: error
+          path: |
+            /tmp/plan.json
+            plugins/release/snapshots/${{ inputs.gateway_version }}.json
+            plugins/release/plans/${{ inputs.gateway_version }}.json
+            plugins/release/bootstrap-evidence/${{ inputs.gateway_version }}.json
+      - name: Apply reviewed VERSION edits
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          (cd tools/plugin-release && go run . apply-plan --root ../.. --plan /tmp/plan.json)
+      - name: Build and publish content-addressed candidates
+        if: ${{ !inputs.dry_run }}
+        env:
+          CANDIDATE_REGISTRY: ${{ vars.PLUGIN_CANDIDATE_REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.CANDIDATE_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CANDIDATE_REGISTRY_PASSWORD }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+        run: |
+          set -euo pipefail
+          test -n "$CANDIDATE_REGISTRY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
+          echo "$REGISTRY_PASSWORD" | oras login "$CANDIDATE_REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+          (cd tools/plugin-release && GOMAXPROCS=1 go build -p 1 -o /tmp/plugin-release-prepare .)
+          # BEGIN plugin-build-contract
+          prepare_test_and_build_plugin() {
+            local implementation=$1 source=$2 build_name=$3
+            case "$implementation" in
+              go)
+                if [ -f "$source/prepare.sh" ]; then (cd "$source" && sh ./prepare.sh); fi
+                (cd "$source" && go test ./...)
+                make -C plugins/wasm-go PLUGIN_NAME="$build_name" build
+                ;;
+              rust)
+                make -C plugins/wasm-rust PLUGIN_NAME="$build_name" test build
+                ;;
+              *) echo "unsupported planned implementation: $implementation" >&2; return 1 ;;
+            esac
+          }
+          # END plugin-build-contract
+          # BEGIN plugin-manifest-publish-contract
+          publish_plugin_manifest() {
+            local ref=$1 wasm=$2 source_commit=$3 version=$4 input_hash=$5
+            local stage push_result digest manifest repo source_created wasm_digest wasm_size
+            # Bash normally clears errexit inside command substitution. Restore it
+            # because both callers capture this function's digest that way.
+            set -e
+            if ! [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then echo "invalid plugin source commit" >&2; return 1; fi
+            if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then echo "invalid stable plugin version" >&2; return 1; fi
+            if ! [[ "$input_hash" =~ ^sha256:[0-9a-f]{64}$ ]]; then echo "invalid plugin input hash" >&2; return 1; fi
+            if ! test -s "$wasm"; then echo "plugin.wasm is missing or empty" >&2; return 1; fi
+            if ! source_created=$(git show -s --format=%cI "$source_commit"); then echo "cannot resolve plugin source commit time" >&2; return 1; fi
+            if ! [[ "$source_created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$ ]]; then echo "invalid plugin source commit time" >&2; return 1; fi
+            wasm_digest="sha256:$(sha256sum "$wasm" | awk '{print $1}')"
+            wasm_size=$(wc -c < "$wasm"); wasm_size=${wasm_size//[[:space:]]/}
+            stage=$(mktemp -d)
+            if ! printf '%s' '{}' > "$stage/config.json" || ! cp "$wasm" "$stage/plugin.wasm"; then
+              rm -rf "$stage"; echo "failed to stage plugin manifest layers" >&2; return 1
+            fi
+            if ! push_result=$(cd "$stage" && oras push "$ref" \
+              "config.json:application/vnd.module.wasm.config.v1+json" \
+              "plugin.wasm:application/vnd.module.wasm.content.layer.v1+wasm" \
+              --image-spec v1.0 \
+              --annotation "org.opencontainers.image.created=$source_created" \
+              --annotation "org.opencontainers.image.revision=$source_commit" \
+              --annotation "org.opencontainers.image.version=$version" \
+              --annotation "io.higress.plugin.input-hash=$input_hash" \
+              --format json); then
+              rm -rf "$stage"; echo "plugin manifest push failed: $ref" >&2; return 1
+            fi
+            rm -rf "$stage"
+            if ! digest=$(jq -ser 'select(length == 1) | .[0].digest | strings | select(test("^sha256:[0-9a-f]{64}$"))' <<<"$push_result"); then
+              echo "plugin manifest push returned a malformed descriptor: $ref" >&2; return 1
+            fi
+            repo=${ref%:*}
+            if ! manifest=$(oras manifest fetch "$repo@$digest"); then
+              echo "published plugin manifest cannot be resolved by digest: $repo@$digest" >&2; return 1
+            fi
+            if ! jq -se --arg commit "$source_commit" --arg created "$source_created" --arg version "$version" --arg input_hash "$input_hash" --arg wasm_digest "$wasm_digest" --argjson wasm_size "$wasm_size" '
+              length == 1 and (.[0] |
+                (keys == ["annotations","config","layers","mediaType","schemaVersion"]) and
+                .schemaVersion == 2 and
+                .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+                (.config == {
+                  "mediaType":"application/vnd.unknown.config.v1+json",
+                  "digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                  "size":2
+                }) and
+                (.annotations == {
+                  "org.opencontainers.image.created": $created,
+                  "org.opencontainers.image.revision": $commit,
+                  "org.opencontainers.image.version": $version,
+                  "io.higress.plugin.input-hash": $input_hash
+                }) and
+                (.layers | type == "array" and length == 2) and
+                (.layers[0] == {
+                  "mediaType":"application/vnd.module.wasm.config.v1+json",
+                  "digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                  "size":2,
+                  "annotations":{"org.opencontainers.image.title":"config.json"}
+                }) and
+                (.layers[1] == {
+                  "mediaType":"application/vnd.module.wasm.content.layer.v1+wasm",
+                  "digest":$wasm_digest,
+                  "size":$wasm_size,
+                  "annotations":{"org.opencontainers.image.title":"plugin.wasm"}
+                })
+              )
+            ' >/dev/null <<<"$manifest"; then
+              echo "published plugin manifest does not match the deterministic two-layer contract: $ref" >&2; return 1
+            fi
+            printf '%s\n' "$digest"
+          }
+          # END plugin-manifest-publish-contract
+          # BEGIN candidate-publish-contract
+          resolve_or_build_candidate() {
+            local candidate=$1 implementation=$2 source=$3 build_name=$4 source_commit=$5 version=$6 input_hash=$7 release_tool=$8
+            local candidate_repo descriptor manifest resolved_digest lookup_error auth_error source_created wasm wasm_digest wasm_size pull_dir verify_error
+            # Bash normally clears errexit inside command substitution. Restore
+            # it because the caller captures this function's digest that way.
+            set -e
+            if ! [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then echo "invalid candidate source commit" >&2; return 1; fi
+            if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then echo "invalid stable candidate version" >&2; return 1; fi
+            if ! [[ "$input_hash" =~ ^sha256:[0-9a-f]{64}$ ]]; then echo "invalid candidate input hash" >&2; return 1; fi
+            if ! test -x "$release_tool"; then echo "candidate verifier is missing or not executable" >&2; return 1; fi
+            if ! source_created=$(git show -s --format=%cI "$source_commit"); then echo "cannot resolve candidate source commit time" >&2; return 1; fi
+            if ! [[ "$source_created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$ ]]; then echo "invalid candidate source commit time" >&2; return 1; fi
+            candidate_repo=${candidate%:*}
+            lookup_error=$(mktemp)
+            if descriptor=$(oras manifest fetch "$candidate" --descriptor 2>"$lookup_error"); then
+              rm -f "$lookup_error"
+              if ! resolved_digest=$(jq -ser '
+                select(length == 1) | .[0]
+                | select(.mediaType == "application/vnd.oci.image.manifest.v1+json")
+                | .digest | strings | select(test("^sha256:[0-9a-f]{64}$"))
+              ' <<<"$descriptor"); then
+                echo "existing candidate descriptor is malformed: $candidate" >&2
+                return 1
+              fi
+              pull_dir=$(mktemp -d)
+              if ! oras manifest fetch "$candidate_repo@$resolved_digest" --output "$pull_dir/manifest.json"; then
+                rm -rf "$pull_dir"
+                echo "existing candidate manifest cannot be resolved by digest: $candidate_repo@$resolved_digest" >&2
+                return 1
+              fi
+              manifest=$(<"$pull_dir/manifest.json")
+              if ! jq -se --arg commit "$source_commit" --arg created "$source_created" --arg version "$version" --arg input_hash "$input_hash" '
+                length == 1 and (.[0] |
+                  (keys == ["annotations","config","layers","mediaType","schemaVersion"]) and
+                  .schemaVersion == 2 and
+                  .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+                  (.config == {
+                    "mediaType":"application/vnd.unknown.config.v1+json",
+                    "digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    "size":2
+                  }) and
+                  (.annotations == {
+                    "org.opencontainers.image.created": $created,
+                    "org.opencontainers.image.revision": $commit,
+                    "org.opencontainers.image.version": $version,
+                    "io.higress.plugin.input-hash": $input_hash
+                  }) and
+                  (.layers | type == "array" and length == 2) and
+                  (.layers[0] == {
+                    "mediaType":"application/vnd.module.wasm.config.v1+json",
+                    "digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    "size":2,
+                    "annotations":{"org.opencontainers.image.title":"config.json"}
+                  }) and
+                  ((.layers[1] | keys) == ["annotations","digest","mediaType","size"]) and
+                  (.layers[1].mediaType == "application/vnd.module.wasm.content.layer.v1+wasm") and
+                  (.layers[1].digest | strings | test("^sha256:[0-9a-f]{64}$")) and
+                  (.layers[1].size | numbers and . > 8) and
+                  (.layers[1].annotations == {"org.opencontainers.image.title":"plugin.wasm"})
+                )
+              ' >/dev/null <<<"$manifest"; then
+                rm -rf "$pull_dir"
+                echo "existing candidate manifest does not match its planned provenance: $candidate" >&2
+                return 1
+              fi
+              # Rebuild even on reuse: metadata alone cannot prove that an
+              # existing candidate contains the selected source bytes.
+              prepare_test_and_build_plugin "$implementation" "$source" "$build_name" >&2
+              wasm="$source/plugin.wasm"
+              if ! test -s "$wasm"; then
+                rm -rf "$pull_dir"
+                echo "candidate build did not produce plugin.wasm: $candidate" >&2
+                return 1
+              fi
+              wasm_digest="sha256:$(sha256sum "$wasm" | awk '{print $1}')"
+              wasm_size=$(wc -c < "$wasm"); wasm_size=${wasm_size//[[:space:]]/}
+              if ! jq -e --arg digest "$wasm_digest" --argjson size "$wasm_size" '.layers[1].digest == $digest and .layers[1].size == $size' "$pull_dir/manifest.json" >/dev/null; then
+                rm -rf "$pull_dir"
+                echo "existing candidate Wasm descriptor does not match the deterministic source build: $candidate" >&2
+                return 1
+              fi
+              if ! oras pull "$candidate_repo@$resolved_digest" --output "$pull_dir" >/dev/null; then
+                rm -rf "$pull_dir"
+                echo "existing candidate blobs cannot be pulled by digest: $candidate_repo@$resolved_digest" >&2
+                return 1
+              fi
+              if ! test -f "$pull_dir/config.json" || ! test -f "$pull_dir/plugin.wasm" || ! cmp -s "$wasm" "$pull_dir/plugin.wasm"; then
+                rm -rf "$pull_dir"
+                echo "existing candidate pulled blobs do not match the deterministic source build: $candidate" >&2
+                return 1
+              fi
+              verify_error=$(mktemp)
+              if ! "$release_tool" verify-pulled-plugin --manifest "$pull_dir/manifest.json" --config "$pull_dir/config.json" --wasm "$pull_dir/plugin.wasm" --digest "$resolved_digest" --source-commit "$source_commit" --source-created "$source_created" --version "$version" --input-hash "$input_hash" 2>"$verify_error"; then
+                cat "$verify_error" >&2
+                rm -f "$verify_error"; rm -rf "$pull_dir"
+                echo "existing candidate failed strict pulled-artifact validation: $candidate" >&2
+                return 1
+              fi
+              rm -f "$verify_error"; rm -rf "$pull_dir"
+              printf '%s\n' "$resolved_digest"
+              return 0
+            fi
+            auth_error=$(<"$lookup_error")
+            auth_error=${auth_error//"$candidate"/}
+            if grep -Eiq 'unauthorized|forbidden|denied|authentication required|authorization required' <<<"$auth_error" ||
+               grep -Eiq 'HTTP(/[0-9.]+)?[[:space:]]+(401|403)([^[:digit:]]|$)|(^|[^[:alpha:]])status( code)?[[:space:]:=]+(401|403)([^[:digit:]]|$)' <<<"$auth_error"; then
+              cat "$lookup_error" >&2; rm -f "$lookup_error"
+              echo "candidate lookup authorization failure is never absence: $candidate" >&2
+              return 1
+            fi
+            if grep -Eiq 'HTTP(/[0-9.]+)?[[:space:]]+404([^[:digit:]]|$)|response status( code)?[[:space:]:=]+404([^[:digit:]]|$)|status code[[:space:]:=]+404([^[:digit:]]|$)|404[[:space:]]+Not[[:space:]]+Found|manifest unknown|name unknown' "$lookup_error" ||
+               { grep -Fq 'Error response from registry:' "$lookup_error" && grep -Fq "$candidate: not found" "$lookup_error"; }; then
+              rm -f "$lookup_error"
+            else
+              cat "$lookup_error" >&2; rm -f "$lookup_error"
+              echo "candidate lookup failed without explicit absence evidence: $candidate" >&2
+              return 1
+            fi
+            # This function is consumed through command substitution below, so
+            # keep build output visible without mixing it into the digest value.
+            prepare_test_and_build_plugin "$implementation" "$source" "$build_name" >&2
+            wasm="$source/plugin.wasm"
+            if ! test -s "$wasm"; then
+              echo "candidate build did not produce plugin.wasm: $candidate" >&2
+              return 1
+            fi
+            publish_plugin_manifest "$candidate" "$wasm" "$source_commit" "$version" "$input_hash"
+          }
+          # END candidate-publish-contract
+          jq -n '{plugins:{}}' >/tmp/candidates.json
+          plan_id=$(jq -r '.planId | sub("sha256:"; "")' /tmp/plan.json)
+          source_commit=$(git rev-parse HEAD)
+          jq -c '.plugins[]' /tmp/plan.json | while read -r entry; do
+            id=$(jq -r .logicalId <<<"$entry"); implementation=$(jq -r .implementation <<<"$entry")
+            source=$(jq -r .sourceDir <<<"$entry"); version=$(jq -r .version <<<"$entry"); input_hash=$(jq -r .inputHash <<<"$entry")
+            build_name=$(basename "$source")
+            [[ "$source" = "plugins/wasm-$implementation/extensions/$build_name" ]]
+            # Both hashes are fixed-width SHA-256 hex strings, so concatenation
+            # retains their complete identities while meeting OCI's 128-byte tag limit.
+            candidate="$CANDIDATE_REGISTRY/candidates/$id:${plan_id}${input_hash#sha256:}"
+            digest=$(resolve_or_build_candidate "$candidate" "$implementation" "$source" "$build_name" "$source_commit" "$version" "$input_hash" /tmp/plugin-release-prepare)
+            jq --arg id "$id" --arg ref "${candidate%@*}@$digest" --arg digest "$digest" --arg commit "$source_commit" --arg hash "$input_hash" '.plugins[$id]={candidateRef:$ref,digest:$digest,sourceCommit:$commit,inputHash:$hash}' /tmp/candidates.json >/tmp/candidates.next && mv /tmp/candidates.next /tmp/candidates.json
+          done
+          cp /tmp/candidates.json "plugins/release/evidence/$GATEWAY_VERSION.json"
+      - name: Sweep public registry for planned tag conflicts
+        env:
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          PREVIOUS: ${{ inputs.previous_snapshot }}
+        run: |
+          set -euo pipefail
+          # BEGIN migration-preflight-contract
+          # Onboarding migration preflight: classify every planned public
+          # version tag before the preparation PR is opened, so a legacy
+          # pre-pipeline artifact surfaces here as a reviewed exclusion instead
+          # of hard-failing the promote batch with an immutable tag conflict.
+          # The tool calibrates its probe against a known-good control tag from
+          # the reviewed previous snapshot and fails closed when the control
+          # does not reproduce its recorded digest, when authorization fails, or
+          # when a lookup cannot be classified as explicit absence.
+          args=(migration-preflight --root ../.. --catalog ../../plugins/release/catalog.json --plan /tmp/plan.json --output /tmp/migration-report.json --markdown /tmp/migration-report.md)
+          if [ -n "$PREVIOUS" ]; then args+=(--previous "../../$PREVIOUS"); else args+=(--previous /tmp/bootstrap-snapshot.json); fi
+          # A dry run builds no candidates, so it has no planned digest to
+          # compare: it reports occupied planned tags without excluding them.
+          if [ -f /tmp/candidates.json ]; then args+=(--candidate-evidence /tmp/candidates.json); fi
+          (cd tools/plugin-release && go run . "${args[@]}")
+          # END migration-preflight-contract
+          blocked=$(jq -er '[.entries[] | select(.state == "blocked")] | length' /tmp/migration-report.json)
+          suspected=$(jq -er '[.entries[] | select(.state == "suspected")] | length' /tmp/migration-report.json)
+          probe_mode=$(jq -er .probeMode /tmp/migration-report.json)
+          if [ "$blocked" -gt 0 ]; then
+            {
+              echo "Migration preflight excluded $blocked planned plugin(s) from the promote batch:"
+              echo
+              jq -er '[.entries[] | select(.state == "blocked") | {logicalId, ociRef, existingDigest, plannedDigest, recommendation}]' /tmp/migration-report.json
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$suspected" -gt 0 ]; then
+            echo "Dry-run migration preflight ($probe_mode): $suspected planned tag(s) already exist publicly and are classified by the non-dry-run sweep." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Migration preflight ($probe_mode): no planned version tag is occupied by a different artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload migration preflight report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: plugin-release-migration-report-${{ inputs.gateway_version }}
+          if-no-files-found: error
+          path: |
+            /tmp/migration-report.json
+            /tmp/migration-report.md
+      - name: Render canonical snapshot
+        if: ${{ !inputs.dry_run }}
+        env:
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          PREVIOUS: ${{ inputs.previous_snapshot }}
+        run: |
+          set -euo pipefail
+          mkdir -p plugins/release/snapshots
+          args=(render-snapshot --catalog ../../plugins/release/catalog.json --plan /tmp/plan.json --candidate-evidence /tmp/candidates.json --migration-report /tmp/migration-report.json --output "../../plugins/release/snapshots/$GATEWAY_VERSION.json")
+          if [ -n "$PREVIOUS" ]; then args+=(--previous "../../$PREVIOUS"); else args+=(--previous /tmp/bootstrap-snapshot.json --bootstrap-evidence /tmp/bootstrap-evidence.json); fi
+          (cd tools/plugin-release && go run . "${args[@]}")
+          sha256sum "plugins/release/snapshots/$GATEWAY_VERSION.json" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Refresh GitHub App token for preparation PR
+        if: ${{ !inputs.dry_run }}
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: pr-app-token
+        with:
+          app-id: ${{ vars.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
+          owner: higress-group
+          repositories: higress
+      - name: Create or update deterministic preparation PR
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.pr-app-token.outputs.token }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          # The generated PR must fork the exact main/code-freeze commit. If
+          # main moved while candidates built, reprepare from the new freeze.
+          gh auth setup-git
+          git fetch --no-tags origin main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$TARGET_REF"
+          branch="release/plugin-snapshot-$GATEWAY_VERSION"
+          git config user.name "higress-release-bot"; git config user.email "release-bot@higress.io"
+          git checkout -B "$branch"
+          git add plugins/wasm-go/extensions plugins/wasm-rust/extensions plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence
+          git commit -s -m "chore: prepare plugin snapshot $GATEWAY_VERSION" || true
+          git push --force-with-lease origin "$branch"
+          # BEGIN preparation-pr-contract
+          title="chore: prepare plugin snapshot $GATEWAY_VERSION"
+          body="Immutable candidate snapshot; review VERSION edits and digest provenance."
+          # The merged, labeled preparation PR is the human approval that
+          # authorizes promote, so the report a reviewer must act on belongs in
+          # that PR body. An all-green sweep leaves the body byte-identical.
+          if [ "$(jq -er '[.entries[] | select(.state == "blocked")] | length' /tmp/migration-report.json)" -gt 0 ]; then
+            body="$body"$'\n\n'"$(cat /tmp/migration-report.md)"
+          fi
+          label="release/$GATEWAY_VERSION"
+          # promote verifies this exact label on the merged PR and fails closed
+          # without it, so the label must exist before the PR is opened. Label
+          # management requires the release App installation to hold label write
+          # permission alongside its contents/pull-requests permissions.
+          label_ref=$(jq -rn --arg label "$label" '$label | @uri')
+          if ! gh api "repos/$GITHUB_REPOSITORY/labels/$label_ref" >/dev/null 2>&1; then
+            gh label create "$label" --color "0969da" --description "Authorizes promote-plugin-release for plugin snapshot $GATEWAY_VERSION"
+          fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/labels/$label_ref" --jq .name)" = "$label"
+          gh pr create --base main --head "$branch" --title "$title" --body "$body" --label "$label" || gh pr edit "$branch" --title "$title" --body "$body" --add-label "$label"
+          # END preparation-pr-contract

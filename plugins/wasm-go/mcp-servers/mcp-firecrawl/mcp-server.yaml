@@ -176,6 +176,7 @@ tools:
     type: "string"
   description: "抓取单个URL并可选地使用LLM提取信息"
   name: "scrape"
+  legacyOnly: true
   requestTemplate:
     argsToJsonBody: true
     headers:
@@ -406,6 +407,7 @@ tools:
     type: "string"
   description: "批量抓取多个URL并可选地使用LLM提取信息"
   name: "batch_scrape"
+  legacyOnly: true
   requestTemplate:
     argsToJsonBody: true
     headers:
@@ -454,6 +456,7 @@ tools:
     type: "integer"
   description: "根据选项映射多个URL"
   name: "map"
+  legacyOnly: true
   requestTemplate:
     argsToJsonBody: true
     headers:
@@ -680,6 +683,7 @@ tools:
     type: "object"
   description: "使用LLM从页面中提取结构化数据"
   name: "extract"
+  legacyOnly: true
   requestTemplate:
     argsToJsonBody: true
     headers:
@@ -745,6 +749,7 @@ tools:
     type: "object"
   description: "搜索并可选地抓取搜索结果"
   name: "search"
+  legacyOnly: true
   requestTemplate:
     argsToJsonBody: true
     headers:

@@ -634,7 +634,11 @@ func (w *watcher) generateServiceEntry(config InterfaceConfig) *v1alpha3.Service
 		if service.Metadata != nil && service.Metadata[PROTOCOL] != "" {
 			protocol = common.ParseProtocol(service.Metadata[PROTOCOL])
 		}
-		portNumber, _ := strconv.Atoi(service.Port)
+		portNumber, err := strconv.ParseUint(service.Port, 10, 16)
+		if err != nil || portNumber == 0 {
+			log.Warnf("skip zookeeper endpoint %s with invalid port %q", service.Ip, service.Port)
+			continue
+		}
 		port := &v1alpha3.ServicePort{
 			Name:     protocol.String(),
 			Number:   uint32(portNumber),

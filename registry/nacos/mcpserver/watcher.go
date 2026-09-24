@@ -44,7 +44,7 @@ import (
 
 const (
 	DefaultInitTimeout          = time.Second * 10
-	DefaultNacosTimeout         = 5000
+	DefaultNacosTimeout         = 30000
 	DefaultNacosLogLevel        = "info"
 	DefaultNacosLogDir          = "/var/log/nacos/log/mcp/log"
 	DefaultNacosCacheDir        = "/var/log/nacos/log/mcp/cache"
@@ -110,6 +110,7 @@ func NewWatcher(cache memory.Cache, opts ...WatcherOption) (provider.Watcher, er
 	}
 
 	w.NacosRefreshInterval = int64(DefaultRefreshInterval)
+	w.NacosTimeout = DefaultNacosTimeout
 
 	for _, opt := range opts {
 		opt(w)
@@ -123,7 +124,7 @@ func NewWatcher(cache memory.Cache, opts ...WatcherOption) (provider.Watcher, er
 	mcpServerLog.Infof("new nacos mcp server watcher with config Name:%s", w.Name)
 
 	clientConfig := constant.NewClientConfig(
-		constant.WithTimeoutMs(DefaultNacosTimeout),
+		constant.WithTimeoutMs(uint64(w.NacosTimeout)),
 		constant.WithLogLevel(DefaultNacosLogLevel),
 		constant.WithLogDir(DefaultNacosLogDir),
 		constant.WithCacheDir(DefaultNacosCacheDir),
@@ -214,6 +215,15 @@ func WithNacosRefreshInterval(refreshInterval int64) WatcherOption {
 	}
 }
 
+func WithNacosTimeout(timeout int64) WatcherOption {
+	return func(w *watcher) {
+		if timeout <= 0 {
+			timeout = DefaultNacosTimeout
+		}
+		w.NacosTimeout = timeout
+	}
+}
+
 func WithType(t string) WatcherOption {
 	return func(w *watcher) {
 		w.Type = t
@@ -301,13 +311,14 @@ func (w *watcher) Run() {
 
 func (w *watcher) fetchAllMcpConfig() error {
 	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
 	if w.isStop {
+		w.mutex.Unlock()
 		return nil
 	}
+	registryClient := w.registryClient
+	w.mutex.Unlock()
 
-	mcpConfigs, err := w.registryClient.ListMcpServer()
+	mcpConfigs, err := registryClient.ListMcpServer()
 	if err != nil {
 		return fmt.Errorf("list mcp server failed ,error %s", err.Error())
 	}
@@ -315,6 +326,12 @@ func (w *watcher) fetchAllMcpConfig() error {
 	fetchedConfigs := map[string]bool{}
 	for _, c := range mcpConfigs {
 		fetchedConfigs[c.Id] = true
+	}
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	if w.isStop {
+		return nil
 	}
 
 	for key := range w.watchingConfig {

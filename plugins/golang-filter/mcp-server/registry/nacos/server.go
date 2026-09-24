@@ -27,6 +27,32 @@ type NacosConfig struct {
 	ServiceMatcher *map[string]string
 }
 
+func (c *NacosConfig) Clone() common.Server {
+	cloned := &NacosConfig{
+		ServerAddr: cloneStringPtr(c.ServerAddr),
+		Ak:         cloneStringPtr(c.Ak),
+		Sk:         cloneStringPtr(c.Sk),
+		Namespace:  cloneStringPtr(c.Namespace),
+		RegionId:   cloneStringPtr(c.RegionId),
+	}
+	if c.ServiceMatcher != nil {
+		matchers := make(map[string]string, len(*c.ServiceMatcher))
+		for key, value := range *c.ServiceMatcher {
+			matchers[key] = value
+		}
+		cloned.ServiceMatcher = &matchers
+	}
+	return cloned
+}
+
+func cloneStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
 type McpServerToolsChangeListener struct {
 	mcpServer *common.MCPServer
 }

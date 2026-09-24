@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8s "sigs.k8s.io/gateway-api/apis/v1"
-	k8sbeta "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	higressconstant "github.com/alibaba/higress/v2/pkg/config/constants"
 	networking "istio.io/api/networking/v1alpha3"
@@ -162,20 +161,20 @@ func TestListInvalidGroupVersionKind(t *testing.T) {
 
 func TestListGatewayResourceType(t *testing.T) {
 	controller := setupController(t,
-		&k8sbeta.GatewayClass{
+		&k8s.GatewayClass{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "higress",
 			},
 			Spec: *gatewayClassSpec,
 		},
-		&k8sbeta.Gateway{
+		&k8s.Gateway{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "gwspec",
 				Namespace: "ns1",
 			},
 			Spec: *gatewaySpec,
 		},
-		&k8sbeta.HTTPRoute{
+		&k8s.HTTPRoute{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "http-route",
 				Namespace: "ns1",
@@ -198,11 +197,11 @@ func TestListGatewayResourceTypeWithAlternateGatewayClassName(t *testing.T) {
 	alternateGateway := gatewaySpec.DeepCopy()
 	alternateGateway.GatewayClassName = "alternate"
 	controller := setupController(t,
-		&k8sbeta.GatewayClass{
+		&k8s.GatewayClass{
 			ObjectMeta: metav1.ObjectMeta{Name: "alternate"},
 			Spec:       *gatewayClassSpec,
 		},
-		&k8sbeta.Gateway{
+		&k8s.Gateway{
 			ObjectMeta: metav1.ObjectMeta{Name: "alternate-gw", Namespace: "ns1"},
 			Spec:       *alternateGateway,
 		})
@@ -226,15 +225,15 @@ func TestHTTPRouteBackendServiceLifecycle(t *testing.T) {
 		}},
 	}}
 	controller := setupController(t,
-		&k8sbeta.GatewayClass{
+		&k8s.GatewayClass{
 			ObjectMeta: metav1.ObjectMeta{Name: "higress"},
 			Spec:       *gatewayClassSpec,
 		},
-		&k8sbeta.Gateway{
+		&k8s.Gateway{
 			ObjectMeta: metav1.ObjectMeta{Name: "gwspec", Namespace: "ns1"},
 			Spec:       *gatewaySpec,
 		},
-		&k8sbeta.HTTPRoute{
+		&k8s.HTTPRoute{
 			ObjectMeta: metav1.ObjectMeta{Name: "http-route", Namespace: "ns1"},
 			Spec:       *route,
 		},
@@ -290,13 +289,13 @@ func TestListGatewayResourceTypeWithCustomGatewayClass(t *testing.T) {
 	customGateway.GatewayClassName = k8s.ObjectName(customGatewayClass)
 
 	controller := setupControllerWithGatewayClass(t, customGatewayClass,
-		&k8sbeta.GatewayClass{
+		&k8s.GatewayClass{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: higressconstant.DefaultGatewayClass,
 			},
 			Spec: *gatewayClassSpec,
 		},
-		&k8sbeta.GatewayClass{
+		&k8s.GatewayClass{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: customGatewayClass,
 			},
@@ -304,14 +303,14 @@ func TestListGatewayResourceTypeWithCustomGatewayClass(t *testing.T) {
 				ControllerName: k8s.GatewayController(customControllerName),
 			},
 		},
-		&k8sbeta.Gateway{
+		&k8s.Gateway{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "default-gw",
 				Namespace: "ns1",
 			},
 			Spec: *defaultGateway,
 		},
-		&k8sbeta.Gateway{
+		&k8s.Gateway{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "custom-gw",
 				Namespace: "ns1",

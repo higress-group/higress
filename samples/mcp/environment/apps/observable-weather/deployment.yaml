@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: observable-weather
+  namespace: mcp-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: observable-weather
+  template:
+    metadata:
+      labels:
+        app: observable-weather
+    spec:
+      containers:
+        - name: observable-weather
+          image: localhost/mcp-demo/observable-weather:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: observable-weather
+  namespace: mcp-demo
+spec:
+  selector:
+    app: observable-weather
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

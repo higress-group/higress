@@ -19,8 +19,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/alibaba/higress/v2/pkg/ingress/kube/mcpserver"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/util"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_validMcpServer(t *testing.T) {
@@ -847,6 +849,86 @@ func TestMcpServerController_constructMcpSessionStruct(t *testing.T) {
 			json.Unmarshal([]byte(got), &gotJSON)
 			json.Unmarshal([]byte(tt.wantJSON), &wantJSON)
 			assert.Equal(t, wantJSON, gotJSON)
+		})
+	}
+}
+
+type staticMcpServerProvider struct {
+	servers []*mcpserver.McpServer
+}
+
+func (p *staticMcpServerProvider) GetMcpServers() []*mcpserver.McpServer {
+	return p.servers
+}
+
+func TestMcpServerController_constructMcpSessionStructProviderDomains(t *testing.T) {
+	tests := []struct {
+		name        string
+		domains     []string
+		wantDomains []string
+	}{
+		{
+			name:        "empty domains preserve existing rule",
+			wantDomains: []string{""},
+		},
+		{
+			name:        "single domain",
+			domains:     []string{"orders.example.com"},
+			wantDomains: []string{"orders.example.com"},
+		},
+		{
+			name:        "multiple domains",
+			domains:     []string{"orders.example.com", "orders-internal.example.com"},
+			wantDomains: []string{"orders.example.com", "orders-internal.example.com"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manualRule := &MatchRule{
+				MatchRuleDomain: "manual.example.com",
+				MatchRulePath:   "/manual",
+				MatchRuleType:   "exact",
+			}
+			mcp := NewDefaultMcpServer()
+			mcp.MatchList = []*MatchRule{manualRule}
+
+			controller := NewMcpServerController("test-namespace")
+			controller.RegisterMcpServerProvider(&staticMcpServerProvider{
+				servers: []*mcpserver.McpServer{
+					{
+						Name:              "orders",
+						Domains:           tt.domains,
+						PathMatchType:     "prefix",
+						PathMatchValue:    "/mcp",
+						UpstreamType:      "sse",
+						EnablePathRewrite: true,
+						PathRewritePrefix: "/upstream/mcp",
+					},
+				},
+			})
+
+			var config struct {
+				PluginConfig struct {
+					Value struct {
+						MatchList []*MatchRule `json:"match_list"`
+					} `json:"value"`
+				} `json:"plugin_config"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(controller.constructMcpSessionStruct(mcp)), &config))
+
+			wantRules := []*MatchRule{manualRule}
+			for _, domain := range tt.wantDomains {
+				wantRules = append(wantRules, &MatchRule{
+					MatchRuleDomain:   domain,
+					MatchRulePath:     "/mcp",
+					MatchRuleType:     "prefix",
+					UpstreamType:      "sse",
+					EnablePathRewrite: true,
+					PathRewritePrefix: "/upstream/mcp",
+				})
+			}
+			assert.Equal(t, wantRules, config.PluginConfig.Value.MatchList)
 		})
 	}
 }

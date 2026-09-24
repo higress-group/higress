@@ -1,0 +1,974 @@
+{
+  "schemaVersion": 1,
+  "gatewayVersion": "2.2.4",
+  "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+  "previousRelease": "2.2.3",
+  "catalogSha256": "218a4f6d187754d43b02cadce9f5bf3aa0f2cae604db89a0cb4904bc1e064609",
+  "planId": "sha256:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356",
+  "provenanceMode": "candidate",
+  "bootstrapEvidence": {
+    "path": "plugins/release/bootstrap-evidence/2.2.4.json",
+    "sha256": "eedf9bc97fe940877cc0976bb1899e31b24eb0434ccef6bdb0c8fed7baece0c1"
+  },
+  "plugins": [
+    {
+      "logicalId": "ai-agent",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-agent",
+      "image": "plugins/ai-agent",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-agent:2.0.1",
+      "digest": "sha256:1ff8b5c19243765a1e19fa6ec182e408643c771edc1bf8df5332f96eeda9d69f",
+      "inputHash": "sha256:7bdac359aaea783e000f58947d1412a0ea5f67e8adf28ed4222146dd8aa19095",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-agent:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043567bdac359aaea783e000f58947d1412a0ea5f67e8adf28ed4222146dd8aa19095@sha256:1ff8b5c19243765a1e19fa6ec182e408643c771edc1bf8df5332f96eeda9d69f",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-agent",
+          "resourceDir": "ai-agent",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-agent",
+          "httpPath": "ai-agent"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-cache",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-cache",
+      "image": "plugins/ai-cache",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-cache:2.0.1",
+      "digest": "sha256:7d34e9da7b6782b1ec6fcb8d1f54d1445998e6e97d9e9d75ddc6c4c6a00637b0",
+      "inputHash": "sha256:4bf98709658a92d40b7bda75b5f458387526143e09b321a401ff7a258fdea47f",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-cache:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043564bf98709658a92d40b7bda75b5f458387526143e09b321a401ff7a258fdea47f@sha256:7d34e9da7b6782b1ec6fcb8d1f54d1445998e6e97d9e9d75ddc6c4c6a00637b0",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-cache",
+          "resourceDir": "ai-cache",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-cache",
+          "httpPath": "ai-cache"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-context-limit",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-context-limit",
+      "image": "plugins/ai-context-limit",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-context-limit:1.0.0",
+      "digest": "sha256:6325ca94b20a3f5ab5e9df4014b60daca8d86e7d0999e74abb2c1ddd29b36f83",
+      "inputHash": "sha256:e2e73f72b87c9dbf47d763e287d7a4e6bfaa405cf27e2283020034a4cf7c1b74",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-context-limit:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356e2e73f72b87c9dbf47d763e287d7a4e6bfaa405cf27e2283020034a4cf7c1b74@sha256:6325ca94b20a3f5ab5e9df4014b60daca8d86e7d0999e74abb2c1ddd29b36f83",
+      "provenanceMode": "candidate",
+      "backfill": true,
+      "consumers": {}
+    },
+    {
+      "logicalId": "ai-data-masking",
+      "implementation": "rust",
+      "sourceDir": "plugins/wasm-rust/extensions/ai-data-masking",
+      "image": "plugins/ai-data-masking",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-data-masking:2.0.1",
+      "digest": "sha256:673f0b54baa723b54ef64f20a18546131ac4b534fc21912d62227a01ea998966",
+      "inputHash": "sha256:c417987f489129fe71d560b65081f9c01576635185195b045a9d8b199bec0201",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-data-masking:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356c417987f489129fe71d560b65081f9c01576635185195b045a9d8b199bec0201@sha256:673f0b54baa723b54ef64f20a18546131ac4b534fc21912d62227a01ea998966",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-data-masking",
+          "resourceDir": "ai-data-masking",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-data-masking",
+          "httpPath": "ai-data-masking"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-history",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-history",
+      "image": "plugins/ai-history",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-history:2.0.1",
+      "digest": "sha256:7fbff33f15cfe786c9f62bad1f7ae96526511a742b06298d7deebc1e8bb3c7f8",
+      "inputHash": "sha256:ffef21d4a47ccf3b455fda2f1ece61b10cb74f9ecf1f9a7d8c5570078bd8cd52",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-history:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356ffef21d4a47ccf3b455fda2f1ece61b10cb74f9ecf1f9a7d8c5570078bd8cd52@sha256:7fbff33f15cfe786c9f62bad1f7ae96526511a742b06298d7deebc1e8bb3c7f8",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-history",
+          "resourceDir": "ai-history",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-history",
+          "httpPath": "ai-history"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-intent",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-intent",
+      "image": "plugins/ai-intent",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-intent:2.0.1",
+      "digest": "sha256:b7e086cd909fd8a570ebdf7813ff0ea2cfc9a45d1a43b209a3c567bb8be3c301",
+      "inputHash": "sha256:68cb5ca015591eca1c3ca3e236b1adef734b700d13f1f9f4dc1059b5c7930bf0",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-intent:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a0435668cb5ca015591eca1c3ca3e236b1adef734b700d13f1f9f4dc1059b5c7930bf0@sha256:b7e086cd909fd8a570ebdf7813ff0ea2cfc9a45d1a43b209a3c567bb8be3c301",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-intent",
+          "resourceDir": "ai-intent",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-intent",
+          "httpPath": "ai-intent"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-json-resp",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-json-resp",
+      "image": "plugins/ai-json-resp",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-json-resp:2.0.1",
+      "digest": "sha256:8b16921e60399a97d19ffb4914b0d8648206c58640b35078438036c57c12c4a8",
+      "inputHash": "sha256:6a3133843c8cdb48154275ab0cc64bdf593f40587cdafa7c2a2a84acaf46f3da",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-json-resp:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043566a3133843c8cdb48154275ab0cc64bdf593f40587cdafa7c2a2a84acaf46f3da@sha256:8b16921e60399a97d19ffb4914b0d8648206c58640b35078438036c57c12c4a8",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-json-resp",
+          "resourceDir": "ai-json-resp",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-json-resp",
+          "httpPath": "ai-json-resp"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-load-balancer",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-load-balancer",
+      "image": "plugins/ai-load-balancer",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-load-balancer:2.0.1",
+      "digest": "sha256:74d6644005938bb712b3848497ad7a943c1b7d15d088fc285bec537e4f47d1f4",
+      "inputHash": "sha256:af4bfbdf910673af907181875560b98510274458ed41ad6f942ea3a915cd2e92",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-load-balancer:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356af4bfbdf910673af907181875560b98510274458ed41ad6f942ea3a915cd2e92@sha256:74d6644005938bb712b3848497ad7a943c1b7d15d088fc285bec537e4f47d1f4",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-load-balancer",
+          "resourceDir": "ai-load-balancer",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-load-balancer",
+          "httpPath": "ai-load-balancer"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-prompt-decorator",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-prompt-decorator",
+      "image": "plugins/ai-prompt-decorator",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-prompt-decorator:2.0.1",
+      "digest": "sha256:f0ce3fa99d76ddd59d10fdfcc9899053258c55bb42ef8578125d28f10762ecef",
+      "inputHash": "sha256:4e7241621400a8d308ca0ba98f411430dc54aa2d773a868beb9929391b4f06cc",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-prompt-decorator:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043564e7241621400a8d308ca0ba98f411430dc54aa2d773a868beb9929391b4f06cc@sha256:f0ce3fa99d76ddd59d10fdfcc9899053258c55bb42ef8578125d28f10762ecef",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-prompt-decorator",
+          "resourceDir": "ai-prompt-decorator",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-prompt-decorator",
+          "httpPath": "ai-prompt-decorator"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-prompt-template",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-prompt-template",
+      "image": "plugins/ai-prompt-template",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-prompt-template:2.0.1",
+      "digest": "sha256:a7470b80c435ec3bdf45bbd790f1d47a8fb05fedce70b4ddc4107b8c1b4d6830",
+      "inputHash": "sha256:b4ec8d0ac43b6e4bffeb4880869740e8946549a28623518b609011a9bb0fd7f9",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-prompt-template:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356b4ec8d0ac43b6e4bffeb4880869740e8946549a28623518b609011a9bb0fd7f9@sha256:a7470b80c435ec3bdf45bbd790f1d47a8fb05fedce70b4ddc4107b8c1b4d6830",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-prompt-template",
+          "resourceDir": "ai-prompt-template",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-prompt-template",
+          "httpPath": "ai-prompt-template"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-proxy",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-proxy",
+      "image": "plugins/ai-proxy",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-proxy:2.0.1",
+      "digest": "sha256:754c4d6c9e8aed2cabc4aa37c21f1e6dbf3b4973f01c18765ab83c17ad4d40db",
+      "inputHash": "sha256:fc42f8a92ee198eacb59689be844cbeb00dab79b359b583cb404f4106fef5cee",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-proxy:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356fc42f8a92ee198eacb59689be844cbeb00dab79b359b583cb404f4106fef5cee@sha256:754c4d6c9e8aed2cabc4aa37c21f1e6dbf3b4973f01c18765ab83c17ad4d40db",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-proxy",
+          "resourceDir": "ai-proxy",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-proxy",
+          "httpPath": "ai-proxy"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-quota",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-quota",
+      "image": "plugins/ai-quota",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-quota:2.0.1",
+      "digest": "sha256:1c5a0bc5cff949a194b662e9bd2aeb9599bfe18fbc8bc01398cc99e936ed3507",
+      "inputHash": "sha256:1c4c0bfd95ac3ca2a7750b735c035bdb4692b76996ca4c943b059b7c0c43bd5c",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-quota:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043561c4c0bfd95ac3ca2a7750b735c035bdb4692b76996ca4c943b059b7c0c43bd5c@sha256:1c5a0bc5cff949a194b662e9bd2aeb9599bfe18fbc8bc01398cc99e936ed3507",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-quota",
+          "resourceDir": "ai-quota",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-quota",
+          "httpPath": "ai-quota"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-rag",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-rag",
+      "image": "plugins/ai-rag",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-rag:2.0.1",
+      "digest": "sha256:b02f12e1716bfa1dcc51d00c1424042bbc5fc566b4fd680a163be2239a7bf41f",
+      "inputHash": "sha256:035356c2fba6a5804d5950a156f67bbe39974aa74a3e6c6c2946502cfcc67666",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-rag:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356035356c2fba6a5804d5950a156f67bbe39974aa74a3e6c6c2946502cfcc67666@sha256:b02f12e1716bfa1dcc51d00c1424042bbc5fc566b4fd680a163be2239a7bf41f",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-rag",
+          "resourceDir": "ai-rag",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-rag",
+          "httpPath": "ai-rag"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-search",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-search",
+      "image": "plugins/ai-search",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-search:2.0.1",
+      "digest": "sha256:675b82ad3ef6f833c1f2eff07a38bd0fcd402096b2252abd2b1ee8f483fc9b1f",
+      "inputHash": "sha256:a8293bff9f54007de5738e72f0f39ed77e6baa1ef144d85be28120ebde1720bc",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-search:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356a8293bff9f54007de5738e72f0f39ed77e6baa1ef144d85be28120ebde1720bc@sha256:675b82ad3ef6f833c1f2eff07a38bd0fcd402096b2252abd2b1ee8f483fc9b1f",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-search",
+          "resourceDir": "ai-search",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-search",
+          "httpPath": "ai-search"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-security-guard",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-security-guard",
+      "image": "plugins/ai-security-guard",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-security-guard:2.0.1",
+      "digest": "sha256:a0d2d07e734aabf18b560094054c61a35263d88c6b4ec93b1d275554930eb1fb",
+      "inputHash": "sha256:4bcf7a9145be3869561d189ef292d520361a30ce43a495e5f39e70134eed22df",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-security-guard:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043564bcf7a9145be3869561d189ef292d520361a30ce43a495e5f39e70134eed22df@sha256:a0d2d07e734aabf18b560094054c61a35263d88c6b4ec93b1d275554930eb1fb",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-security-guard",
+          "resourceDir": "ai-security-guard",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-security-guard",
+          "httpPath": "ai-security-guard"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-statistics",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-statistics",
+      "image": "plugins/ai-statistics",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-statistics:2.0.1",
+      "digest": "sha256:4fa80b5b1b679097ca0d41bb8d269b589695ca140fd1a926a7b1b7c824bef838",
+      "inputHash": "sha256:dd27d3ad4f01aa2592cc9554317c258c48ef7a00dd8a3e5928fd6760219c0d55",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-statistics:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356dd27d3ad4f01aa2592cc9554317c258c48ef7a00dd8a3e5928fd6760219c0d55@sha256:4fa80b5b1b679097ca0d41bb8d269b589695ca140fd1a926a7b1b7c824bef838",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-statistics",
+          "resourceDir": "ai-statistics",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-statistics",
+          "httpPath": "ai-statistics"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-token-ratelimit",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-token-ratelimit",
+      "image": "plugins/ai-token-ratelimit",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-token-ratelimit:2.0.1",
+      "digest": "sha256:e2d899b97850600ad15764ce1ee6bc13bb0589d6d50a6c20f3a28cc0b77caca9",
+      "inputHash": "sha256:459c8bf79f983f0e2ad90ab984fb9b4890187c54b31ec53b51b19fd0c1a28fd7",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-token-ratelimit:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356459c8bf79f983f0e2ad90ab984fb9b4890187c54b31ec53b51b19fd0c1a28fd7@sha256:e2d899b97850600ad15764ce1ee6bc13bb0589d6d50a6c20f3a28cc0b77caca9",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-token-ratelimit",
+          "resourceDir": "ai-token-ratelimit",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-token-ratelimit",
+          "httpPath": "ai-token-ratelimit"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-transformer",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-transformer",
+      "image": "plugins/ai-transformer",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-transformer:2.0.1",
+      "digest": "sha256:44d062c1fb5635ff7c03dac2e132b307625c07ee15821f08883a1b1cb7806aaf",
+      "inputHash": "sha256:bd2022a1db74e64b501819ac6dc32488fca513453f0812b4894669dd82626077",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-transformer:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356bd2022a1db74e64b501819ac6dc32488fca513453f0812b4894669dd82626077@sha256:44d062c1fb5635ff7c03dac2e132b307625c07ee15821f08883a1b1cb7806aaf",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-transformer",
+          "resourceDir": "ai-transformer",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-transformer",
+          "httpPath": "ai-transformer"
+        }
+      }
+    },
+    {
+      "logicalId": "cache-control",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/cache-control",
+      "image": "plugins/cache-control",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cache-control:2.0.1",
+      "digest": "sha256:f41bce5e679990ac9b75f94a2df4d7eba4009a0f8fc8063723024c19f36a5f96",
+      "inputHash": "sha256:6ec774b9c707ffae096639bfe90cba9cc795951d0c8b736fb5570194940c9d80",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/cache-control:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043566ec774b9c707ffae096639bfe90cba9cc795951d0c8b736fb5570194940c9d80@sha256:f41bce5e679990ac9b75f94a2df4d7eba4009a0f8fc8063723024c19f36a5f96",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "cache-control",
+          "resourceDir": "cache-control",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "cache-control",
+          "httpPath": "cache-control"
+        }
+      }
+    },
+    {
+      "logicalId": "cluster-key-rate-limit",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/cluster-key-rate-limit",
+      "image": "plugins/cluster-key-rate-limit",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cluster-key-rate-limit:2.0.1",
+      "digest": "sha256:9af3e19fbef7ac1765bfd69a19f4ae6cced7d70d40b026169f9df18482af41aa",
+      "inputHash": "sha256:5a6a10ab25d1285c3ed69ffdf79e722267895878ce38e48f54fc45d0ce43282a",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/cluster-key-rate-limit:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043565a6a10ab25d1285c3ed69ffdf79e722267895878ce38e48f54fc45d0ce43282a@sha256:9af3e19fbef7ac1765bfd69a19f4ae6cced7d70d40b026169f9df18482af41aa",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "cluster-key-rate-limit",
+          "resourceDir": "cluster-key-rate-limit",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "cluster-key-rate-limit",
+          "httpPath": "cluster-key-rate-limit"
+        }
+      }
+    },
+    {
+      "logicalId": "cors",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/cors",
+      "image": "plugins/cors",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cors:2.0.2",
+      "digest": "sha256:a94929f327aa5195ff5b16bd3d54aa8f31c8dc2aae7f2a76357758e8916b73fb",
+      "inputHash": "sha256:0f5d7b91e7b3943da4aecfe1fb2d2daf3c7df5b1725eff6b42b320f142ee4549",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/cors:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043560f5d7b91e7b3943da4aecfe1fb2d2daf3c7df5b1725eff6b42b320f142ee4549@sha256:a94929f327aa5195ff5b16bd3d54aa8f31c8dc2aae7f2a76357758e8916b73fb",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "cors",
+          "resourceDir": "cors",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "cors",
+          "httpPath": "cors"
+        }
+      }
+    },
+    {
+      "logicalId": "de-graphql",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/de-graphql",
+      "image": "plugins/de-graphql",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/de-graphql:2.0.1",
+      "digest": "sha256:1a3964128ee623427d09e135368daf9ea6f1c352b1f9875d81adc6b9e66b3d24",
+      "inputHash": "sha256:6c1f469d1d5d991606ef926cf709464ef1fb10954b7cd1a2ebb9251495101733",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/de-graphql:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043566c1f469d1d5d991606ef926cf709464ef1fb10954b7cd1a2ebb9251495101733@sha256:1a3964128ee623427d09e135368daf9ea6f1c352b1f9875d81adc6b9e66b3d24",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "de-graphql",
+          "resourceDir": "de-graphql",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "de-graphql",
+          "httpPath": "de-graphql"
+        }
+      }
+    },
+    {
+      "logicalId": "ext-auth",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ext-auth",
+      "image": "plugins/ext-auth",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ext-auth:2.0.1",
+      "digest": "sha256:ed86a3642f090872a957cf28270816dfb62627cb636877b50f7174039a3645dd",
+      "inputHash": "sha256:06bf9b91e546b800dcc89ae992022903775dc575a23fda91cb96c346f121a347",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ext-auth:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a0435606bf9b91e546b800dcc89ae992022903775dc575a23fda91cb96c346f121a347@sha256:ed86a3642f090872a957cf28270816dfb62627cb636877b50f7174039a3645dd",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ext-auth",
+          "resourceDir": "ext-auth",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ext-auth",
+          "httpPath": "ext-auth"
+        }
+      }
+    },
+    {
+      "logicalId": "frontend-gray",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/frontend-gray",
+      "image": "plugins/frontend-gray",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/frontend-gray:2.0.1",
+      "digest": "sha256:ef8521ffa2bc077426c313273fada1bce3dd45ff7fe2fcf2c9fbf69c6ccc842b",
+      "inputHash": "sha256:672e473de85b524d7bbc33913a738791c1626f14b1e5836301c666179df6c984",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/frontend-gray:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356672e473de85b524d7bbc33913a738791c1626f14b1e5836301c666179df6c984@sha256:ef8521ffa2bc077426c313273fada1bce3dd45ff7fe2fcf2c9fbf69c6ccc842b",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "frontend-gray",
+          "resourceDir": "frontend-gray",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "frontend-gray",
+          "httpPath": "frontend-gray"
+        }
+      }
+    },
+    {
+      "logicalId": "geo-ip",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/geo-ip",
+      "image": "plugins/geo-ip",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/geo-ip:2.0.1",
+      "digest": "sha256:844d3afade0236dd0fe07ae9d62bf1520837fe86281111e46c269a0bfc6815d1",
+      "inputHash": "sha256:7cf293eb30f8d9fcc802c83f9320d7952931b0edd20ee493a61f0fbf1259900e",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/geo-ip:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043567cf293eb30f8d9fcc802c83f9320d7952931b0edd20ee493a61f0fbf1259900e@sha256:844d3afade0236dd0fe07ae9d62bf1520837fe86281111e46c269a0bfc6815d1",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "geo-ip",
+          "resourceDir": "geo-ip",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "geo-ip",
+          "httpPath": "geo-ip"
+        }
+      }
+    },
+    {
+      "logicalId": "gw-error-format",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/gw-error-format",
+      "image": "plugins/gw-error-format",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/gw-error-format:1.0.0",
+      "digest": "sha256:a0b80b448e995cc3c5697397167e81d3d557205f8ec00e44b16b00997c4082e9",
+      "inputHash": "sha256:79ebac51c9086fd483547b6245dced68cbfada9d2fcd7cb7c649fd1d8f383fa4",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/gw-error-format:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a0435679ebac51c9086fd483547b6245dced68cbfada9d2fcd7cb7c649fd1d8f383fa4@sha256:a0b80b448e995cc3c5697397167e81d3d557205f8ec00e44b16b00997c4082e9",
+      "provenanceMode": "candidate",
+      "backfill": true,
+      "consumers": {}
+    },
+    {
+      "logicalId": "hmac-auth-apisix",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/hmac-auth-apisix",
+      "image": "plugins/hmac-auth-apisix",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/hmac-auth-apisix:2.0.1",
+      "digest": "sha256:9c4ffddfd75efc557840d2b5844a03d7292268ed97deb3af69ebf3583d3a0633",
+      "inputHash": "sha256:a1f9f90f3bfc20ac52164a4f8790901a2464ce6e016196ec2e10e029b70f8005",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/hmac-auth-apisix:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356a1f9f90f3bfc20ac52164a4f8790901a2464ce6e016196ec2e10e029b70f8005@sha256:9c4ffddfd75efc557840d2b5844a03d7292268ed97deb3af69ebf3583d3a0633",
+      "provenanceMode": "candidate",
+      "consumers": {}
+    },
+    {
+      "logicalId": "ip-restriction",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ip-restriction",
+      "image": "plugins/ip-restriction",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ip-restriction:2.0.1",
+      "digest": "sha256:1db058146bf088af90e232a4a54dc552f11d5b2a022ef6544d3f69bb55f817e1",
+      "inputHash": "sha256:791766dd57fa49664d5a0d267777a90cae7d48b009509d33a6cd1b15aae4e7ca",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ip-restriction:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356791766dd57fa49664d5a0d267777a90cae7d48b009509d33a6cd1b15aae4e7ca@sha256:1db058146bf088af90e232a4a54dc552f11d5b2a022ef6544d3f69bb55f817e1",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ip-restriction",
+          "resourceDir": "ip-restriction",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "ip-restriction",
+          "httpPath": "ip-restriction"
+        }
+      }
+    },
+    {
+      "logicalId": "json-converter",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/jsonrpc-converter",
+      "image": "plugins/jsonrpc-converter",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/jsonrpc-converter:2.0.1",
+      "digest": "sha256:c169476e09115062ce717257531407576d42761a7ce1888215a1ae37b5f179a0",
+      "inputHash": "sha256:56d007aaf59237cc9012595024794a0cf77e4c8ce649c16af9f67f3ffd425578",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/json-converter:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a0435656d007aaf59237cc9012595024794a0cf77e4c8ce649c16af9f67f3ffd425578@sha256:c169476e09115062ce717257531407576d42761a7ce1888215a1ae37b5f179a0",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "json-converter",
+          "resourceDir": "json-converter",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "json-converter",
+          "httpPath": "json-converter",
+          "aliases": [
+            "jsonrpc-converter"
+          ]
+        }
+      }
+    },
+    {
+      "logicalId": "log-request-response",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/log-request-response",
+      "image": "plugins/log-request-response",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/log-request-response:1.0.0",
+      "digest": "sha256:a3e915062ffc312b79f67dd1a6a8a9e199f6f6d2bdd2afb4b272327552b68731",
+      "inputHash": "sha256:a076d10112b8dd54dd29c0e6bafa8c958f03b5e7802b79adcc7e5b5e76df75ce",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/log-request-response:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356a076d10112b8dd54dd29c0e6bafa8c958f03b5e7802b79adcc7e5b5e76df75ce@sha256:a3e915062ffc312b79f67dd1a6a8a9e199f6f6d2bdd2afb4b272327552b68731",
+      "provenanceMode": "candidate",
+      "backfill": true,
+      "consumers": {}
+    },
+    {
+      "logicalId": "mcp-router",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/mcp-router",
+      "image": "plugins/mcp-router",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-router:2.0.1",
+      "digest": "sha256:2f888548c5284d514ed9f0384711610dfdb8b72f572e95bfcd1c64e41d199203",
+      "inputHash": "sha256:e0201480ccd7a5f3f646276e590a308784450673092541baa039eb55f83f79c3",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/mcp-router:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356e0201480ccd7a5f3f646276e590a308784450673092541baa039eb55f83f79c3@sha256:2f888548c5284d514ed9f0384711610dfdb8b72f572e95bfcd1c64e41d199203",
+      "provenanceMode": "candidate",
+      "consumers": {}
+    },
+    {
+      "logicalId": "mcp-server",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/mcp-server",
+      "image": "plugins/mcp-server",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-server:2.0.1",
+      "digest": "sha256:1fe9a60eae0563e855cf66ead8062e14bc57f823b431a90963b4a026373cd6da",
+      "inputHash": "sha256:6f5f2097da93edfe478d1432496509bfcd8f861db71786d8e0f96fb7563c8c55",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/mcp-server:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043566f5f2097da93edfe478d1432496509bfcd8f861db71786d8e0f96fb7563c8c55@sha256:1fe9a60eae0563e855cf66ead8062e14bc57f823b431a90963b4a026373cd6da",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "mcp-server",
+          "resourceDir": "mcp-server",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "mcp-server",
+          "httpPath": "mcp-server"
+        }
+      }
+    },
+    {
+      "logicalId": "model-mapper",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/model-mapper",
+      "image": "plugins/model-mapper",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-mapper:2.0.1",
+      "digest": "sha256:e587c00a42abae26ce7086d8fc1652ab560e2b3f72125ae655fc8aeaf504181b",
+      "inputHash": "sha256:738e1ff769fc53d5d882aa99e7a1b0e70415dcfdc33fbfc82c7f42bda7344089",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/model-mapper:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356738e1ff769fc53d5d882aa99e7a1b0e70415dcfdc33fbfc82c7f42bda7344089@sha256:e587c00a42abae26ce7086d8fc1652ab560e2b3f72125ae655fc8aeaf504181b",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "model-mapper",
+          "resourceDir": "model-mapper",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "model-mapper",
+          "httpPath": "model-mapper"
+        }
+      }
+    },
+    {
+      "logicalId": "model-router",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/model-router",
+      "image": "plugins/model-router",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-router:2.0.1",
+      "digest": "sha256:19cdd07e82b4deb4550a988285e55cc08fc308414d94ffcc9d3ca0d45fe0c8fc",
+      "inputHash": "sha256:962bf8fa29ce67a894de7ea1101d3c5c4ba771b2f44b8655599b3370d4602ae1",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/model-router:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356962bf8fa29ce67a894de7ea1101d3c5c4ba771b2f44b8655599b3370d4602ae1@sha256:19cdd07e82b4deb4550a988285e55cc08fc308414d94ffcc9d3ca0d45fe0c8fc",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "model-router",
+          "resourceDir": "model-router",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "model-router",
+          "httpPath": "model-router"
+        }
+      }
+    },
+    {
+      "logicalId": "nginx-rewrite-compatible",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/nginx-rewrite-compatible",
+      "image": "plugins/nginx-rewrite-compatible",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/nginx-rewrite-compatible:1.0.0",
+      "digest": "sha256:9ab80c0c7e9abd30e099ef92964efc0291f1161175ea2a6873019d1d47a06922",
+      "inputHash": "sha256:86f264839078b3a0f7df7afd26863023417117dffb1c11475a987bf36d2265bc",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/nginx-rewrite-compatible:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a0435686f264839078b3a0f7df7afd26863023417117dffb1c11475a987bf36d2265bc@sha256:9ab80c0c7e9abd30e099ef92964efc0291f1161175ea2a6873019d1d47a06922",
+      "provenanceMode": "candidate",
+      "backfill": true,
+      "consumers": {}
+    },
+    {
+      "logicalId": "oidc",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/oidc",
+      "image": "plugins/oidc",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/oidc:2.0.1",
+      "digest": "sha256:a819327246c31bd77d66cd7b931bfd6f363ddcdfa3dc25ca68ae736e2e49e4a4",
+      "inputHash": "sha256:694839f83adb3a5a09b898957cedb529c088671ef1fc8fe3701cac73bc62ed64",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/oidc:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356694839f83adb3a5a09b898957cedb529c088671ef1fc8fe3701cac73bc62ed64@sha256:a819327246c31bd77d66cd7b931bfd6f363ddcdfa3dc25ca68ae736e2e49e4a4",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "oidc",
+          "resourceDir": "oidc",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "oidc",
+          "httpPath": "oidc"
+        }
+      }
+    },
+    {
+      "logicalId": "opa",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/opa",
+      "image": "plugins/opa",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/opa:2.0.1",
+      "digest": "sha256:58c890242b106694b8aec3247e03ef0954e3e7f5e284b9116b3590bf9bf0b5f4",
+      "inputHash": "sha256:7bdb68a374081e6eaf2bf0010f2ea3e12195189aa465c1ac05b76dc79f7c68ff",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/opa:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043567bdb68a374081e6eaf2bf0010f2ea3e12195189aa465c1ac05b76dc79f7c68ff@sha256:58c890242b106694b8aec3247e03ef0954e3e7f5e284b9116b3590bf9bf0b5f4",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "opa",
+          "resourceDir": "opa",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "opa",
+          "httpPath": "opa"
+        }
+      }
+    },
+    {
+      "logicalId": "request-validation",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/request-validation",
+      "image": "plugins/request-validation",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/request-validation:2.0.1",
+      "digest": "sha256:5450d67db6d50c29bdcd966b5a7eb7e01a9e81672aa4ae3c96462937a6b7b559",
+      "inputHash": "sha256:5a510d797eee00115664a0f22b0a5de4b5866adc8b7b3b3d9ffc916616fa5fab",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/request-validation:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a043565a510d797eee00115664a0f22b0a5de4b5866adc8b7b3b3d9ffc916616fa5fab@sha256:5450d67db6d50c29bdcd966b5a7eb7e01a9e81672aa4ae3c96462937a6b7b559",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "request-validation",
+          "resourceDir": "request-validation",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "request-validation",
+          "httpPath": "request-validation"
+        }
+      }
+    },
+    {
+      "logicalId": "response-cache",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/response-cache",
+      "image": "plugins/response-cache",
+      "version": "1.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/response-cache:1.0.1",
+      "digest": "sha256:48ac08f29879b14b76e154ec5107a67137a82dc2b90964726177e7f5abdd97e5",
+      "inputHash": "sha256:c0245507b2d3236f64bfd2ec3f153d4c92ee5295eb39db74318833657a1be93e",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/response-cache:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356c0245507b2d3236f64bfd2ec3f153d4c92ee5295eb39db74318833657a1be93e@sha256:48ac08f29879b14b76e154ec5107a67137a82dc2b90964726177e7f5abdd97e5",
+      "provenanceMode": "candidate",
+      "consumers": {}
+    },
+    {
+      "logicalId": "simple-jwt-auth",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/simple-jwt-auth",
+      "image": "plugins/simple-jwt-auth",
+      "version": "1.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/simple-jwt-auth:1.0.1",
+      "digest": "sha256:fc47399ea9eb53bf3b15485a7819b1c4d00e777f8bb5223e0502087b19b1d53e",
+      "inputHash": "sha256:087188dd652a34f582e38429ca764349c467b64c4af6781e4f9d2dc8d0e053c8",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/simple-jwt-auth:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356087188dd652a34f582e38429ca764349c467b64c4af6781e4f9d2dc8d0e053c8@sha256:fc47399ea9eb53bf3b15485a7819b1c4d00e777f8bb5223e0502087b19b1d53e",
+      "provenanceMode": "candidate",
+      "consumers": {}
+    },
+    {
+      "logicalId": "traffic-tag",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/traffic-tag",
+      "image": "plugins/traffic-tag",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/traffic-tag:2.0.1",
+      "digest": "sha256:b5fda0cbb24440619d66629636f0a5e0388a790fc3dbe98d93e75093e6e50c3b",
+      "inputHash": "sha256:32395c39c5e0912dc9a349d5b9143b2546561e10e6d9551c497ea1ace9ebed8f",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/traffic-tag:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a0435632395c39c5e0912dc9a349d5b9143b2546561e10e6d9551c497ea1ace9ebed8f@sha256:b5fda0cbb24440619d66629636f0a5e0388a790fc3dbe98d93e75093e6e50c3b",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "traffic-tag",
+          "resourceDir": "traffic-tag",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "traffic-tag",
+          "httpPath": "traffic-tag"
+        }
+      }
+    },
+    {
+      "logicalId": "transformer",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/transformer",
+      "image": "plugins/transformer",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/transformer:2.0.1",
+      "digest": "sha256:192ab149cca30ed38b05a9263a8c0ec064c90f0064bf1801ff42f017782d45c3",
+      "inputHash": "sha256:bd44139e3b1fedfbabd2b17bc7120f0c0fd7114848733cc31c265f4f7f289fc8",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/transformer:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356bd44139e3b1fedfbabd2b17bc7120f0c0fd7114848733cc31c265f4f7f289fc8@sha256:192ab149cca30ed38b05a9263a8c0ec064c90f0064bf1801ff42f017782d45c3",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "transformer",
+          "resourceDir": "transformer",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "transformer",
+          "httpPath": "transformer"
+        }
+      }
+    },
+    {
+      "logicalId": "waf",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/waf",
+      "image": "plugins/waf",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/waf:2.0.1",
+      "digest": "sha256:c137f884daf936f527cdbc1501833fd768cf9f545f51e85799bdbe81576b6ab1",
+      "inputHash": "sha256:a79b64e019a2a84641513371bde00814a260ff56e90eb6663f53d7834adbf82c",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/waf:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356a79b64e019a2a84641513371bde00814a260ff56e90eb6663f53d7834adbf82c@sha256:c137f884daf936f527cdbc1501833fd768cf9f545f51e85799bdbe81576b6ab1",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "waf",
+          "resourceDir": "waf",
+          "urlForm": "oci"
+        },
+        "pluginServer": {
+          "inventoryKey": "waf",
+          "httpPath": "waf"
+        }
+      }
+    }
+  ]
+}

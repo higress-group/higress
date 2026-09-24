@@ -231,6 +231,7 @@ func (s *SSEServer) HandleMessage(w http.ResponseWriter, r *http.Request, body j
 	var status int
 	// Only send response if there is one (not for notifications)
 	if response != nil {
+		w.Header().Set("Content-Type", "application/json")
 		if sessionID != "" {
 			w.WriteHeader(http.StatusAccepted)
 			status = http.StatusAccepted
@@ -240,7 +241,6 @@ func (s *SSEServer) HandleMessage(w http.ResponseWriter, r *http.Request, body j
 			status = http.StatusOK
 		}
 		// Send HTTP response
-		w.Header().Set("Content-Type", "application/json")
 		jsonData, err := json.Marshal(response)
 		if err != nil {
 			api.LogErrorf("Failed to marshal SSE Message response: %v", err)

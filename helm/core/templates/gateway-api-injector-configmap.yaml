@@ -1,0 +1,25 @@
+{{- if and .Values.global.enableGatewayAPI .Values.global.enableGatewayAPIDeploymentController }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: istio-sidecar-injector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: higress-controller
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  values: |-
+    {
+      "gatewayImage": {{ printf "%s/higress/%s:%s" (.Values.gateway.hub | default .Values.global.hub) (.Values.gateway.image | default "gateway") (.Values.gateway.tag | default .Chart.AppVersion) | quote }},
+      "imagePullPolicy": {{ .Values.gateway.imagePullPolicy | default "IfNotPresent" | quote }},
+      "discoveryAddress": {{ printf "higress-controller.%s.svc:15012" .Release.Namespace | quote }},
+      "clusterDomain": {{ .Values.global.proxy.clusterDomain | quote }},
+      "clusterID": {{ .Values.global.multiCluster.clusterName | default "Kubernetes" | quote }}
+    }
+  config: |-
+    policy: disabled
+    defaultTemplates: []
+    templates:
+      higress-kube-gateway: |
+{{ .Files.Get "files/higress-kube-gateway.yaml" | trim | indent 8 }}
+{{- end }}

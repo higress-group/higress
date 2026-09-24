@@ -43,6 +43,7 @@ type gatewayController struct {
 	gatewayHandlers         []model.EventHandler
 	destinationRuleHandlers []model.EventHandler
 	envoyFilterHandlers     []model.EventHandler
+	wasmPluginHandlers      []model.EventHandler
 
 	store           model.ConfigStoreController
 	istioController *istiogateway.Controller
@@ -78,10 +79,12 @@ func NewController(client kube.Client, options common.Options, xdsUpdater model.
 		Revision:     higressconfig.Revision,
 	}
 	istiogateway.SetGatewayClassName(options.GatewayClass)
-	istioController := istiogateway.NewController(client, client.CrdWatcher().WaitForCRD, opt, xdsUpdater)
+	defaultGatewaySelector := map[string]string{}
 	if options.GatewaySelectorKey != "" {
-		istioController.DefaultGatewaySelector = map[string]string{options.GatewaySelectorKey: options.GatewaySelectorValue}
+		defaultGatewaySelector[options.GatewaySelectorKey] = options.GatewaySelectorValue
 	}
+	istioController := istiogateway.NewControllerWithDefaultGatewaySelector(
+		client, client.CrdWatcher().WaitForCRD, opt, xdsUpdater, defaultGatewaySelector)
 
 	var statusManager *status.Manager = nil
 	if options.EnableStatus {
@@ -143,6 +146,8 @@ func (g *gatewayController) RegisterEventHandler(kind config.GroupVersionKind, f
 		g.destinationRuleHandlers = append(g.destinationRuleHandlers, f)
 	case gvk.EnvoyFilter:
 		g.envoyFilterHandlers = append(g.envoyFilterHandlers, f)
+	case gvk.WasmPlugin:
+		g.wasmPluginHandlers = append(g.wasmPluginHandlers, f)
 	}
 }
 
@@ -191,6 +196,12 @@ func (g *gatewayController) onEvent(prev config.Config, curr config.Config, even
 		// Set this label so that we do not compare configs and just push.
 		Labels: map[string]string{constants.AlwaysPushLabel: "true"},
 	}
+	wasmPluginMetadata := config.Meta{
+		Name:             "gateway-api-ai-endpoint-picker",
+		Namespace:        namespace,
+		GroupVersionKind: gvk.WasmPlugin,
+		Labels:           map[string]string{constants.AlwaysPushLabel: "true"},
+	}
 
 	for _, f := range g.virtualServiceHandlers {
 		f(config.Config{Meta: vsMetadata}, config.Config{Meta: vsMetadata}, event)
@@ -198,5 +209,8 @@ func (g *gatewayController) onEvent(prev config.Config, curr config.Config, even
 
 	for _, f := range g.gatewayHandlers {
 		f(config.Config{Meta: gatewayMetadata}, config.Config{Meta: gatewayMetadata}, event)
+	}
+	for _, f := range g.wasmPluginHandlers {
+		f(config.Config{Meta: wasmPluginMetadata}, config.Config{Meta: wasmPluginMetadata}, event)
 	}
 }

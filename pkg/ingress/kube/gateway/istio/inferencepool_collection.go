@@ -24,10 +24,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	inferencev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gateway "sigs.k8s.io/gateway-api/apis/v1beta1"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 
 	"istio.io/istio/pkg/config/constants"
+	"istio.io/istio/pkg/config/gateway/kube"
 	"istio.io/istio/pkg/config/schema/gvk"
 	"istio.io/istio/pkg/kube/kclient"
 	"istio.io/istio/pkg/kube/krt"
@@ -52,8 +52,8 @@ const (
 // ControllerName is the name of this controller for labeling resources it manages
 const ControllerName = "inference-controller"
 
-func getSupportedControllers() sets.Set[gatewayv1.GatewayController] {
-	ret := sets.New[gatewayv1.GatewayController]()
+func getSupportedControllers() sets.Set[gateway.GatewayController] {
+	ret := sets.New[gateway.GatewayController]()
 	for _, controller := range builtinClasses {
 		ret.Insert(controller)
 	}
@@ -75,6 +75,7 @@ type targetPort struct {
 }
 
 type extRefInfo struct {
+	mode        kube.InferencePoolEndpointPickerMode
 	name        string
 	port        int32
 	failureMode string
@@ -129,20 +130,25 @@ func InferencePoolCollection(
 
 // createInferencePoolObject creates the InferencePool object with shadow service and extension ref info
 func createInferencePoolObject(pool *inferencev1.InferencePool, gatewayParents sets.Set[types.NamespacedName]) *InferencePool {
-	// Build extension reference info
-	extRef := extRefInfo{
-		name: string(pool.Spec.EndpointPickerRef.Name),
-	}
-
-	if pool.Spec.EndpointPickerRef.Port == nil {
-		log.Errorf("invalid InferencePool %s/%s; endpointPickerRef port is required", pool.Namespace, pool.Name)
+	mode, message := inferencePoolEndpointPickerMode(pool.Spec.EndpointPickerRef)
+	if message != "" {
+		log.Errorf("invalid InferencePool %s/%s: %s", pool.Namespace, pool.Name, message)
 		return nil
 	}
-	extRef.port = int32(pool.Spec.EndpointPickerRef.Port.Number)
 
-	extRef.failureMode = string(inferencev1.EndpointPickerFailClose) // Default failure mode
-	if pool.Spec.EndpointPickerRef.FailureMode != inferencev1.EndpointPickerFailClose {
-		extRef.failureMode = string(pool.Spec.EndpointPickerRef.FailureMode)
+	// Build extension reference info
+	extRef := extRefInfo{mode: mode}
+	if mode == kube.InferencePoolEndpointPickerModeExternal {
+		extRef.name = string(pool.Spec.EndpointPickerRef.Name)
+		if pool.Spec.EndpointPickerRef.Port == nil {
+			log.Errorf("invalid InferencePool %s/%s; endpointPickerRef port is required", pool.Namespace, pool.Name)
+			return nil
+		}
+		extRef.port = int32(pool.Spec.EndpointPickerRef.Port.Number)
+		extRef.failureMode = string(inferencev1.EndpointPickerFailClose)
+		if pool.Spec.EndpointPickerRef.FailureMode != inferencev1.EndpointPickerFailClose {
+			extRef.failureMode = string(pool.Spec.EndpointPickerRef.FailureMode)
+		}
 	}
 
 	svcName, err := InferencePoolServiceName(pool.Name)
@@ -175,6 +181,25 @@ func createInferencePoolObject(pool *inferencev1.InferencePool, gatewayParents s
 		extRef:         extRef,
 		gatewayParents: gatewayParents,
 	}
+}
+
+func inferencePoolEndpointPickerMode(ref inferencev1.EndpointPickerRef) (kube.InferencePoolEndpointPickerMode, string) {
+	group := string(ptr.OrEmpty(ref.Group))
+	kind := string(ref.Kind)
+	if kind == "" {
+		kind = gvk.Service.Kind
+	}
+	name := string(ref.Name)
+	if group == kube.BuiltinInferenceEndpointPickerGroup &&
+		kind == kube.BuiltinInferenceEndpointPickerKind &&
+		name == kube.BuiltinInferenceEndpointPickerName {
+		return kube.InferencePoolEndpointPickerModeBuiltin, ""
+	}
+	if group == "" && kind == gvk.Service.Kind {
+		return kube.InferencePoolEndpointPickerModeExternal, ""
+	}
+	return kube.InferencePoolEndpointPickerModeExternal,
+		fmt.Sprintf("Unsupported ExtensionRef kind or implementation: %s/%s/%s", group, kind, name)
 }
 
 // calculateInferencePoolStatus calculates the complete status for an InferencePool
@@ -287,9 +312,9 @@ func routeReferencesInferencePool(route *gateway.HTTPRoute, pool *inferencev1.In
 }
 
 // isInferencePoolBackendRef checks if a BackendRef is pointing to an InferencePool
-func isInferencePoolBackendRef(backendRef gatewayv1.BackendRef) bool {
-	return ptr.OrEmpty(backendRef.Group) == gatewayv1.Group(gvk.InferencePool.Group) &&
-		ptr.OrEmpty(backendRef.Kind) == gatewayv1.Kind(gvk.InferencePool.Kind)
+func isInferencePoolBackendRef(backendRef gateway.BackendRef) bool {
+	return ptr.OrEmpty(backendRef.Group) == gateway.Group(gvk.InferencePool.Group) &&
+		ptr.OrEmpty(backendRef.Kind) == gateway.Kind(gvk.InferencePool.Kind)
 }
 
 // calculateSingleParentStatus calculates the status for a single gateway parent
@@ -324,8 +349,8 @@ func calculateSingleParentStatus(
 	// Build the final status
 	return inferencev1.ParentStatus{
 		ParentRef: inferencev1.ParentReference{
-			Group:     (*inferencev1.Group)(&gvk.Gateway.Group),
-			Kind:      inferencev1.Kind(gvk.Gateway.Kind),
+			Group:     (*inferencev1.Group)(&gvk.KubernetesGateway.Group),
+			Kind:      inferencev1.Kind(gvk.KubernetesGateway.Kind),
 			Namespace: inferencev1.Namespace(gatewayParent.Namespace),
 			Name:      inferencev1.ObjectName(gatewayParent.Name),
 		},
@@ -365,7 +390,7 @@ func calculateAcceptedStatus(
 			if string(parentStatus.ParentRef.Name) == gatewayParent.Name && gatewayNamespace == gatewayParent.Namespace {
 				// Check if this parent is accepted
 				for _, parentCondition := range parentStatus.Conditions {
-					if parentCondition.Type == string(gatewayv1.RouteConditionAccepted) {
+					if parentCondition.Type == string(gateway.RouteConditionAccepted) {
 						if parentCondition.Status == metav1.ConditionTrue {
 							return &condition{
 								reason:  string(inferencev1.InferencePoolReasonAccepted),
@@ -410,6 +435,13 @@ func calculateResolvedRefsStatus(
 	pool *inferencev1.InferencePool,
 	services krt.Collection[*corev1.Service],
 ) *condition {
+	mode, modeError := inferencePoolEndpointPickerMode(pool.Spec.EndpointPickerRef)
+	if modeError != "" {
+		return &condition{reason: string(inferencev1.InferencePoolReasonInvalidExtensionRef), status: metav1.ConditionFalse, message: modeError}
+	}
+	if mode == kube.InferencePoolEndpointPickerModeBuiltin {
+		return &condition{reason: string(inferencev1.InferencePoolReasonResolvedRefs), status: metav1.ConditionTrue, message: "Built-in endpoint picker selected"}
+	}
 	// Default Kind to Service if unset
 	kind := string(pool.Spec.EndpointPickerRef.Kind)
 	if kind == "" {
@@ -502,15 +534,16 @@ func InferencePoolServiceName(poolName string) (string, error) {
 }
 
 func translateShadowServiceToService(existingLabels map[string]string, shadow shadowServiceInfo, extRef extRefInfo) *corev1.Service {
-	// Create the ports used by the shadow service
+	// Create one service port for each InferencePool targetPort so Istio discovers
+	// all target endpoints. Dummy ports 54321, 54322, ... map to the real targetPorts.
+	baseDummyPort := int32(54321)
 	ports := make([]corev1.ServicePort, 0, len(shadow.targetPorts))
-	dummyPort := int32(54321) // Dummy port, not used for anything
-	for i, port := range shadow.targetPorts {
+	for i, targetPort := range shadow.targetPorts {
 		ports = append(ports, corev1.ServicePort{
-			Name:       "port" + strconv.Itoa(i),
+			Name:       fmt.Sprintf("http-%d", i),
 			Protocol:   corev1.ProtocolTCP,
-			Port:       dummyPort + int32(i),
-			TargetPort: intstr.FromInt(int(port.port)),
+			Port:       baseDummyPort + int32(i),
+			TargetPort: intstr.FromInt(int(targetPort.port)),
 		})
 	}
 
@@ -533,6 +566,17 @@ func translateShadowServiceToService(existingLabels map[string]string, shadow sh
 			ClusterIP: corev1.ClusterIPNone, // Headless service
 			Ports:     ports,
 		},
+	}
+	if extRef.mode == kube.InferencePoolEndpointPickerModeBuiltin {
+		delete(svc.Labels, InferencePoolExtensionRefSvc)
+		delete(svc.Labels, InferencePoolExtensionRefPort)
+		delete(svc.Labels, InferencePoolExtensionRefFailureMode)
+		svc.Labels[constants.InferencePoolEndpointPickerModeLabel] = string(kube.InferencePoolEndpointPickerModeBuiltin)
+	} else if svc.Labels[constants.InferencePoolEndpointPickerModeLabel] == string(kube.InferencePoolEndpointPickerModeBuiltin) {
+		delete(svc.Labels, constants.InferencePoolEndpointPickerModeLabel)
+		svc.Labels[InferencePoolExtensionRefSvc] = extRef.name
+		svc.Labels[InferencePoolExtensionRefPort] = strconv.Itoa(int(extRef.port))
+		svc.Labels[InferencePoolExtensionRefFailureMode] = extRef.failureMode
 	}
 
 	svc.SetOwnerReferences([]metav1.OwnerReference{

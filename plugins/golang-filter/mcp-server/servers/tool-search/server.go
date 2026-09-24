@@ -49,6 +49,11 @@ type ToolSearchConfig struct {
 	description string
 }
 
+func (c *ToolSearchConfig) Clone() common.Server {
+	cloned := *c
+	return &cloned
+}
+
 func (c *ToolSearchConfig) ParseConfig(config map[string]any) error {
 	// Parse vector configuration
 	vectorConfig, ok := config["vector"].(map[string]any)

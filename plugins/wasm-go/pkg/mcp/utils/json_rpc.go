@@ -24,6 +24,8 @@ import (
 	"github.com/tidwall/sjson"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
 	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/higress-group/wasm-go/pkg/log"
 	pb "github.com/higress-group/wasm-go/pkg/protos"
@@ -31,12 +33,14 @@ import (
 )
 
 const (
-	CtxJsonRpcID = "jsonRpcID"
-	CtxNeedPause = "needPause" // Context key to signal if the handler needs to pause
-	JError       = "error"
-	JCode        = "code"
-	JMessage     = "message"
-	JResult      = "result"
+	CtxJsonRpcID           = "jsonRpcID"
+	CtxNeedPause           = "needPause" // Context key to signal if the handler needs to pause
+	CtxJsonRpcNotification = "jsonRpcNotification"
+	CtxJsonRpcResponded    = "jsonRpcResponded"
+	JError                 = "error"
+	JCode                  = "code"
+	JMessage               = "message"
+	JResult                = "result"
 
 	ErrParseError     = -32700
 	ErrInvalidRequest = -32600
@@ -119,7 +123,21 @@ func sendJsonRpcResponse(ctx wrapper.HttpContext, id JsonRpcID, extras map[strin
 	makeHttpResponse(ctx, 200, debugInfo, [][2]string{{"Content-Type", "application/json; charset=utf-8"}}, body)
 }
 
+func acknowledgeNotification(ctx wrapper.HttpContext) {
+	ctx.SetContext(CtxJsonRpcResponded, true)
+	proxywasm.SendHttpResponseWithDetail(202, "json_rpc_notification_ack", nil, nil, -1)
+}
+
+func isNotification(ctx wrapper.HttpContext) bool {
+	notification, _ := ctx.GetContext(CtxJsonRpcNotification).(bool)
+	return notification
+}
+
 func OnJsonRpcResponseSuccess(ctx wrapper.HttpContext, result map[string]any, debugInfo ...string) {
+	if isNotification(ctx) {
+		acknowledgeNotification(ctx)
+		return
+	}
 	var (
 		id JsonRpcID
 		ok bool
@@ -137,6 +155,10 @@ func OnJsonRpcResponseSuccess(ctx wrapper.HttpContext, result map[string]any, de
 }
 
 func OnJsonRpcResponseError(ctx wrapper.HttpContext, err error, errorCode int, debugInfo ...string) {
+	if isNotification(ctx) {
+		acknowledgeNotification(ctx)
+		return
+	}
 	var (
 		id JsonRpcID
 		ok bool
@@ -157,6 +179,8 @@ func OnJsonRpcResponseError(ctx wrapper.HttpContext, err error, errorCode int, d
 }
 
 func HandleJsonRpcMethod(ctx wrapper.HttpContext, body []byte, handles MethodHandlers) types.Action {
+	ctx.SetContext(CtxJsonRpcNotification, false)
+	ctx.SetContext(CtxJsonRpcResponded, false)
 	idResult := gjson.GetBytes(body, "id")
 	id := NewJsonRpcIDFromGjson(idResult)
 	ctx.SetContext(CtxJsonRpcID, id)
@@ -187,6 +211,66 @@ func HandleJsonRpcMethod(ctx wrapper.HttpContext, body []byte, handles MethodHan
 		proxywasm.SendHttpResponseWithDetail(202, "json_rpc_ack", nil, nil, -1)
 	}
 	return types.ActionContinue
+}
+
+// HandleModernJsonRpcMethod adapts a fully validated modern request to the
+// existing handler contract. It never reparses identity fields and suppresses
+// JSON-RPC response envelopes for notifications.
+func HandleModernJsonRpcMethod(ctx wrapper.HttpContext, request *protocol.RequestContext, handles MethodHandlers) types.Action {
+	id := JsonRpcID{}
+	if request.Envelope.ID.IsPresent() {
+		rawID := request.Envelope.ID.Raw()
+		if len(rawID) > 0 && rawID[0] == '"' {
+			id.IsString = true
+			id.StringValue, _ = strconv.Unquote(string(rawID))
+		} else {
+			id.IntValue, _ = strconv.ParseInt(string(rawID), 10, 64)
+		}
+		ctx.SetContext(CtxJsonRpcID, id)
+	}
+	ctx.SetContext(CtxJsonRpcNotification, request.Envelope.Notification)
+	ctx.SetContext(CtxJsonRpcResponded, false)
+	ctx.SetContext(CtxNeedPause, false)
+
+	handle := handles[request.Envelope.Method]
+	if handle == nil {
+		SendProtocolError(ctx, request.Envelope.ID, protocol.MethodNotFound(), "mcp_modern_method_not_found")
+		return types.ActionContinue
+	}
+	params := gjson.ParseBytes(request.Envelope.Params)
+	log.Debugf("modern JSON-RPC method[%s] passed protocol validation", request.Envelope.Method)
+	if err := handle(ctx, id, params); err != nil {
+		OnJsonRpcResponseError(ctx, err, ErrInvalidRequest)
+		return types.ActionContinue
+	}
+	if needPause, _ := ctx.GetContext(CtxNeedPause).(bool); needPause {
+		return types.ActionPause
+	}
+	if request.Envelope.Notification {
+		responded, _ := ctx.GetContext(CtxJsonRpcResponded).(bool)
+		if !responded {
+			acknowledgeNotification(ctx)
+		}
+	}
+	return types.ActionContinue
+}
+
+// SendProtocolError emits the typed modern HTTP/JSON-RPC error mapping.
+func SendProtocolError(ctx wrapper.HttpContext, id protocol.ID, protocolError *protocol.Error, debugInfo string) {
+	makeHttpResponse(
+		ctx,
+		protocolError.HTTPStatus,
+		debugInfo,
+		[][2]string{{"Content-Type", "application/json; charset=utf-8"}},
+		protocol.MarshalErrorResponse(id, protocolError),
+	)
+}
+
+// IsModernRequest reports whether the current handler runs behind the strict
+// modern protocol boundary.
+func IsModernRequest(ctx wrapper.HttpContext) bool {
+	request, ok := ctx.GetContext(consts.CtxProtocolRequest).(*protocol.RequestContext)
+	return ok && request != nil && request.Era == protocol.EraModern
 }
 
 func HandleJsonRpcRequest(ctx wrapper.HttpContext, body []byte, handle JsonRpcRequestHandler) types.Action {

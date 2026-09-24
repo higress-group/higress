@@ -1054,6 +1054,7 @@ func (c *controller) storeBackendTrafficPolicy(wrapper *common.WrapperConfig, ba
 			portNumber := dest.Destination.GetPort().GetNumber()
 			serviceKey := common.CreateMcpServiceKey(dest.Destination.Host, int32(portNumber))
 			if _, exist := store[serviceKey]; !exist {
+				wrapperConfig := common.WrapperConfigForMcpDestination(wrapper, dest)
 				if serviceKey.Port != 0 {
 					store[serviceKey] = &common.WrapperTrafficPolicy{
 						PortTrafficPolicy: &networking.TrafficPolicy_PortTrafficPolicy{
@@ -1061,12 +1062,12 @@ func (c *controller) storeBackendTrafficPolicy(wrapper *common.WrapperConfig, ba
 								Number: uint32(serviceKey.Port),
 							},
 						},
-						WrapperConfig: wrapper,
+						WrapperConfig: wrapperConfig,
 					}
 				} else {
 					store[serviceKey] = &common.WrapperTrafficPolicy{
 						TrafficPolicy: &networking.TrafficPolicy{},
-						WrapperConfig: wrapper,
+						WrapperConfig: wrapperConfig,
 					}
 				}
 			}

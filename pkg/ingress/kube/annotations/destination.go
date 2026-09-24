@@ -33,6 +33,7 @@ var _ Parser = destination{}
 type DestinationConfig struct {
 	McpDestination []*networking.HTTPRouteDestination
 	WeightSum      int64
+	Protocols      map[string]string
 }
 
 type destination struct{}
@@ -48,6 +49,7 @@ func (a destination) Parse(annotations Annotations, config *Ingress, _ *GlobalCo
 	}
 	lines := splitLines(value)
 	var destinations []*networking.HTTPRouteDestination
+	protocols := map[string]string{}
 	var weightSum int64
 	for _, line := range lines {
 		// fmt: [weight] <host>[:port] [subset]
@@ -71,7 +73,7 @@ func (a destination) Parse(annotations Annotations, config *Ingress, _ *GlobalCo
 			IngressLog.Errorf("destination %s has no address within ingress %s/%s", value, config.Namespace, config.Name)
 			return nil
 		}
-		address := pairs[addrIndex]
+		address, protocol := splitDestinationProtocol(pairs[addrIndex])
 		host := address
 		var port uint64
 		colon := strings.LastIndex(address, ":")
@@ -98,6 +100,9 @@ func (a destination) Parse(annotations Annotations, config *Ingress, _ *GlobalCo
 				Number: uint32(port),
 			}
 		}
+		if protocol != "" {
+			protocols[destinationProtocolKey(host, uint32(port))] = protocol
+		}
 		IngressLog.Debugf("destination generated for ingress %s/%s: %v", config.Namespace, config.Name, dest)
 		destinations = append(destinations, dest)
 	}
@@ -108,7 +113,21 @@ func (a destination) Parse(annotations Annotations, config *Ingress, _ *GlobalCo
 		McpDestination: destinations,
 		WeightSum:      weightSum,
 	}
+	if len(protocols) > 0 {
+		config.Destination.Protocols = protocols
+	}
 	return nil
+}
+
+func (d *DestinationConfig) BackendProtocolForDestination(destination *networking.Destination) string {
+	if d == nil || destination == nil {
+		return ""
+	}
+	return d.Protocols[destinationProtocolKey(destination.Host, destination.GetPort().GetNumber())]
+}
+
+func (d *DestinationConfig) HasBackendProtocols() bool {
+	return d != nil && len(d.Protocols) > 0
 }
 
 func needDestinationConfig(annotations Annotations) bool {
@@ -122,4 +141,19 @@ func splitLines(s string) []string {
 		lines = append(lines, sc.Text())
 	}
 	return lines
+}
+
+func splitDestinationProtocol(address string) (string, string) {
+	lowerAddress := strings.ToLower(address)
+	if strings.HasPrefix(lowerAddress, "http://") {
+		return address[len("http://"):], "HTTP"
+	}
+	if strings.HasPrefix(lowerAddress, "https://") {
+		return address[len("https://"):], "HTTPS"
+	}
+	return address, ""
+}
+
+func destinationProtocolKey(host string, port uint32) string {
+	return host + ":" + strconv.FormatUint(uint64(port), 10)
 }

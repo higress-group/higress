@@ -17,12 +17,17 @@ your contributions.
 **Please do NOT report security vulnerabilities through public GitHub issues,
 discussions, or pull requests.**
 
-Instead, please report them through **both** of the following private channels:
+Submit vulnerability reports through the project's vendor-neutral,
+authoritative private intake:
 
-1. **GitHub Private Security Advisory**:
+1. **GitHub Private Security Advisory (required and sufficient)**:
    <https://github.com/higress-group/higress/security/advisories/new>
-2. **Alibaba Security Response Center (ASRC)**:
-   <https://security.alibaba.com/>
+
+Reporters may also submit the same report to the
+[Alibaba Security Response Center](https://security.alibaba.com/) when the
+issue affects an Alibaba Cloud service or they prefer that additional channel.
+An ASRC submission is optional and is not required for the Higress project to
+receive or act on a report.
 
 Please include as much of the following information as possible to help us
 triage and address the issue:
@@ -53,9 +58,61 @@ keep you informed of our progress throughout the process.
 
 ## Security Response Team
 
-The Higress security response is handled by the project maintainers listed in
-[`MAINTAINERS.md`](./MAINTAINERS.md). Security reports submitted via GitHub
-Private Security Advisory are visible to all current maintainers.
+The Security Response Team (SRT) is composed of the current project
+maintainers:
+
+- Yiquan Dong ([@CH3CHO](https://github.com/CH3CHO))
+- Yuanxiao Zhao ([@EndlessSeeker](https://github.com/EndlessSeeker))
+- Leilei Geng ([@gengleilei](https://github.com/gengleilei))
+- Xiantao Han ([@hanxiantao](https://github.com/hanxiantao))
+- Zhiwei Cheng ([@cr7258](https://github.com/cr7258))
+- Tianyi Zhang ([@johnlanni](https://github.com/johnlanni))
+- Jingfeng Xu ([@lexburner](https://github.com/lexburner))
+
+[`MAINTAINERS.md`](https://github.com/higress-group/community/blob/main/MAINTAINERS.md)
+is authoritative for membership. A merged
+change to that roster onboards or offboards the same person from the SRT and
+their private security access must be updated promptly.
+
+For each report, the SRT assigns the following responsibilities in the private
+advisory or equivalent confidential case record:
+
+- **Triage coordinator**: acknowledges the report, maintains contact with the
+  reporter, assigns severity, tracks deadlines, and coordinates the team.
+- **Fix lead**: reproduces the issue and develops or coordinates remediation.
+- **Reviewer and release lead**: independently reviews the fix, prepares the
+  supported-version releases, and verifies that artifacts are available.
+- **Disclosure lead**: prepares the advisory, CVE request when appropriate,
+  credits, and coordinated public communication.
+
+One person may perform more than one role, but every confirmed vulnerability
+must involve at least two unconflicted SRT members so that remediation receives
+independent review.
+
+### Report handling, conflicts, and escalation
+
+1. The GitHub Private Security Advisory, or an equivalent project-controlled
+   confidential record, is the system of record for the report, assignments,
+   decisions, timeline, fix, and disclosure plan. If a reporter also opens an
+   ASRC case, an SRT member with ASRC access may correlate it with the project
+   record. ASRC access is not required for SRT membership, and project handling
+   does not depend on every SRT member having access to that vendor-operated
+   system.
+2. An SRT member with a personal, employer, or product conflict must disclose
+   it privately and recuse from severity, release, or disclosure decisions for
+   that case. The triage coordinator assigns an unconflicted replacement.
+3. If acknowledgement, triage, remediation, or disclosure is at risk of
+   missing the timelines in this policy, the triage coordinator escalates the
+   case to the full unconflicted SRT and records a revised plan. Critical
+   vulnerabilities are escalated immediately.
+4. If a reporter receives no acknowledgement within three business days, they
+   should follow up through the GitHub Private Security Advisory and may
+   reference an optional ASRC case identifier when available. No vulnerability
+   details should be posted publicly.
+5. If fewer than two SRT members are unconflicted, the unconflicted member
+   escalates confidentially to the CNCF TOC private mailing list at
+   [cncf-private-toc@lists.cncf.io](mailto:cncf-private-toc@lists.cncf.io)
+   before a release or disclosure decision is made.
 
 ## Disclosure Policy
 

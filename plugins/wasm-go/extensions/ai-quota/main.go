@@ -258,9 +258,18 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 		return data
 	}
 
-	inputToken := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
-	outputToken := ctx.GetContext(tokenusage.CtxKeyOutputToken).(int64)
-	consumer := ctx.GetContext("consumer").(string)
+	inputToken, ok := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
+	if !ok {
+		return data
+	}
+	outputToken, ok := ctx.GetContext(tokenusage.CtxKeyOutputToken).(int64)
+	if !ok {
+		return data
+	}
+	consumer, ok := ctx.GetContext("consumer").(string)
+	if !ok {
+		return data
+	}
 	totalToken := int(inputToken + outputToken)
 	log.Debugf("update consumer:%s, totalToken:%d", consumer, totalToken)
 	config.redisClient.DecrBy(config.RedisKeyPrefix+consumer, totalToken, nil)

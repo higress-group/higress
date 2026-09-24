@@ -22,8 +22,31 @@ import (
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
+const ctxMCPResultAdapter = "mcp_result_adapter"
+
+// MCPResultAdapter transforms a successful MCP response result before it is
+// serialized. Servers install an adapter only for request profiles that need
+// response shaping; asynchronous tool callbacks retain it on the HTTP context.
+type MCPResultAdapter func(map[string]any) map[string]any
+
+// SetMCPResultAdapter installs a request-scoped MCP success-result adapter.
+func SetMCPResultAdapter(ctx wrapper.HttpContext, adapter MCPResultAdapter) {
+	ctx.SetContext(ctxMCPResultAdapter, adapter)
+}
+
+// ApplyMCPResultAdapter applies the request-scoped adapter, if any. Keeping the
+// adapter on the HTTP context allows REST callbacks to use it after Call has
+// returned.
+func ApplyMCPResultAdapter(ctx wrapper.HttpContext, result map[string]any) map[string]any {
+	adapter, ok := ctx.GetContext(ctxMCPResultAdapter).(MCPResultAdapter)
+	if !ok || adapter == nil {
+		return result
+	}
+	return adapter(result)
+}
+
 func OnMCPResponseSuccess(ctx wrapper.HttpContext, result map[string]any, debugInfo string) {
-	OnJsonRpcResponseSuccess(ctx, result, debugInfo)
+	OnJsonRpcResponseSuccess(ctx, ApplyMCPResultAdapter(ctx, result), debugInfo)
 	// TODO: support pub to redis when use POST + SSE
 }
 

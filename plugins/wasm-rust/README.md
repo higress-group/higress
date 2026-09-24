@@ -47,14 +47,14 @@
 # 进入项目目录
 cd plugins/wasm-rust/
 
-# 构建默认插件 (say-hello)
+# 构建默认的正式插件 (ai-data-masking)
 make build
 
-# 构建指定插件
-make build PLUGIN_NAME=say-hello
+# 构建示例插件
+make build PLUGIN_ROOT=example PLUGIN_NAME=say-hello
 
-# 构建并指定版本
-make build PLUGIN_NAME=say-hello PLUGIN_VERSION=1.0.0
+# 构建示例插件并指定版本
+make build PLUGIN_ROOT=example PLUGIN_NAME=say-hello PLUGIN_VERSION=1.0.0
 
 # 注意：由于 Makefile 中的 .DEFAULT 目标，需要明确指定目标
 # 如果遇到 "Nothing to be done" 错误，请确保使用正确的语法
@@ -63,8 +63,8 @@ make build PLUGIN_NAME=say-hello PLUGIN_VERSION=1.0.0
 **重要提示**：
 
 - 某些插件（如 `ai-data-masking`）依赖 C 库，可能需要额外的配置才能成功构建
-- 建议先使用简单的插件（如 `say-hello`）测试构建环境
-- 构建成功后会生成 `extensions/<plugin-name>/plugin.wasm` 文件
+- 建议先使用简单的示例插件（如 `say-hello`）测试构建环境
+- 构建成功后会在所选 `PLUGIN_ROOT` 下生成 `<plugin-name>/plugin.wasm`
 
 ### 运行测试
 
@@ -78,7 +78,7 @@ cd plugins/wasm-rust/
 make test-base
 
 # 运行指定插件测试
-make test PLUGIN_NAME=say-hello
+make test PLUGIN_ROOT=example PLUGIN_NAME=say-hello
 ```
 
 ### 代码检查
@@ -93,15 +93,15 @@ cd plugins/wasm-rust/
 make lint-base
 
 # 运行指定插件 lint 检查
-make lint PLUGIN_NAME=say-hello
+make lint PLUGIN_ROOT=example PLUGIN_NAME=say-hello
 ```
 
 ### Makefile 说明
 
 当前 Makefile 包含以下可用目标：
 
-- `build` - 构建插件（默认插件为 say-hello）
-- `build-image` - 构建插件对应镜像（默认插件为 say-hello）
+- `build` - 构建插件（默认插件为 ai-data-masking）
+- `build-image` - 构建插件对应镜像（默认插件为 ai-data-masking）
 - `lint-base` - 对所有代码进行 lint 检查
 - `lint` - 对指定插件进行 lint 检查
 - `test-base` - 运行所有测试
@@ -130,13 +130,13 @@ wasm-rust/
 │   ├── redis_wrapper.rs   # Redis 包装器
 │   ├── request_wrapper.rs # 请求包装器
 │   └── rule_matcher.rs    # 规则匹配器
-├── extensions/            # 插件示例
-│   ├── say-hello/        # 基础示例
-│   ├── ai-data-masking/  # AI 数据脱敏
-│   ├── request-block/    # 请求拦截
+├── extensions/            # 正式发布的 Rust 插件
+│   └── ai-data-masking/  # AI 数据脱敏
+├── example/              # 不参与正式发布的参考实现和开发示例
 │   ├── ai-intent/        # AI 意图识别
-│   └── demo-wasm/        # 演示插件
-├── example/              # 完整示例
+│   ├── demo-wasm/        # 演示插件
+│   ├── request-block/    # 请求拦截参考实现
+│   ├── say-hello/        # 基础示例
 │   ├── wrapper-say-hello/ # 包装器示例
 │   └── sse-timing/       # SSE 时序示例
 └── Makefile              # 构建脚本
@@ -266,14 +266,17 @@ spec:
         name: "route-specific"
 ```
 
-## 内置插件
+## 正式插件和示例
 
-### 基础插件
+`extensions/` 仅包含参与正式构建和发布的插件；`example/` 中的实现用于
+开发参考，不参与正式插件发布。
+
+### 示例插件
 
 - **say-hello**: 基础示例插件，演示插件开发流程 ✅
 - **demo-wasm**: 完整演示插件，包含 Redis 集成等功能
 
-### 功能插件
+### 正式插件
 
 - **ai-data-masking**: AI 数据脱敏插件 ⚠️
 
@@ -281,6 +284,8 @@ spec:
   - 支持 OpenAI 协议和自定义 JSONPath
   - 内置敏感词库和自定义规则
   - **注意**: 依赖 C 库，可能需要额外配置
+
+### 其他参考实现
 
 - **request-block**: 请求拦截插件 ✅
 
@@ -329,8 +334,11 @@ source ~/.zshrc
 # 进入项目目录
 cd plugins/wasm-rust/
 
-# 使用 Makefile 构建插件（推荐）
+# 使用 Makefile 构建正式插件（推荐）
 make build PLUGIN_NAME=my-plugin
+
+# 构建 example/ 下的参考插件
+make build PLUGIN_ROOT=example PLUGIN_NAME=say-hello
 
 # 直接使用 Cargo 构建 WASM 文件
 cd extensions/my-plugin
@@ -348,14 +356,14 @@ docker build -t my-plugin:latest --build-arg PLUGIN_NAME=my-plugin .
 **重要提示**：Dockerfile 需要指定 `PLUGIN_NAME` 参数来构建特定插件。
 
 ```bash
-# 构建 say-hello 插件
-docker build -t say-hello:latest --build-arg PLUGIN_NAME=say-hello .
+# 构建 say-hello 示例插件
+docker build -t say-hello:latest --build-arg PLUGIN_ROOT=example --build-arg PLUGIN_NAME=say-hello .
 
 # 构建 ai-data-masking 插件
 docker build -t ai-data-masking:latest --build-arg PLUGIN_NAME=ai-data-masking .
 
-# 构建 request-block 插件
-docker build -t request-block:latest --build-arg PLUGIN_NAME=request-block .
+# 构建 request-block 参考插件
+docker build -t request-block:latest --build-arg PLUGIN_ROOT=example --build-arg PLUGIN_NAME=request-block .
 
 # 构建自定义插件
 docker build -t my-custom-plugin:latest --build-arg PLUGIN_NAME=my-custom-plugin .
@@ -416,8 +424,8 @@ spec:
 不同命令需要在不同的目录下执行：
 
 - **Makefile 命令**（如 `make build`、`make build-image`、`make test`、`make lint`）：在 `plugins/wasm-rust/` 目录下执行
-- **Cargo 命令**（如 `cargo build`、`cargo test`）：在具体的插件目录下执行（如 `plugins/wasm-rust/extensions/my-plugin/`）
-- **Docker 命令**：在 `plugins/wasm-rust/` 目录下执行，需要指定 `PLUGIN_NAME` 参数
+- **Cargo 命令**（如 `cargo build`、`cargo test`）：在具体的插件目录下执行（如 `plugins/wasm-rust/extensions/my-plugin/` 或 `plugins/wasm-rust/example/say-hello/`）
+- **Docker 命令**：在 `plugins/wasm-rust/` 目录下执行，需要指定 `PLUGIN_NAME`；构建参考插件时还需指定 `PLUGIN_ROOT=example`
 
 ### 调试
 

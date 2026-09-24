@@ -24,6 +24,11 @@ type HigressOpsConfig struct {
 	description   string
 }
 
+func (c *HigressOpsConfig) Clone() common.Server {
+	cloned := *c
+	return &cloned
+}
+
 // GetBasicAuthCredentials implements common.BasicAuthProvider. The higress-ops
 // server exposes Istio/Envoy debug interfaces, so it always requires callers to
 // present HTTP Basic credentials.

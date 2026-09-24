@@ -15,6 +15,7 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -262,6 +263,46 @@ func (s *Server) initConfigController() error {
 }
 
 func (s *Server) Start(stop <-chan struct{}) error {
+	// Check CRD versions before starting the server.
+	//
+	// The check is bounded by a timeout and is also cancelled when the server
+	// is asked to stop, so a stalled API server cannot block startup or shield
+	// the process from the stop signal. This is a diagnostic warning check, so
+	// a cancelled/expired context surfaces as a warning rather than a failure.
+	const crdVersionCheckTimeout = 30 * time.Second
+	crdCheckCtx, crdCheckCancel := context.WithTimeout(context.Background(), crdVersionCheckTimeout)
+	defer crdCheckCancel()
+	go func() {
+		select {
+		case <-stop:
+			crdCheckCancel()
+		case <-crdCheckCtx.Done():
+		}
+	}()
+
+	log.Info("Checking CRD versions...")
+	crdWarnings := higresskube.CheckCRDVersions(crdCheckCtx, s.kubeClient.RESTConfig())
+	if len(crdWarnings) > 0 {
+		log.Warn("=================================================================")
+		log.Warn("                      CRD VERSION WARNINGS                       ")
+		log.Warn("=================================================================")
+		for i, warning := range crdWarnings {
+			log.Warnf("[%d] %s", i+1, warning)
+		}
+		log.Warn("=================================================================")
+		log.Warn("⚠️  Some features may not work correctly with outdated CRDs.")
+		log.Warn("")
+		log.Warn("Apply the CRDs that match this Higress version:")
+		log.Warn("  # From the same source tree or release bundle used for this build:")
+		log.Warn("  kubectl apply -f api/kubernetes/customresourcedefinitions.gen.yaml")
+		log.Warn("")
+		log.Warn("  # Or from the local Helm chart copy:")
+		log.Warn("  kubectl apply -f helm/core/crds/customresourcedefinitions.gen.yaml")
+		log.Warn("=================================================================")
+	} else {
+		log.Info("✅ All required CRDs are up-to-date")
+	}
+
 	if err := s.server.Start(stop); err != nil {
 		return err
 	}

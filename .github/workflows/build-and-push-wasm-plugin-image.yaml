@@ -1,153 +1,57 @@
-name: Build and Push Wasm Plugin Image
+name: Validate Legacy Wasm Plugin Request
 
+# Public plugin tags are written only by promote-plugin-release.yaml. This
+# retained entry point deliberately has no registry credentials or write scope.
 on:
   push:
     tags:
-      - "wasm-*-*-v*.*.*" # 匹配 wasm-{go|rust}-{pluginName}-vX.Y.Z 格式的标签
+      - "wasm-*-*-v*.*.*"
   workflow_dispatch:
     inputs:
       plugin_type:
-        description: "Type of the plugin"
+        description: "Legacy request type (validated only)"
         required: true
         type: choice
-        options:
-          - go
-          - rust
+        options: [go, rust]
       plugin_name:
-        description: "Name of the plugin"
+        description: "Official catalog logical ID"
         required: true
         type: string
       version:
-        description: "Version of the plugin (optional, without leading v)"
+        description: "Ignored: public version comes from committed VERSION"
         required: false
         type: string
 
+permissions:
+  contents: read
+
+concurrency:
+  group: legacy-wasm-validation-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build-and-push-wasm-plugin-image:
+  validate-only:
     runs-on: ubuntu-latest
-    environment:
-      name: image-registry-msg
-    env:
-      IMAGE_REGISTRY_SERVICE: ${{ vars.IMAGE_REGISTRY || 'higress-registry.cn-hangzhou.cr.aliyuncs.com' }}
-      IMAGE_REPOSITORY: ${{ vars.PLUGIN_IMAGE_REPOSITORY || 'plugins' }}
-      RUST_VERSION: 1.82
-      GO_VERSION: 1.24.0
-      ORAS_VERSION: 1.0.0
     steps:
-      - name: Set plugin_type, plugin_name and version from inputs or ref_name
-        id: set_vars
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            plugin_type="${{ github.event.inputs.plugin_type }}"
-            plugin_name="${{ github.event.inputs.plugin_name }}"
-            version="${{ github.event.inputs.version }}"
-          else
-            ref_name=${{ github.ref_name }}
-            plugin_type=${ref_name#*-} # 删除插件类型前面的字段(wasm-)
-            plugin_type=${plugin_type%%-*} # 删除插件类型后面的字段(-{plugin_name}-vX.Y.Z)
-            plugin_name=${ref_name#*-*-} # 删除插件名前面的字段(wasm-go-)
-            plugin_name=${plugin_name%-*} # 删除插件名后面的字段(-vX.Y.Z)
-            version=$(echo "$ref_name" | awk -F'v' '{print $2}')
-          fi
-          if [[ "$plugin_type" == "rust" ]]; then
-            builder_image="higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/wasm-rust-builder:rust${{ env.RUST_VERSION }}-oras${{ env.ORAS_VERSION }}"
-          else
-            builder_image="higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/wasm-go-builder:go${{ env.GO_VERSION }}-oras${{ env.ORAS_VERSION }}"
-          fi
-          echo "PLUGIN_TYPE=$plugin_type" >> $GITHUB_ENV
-          echo "PLUGIN_NAME=$plugin_name" >> $GITHUB_ENV
-          echo "VERSION=$version" >> $GITHUB_ENV
-          echo "BUILDER_IMAGE=$builder_image" >> $GITHUB_ENV
-
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: File Check
-        run: |
-          workspace=${{ github.workspace }}/plugins/wasm-${PLUGIN_TYPE}/extensions/${PLUGIN_NAME}
-          push_command="./plugin.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip"
-
-          # 查找spec.yaml
-          if [ -f "${workspace}/spec.yaml" ]; then
-            echo "spec.yaml exists"
-            push_command="./spec.yaml:application/vnd.module.wasm.spec.v1+yaml $push_command "
-          fi
-
-          # 查找README.md
-          if [ -f "${workspace}/README.md" ];then
-              echo "README.md exists"
-              push_command="./README.md:application/vnd.module.wasm.doc.v1+markdown $push_command "
-          fi
-
-          # 查找README_{lang}.md
-          for file in ${workspace}/README_*.md; do
-            if [ -f "$file" ]; then
-              file_name=$(basename $file)
-              echo "$file_name exists"
-              lang=$(basename $file | sed 's/README_//; s/.md//')
-              push_command="./$file_name:application/vnd.module.wasm.doc.v1.$lang+markdown $push_command "
-            fi
-          done
-
-          echo "PUSH_COMMAND=\"$push_command\"" >> $GITHUB_ENV
-
-      - name: Run a wasm-builder
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.0"
+      - name: Reject production publication and validate the requested catalog entry
         env:
-          PLUGIN_NAME: ${{ env.PLUGIN_NAME }}
-          BUILDER_IMAGE: ${{ env.BUILDER_IMAGE }}
+          LEGACY_PLUGIN: ${{ inputs.plugin_name }}
+          LEGACY_VERSION: ${{ inputs.version }}
         run: |
-          docker run -itd --name builder -v ${{ github.workspace }}:/workspace -e PLUGIN_NAME=${{ env.PLUGIN_NAME }} --rm ${{ env.BUILDER_IMAGE }} /bin/bash
-
-      - name: Build Image and Push
-        run: |
-          push_command=${{ env.PUSH_COMMAND }}
-          push_command=${push_command#\"}
-          push_command=${push_command%\"} # 删除PUSH_COMMAND中的双引号，确保oras push正常解析
-
-          target_image="${{ env.IMAGE_REGISTRY_SERVICE }}/${{ env.IMAGE_REPOSITORY}}/${{ env.PLUGIN_NAME }}:${{ env.VERSION }}"
-          target_image_latest="${{ env.IMAGE_REGISTRY_SERVICE }}/${{ env.IMAGE_REPOSITORY}}/${{ env.PLUGIN_NAME }}:latest"
-          echo "TargetImage=${target_image}"
-          echo "TargetImageLatest=${target_image_latest}"
-
-          cd ${{ github.workspace }}/plugins/wasm-${PLUGIN_TYPE}/extensions/${PLUGIN_NAME}
-          if [ -f ./.buildrc ]; then
-            echo 'Found .buildrc file, sourcing it...'
-            . ./.buildrc
-          else
-            echo '.buildrc file not found'
+          set -euo pipefail
+          (cd tools/plugin-release && go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json)
+          if [ -n "${LEGACY_VERSION}" ]; then
+            echo "::error::legacy version input is prohibited; commit VERSION and use prepare-plugin-release"
+            exit 1
           fi
-          echo "EXTRA_TAGS=${EXTRA_TAGS}"
-          if [ "${PLUGIN_TYPE}" == "go" ]; then
-          command="
-          set -e
-          cd /workspace/plugins/wasm-go/extensions/${PLUGIN_NAME}
-          go mod tidy
-          GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o plugin.wasm .
-          tar czvf plugin.tar.gz plugin.wasm
-          echo ${{ secrets.REGISTRY_PASSWORD }} | oras login -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin ${{ env.IMAGE_REGISTRY_SERVICE }}
-          oras push ${target_image} ${push_command}
-          oras push ${target_image_latest} ${push_command}
-          "
-          elif [ "${PLUGIN_TYPE}" == "rust" ]; then
-          command="
-          set -e
-          cd /workspace/plugins/wasm-rust/extensions/${PLUGIN_NAME}
-          if [ -f ./.prebuild ]; then
-            echo 'Found .prebuild file, sourcing it...'
-            . ./.prebuild
+          if [ -n "${LEGACY_PLUGIN}" ] && ! jq -e --arg id "$LEGACY_PLUGIN" '.plugins[] | select(.logicalId == $id and .releaseEligible)' plugins/release/catalog.json >/dev/null; then
+            echo "::error::legacy plugin is not an eligible official Go/Rust catalog entry"
+            exit 1
           fi
-          rustup target add wasm32-wasip1
-          cargo build --target wasm32-wasip1 --release
-          cp target/wasm32-wasip1/release/*.wasm plugin.wasm
-          tar czvf plugin.tar.gz plugin.wasm
-          echo ${{ secrets.REGISTRY_PASSWORD }} | oras login -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin ${{ env.IMAGE_REGISTRY_SERVICE }}
-          oras push ${target_image} ${push_command}
-          oras push ${target_image_latest} ${push_command}
-          "
-          else
-
-          command="
-          echo "unkown type ${PLUGIN_TYPE}"
-          "
-          fi
-          docker exec builder bash -c "$command"
+          echo "Legacy publication is disabled. Use prepare-plugin-release and promote-plugin-release."

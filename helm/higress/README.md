@@ -169,6 +169,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.enableAlphaGatewayAPI | bool | `false` | If true, Higress Controller will monitor Gateway API resources that have not reached v1 yet |
 | global.enableDeltaXDS | bool | `true` | Whether to enable Istio delta xDS, default is false. |
 | global.enableGatewayAPI | bool | `true` | If true, Higress Controller will monitor Gateway API resources as well |
+| global.enableGatewayAPIDeploymentController | bool | `false` | If true, provision an isolated Deployment and Service for each managed Gateway API Gateway. This is opt-in to preserve the default shared Higress gateway deployment model. |
 | global.enableH3 | bool | `false` |  |
 | global.enableIPv6 | bool | `false` |  |
 | global.enableInferenceExtension | bool | `false` | If true, enable Gateway API Inference Extension support |
@@ -218,7 +219,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.proxy.excludeInboundPorts | string | `""` |  |
 | global.proxy.excludeOutboundPorts | string | `""` |  |
 | global.proxy.holdApplicationUntilProxyStarts | bool | `false` | Controls if sidecar is injected at the front of the container list and blocks the start of the other containers until the proxy is ready |
-| global.proxy.image | string | `"proxyv2"` |  |
+| global.proxy.image | string | `"gateway"` |  |
 | global.proxy.includeIPRanges | string | `"*"` | istio egress capture allowlist https://istio.io/docs/tasks/traffic-management/egress.html#calling-external-services-directly example: includeIPRanges: "172.30.0.0/16,172.20.0.0/16" would only capture egress traffic on those two IP Ranges, all other outbound traffic would be allowed by the sidecar |
 | global.proxy.includeInboundPorts | string | `"*"` |  |
 | global.proxy.includeOutboundPorts | string | `""` |  |
@@ -233,7 +234,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | global.proxy.resources | object | `{"limits":{"cpu":"2000m","memory":"1024Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resources for the sidecar. |
 | global.proxy.statusPort | int | `15020` | Default port for Pilot agent health checks. A value of 0 will disable health checking. |
 | global.proxy.tracer | string | `""` | Specify which tracer to use. One of: lightstep, datadog, stackdriver. If using stackdriver tracer outside GCP, set env GOOGLE_APPLICATION_CREDENTIALS to the GCP credential file. |
-| global.proxy_init.image | string | `"proxyv2"` | Base name for the proxy_init container, used to configure iptables. |
+| global.proxy_init.image | string | `"gateway"` | Base name for the proxy_init container, used to configure iptables. |
 | global.proxy_init.resources.limits.cpu | string | `"2000m"` |  |
 | global.proxy_init.resources.limits.memory | string | `"1024Mi"` |  |
 | global.proxy_init.resources.requests.cpu | string | `"10m"` |  |
@@ -288,14 +289,23 @@ The command removes all the Kubernetes components associated with the chart and 
 | pluginServer.service.port | int | `80` |  |
 | pluginServer.tag | string | `""` |  |
 | redis.redis.affinity | object | `{}` | Affinity for Redis |
+| redis.redis.aof | object | `{"enabled":false,"fsync":"everysec","rewriteMinSize":"64mb","rewritePercentage":100}` | AOF (Append-Only File) persistence settings. Only effective when persistence.enabled=true. AOF logs every write operation, providing best durability (up to 1s data loss with everysec). Redis prefers AOF for recovery when both AOF and RDB are enabled. |
+| redis.redis.aof.enabled | bool | `false` | Enable AOF persistence. Default is false (opt-in). Set to true to enable AOF persistence. |
+| redis.redis.aof.fsync | string | `"everysec"` | AOF fsync policy: always, everysec, or no. "everysec" balances durability (≤1s data loss) and performance. See https://redis.io/docs/management/persistence/ |
+| redis.redis.aof.rewriteMinSize | string | `"64mb"` | Minimum AOF file size to trigger rewrite. Default 64mb prevents frequent rewrites. |
+| redis.redis.aof.rewritePercentage | int | `100` | Rewrite AOF when size exceeds this percentage of base file. Default 100 = 2x size. |
+| redis.redis.extraConfig | string | `""` | Extra redis-stack.conf directives appended after the generated config (requirepass, and AOF defaults when persistence is enabled). Directives here take precedence over generated defaults (Redis applies the last value). Example:   maxmemory 512mb   maxmemory-policy allkeys-lru |
 | redis.redis.image | string | `"redis-stack-server"` | Specify the image |
 | redis.redis.name | string | `"redis-stack-server"` |  |
 | redis.redis.nodeSelector | object | `{}` | NodeSelector Node labels for Redis |
 | redis.redis.password | string | `""` | Specify the password, if not set, no password is used |
 | redis.redis.persistence.accessModes | list | `["ReadWriteOnce"]` | Persistent Volume access modes |
-| redis.redis.persistence.enabled | bool | `false` | Enable persistence on Redis, default is false |
+| redis.redis.persistence.enabled | bool | `false` | Enable persistence on Redis. When enabled, a PVC is mounted at /data. The `dir /data` directive is written only when aof.enabled or rdb.enabled is true; if both are disabled, persistence must be driven via extraConfig (add `dir /data` there yourself). |
 | redis.redis.persistence.size | string | `"1Gi"` | Persistent Volume size |
 | redis.redis.persistence.storageClass | string | `""` | If undefined (the default) or set to null, no storageClassName spec is set, choosing the default provisioner |
+| redis.redis.rdb | object | `{"enabled":false,"save":["900 1","300 10","60 10000"]}` | RDB (Redis Database) snapshot persistence settings. Only effective when persistence.enabled=true. RDB provides compact point-in-time snapshots, useful for backups and faster restart. Can be enabled alongside AOF for dual persistence strategy. |
+| redis.redis.rdb.enabled | bool | `false` | Enable RDB snapshots. Default is false (opt-in). Set to true to enable RDB snapshots. |
+| redis.redis.rdb.save | list | `["900 1","300 10","60 10000"]` | RDB snapshot schedule as "seconds changes" pairs. Redis saves when ANY rule is matched. Only takes effect when rdb.enabled=true. Common defaults: "900 1" (15min/1 key), "300 10" (5min/10 keys), "60 10000" (1min/10000 keys). Set to empty list [] to disable RDB snapshots (renders `save ""`). See https://redis.io/docs/management/persistence/ |
 | redis.redis.replicas | int | `1` | Specify the number of replicas |
 | redis.redis.resources | object | `{}` | Specify the resources |
 | redis.redis.service | object | `{"port":6379,"type":"ClusterIP"}` | Service parameters |

@@ -1,0 +1,264 @@
+name: Build Plugin Server from Immutable Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      gateway_version:
+        description: "Gateway version used for the immutable image tag"
+        required: true
+        type: string
+      higress_commit:
+        description: "Exact merged Higress commit carrying the snapshot"
+        required: true
+        type: string
+      snapshot_path:
+        description: "Snapshot path at higress_commit"
+        required: true
+        type: string
+      snapshot_sha256:
+        description: "Canonical snapshot SHA-256"
+        required: true
+        type: string
+      plugin_server_commit:
+        description: "Exact approved plugin-server source commit"
+        required: true
+        type: string
+      dry_run:
+        description: "Verify immutable inputs only"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-plugin-server-${{ inputs.gateway_version }}
+  cancel-in-progress: false
+
+jobs:
+  verify-inputs:
+    runs-on: ubuntu-latest
+    environment: plugin-server-production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.higress_commit }}
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.24.0"
+      - name: Set up pinned ORAS
+        uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20 # v1.2.3
+        with:
+          version: 1.2.3
+      - name: Checkout exact plugin-server source and build context
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: higress-group/plugin-server
+          ref: ${{ inputs.plugin_server_commit }}
+          path: plugin-server
+          fetch-depth: 0
+      - name: Verify pinned source and snapshot
+        env:
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          HIGRESS_COMMIT: ${{ inputs.higress_commit }}
+          PLUGIN_SERVER_COMMIT: ${{ inputs.plugin_server_commit }}
+          SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+          SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$GATEWAY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$HIGRESS_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PLUGIN_SERVER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$SNAPSHOT_PATH" = "plugins/release/snapshots/$GATEWAY_VERSION.json"
+          [[ "$SNAPSHOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(git rev-parse HEAD)" = "$HIGRESS_COMMIT"
+          test "$(git -C plugin-server rev-parse HEAD)" = "$PLUGIN_SERVER_COMMIT"
+          test "$(sha256sum "$SNAPSHOT_PATH" | awk '{print $1}')" = "$SNAPSHOT_SHA256"
+          test "$(jq -er .gatewayVersion "$SNAPSHOT_PATH")" = "$GATEWAY_VERSION"
+          test -f plugin-server/Dockerfile
+          test -f plugin-server/pull_plugins.py
+          test -f plugin-server/unmanaged-plugins.lock.json
+          (cd plugin-server && python3 -m unittest test_pull_plugins.py)
+          plan="plugins/release/plans/$GATEWAY_VERSION.json"
+          test -f "$plan"
+          args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan" --committed-source "$HIGRESS_COMMIT" --resolve --oci-source candidate)
+          if [ -z "$(jq -r '.bootstrapEvidence.path // empty' "$SNAPSHOT_PATH")" ]; then
+            previous=$(jq -r '.previousRelease // empty' "$SNAPSHOT_PATH")
+            [[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            previous_path="plugins/release/snapshots/$previous.json"
+            test -f "$previous_path"
+            args+=(--previous "../../$previous_path")
+          fi
+          (cd tools/plugin-release && go run . "${args[@]}")
+      - name: Confirm dry-run boundary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "Dry run: no plugin-server image was built or pushed." >> "$GITHUB_STEP_SUMMARY"
+      - name: Set up pinned multi-architecture tooling
+        if: ${{ !inputs.dry_run }}
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+        with:
+          platforms: arm64,amd64
+      - name: Set up pinned Buildx
+        if: ${{ !inputs.dry_run }}
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Build, verify, and promote immutable plugin-server image
+        if: ${{ !inputs.dry_run }}
+        env:
+          HIGRESS_COMMIT: ${{ inputs.higress_commit }}
+          SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+          SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
+          PLUGIN_SERVER_COMMIT: ${{ inputs.plugin_server_commit }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          REGISTRY: ${{ vars.PLUGIN_SERVER_REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.PLUGIN_SERVER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.PLUGIN_SERVER_REGISTRY_PASSWORD }}
+          PLUGIN_PUBLIC_REGISTRY: ${{ vars.PLUGIN_PUBLIC_REGISTRY }}
+        run: |
+          set -euo pipefail
+          # BEGIN plugin-server-index-contract
+          verify_plugin_server_index() {
+            jq -e '
+              def runnable: (.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64"));
+              [.manifests[] | select(runnable)] as $runnable |
+              [.manifests[] | select(runnable | not)] as $extra |
+              (([$runnable[] | .platform.os + "/" + .platform.architecture] | sort) == ["linux/amd64","linux/arm64"]) and
+              (($runnable | length) == 2) and
+              (($extra | length) == 0 or
+                (($extra | length) == 2 and
+                 all($extra[];
+                   .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+                   .platform.os == "unknown" and .platform.architecture == "unknown" and
+                   .annotations["vnd.docker.reference.type"] == "attestation-manifest") and
+                 (([$extra[].annotations["vnd.docker.reference.digest"]] | sort) == ([$runnable[].digest] | sort))))
+            ' "$1" >/dev/null
+          }
+          # END plugin-server-index-contract
+          [[ "$(git -C plugin-server rev-parse HEAD)" = "$PLUGIN_SERVER_COMMIT" ]]
+          test -n "$REGISTRY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
+          test -n "$PLUGIN_PUBLIC_REGISTRY"
+          marker="$PLUGIN_PUBLIC_REGISTRY/candidates/plugin-release-batches:$SNAPSHOT_SHA256"
+          marker_manifest=$(oras manifest fetch "$marker")
+          marker_layer=$(jq -r '.layers[] | select(.mediaType == "application/vnd.higress.plugin-release-batch.v1+json").digest' <<<"$marker_manifest")
+          [[ "$marker_layer" =~ ^sha256:[0-9a-f]{64}$ ]]
+          marker_repo=${marker%:*}
+          oras blob fetch "$marker_repo@$marker_layer" -o /tmp/latest-batch-marker.json
+          jq -e --arg sha "$SNAPSHOT_SHA256" '.snapshotSha256 == $sha and .phase == "latest-complete" and (.entries | length > 0)' /tmp/latest-batch-marker.json >/dev/null
+          cp "$SNAPSHOT_PATH" plugin-server/snapshot.json
+          test "$(sha256sum plugin-server/snapshot.json | awk '{print $1}')" = "$SNAPSHOT_SHA256"
+          image="$REGISTRY/higress/plugin-server:$GATEWAY_VERSION"
+          candidate="$REGISTRY/candidates/plugin-server:${GATEWAY_VERSION}-${SNAPSHOT_SHA256}"
+          echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+          lookup_error=/tmp/public-tag-lookup.err
+          if existing_json=$(oras manifest fetch "$image" --descriptor 2>"$lookup_error"); then
+            existing=$(jq -er .digest <<<"$existing_json")
+          elif grep -Eqi '401|403|unauthorized|forbidden|denied|authentication required|authorization required' "$lookup_error"; then
+            cat "$lookup_error" >&2
+            echo "public tag lookup was refused; authorization failure is never absence" >&2
+            exit 1
+          elif grep -Eqi '404|manifest unknown|name unknown|repository does not exist' "$lookup_error" ||
+               { grep -Fq 'Error response from registry:' "$lookup_error" && grep -Fq "$image: not found" "$lookup_error"; }; then
+            existing=""
+          else
+            cat "$lookup_error" >&2
+            echo "public tag lookup failed; refusing candidate/public mutation" >&2
+            exit 1
+          fi
+          candidate_lookup_error=/tmp/candidate-tag-lookup.err
+          if candidate_json=$(oras manifest fetch "$candidate" --descriptor 2>"$candidate_lookup_error"); then
+            candidate_digest=$(jq -er .digest <<<"$candidate_json")
+            echo "Reusing immutable plugin-server candidate $candidate@$candidate_digest" >> "$GITHUB_STEP_SUMMARY"
+          elif grep -Eqi '401|403|unauthorized|forbidden|denied|authentication required|authorization required' "$candidate_lookup_error"; then
+            cat "$candidate_lookup_error" >&2
+            echo "candidate tag lookup was refused; authorization failure is never absence" >&2
+            exit 1
+          elif grep -Eqi '404|manifest unknown|name unknown|repository does not exist' "$candidate_lookup_error" ||
+               { grep -Fq 'Error response from registry:' "$candidate_lookup_error" && grep -Fq "$candidate: not found" "$candidate_lookup_error"; }; then
+            docker buildx build --platform linux/amd64,linux/arm64 --push -t "$candidate" \
+              --build-arg SNAPSHOT_SHA256="$SNAPSHOT_SHA256" --build-arg HIGRESS_SOURCE_COMMIT="$HIGRESS_COMMIT" \
+              --build-arg PLUGIN_SERVER_SOURCE_COMMIT="$PLUGIN_SERVER_COMMIT" --build-arg GATEWAY_VERSION="$GATEWAY_VERSION" plugin-server
+            candidate_digest=$(docker buildx imagetools inspect "$candidate" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          else
+            cat "$candidate_lookup_error" >&2
+            echo "candidate tag lookup failed; refusing candidate/public mutation" >&2
+            exit 1
+          fi
+          test -n "$candidate_digest"
+          if [ -n "$existing" ] && [ "$existing" != "$candidate_digest" ]; then echo "immutable plugin-server tag conflict" >&2; exit 1; fi
+          # Candidate acceptance happens before the public tag is created. It
+          # requires exactly amd64+arm64 runnable images, permits only the
+          # standard Buildx attestation paired with each runnable digest, and
+          # verifies immutable labels and actual served bytes on this runner.
+          docker buildx imagetools inspect "$candidate" --raw > /tmp/candidate-index.json
+          verify_plugin_server_index /tmp/candidate-index.json
+          while read -r platform_digest; do
+            labels=$(docker buildx imagetools inspect "$candidate@$platform_digest" --format '{{json .Image.Config.Labels}}')
+            jq -e --arg plugin "$PLUGIN_SERVER_COMMIT" --arg higress "$HIGRESS_COMMIT" --arg snapshot "$SNAPSHOT_SHA256" --arg version "$GATEWAY_VERSION" \
+              '."org.opencontainers.image.revision" == $plugin and ."io.higress.higress-source-commit" == $higress and ."io.higress.plugin-snapshot-sha256" == $snapshot and ."io.higress.gateway-version" == $version' <<<"$labels" >/dev/null
+          done < <(jq -r '.manifests[] | select(.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64")) | .digest' /tmp/candidate-index.json)
+          docker pull "$candidate@$candidate_digest"
+          container=$(docker run -d --rm -p 127.0.0.1:18080:8080 "$candidate@$candidate_digest")
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          for retry in $(seq 1 20); do curl --fail --silent --show-error http://127.0.0.1:18080/plugins/snapshot-inventory.json >/tmp/snapshot-inventory.json && break; sleep 1; done
+          jq -e 'type == "object" and has("mcp-server") and has("json-converter") and has("jsonrpc-converter")' /tmp/snapshot-inventory.json >/dev/null
+          fetch_wasm() { curl --fail --silent --show-error "http://127.0.0.1:18080/plugins/$1/$2/plugin.wasm" > "$3"; head -c 4 "$3" | grep -qx $'\x00asm'; }
+          managed=$(jq -c '.plugins[] | select(.consumers.pluginServer.inventoryKey == "mcp-server")' "$SNAPSHOT_PATH")
+          managed_path=$(jq -r '.consumers.pluginServer.httpPath' <<<"$managed"); managed_version=$(jq -r .version <<<"$managed")
+          fetch_wasm "$managed_path" "$managed_version" /tmp/managed.wasm
+          managed_ref=$(jq -r '.ociRef | sub(":[^/:]+$"; "")' <<<"$managed"); managed_digest=$(jq -r .digest <<<"$managed")
+          managed_layer=$(oras manifest fetch "$managed_ref@$managed_digest" | jq -r '.layers[] | select(.mediaType == "application/vnd.module.wasm.content.layer.v1+wasm").digest')
+          oras blob fetch "$managed_ref@$managed_layer" -o /tmp/managed-oci.wasm
+          cmp /tmp/managed.wasm /tmp/managed-oci.wasm
+          json_version=$(jq -r '.plugins[] | select(.consumers.pluginServer.inventoryKey == "json-converter") | .version' "$SNAPSHOT_PATH")
+          fetch_wasm jsonrpc-converter "$json_version" /tmp/jsonrpc.wasm
+          lock=plugin-server/unmanaged-plugins.lock.json
+          locked=$(jq -c '.plugins["basic-auth"]' "$lock")
+          locked_path=$(jq -r .servedPath <<<"$locked"); locked_version=$(jq -r .servedVersion <<<"$locked")
+          fetch_wasm "$locked_path" "$locked_version" /tmp/unmanaged.wasm
+          test "$(sha256sum /tmp/unmanaged.wasm | awk '{print $1}')" = "$(jq -r .wasmSha256 <<<"$locked")"
+          if [ -z "$existing" ]; then docker buildx imagetools create --tag "$image" "$candidate@$candidate_digest"; fi
+          test "$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "$candidate_digest"
+          docker buildx imagetools inspect "$image" --raw > /tmp/public-index.json
+          cmp /tmp/candidate-index.json /tmp/public-index.json
+          verify_plugin_server_index /tmp/public-index.json
+          while read -r platform_digest; do
+            labels=$(docker buildx imagetools inspect "$image@$platform_digest" --format '{{json .Image.Config.Labels}}')
+            jq -e --arg plugin "$PLUGIN_SERVER_COMMIT" --arg higress "$HIGRESS_COMMIT" --arg snapshot "$SNAPSHOT_SHA256" --arg version "$GATEWAY_VERSION" \
+              '."org.opencontainers.image.revision" == $plugin and ."io.higress.higress-source-commit" == $higress and ."io.higress.plugin-snapshot-sha256" == $snapshot and ."io.higress.gateway-version" == $version' <<<"$labels" >/dev/null
+          done < <(jq -r '.manifests[] | select(.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64")) | .digest' /tmp/public-index.json)
+          printf 'PLUGIN_SERVER_IMAGE=%s@%s\n' "$image" "$candidate_digest" >> "$GITHUB_ENV"
+      - name: Create Console dispatch token after public acceptance
+        if: ${{ !inputs.dry_run }}
+        id: console-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ vars.CONSOLE_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.CONSOLE_DISPATCH_APP_PRIVATE_KEY }}
+          owner: higress-group
+          repositories: higress-console
+      - name: Dispatch accepted plugin snapshot to Console
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.console-token.outputs.token }}
+          HIGRESS_COMMIT: ${{ inputs.higress_commit }}
+          SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+          SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
+          PLUGIN_SERVER_COMMIT: ${{ inputs.plugin_server_commit }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+        run: |
+          set -euo pipefail
+          test -n "$PLUGIN_SERVER_IMAGE"
+          key="${SNAPSHOT_SHA256}-${PLUGIN_SERVER_COMMIT}-${PLUGIN_SERVER_IMAGE##*@}"
+          console_base_sha=$(gh api repos/higress-group/higress-console/git/ref/heads/main --jq .object.sha)
+          [[ "$console_base_sha" =~ ^[0-9a-f]{40}$ ]]
+          gh api --method POST repos/higress-group/higress-console/dispatches \
+            -f event_type=higress-plugin-snapshot \
+            -f client_payload[delivery_key]="$key" \
+            -f client_payload[higress_commit]="$HIGRESS_COMMIT" \
+            -f client_payload[snapshot_path]="$SNAPSHOT_PATH" \
+            -f client_payload[snapshot_sha256]="$SNAPSHOT_SHA256" \
+            -f client_payload[plugin_server_commit]="$PLUGIN_SERVER_COMMIT" \
+            -f client_payload[plugin_server_image]="$PLUGIN_SERVER_IMAGE" \
+            -f client_payload[console_base_sha]="$console_base_sha"

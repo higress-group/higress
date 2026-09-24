@@ -195,8 +195,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"x-user-id", "user123"},
 			})
 
-			// 应该返回ActionContinue，因为从header提取key后继续处理
-			require.Equal(t, types.ActionContinue, action)
+			// 等待异步缓存查询完成后，再由回调返回缓存或恢复请求。
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 		})
 
 		// 测试header key为空
@@ -435,6 +435,27 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 		})
 	})
+}
+
+func TestIsCacheableResponseStatus(t *testing.T) {
+	allowed := []int32{200, 204}
+	for _, tc := range []struct {
+		name   string
+		status string
+		want   bool
+	}{
+		{name: "allowed", status: "200", want: true},
+		{name: "valid but not allowed", status: "500", want: false},
+		{name: "negative", status: "-1", want: false},
+		{name: "below HTTP range", status: "99", want: false},
+		{name: "above HTTP range", status: "600", want: false},
+		{name: "int32 overflow", status: "2147483648", want: false},
+		{name: "not a number", status: "invalid", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isCacheableResponseStatus(tc.status, allowed))
+		})
+	}
 }
 
 func TestOnHttpResponseBody(t *testing.T) {

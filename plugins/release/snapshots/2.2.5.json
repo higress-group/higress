@@ -1,0 +1,1951 @@
+{
+  "schemaVersion": 1,
+  "gatewayVersion": "2.2.5",
+  "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+  "previousRelease": "2.2.4",
+  "catalogSha256": "31406b6596e6c4bf3147bd032b6c5d0d28ef15d5bf9946c1dde967f4ab232fc6",
+  "planId": "sha256:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84",
+  "provenanceMode": "candidate",
+  "plugins": [
+    {
+      "logicalId": "ai-agent",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-agent",
+      "image": "plugins/ai-agent",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-agent:2.0.2",
+      "digest": "sha256:31938d2083ebd1ce5bc84e19f7d86f143ac39825b545b247b71823d83d16d63d",
+      "inputHash": "sha256:b570153f1020b9894949faf2374833b46f2e3c486e01230bb814825c12fd5b42",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-agent:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84b570153f1020b9894949faf2374833b46f2e3c486e01230bb814825c12fd5b42@sha256:31938d2083ebd1ce5bc84e19f7d86f143ac39825b545b247b71823d83d16d63d",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-agent",
+          "resourceDir": "ai-agent",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-agent/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "b96a2745008b26cb61f3a005ac2993c583989cb2a9583639a8a88940040cc318"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-agent/README.md",
+                "targetPath": "README.md",
+                "sha256": "1b56ef86278521423f9c1a92940596b431677a6ce63653edbeb228759c423f58"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-agent/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "b214ae4e47ad49cbc55cbcab162f74238795eb988b2dc18e2dad49208a6612a9"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-agent",
+          "httpPath": "ai-agent"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-cache",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-cache",
+      "image": "plugins/ai-cache",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-cache:2.0.2",
+      "digest": "sha256:b4d9830ce274f62f03ac80b53507e141e7c0dde29c56a5641cf6b41986b4c87b",
+      "inputHash": "sha256:5e6a3c09a53ecd343cbbff96fa14fcb0ddf17f37db188f4c8ea6f5192b472431",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-cache:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d845e6a3c09a53ecd343cbbff96fa14fcb0ddf17f37db188f4c8ea6f5192b472431@sha256:b4d9830ce274f62f03ac80b53507e141e7c0dde29c56a5641cf6b41986b4c87b",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-cache",
+          "resourceDir": "ai-cache",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-cache/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "f1821f16252f0fbb6f89339d484abe96a0c851311c363977455e242f33b34f98"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-cache/README.md",
+                "targetPath": "README.md",
+                "sha256": "13abbe3e07b0cddcaf8ed1d63773c4037d6c2dab83df22b5bad71354dc149080"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-cache/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "26e7a2e613eb08246ae8521ccb50302f589e7dca82427978838e19b678bda94d"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-cache",
+          "httpPath": "ai-cache"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-context-limit",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-context-limit",
+      "image": "plugins/ai-context-limit",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-context-limit:1.0.0",
+      "digest": "sha256:6325ca94b20a3f5ab5e9df4014b60daca8d86e7d0999e74abb2c1ddd29b36f83",
+      "inputHash": "sha256:e2e73f72b87c9dbf47d763e287d7a4e6bfaa405cf27e2283020034a4cf7c1b74",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-context-limit:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356e2e73f72b87c9dbf47d763e287d7a4e6bfaa405cf27e2283020034a4cf7c1b74@sha256:6325ca94b20a3f5ab5e9df4014b60daca8d86e7d0999e74abb2c1ddd29b36f83",
+      "provenanceMode": "candidate",
+      "backfill": true,
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-context-limit",
+          "resourceDir": "ai-context-limit",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/ai-context-limit/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "4507454263642ba71290f11a59905850054c868a22228f812a33c4fdb3f3e82e"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/ai-context-limit/README.md",
+                "targetPath": "README.md",
+                "sha256": "64613bf129cf37f9a5a25beeb044a6e0364907f884819842ae7ef1538e4e18b2"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/ai-context-limit/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "b57b8beca499787203ad73ea05388ed5a16b7ccbe5790a07252aeb0e0dc55ce7"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "logicalId": "ai-data-masking",
+      "implementation": "rust",
+      "sourceDir": "plugins/wasm-rust/extensions/ai-data-masking",
+      "image": "plugins/ai-data-masking",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-data-masking:2.0.2",
+      "digest": "sha256:86745533c6b295e31ee40101f2afb9f0e736fc12acd5e8868658094cdec42c7e",
+      "inputHash": "sha256:e063e4a6cb8f9d2e60e305315cfad86f8e43fd505941ca170566f94d36697451",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-data-masking:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84e063e4a6cb8f9d2e60e305315cfad86f8e43fd505941ca170566f94d36697451@sha256:86745533c6b295e31ee40101f2afb9f0e736fc12acd5e8868658094cdec42c7e",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-data-masking",
+          "resourceDir": "ai-data-masking",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-data-masking/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "c406d06724b1bc131e3e474dc028249e4c347b9374122c360757ca45f5f77c89"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-data-masking/README.md",
+                "targetPath": "README.md",
+                "sha256": "64e7a4feee5adc6afaef665526728d346914c5aca38862f896e5cc9d775a365f"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-data-masking/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "2521550ffde81a65a15854d5fd7c55cd0b0242d489b4084c247165b93eba7da3"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-data-masking",
+          "httpPath": "ai-data-masking"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-endpoint-picker",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-endpoint-picker",
+      "image": "plugins/ai-endpoint-picker",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-endpoint-picker:2.0.1",
+      "digest": "sha256:8465b83c448f9450ee5d3743976b57cea1cb389d24b0f61aa998501d1d05f3f0",
+      "inputHash": "sha256:b7e6dc2f83ab586d6c9ba30fc58f687cc986d65f17bc09e786d6786bdc4ad478",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-endpoint-picker:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84b7e6dc2f83ab586d6c9ba30fc58f687cc986d65f17bc09e786d6786bdc4ad478@sha256:8465b83c448f9450ee5d3743976b57cea1cb389d24b0f61aa998501d1d05f3f0",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-endpoint-picker",
+          "resourceDir": "ai-endpoint-picker",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/ai-endpoint-picker/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "3ddf79d664a702c18b5eb9c6bd297d19c1834f4467387cf72ee4599f9f9dac77"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/ai-endpoint-picker/README.md",
+                "targetPath": "README.md",
+                "sha256": "4812cd4d3c11ee8f809a8b9e7acd976696af462bef6fe9c7432c1e8db6056295"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/ai-endpoint-picker/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "0d262516f2a9a4fc87963557f827cf494a5d12481ff5f9c141bcd11c1e2ccb40"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "logicalId": "ai-history",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-history",
+      "image": "plugins/ai-history",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-history:2.0.2",
+      "digest": "sha256:f780353175fa903066c9cbcaacb6b6396e0c60e0268a2b039ad878bdd0ddf2d0",
+      "inputHash": "sha256:ebf7a87c2884699a324b4f916a0ef871b498b9b54801de127e5ce4eceee89b7d",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-history:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84ebf7a87c2884699a324b4f916a0ef871b498b9b54801de127e5ce4eceee89b7d@sha256:f780353175fa903066c9cbcaacb6b6396e0c60e0268a2b039ad878bdd0ddf2d0",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-history",
+          "resourceDir": "ai-history",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-history/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "7b92c31118ebd064c7c2974bdb56b9ec30b339de65fe5bfa7011e8aa15e66dd3"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-history/README.md",
+                "targetPath": "README.md",
+                "sha256": "4b8f292c8a07bbd6609f273e2d9ca1386730f225297c71a28ef3a1ab174fdd66"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-history/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "91cd47103136b779f34b2d667f09004be60cc739ccc0999bac56e773681a88c7"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-history",
+          "httpPath": "ai-history"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-intent",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-intent",
+      "image": "plugins/ai-intent",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-intent:2.0.2",
+      "digest": "sha256:6172b70c64ad72f43e446931a877ad86cd7b9d07f41974b0cd5bc5dd4e91258b",
+      "inputHash": "sha256:4861b5a3e43ccf39fbef2e5d35a9a217e7dc157f206cdfa62b359bf528646061",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-intent:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d844861b5a3e43ccf39fbef2e5d35a9a217e7dc157f206cdfa62b359bf528646061@sha256:6172b70c64ad72f43e446931a877ad86cd7b9d07f41974b0cd5bc5dd4e91258b",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-intent",
+          "resourceDir": "ai-intent",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-intent/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "da3346e1229789ee5cedb3f3be1ee1d359420201666e0572e6b19fa3e74e509e"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-intent/README.md",
+                "targetPath": "README.md",
+                "sha256": "c0d169bbd3a6ef52e647feb38ef9ae964fe673125d0c5d13c7dd917196bbe8a2"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-intent/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "6971931479ed4161b84f9b3a62d1dcd40e2ffae99f8baaf2c9ff8ba7444d666d"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-intent",
+          "httpPath": "ai-intent"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-json-resp",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-json-resp",
+      "image": "plugins/ai-json-resp",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-json-resp:2.0.2",
+      "digest": "sha256:cb19c042b164ae2c747406ed19319039662475369b5bfe631beb56e8b54d5227",
+      "inputHash": "sha256:571d995e02425c2db2f1115288125be89672b3ca0633a7666fc2702d51c5aea7",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-json-resp:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84571d995e02425c2db2f1115288125be89672b3ca0633a7666fc2702d51c5aea7@sha256:cb19c042b164ae2c747406ed19319039662475369b5bfe631beb56e8b54d5227",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-json-resp",
+          "resourceDir": "ai-json-resp",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-json-resp/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "8ab238393471044d596e1d49a197ee2b40893809573b1833281dc52a537d75bc"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-json-resp/README.md",
+                "targetPath": "README.md",
+                "sha256": "6d83a2e480d21d97cd7bb6fb5b90816ac3e11337c27e8e1908e707a8f48be813"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-json-resp/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "4c1c0d44d2fde61642e0832af8fcf620d5b411f681528e905588cefd32f2b2c7"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-json-resp",
+          "httpPath": "ai-json-resp"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-load-balancer",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-load-balancer",
+      "image": "plugins/ai-load-balancer",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-load-balancer:2.0.2",
+      "digest": "sha256:83f8995ab9ee4646a19c2d3b2850957f129894bafeaceddbbab349003d0aa505",
+      "inputHash": "sha256:682b2c3f31a54e842c9867eff279c189449cc65ea3ae5b10aac205a6b4427743",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-load-balancer:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84682b2c3f31a54e842c9867eff279c189449cc65ea3ae5b10aac205a6b4427743@sha256:83f8995ab9ee4646a19c2d3b2850957f129894bafeaceddbbab349003d0aa505",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-load-balancer",
+          "resourceDir": "ai-load-balancer",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-load-balancer/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "cf6d3fdd84e41acf58795df63dd216b24e139ffd67da71331d35cecd7035cf86"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-load-balancer/README.md",
+                "targetPath": "README.md",
+                "sha256": "adc1f0126ff69d2c341c6ef96ced1aa53c288192c20ab9f430f13971d360cdcc"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-load-balancer/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "dd0e41f3f13ae14353c682d53e93b048b10138b57148211305052a00e0ba89a1"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-load-balancer",
+          "httpPath": "ai-load-balancer"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-prompt-decorator",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-prompt-decorator",
+      "image": "plugins/ai-prompt-decorator",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-prompt-decorator:2.0.2",
+      "digest": "sha256:ed37b6324acb8e376487f4fec35232edce51f09a1894c29f9e3220d30df297e6",
+      "inputHash": "sha256:46a467368c3ad943c349c1062f2f8ca4f7b680da901ac7f4fe4fc82b78f6f2ac",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-prompt-decorator:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d8446a467368c3ad943c349c1062f2f8ca4f7b680da901ac7f4fe4fc82b78f6f2ac@sha256:ed37b6324acb8e376487f4fec35232edce51f09a1894c29f9e3220d30df297e6",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-prompt-decorator",
+          "resourceDir": "ai-prompt-decorator",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-prompt-decorator/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "0f9f7c5237258f1436ffea549093fa54da59117c92cd22d47cdd02b7608c78ea"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-prompt-decorator/README.md",
+                "targetPath": "README.md",
+                "sha256": "fe778e138bf1ca9e5c531d8d3778946877c17b0b1f4ea235aea6ec7bc64dfce1"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-prompt-decorator/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "f62464b0873dfce84859f76be5374ed7d8d2cf8384740f124ca0a4772a1bbeac"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-prompt-decorator",
+          "httpPath": "ai-prompt-decorator"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-prompt-template",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-prompt-template",
+      "image": "plugins/ai-prompt-template",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-prompt-template:2.0.2",
+      "digest": "sha256:6b8b00c1afb6eb7794bb4aeb24c5757c59fad354a8c7c358599125e8152a933e",
+      "inputHash": "sha256:f817721b3ab740e4fe09ba7596db1c0f6c6336d918234395167c9233615a72a0",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-prompt-template:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84f817721b3ab740e4fe09ba7596db1c0f6c6336d918234395167c9233615a72a0@sha256:6b8b00c1afb6eb7794bb4aeb24c5757c59fad354a8c7c358599125e8152a933e",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-prompt-template",
+          "resourceDir": "ai-prompt-template",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-prompt-template/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "5e5204ea072ed6215327c6fe040f393c2e1b9dc339cf698f5fe60dd00d5c8c97"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-prompt-template/README.md",
+                "targetPath": "README.md",
+                "sha256": "049169cc67e17f694f9d6c601e9c0f7e882d3c688df6f8f6b593c4480adcfaf6"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-prompt-template/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "462f06d891e49f87111765bb3c6b090b55477370daff04783ed1b54c56f4de58"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-prompt-template",
+          "httpPath": "ai-prompt-template"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-proxy",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-proxy",
+      "image": "plugins/ai-proxy",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-proxy:2.0.2",
+      "digest": "sha256:8669916cd6886d7f9348a3f827f30f1708a112afc92c3bed3f2403012d8b83f6",
+      "inputHash": "sha256:6fa41e7d6d33c08aee2d1598ac8f7290d36b695b62235d3e76540af2cea9a457",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-proxy:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d846fa41e7d6d33c08aee2d1598ac8f7290d36b695b62235d3e76540af2cea9a457@sha256:8669916cd6886d7f9348a3f827f30f1708a112afc92c3bed3f2403012d8b83f6",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-proxy",
+          "resourceDir": "ai-proxy",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-proxy/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "d13fbd2b205861343a5b96774e8545a4452b56187b775e3a7ab2f8ab908fb066"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-proxy/README.md",
+                "targetPath": "README.md",
+                "sha256": "22e4e71d45de152e9f3af07dc8c5896fc66f59a8ba063a38430e5d6199a6dea1"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-proxy/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "74405ba0c3cb1dbb1327c7b2cdce676c4790e4726f374c2ddf15135f566660db"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-proxy",
+          "httpPath": "ai-proxy"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-quota",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-quota",
+      "image": "plugins/ai-quota",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-quota:2.0.2",
+      "digest": "sha256:d2a47206ddb764f80fc3bdb1ae7ff26d17b8bffd881accebd463d15e0b86645c",
+      "inputHash": "sha256:84cbeafa0740e9225f4aebdd521ef97696754b3efaa56654ad0edf1269e788a3",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-quota:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d8484cbeafa0740e9225f4aebdd521ef97696754b3efaa56654ad0edf1269e788a3@sha256:d2a47206ddb764f80fc3bdb1ae7ff26d17b8bffd881accebd463d15e0b86645c",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-quota",
+          "resourceDir": "ai-quota",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-quota/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "c9457032ebd452265ee0dde60b1a08367d18352d4463cb8a771ef9c7a85c135f"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-quota/README.md",
+                "targetPath": "README.md",
+                "sha256": "fb5b2a224dbf75be2b4cbc106620d2eabd3f35c29926134d3a378827ac198c55"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-quota/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "c6a75d633e380b9e47cc0cc6e0cab2c62109decda9da723c8491b862ced2155e"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-quota",
+          "httpPath": "ai-quota"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-rag",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-rag",
+      "image": "plugins/ai-rag",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-rag:2.0.2",
+      "digest": "sha256:e66ff7e8fd25d67a683263a5ba58a0bb56e60dbb624873b1f08ee132235acfce",
+      "inputHash": "sha256:04ddae799c96d581cc663a904e5e1b79743b47329511cf2e79a2a7fc1f7039ba",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-rag:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d8404ddae799c96d581cc663a904e5e1b79743b47329511cf2e79a2a7fc1f7039ba@sha256:e66ff7e8fd25d67a683263a5ba58a0bb56e60dbb624873b1f08ee132235acfce",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-rag",
+          "resourceDir": "ai-rag",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-rag/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "e26e43743e13e84734a25eed20a3a7dfe26813875d4b32b4959f6e43c2e7b587"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-rag/README.md",
+                "targetPath": "README.md",
+                "sha256": "45ea4f071f43e1350b095d4b88e97fcbcccfd6e1a14e9d3e008d2c9615281e0e"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-rag/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "815979192ba10cf018fc42ef1710203f42aa120560c98925822eedc2e4b19b2d"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-rag",
+          "httpPath": "ai-rag"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-search",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-search",
+      "image": "plugins/ai-search",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-search:2.0.2",
+      "digest": "sha256:e55005f3753d7df2f575124c3b56973d878c192a1c270fab88aa8e7701e66cc5",
+      "inputHash": "sha256:aa13ed14b196ea99f0482d6447e84b0626d223d164a8930e91025f79dd162244",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-search:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84aa13ed14b196ea99f0482d6447e84b0626d223d164a8930e91025f79dd162244@sha256:e55005f3753d7df2f575124c3b56973d878c192a1c270fab88aa8e7701e66cc5",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-search",
+          "resourceDir": "ai-search",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-search/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "e3d1e2d30d0e1dae6eaa60497e7b221652b72c5ddde2131c45476c56f658fbb1"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-search/README.md",
+                "targetPath": "README.md",
+                "sha256": "8650d2dfc5d6658686129920129d82f1ae2a564e84edd4aa8275aaa4b57eaba5"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-search/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "bf689a21084161a59feadb4929ebfd7e9fd9a0efdee973c7b7a308ca6b220c33"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-search",
+          "httpPath": "ai-search"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-security-guard",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-security-guard",
+      "image": "plugins/ai-security-guard",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-security-guard:2.0.2",
+      "digest": "sha256:35d20f77302c9a40196f8b2ba4f88029c0e11066fa51249720b949eb44ba2758",
+      "inputHash": "sha256:05eba37814c7db35cc31bfceed78e37031cc733afafc0d24c64b20ea08149650",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-security-guard:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d8405eba37814c7db35cc31bfceed78e37031cc733afafc0d24c64b20ea08149650@sha256:35d20f77302c9a40196f8b2ba4f88029c0e11066fa51249720b949eb44ba2758",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-security-guard",
+          "resourceDir": "ai-security-guard",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-security-guard/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "7ce1414b0f54ccbbeaa81d2aee6be9fe7df185b9d09278f826aeb2ef829fbfd3"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-security-guard/README.md",
+                "targetPath": "README.md",
+                "sha256": "0e87815c2b589308e40e049ecf3e682c5131e6339598f3dd717cc15d6f2b7bec"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-security-guard/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "ed496ff87a10d17b5246cbbc9779cc8366674b1549eed90a63039c3dd82e2663"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-security-guard",
+          "httpPath": "ai-security-guard"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-statistics",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-statistics",
+      "image": "plugins/ai-statistics",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-statistics:2.0.2",
+      "digest": "sha256:52b322ce5d13085e937fe087c40672554d56a915dd80d68636f2d052824a6eb1",
+      "inputHash": "sha256:86ce0a98ba0f6af74b2885b326fde5d66f193ca0803c0938acb8cca5be5835b7",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-statistics:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d8486ce0a98ba0f6af74b2885b326fde5d66f193ca0803c0938acb8cca5be5835b7@sha256:52b322ce5d13085e937fe087c40672554d56a915dd80d68636f2d052824a6eb1",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-statistics",
+          "resourceDir": "ai-statistics",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-statistics/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "ecac61641b8e874a5500a71d16b3238179f610743561827436f2febe0e7641e7"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-statistics/README.md",
+                "targetPath": "README.md",
+                "sha256": "19fc2f8a2f1097f9d9f2772886fb8b5bafb9cf5bb1beffc70b58094d13311886"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-statistics/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "99e323591f347496a38456da65ced3f5cb30b7cf3b1090b8ed7487b2026a66d0"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-statistics",
+          "httpPath": "ai-statistics"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-token-ratelimit",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-token-ratelimit",
+      "image": "plugins/ai-token-ratelimit",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-token-ratelimit:2.0.2",
+      "digest": "sha256:23cf33b7381a3a2cfd84bc2e6b5ddefd2355db26c69399dce7c7fe94d17e6cfd",
+      "inputHash": "sha256:7df4dc75c9fa776799d7238d0d309eec545a936a3f66517a23170f677cc7e70a",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-token-ratelimit:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d847df4dc75c9fa776799d7238d0d309eec545a936a3f66517a23170f677cc7e70a@sha256:23cf33b7381a3a2cfd84bc2e6b5ddefd2355db26c69399dce7c7fe94d17e6cfd",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-token-ratelimit",
+          "resourceDir": "ai-token-ratelimit",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-token-ratelimit/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "482107852c0be578076840e5c51943251e606b41728e7a93b68254298ce4dad6"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-token-ratelimit/README.md",
+                "targetPath": "README.md",
+                "sha256": "81d96123e6c0466de34956530356c5ca07e7ef656293b514738fb365189473ba"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-token-ratelimit/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "a53950796c2ff267c7262cf3a831644f303fd653a7fea354c14c6769d22c3c1a"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-token-ratelimit",
+          "httpPath": "ai-token-ratelimit"
+        }
+      }
+    },
+    {
+      "logicalId": "ai-transformer",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ai-transformer",
+      "image": "plugins/ai-transformer",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-transformer:2.0.2",
+      "digest": "sha256:688049fd7e20db241e842a43b0496d5682e34fb0e891513cbb65d217e46179ea",
+      "inputHash": "sha256:82a4b1152fab58f79fd8239a8f85bb87fed9a8acec957bc6c2fd8e16f3f1f06a",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ai-transformer:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d8482a4b1152fab58f79fd8239a8f85bb87fed9a8acec957bc6c2fd8e16f3f1f06a@sha256:688049fd7e20db241e842a43b0496d5682e34fb0e891513cbb65d217e46179ea",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ai-transformer",
+          "resourceDir": "ai-transformer",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-transformer/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "9366b4928fd157c8e0c25fac876ee3c595025ad2e4abd8f3ba15fa74a645ceea"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-transformer/README.md",
+                "targetPath": "README.md",
+                "sha256": "34d1523201be16aecc73665af4257f5ce29d0b8e85f68277a748c41af915c08a"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ai-transformer/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "2ff073e9dc69815cc9254a656f81902404447761184c1dca78edf87b422ed906"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ai-transformer",
+          "httpPath": "ai-transformer"
+        }
+      }
+    },
+    {
+      "logicalId": "cache-control",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/cache-control",
+      "image": "plugins/cache-control",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cache-control:2.0.2",
+      "digest": "sha256:6ed1d152f9cd775a90a376e5e6e4aba4746390e15973464593bed7ea9e0e8187",
+      "inputHash": "sha256:a5dbe09aef37a0b82b893b539bba38257b9b9fdb84ba8fcbac8713c1603f1064",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/cache-control:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84a5dbe09aef37a0b82b893b539bba38257b9b9fdb84ba8fcbac8713c1603f1064@sha256:6ed1d152f9cd775a90a376e5e6e4aba4746390e15973464593bed7ea9e0e8187",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "cache-control",
+          "resourceDir": "cache-control",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/cache-control/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "344c19e3f4a6d3cb2311ad346e2bfdf0ca3a09399537cb9530a49164d78009e0"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/cache-control/README.md",
+                "targetPath": "README.md",
+                "sha256": "9b1faf5542c02b70ef59e10541c63456ec2e7caa985b90ce654e91cef77c8650"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/cache-control/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "fc1c2e98361dab3cce98ddc1d52712a484a8b5f723285bb5e87552a2b88e7555"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "cache-control",
+          "httpPath": "cache-control"
+        }
+      }
+    },
+    {
+      "logicalId": "cluster-key-rate-limit",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/cluster-key-rate-limit",
+      "image": "plugins/cluster-key-rate-limit",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cluster-key-rate-limit:2.0.2",
+      "digest": "sha256:1d30a8d4b445e9129a6af5e4e80abf740d03d3de9dc677f6663ffc55f11bfeb3",
+      "inputHash": "sha256:df3fe8720ee52661571a793221ac59f4363df2dd7eacdec891f0a75a2521ca16",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/cluster-key-rate-limit:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84df3fe8720ee52661571a793221ac59f4363df2dd7eacdec891f0a75a2521ca16@sha256:1d30a8d4b445e9129a6af5e4e80abf740d03d3de9dc677f6663ffc55f11bfeb3",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "cluster-key-rate-limit",
+          "resourceDir": "cluster-key-rate-limit",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/cluster-key-rate-limit/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "77324f022126fe4211183beaa3d9d3f6c66a59198c569997dbb2514030b555b0"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/cluster-key-rate-limit/README.md",
+                "targetPath": "README.md",
+                "sha256": "b960b9a878ac6466995d33658ab6a66fac73ba93e12037dc49b7db2e26e1eda5"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/cluster-key-rate-limit/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "49791f87ce1599b0425259c7d4d9989768045c78e81560433bcf137d0655e3b0"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "cluster-key-rate-limit",
+          "httpPath": "cluster-key-rate-limit"
+        }
+      }
+    },
+    {
+      "logicalId": "cors",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/cors",
+      "image": "plugins/cors",
+      "version": "2.0.3",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/cors:2.0.3",
+      "digest": "sha256:52fad4afbee06b455c053387ea0aadd231b30983d1cf2ba7efaf6591e811d304",
+      "inputHash": "sha256:6fa9cbc3f1d8ec5e04bd824b045359865511ba36a28958a8fb3936e01d993c9c",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/cors:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d846fa9cbc3f1d8ec5e04bd824b045359865511ba36a28958a8fb3936e01d993c9c@sha256:52fad4afbee06b455c053387ea0aadd231b30983d1cf2ba7efaf6591e811d304",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "cors",
+          "resourceDir": "cors",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/cors/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "bc5317892338e1ac756be8dcd95d9d4b538276d4bbdc5bc4d49a4b385d485def"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/cors/README.md",
+                "targetPath": "README.md",
+                "sha256": "9a22711f04604fba2ebb520c47a619ee3e990c837de8562c96cc6b9741c8a5f8"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/cors/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "d5f74764c286e3827e4b62ab02fcd6bf5fad74fc22115161354da85d7f6a62e2"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "cors",
+          "httpPath": "cors"
+        }
+      }
+    },
+    {
+      "logicalId": "de-graphql",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/de-graphql",
+      "image": "plugins/de-graphql",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/de-graphql:2.0.2",
+      "digest": "sha256:b539f52bc4df7a72cc40fb4b1d6e472ae48f0e823172985349a2c6f1c5d84b79",
+      "inputHash": "sha256:a90f0a348e16009bbd75998d26684fa75dae5441330f4613c0c9142f7f4c5209",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/de-graphql:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84a90f0a348e16009bbd75998d26684fa75dae5441330f4613c0c9142f7f4c5209@sha256:b539f52bc4df7a72cc40fb4b1d6e472ae48f0e823172985349a2c6f1c5d84b79",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "de-graphql",
+          "resourceDir": "de-graphql",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/de-graphql/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "0f2b45f743297ed923b711cb53781d206c0be2ed82b894c82b3f1e051121070c"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/de-graphql/README.md",
+                "targetPath": "README.md",
+                "sha256": "c0adccbcd642586f9e04d1dd62e24877bee81f16f55a3c96cbc5589bdec7963f"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/de-graphql/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "695c5abbe4f34de4b52af0ed9e22533009456589d65ee112ad541d6779877c52"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "de-graphql",
+          "httpPath": "de-graphql"
+        }
+      }
+    },
+    {
+      "logicalId": "ext-auth",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ext-auth",
+      "image": "plugins/ext-auth",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ext-auth:2.0.2",
+      "digest": "sha256:9a1ff34bcf397e845cd7be98e1f1c203b90b25534db9ba97ba5ccb3245a44b3e",
+      "inputHash": "sha256:b001ec9a729f8419f46dc612f5db6e965ddb15e5a98f1593ee892b0254db1d3f",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ext-auth:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84b001ec9a729f8419f46dc612f5db6e965ddb15e5a98f1593ee892b0254db1d3f@sha256:9a1ff34bcf397e845cd7be98e1f1c203b90b25534db9ba97ba5ccb3245a44b3e",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ext-auth",
+          "resourceDir": "ext-auth",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ext-auth/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "6208bf6d750f03acde615d225b8a70c47481a763075e393b3b5c48598de2542c"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ext-auth/README.md",
+                "targetPath": "README.md",
+                "sha256": "12b972cc3e9efbfdae096ec0e8d959ae226531ad390d9abae69f6602062091e1"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ext-auth/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "3026082686454067aa06b8bf4b286b8dded881863092ba26cc58cc66cc7d2c87"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ext-auth",
+          "httpPath": "ext-auth"
+        }
+      }
+    },
+    {
+      "logicalId": "frontend-gray",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/frontend-gray",
+      "image": "plugins/frontend-gray",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/frontend-gray:2.0.2",
+      "digest": "sha256:73edaaa909c8060202a20b88e7dd87e98675f036738818eb38f9b0508d4e416d",
+      "inputHash": "sha256:4b99eaef2562663f0764f2aa19beffcbbfe1f4f9572f816b2dccbad893e81525",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/frontend-gray:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d844b99eaef2562663f0764f2aa19beffcbbfe1f4f9572f816b2dccbad893e81525@sha256:73edaaa909c8060202a20b88e7dd87e98675f036738818eb38f9b0508d4e416d",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "frontend-gray",
+          "resourceDir": "frontend-gray",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/frontend-gray/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "d3ec4bfc85f3ae49d58345ed713cb5f995965d915b492a12195cb507ab1604ca"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/frontend-gray/README.md",
+                "targetPath": "README.md",
+                "sha256": "33e9348e29b37789d36a01aca0925e9e07b2134e948e285dccfd825bd02770a1"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/frontend-gray/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "dbc19cfb4ad5b52a075d26f6e99d5a3b44db5095589075863d9318df19c4fab4"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "frontend-gray",
+          "httpPath": "frontend-gray"
+        }
+      }
+    },
+    {
+      "logicalId": "geo-ip",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/geo-ip",
+      "image": "plugins/geo-ip",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/geo-ip:2.0.2",
+      "digest": "sha256:ddd61865c900e77e604cb2ef16d05d00a0f0d47f4e0e9d17baa7e478a7eb927e",
+      "inputHash": "sha256:6f22ee3ebfd7dfbdd783c614b24a423e50e6527b304ca6aa3b31423ea4a19277",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/geo-ip:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d846f22ee3ebfd7dfbdd783c614b24a423e50e6527b304ca6aa3b31423ea4a19277@sha256:ddd61865c900e77e604cb2ef16d05d00a0f0d47f4e0e9d17baa7e478a7eb927e",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "geo-ip",
+          "resourceDir": "geo-ip",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/geo-ip/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "b4b5ec8aa3c48d93d809bf580e02578b5d012883025d7299a846d81169e2a51a"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/geo-ip/README.md",
+                "targetPath": "README.md",
+                "sha256": "67408e4c774ec7c0123b33cb706da8636d7aed89564bcd51e03e7604697ec46c"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/geo-ip/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "5992b0ac4ffe63d8e7997e8c7af54ea7ef230b014569ea6a2c5301694d887f99"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "geo-ip",
+          "httpPath": "geo-ip"
+        }
+      }
+    },
+    {
+      "logicalId": "gw-error-format",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/gw-error-format",
+      "image": "plugins/gw-error-format",
+      "version": "1.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/gw-error-format:1.0.1",
+      "digest": "sha256:084c83571b07ae9c929ed1b267581c5a33268ef7d06d6755b775365296d4a94d",
+      "inputHash": "sha256:abee913b761acd3dd0b0c0c801de46083e4f4124f48f9539235eb63aa0c2a9c3",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/gw-error-format:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84abee913b761acd3dd0b0c0c801de46083e4f4124f48f9539235eb63aa0c2a9c3@sha256:084c83571b07ae9c929ed1b267581c5a33268ef7d06d6755b775365296d4a94d",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "gw-error-format",
+          "resourceDir": "gw-error-format",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/gw-error-format/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "26ec5ed1220efb0b5bbcec6342a48fcfc01ad68321b56c1e28a99301fd34a7b1"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/gw-error-format/README.md",
+                "targetPath": "README.md",
+                "sha256": "9d083183ae678c2089ad676745893c2c2697d85a3e5253fffd44c5738aa017a8"
+              },
+              {
+                "sourcePath": "plugins/release/console/gw-error-format/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "f4a795ef32d155264089d9336c28f1948dcafaed1408cabd7902f5c0d651645c"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "logicalId": "hmac-auth-apisix",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/hmac-auth-apisix",
+      "image": "plugins/hmac-auth-apisix",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/hmac-auth-apisix:2.0.2",
+      "digest": "sha256:1f746fa0425b4848c274e2d60cf6f4de67000773bf145a2776851c0197e299ec",
+      "inputHash": "sha256:9e50f63b85b07f953361597c356364422ca83b17c473cc69b4d9a3b5f5aad27c",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/hmac-auth-apisix:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d849e50f63b85b07f953361597c356364422ca83b17c473cc69b4d9a3b5f5aad27c@sha256:1f746fa0425b4848c274e2d60cf6f4de67000773bf145a2776851c0197e299ec",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "hmac-auth-apisix",
+          "resourceDir": "hmac-auth-apisix",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/hmac-auth-apisix/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "d8ea901848ebe354471297840a4ba8da3f50fff55998e85bd656396b5608815b"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/hmac-auth-apisix/README.md",
+                "targetPath": "README.md",
+                "sha256": "fa896d226dd92482ca1e273387831f4048445499aa0410935da242369f6ebd97"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/hmac-auth-apisix/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "c076fc3d6ca469456f6d53b3b8b61e4e87c721999217445e47fc19d63d6aa34d"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "logicalId": "ip-restriction",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/ip-restriction",
+      "image": "plugins/ip-restriction",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ip-restriction:2.0.2",
+      "digest": "sha256:28f9bcbe1fffe6fe82e21838574cc6728597f7bb0e0c2e4ab0d9dbfc3059390b",
+      "inputHash": "sha256:13d74d4b48182ace5439231f770568d2b45d5574ff87722e5686b8c5dc4d368d",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/ip-restriction:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d8413d74d4b48182ace5439231f770568d2b45d5574ff87722e5686b8c5dc4d368d@sha256:28f9bcbe1fffe6fe82e21838574cc6728597f7bb0e0c2e4ab0d9dbfc3059390b",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "ip-restriction",
+          "resourceDir": "ip-restriction",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ip-restriction/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "a3dd47a0f22b54bf560470de6e68ec163844b3de8c4cfe5f203864d11eef0f3a"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ip-restriction/README.md",
+                "targetPath": "README.md",
+                "sha256": "db580cad8eb73240bb0296d6e20eed3613fd20716462096163ff6bd5b3df50e7"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/ip-restriction/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "b9ac3ac76d68bd82cb660e71f8be104b669af961b7ab95d5945fbe72d1278d99"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "ip-restriction",
+          "httpPath": "ip-restriction"
+        }
+      }
+    },
+    {
+      "logicalId": "json-converter",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/jsonrpc-converter",
+      "image": "plugins/jsonrpc-converter",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/jsonrpc-converter:2.0.2",
+      "digest": "sha256:deac8f3205b475ff4ca9af71aad0e19f4b7e35c4b1d22e8a3c22c615b32b113a",
+      "inputHash": "sha256:120ffaeed5d302458126cd17085e58ed11d279f3cb4de44d73d34214ccc6be4f",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/json-converter:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84120ffaeed5d302458126cd17085e58ed11d279f3cb4de44d73d34214ccc6be4f@sha256:deac8f3205b475ff4ca9af71aad0e19f4b7e35c4b1d22e8a3c22c615b32b113a",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "json-converter",
+          "resourceDir": "json-converter",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/json-converter/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "3fbdeddef013793e6e7537bc528002a3b6a70b81eca0daf497da4b8b8b6f7bb5"
+              },
+              {
+                "sourcePath": "plugins/release/console/json-converter/README.md",
+                "targetPath": "README.md",
+                "sha256": "b873b07c9a1ada5b5c455d3fac638aa2a4612395a4c2d1ddc2c72b3370c9b03a"
+              },
+              {
+                "sourcePath": "plugins/release/console/json-converter/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "012f1ec63b7a0b6d917794caf1bdcfb4cfc6a7690121cf1e160a0a08655dbaed"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "json-converter",
+          "httpPath": "json-converter",
+          "aliases": [
+            "jsonrpc-converter"
+          ]
+        }
+      }
+    },
+    {
+      "logicalId": "log-request-response",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/log-request-response",
+      "image": "plugins/log-request-response",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/log-request-response:1.0.0",
+      "digest": "sha256:a3e915062ffc312b79f67dd1a6a8a9e199f6f6d2bdd2afb4b272327552b68731",
+      "inputHash": "sha256:a076d10112b8dd54dd29c0e6bafa8c958f03b5e7802b79adcc7e5b5e76df75ce",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/log-request-response:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a04356a076d10112b8dd54dd29c0e6bafa8c958f03b5e7802b79adcc7e5b5e76df75ce@sha256:a3e915062ffc312b79f67dd1a6a8a9e199f6f6d2bdd2afb4b272327552b68731",
+      "provenanceMode": "candidate",
+      "backfill": true,
+      "consumers": {
+        "console": {
+          "propertyKey": "log-request-response",
+          "resourceDir": "log-request-response",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/log-request-response/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "abde6165cccf91e78d66b9e19ae8284a4226f9464e7424037f58557a21bdaf50"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/log-request-response/README.md",
+                "targetPath": "README.md",
+                "sha256": "fdb7250d121b614db91f0d43983a738096e35c7f389422aef0f7378b54b0a828"
+              },
+              {
+                "sourcePath": "plugins/release/console/log-request-response/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "8fc32e95e06d659107fbde5962ceda12c78f4c9776449ec3f6468fe249b9ca5d"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "logicalId": "mcp-router",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/mcp-router",
+      "image": "plugins/mcp-router",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-router:2.0.2",
+      "digest": "sha256:dbab71e85d3e73d60ccca402971c8be2ae0c52a4ff65907ec0b1a3e89eb5bd2a",
+      "inputHash": "sha256:1a8e89d8fbe2f680a360b680b0811d6204eb9213ebc1cb88e47ca06c7e240234",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/mcp-router:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d841a8e89d8fbe2f680a360b680b0811d6204eb9213ebc1cb88e47ca06c7e240234@sha256:dbab71e85d3e73d60ccca402971c8be2ae0c52a4ff65907ec0b1a3e89eb5bd2a",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "mcp-router",
+          "resourceDir": "mcp-router",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/mcp-router/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "b00360eba38939b01dd96b943e994b0d92c55a18248eaa0fd732c548fb477d05"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/mcp-router/README_ZH.md",
+                "targetPath": "README.md",
+                "sha256": "9ebba52208d391bc088b3348e5ce197b654381a3e1f68ec7aa4ae5645d6cdcf6"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/mcp-router/README.md",
+                "targetPath": "README_EN.md",
+                "sha256": "fc2d9557522e45c2b616eb002d5b7ab6a40d4744c325d31c55895a0f5fc39758"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "logicalId": "mcp-server",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/mcp-server",
+      "image": "plugins/mcp-server",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-server:2.0.2",
+      "digest": "sha256:349bdae540510eb7b1f736ce90d97ff80cf830b342cd5fc3086978d1f84015e2",
+      "inputHash": "sha256:bfcf317472364c38ae9ec69e99a854f53a1c69721296be744e09e82c7f1bc19f",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/mcp-server:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84bfcf317472364c38ae9ec69e99a854f53a1c69721296be744e09e82c7f1bc19f@sha256:349bdae540510eb7b1f736ce90d97ff80cf830b342cd5fc3086978d1f84015e2",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "mcp-server",
+          "resourceDir": "mcp-server",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/mcp-server/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "7a4bc50af6572203626bee097850aae770e71098fbac3c90f79f30067b887cfe"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/mcp-server/README.md",
+                "targetPath": "README.md",
+                "sha256": "9b5226a877d174ec3e735050e189d6ff669f16f95ca6d490f945095ac6d440c7"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/mcp-server/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "33c89610906161e2f525aa824ca3c0212bdb225519efb4eb9c1d3fc55599062b"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "mcp-server",
+          "httpPath": "mcp-server"
+        }
+      }
+    },
+    {
+      "logicalId": "model-mapper",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/model-mapper",
+      "image": "plugins/model-mapper",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-mapper:2.0.2",
+      "digest": "sha256:827aa8045fb7ead8e2a21e13ff3be30d0f3588b14e7142f994df25a08a07fc2f",
+      "inputHash": "sha256:c1d00714fc6049fa8c15ff71cb22f4bc7f066904477c507e4ff16ec84e9df112",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/model-mapper:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84c1d00714fc6049fa8c15ff71cb22f4bc7f066904477c507e4ff16ec84e9df112@sha256:827aa8045fb7ead8e2a21e13ff3be30d0f3588b14e7142f994df25a08a07fc2f",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "model-mapper",
+          "resourceDir": "model-mapper",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/model-mapper/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "1b3a06e647f57c84a0a8be5222a3543000d1dd4bfe33e8c57590e72293db3e91"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/model-mapper/README.md",
+                "targetPath": "README.md",
+                "sha256": "9ae64570f720e106736ba96a141156d2fb93c905d1797bb8d0a4a8cfb088c31b"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/model-mapper/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "ac10e3ab48c25c04662213450d52454bbc7994360c2de6e5c7f5d67bb333627c"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "model-mapper",
+          "httpPath": "model-mapper"
+        }
+      }
+    },
+    {
+      "logicalId": "model-router",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/model-router",
+      "image": "plugins/model-router",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-router:2.0.2",
+      "digest": "sha256:931c93e71523b1a3363c1ee925fd14fd24de0eaf314c936a113dcc84fc012bd3",
+      "inputHash": "sha256:44ffc127d449dcaa4104cd34aa7cca9fb9f16b37c7b66a50b9d9065df9c3565c",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/model-router:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d8444ffc127d449dcaa4104cd34aa7cca9fb9f16b37c7b66a50b9d9065df9c3565c@sha256:931c93e71523b1a3363c1ee925fd14fd24de0eaf314c936a113dcc84fc012bd3",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "model-router",
+          "resourceDir": "model-router",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/model-router/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "7be7a23db581b4a5c5dac72b3c0484dd7a75428f58d5f97f8a22f20dd934e806"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/model-router/README.md",
+                "targetPath": "README.md",
+                "sha256": "8244393021824e31d234e4b8e62f65143a83cbad9ce4cfcbdf2c45c515826e68"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/model-router/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "d1354c915f2be8f9115c27cb59b4a8b0c500bee438c3956e8a86b26af6966ad5"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "model-router",
+          "httpPath": "model-router"
+        }
+      }
+    },
+    {
+      "logicalId": "nginx-rewrite-compatible",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/nginx-rewrite-compatible",
+      "image": "plugins/nginx-rewrite-compatible",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/nginx-rewrite-compatible:1.0.0",
+      "digest": "sha256:9ab80c0c7e9abd30e099ef92964efc0291f1161175ea2a6873019d1d47a06922",
+      "inputHash": "sha256:86f264839078b3a0f7df7afd26863023417117dffb1c11475a987bf36d2265bc",
+      "sourceCommit": "7774663e4353652f5c3cecd7e98a1a43b05ee15c",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/nginx-rewrite-compatible:2435592884d1aed342dd41aa9ed162be217c57261113320e020e50f306a0435686f264839078b3a0f7df7afd26863023417117dffb1c11475a987bf36d2265bc@sha256:9ab80c0c7e9abd30e099ef92964efc0291f1161175ea2a6873019d1d47a06922",
+      "provenanceMode": "candidate",
+      "backfill": true,
+      "consumers": {
+        "console": {
+          "propertyKey": "nginx-rewrite-compatible",
+          "resourceDir": "nginx-rewrite-compatible",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/nginx-rewrite-compatible/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "1071a2c29f25f1513117e2ee6891857618aab3f30194f885ea660412458c7605"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/nginx-rewrite-compatible/README.md",
+                "targetPath": "README.md",
+                "sha256": "cfa7a2fbf89eed3cfa90869a3e3f8201697c95472ac8fb660e0de2a2f32840b1"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/nginx-rewrite-compatible/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "fe06fbd011ef589883957b8dac2e471ebd969bc0a15e3013ed6e8827e0b22029"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "logicalId": "oidc",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/oidc",
+      "image": "plugins/oidc",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/oidc:2.0.2",
+      "digest": "sha256:ae87fa3152e3a306dc57430bcc81db5a4cc247d9fce8d322c7aca0db39d2b1b7",
+      "inputHash": "sha256:d2f86a6f996c2fa5c562ee67160b70d3c14931d01df690231f1c00d66bfb1884",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/oidc:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84d2f86a6f996c2fa5c562ee67160b70d3c14931d01df690231f1c00d66bfb1884@sha256:ae87fa3152e3a306dc57430bcc81db5a4cc247d9fce8d322c7aca0db39d2b1b7",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "oidc",
+          "resourceDir": "oidc",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/oidc/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "0b14902953625996a2ea6e5fd6f8f6190bd2b966569da47521023383576eaa07"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/oidc/README.md",
+                "targetPath": "README.md",
+                "sha256": "fa5e298187b14cbffcbed4ae3016b759985064ef61e6e9286f08b0a114e3fd55"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/oidc/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "df85a5c0211d9457b9d0b33db0c38bf60d84656c13b37cc824c8f839a10d5c5e"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "oidc",
+          "httpPath": "oidc"
+        }
+      }
+    },
+    {
+      "logicalId": "opa",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/opa",
+      "image": "plugins/opa",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/opa:2.0.2",
+      "digest": "sha256:05eb4a666bcfd4c09df9724a6f47adcbccf7e6aaa2602d8cecf9bcc39c87199c",
+      "inputHash": "sha256:0edf1f20c4db62b86721d0f7c4952491d9f3bd35d316e16924bf883b85c93b5c",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/opa:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d840edf1f20c4db62b86721d0f7c4952491d9f3bd35d316e16924bf883b85c93b5c@sha256:05eb4a666bcfd4c09df9724a6f47adcbccf7e6aaa2602d8cecf9bcc39c87199c",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "opa",
+          "resourceDir": "opa",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/opa/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "7b4e9547acef763c3616e4e9b5810b9f4af31c02c94e070fd03c976cb70bc0e4"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/opa/README.md",
+                "targetPath": "README.md",
+                "sha256": "c701c8b38a7911030b3f83079b6ee3181caea5ff96725d3ea8a48d37d403a86e"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/opa/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "7e4fbc8b81ea42cb31de0760f1051b401c2319e39e28a18e87991e548b4bdc47"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "opa",
+          "httpPath": "opa"
+        }
+      }
+    },
+    {
+      "logicalId": "request-validation",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/request-validation",
+      "image": "plugins/request-validation",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/request-validation:2.0.2",
+      "digest": "sha256:9eb8e1e54442ce198344fe986002e08444971831bfa6c3ed1b28253b080fdd63",
+      "inputHash": "sha256:dbc96346c1187b10fc9f3e3c312948204468e8a4ea9e573e58778d57c862634b",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/request-validation:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84dbc96346c1187b10fc9f3e3c312948204468e8a4ea9e573e58778d57c862634b@sha256:9eb8e1e54442ce198344fe986002e08444971831bfa6c3ed1b28253b080fdd63",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "request-validation",
+          "resourceDir": "request-validation",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/request-validation/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "e08f8d935ef7da131c7d3042654e9626c40d8d698eaf59768724b44c68066570"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/request-validation/README.md",
+                "targetPath": "README.md",
+                "sha256": "af13d0f9249f125df463578566a3a1e4890b56586aa8ff0715ac1f2ad0128188"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/request-validation/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "97b63c0554d5bd57b9a17d29ab48223bf97b080f646547e3e8195b27431f3868"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "request-validation",
+          "httpPath": "request-validation"
+        }
+      }
+    },
+    {
+      "logicalId": "response-cache",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/response-cache",
+      "image": "plugins/response-cache",
+      "version": "1.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/response-cache:1.0.2",
+      "digest": "sha256:8bb717ad18e000961ffd7498583c99ffdbde96fae452c20e37e649e5f26b69d4",
+      "inputHash": "sha256:c1e823741757fd1b339e46a4f95e6f06f466814d126bf3a96b74d6d5459e47da",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/response-cache:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84c1e823741757fd1b339e46a4f95e6f06f466814d126bf3a96b74d6d5459e47da@sha256:8bb717ad18e000961ffd7498583c99ffdbde96fae452c20e37e649e5f26b69d4",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "response-cache",
+          "resourceDir": "response-cache",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/response-cache/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "d16817a650a724cac0e39b01522f759c9ef158240d4f91f4b60339152c2d6700"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/response-cache/README.md",
+                "targetPath": "README.md",
+                "sha256": "057c46050edbbd3c192e1ac37fbc6dbaa703b3a2295bd9930e42eb34e93f5610"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/response-cache/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "cd8a8e1870783ef0e827cfa730aac74e2fdb23f86bf61874629a25c20a2e080e"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "logicalId": "simple-jwt-auth",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/simple-jwt-auth",
+      "image": "plugins/simple-jwt-auth",
+      "version": "1.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/simple-jwt-auth:1.0.2",
+      "digest": "sha256:64ef257ec7b96ec859108a527103936b0ce46ac354c15d637dc9917dbc203e00",
+      "inputHash": "sha256:f4030e746338be0f33b3b42f6f891ba34c1e03e0552fb44888281ab8cface754",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/simple-jwt-auth:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84f4030e746338be0f33b3b42f6f891ba34c1e03e0552fb44888281ab8cface754@sha256:64ef257ec7b96ec859108a527103936b0ce46ac354c15d637dc9917dbc203e00",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "simple-jwt-auth",
+          "resourceDir": "simple-jwt-auth",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress",
+            "files": [
+              {
+                "sourcePath": "plugins/release/console/simple-jwt-auth/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "9bb20f8c9605c8bb223f1b6d8b62db333de35dd6e99edf795b2e7ca26137fb2f"
+              },
+              {
+                "sourcePath": "plugins/wasm-go/extensions/simple-jwt-auth/README.md",
+                "targetPath": "README.md",
+                "sha256": "51d6ca11c72db254affe7b43b25ef6cd96dfc4b5aa37fa281d03f1a68a3da566"
+              },
+              {
+                "sourcePath": "plugins/release/console/simple-jwt-auth/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "ff07ee2ed988153105b7869e5ff0f3e2f46097d66ffa17f0524801ad08aa7b38"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "logicalId": "traffic-tag",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/traffic-tag",
+      "image": "plugins/traffic-tag",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/traffic-tag:2.0.2",
+      "digest": "sha256:024d6ee1550520da576ffaa5dc84ee461100af1a96eebc7356f3c53384fc421c",
+      "inputHash": "sha256:438d43e0ad37a060ed4fafa969b76726f0b591d09a4e02961e272e4f7c3764ce",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/traffic-tag:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84438d43e0ad37a060ed4fafa969b76726f0b591d09a4e02961e272e4f7c3764ce@sha256:024d6ee1550520da576ffaa5dc84ee461100af1a96eebc7356f3c53384fc421c",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "traffic-tag",
+          "resourceDir": "traffic-tag",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/traffic-tag/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "8a1512116848e04f740f3a7e0e831e2c64396f1cf714b371a3987a3d38b084ac"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/traffic-tag/README.md",
+                "targetPath": "README.md",
+                "sha256": "af7918c6d3b0c41ddd40be5cb2e402aec1637dae2187adda0652cf414ceb62d9"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/traffic-tag/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "082e211700bcf3014b81c42c4b01934fdfa6e62bb73ae2d80d1cd56d9047b9c3"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "traffic-tag",
+          "httpPath": "traffic-tag"
+        }
+      }
+    },
+    {
+      "logicalId": "transformer",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/transformer",
+      "image": "plugins/transformer",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/transformer:2.0.2",
+      "digest": "sha256:1b44f169b3838ec39642f79deb4917e4fb088979aebbd8bb6a113c3fb612c2f8",
+      "inputHash": "sha256:660ecf60aa63eefa35b9ebfd6c626952262afc8fa91bca5efd64ffa6a626b6d1",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/transformer:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d84660ecf60aa63eefa35b9ebfd6c626952262afc8fa91bca5efd64ffa6a626b6d1@sha256:1b44f169b3838ec39642f79deb4917e4fb088979aebbd8bb6a113c3fb612c2f8",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "transformer",
+          "resourceDir": "transformer",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/transformer/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "872b8d7282790d4a445d0a10ca5107aaa190c423bb54bd29c4a6b94ae3f08a4c"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/transformer/README.md",
+                "targetPath": "README.md",
+                "sha256": "fd3710eea3a8a3d0de0b4a66df7dc217933d6ed1955e11b94fa79388d4e57d13"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/transformer/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "9700f3a7b639963252bae1e55dcaeddf6794c60f44f35011c3984bac9d79a39d"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "transformer",
+          "httpPath": "transformer"
+        }
+      }
+    },
+    {
+      "logicalId": "waf",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/waf",
+      "image": "plugins/waf",
+      "version": "2.0.2",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/waf:2.0.2",
+      "digest": "sha256:a52a1e1517d9ddd6f561ff4cef9bbc8302a26c6243aa373bc9bd5c5d07398a8a",
+      "inputHash": "sha256:1c1a92f7bd3e310ad886392165bfb5155bff29b5dd28d5a7e98071c665fe7380",
+      "sourceCommit": "d3c0721dc8f67f5f126d6d374abca676622e330a",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/waf:be3ed1e97fedaa164d046b1a8f547e9d046165749c85794aa03b755f59b06d841c1a92f7bd3e310ad886392165bfb5155bff29b5dd28d5a7e98071c665fe7380@sha256:a52a1e1517d9ddd6f561ff4cef9bbc8302a26c6243aa373bc9bd5c5d07398a8a",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "waf",
+          "resourceDir": "waf",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/waf/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "1919b9d9b13f7b33977987b43be291c025d731221c8893599f90456145c01924"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/waf/README.md",
+                "targetPath": "README.md",
+                "sha256": "0a002d09f4d2238a034341b3ce754fec3b7ec93df3e5cf70b3383ac178774974"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/waf/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "e6da07d6474a22540222e1fea42c692629a8516b8e1270aa0b749a6cdbd0f27d"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "waf",
+          "httpPath": "waf"
+        }
+      }
+    }
+  ]
+}

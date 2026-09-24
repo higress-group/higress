@@ -19,6 +19,7 @@ import (
 	"path"
 
 	"ext-auth/config"
+	"ext-auth/expr"
 	"ext-auth/util"
 
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -44,6 +45,12 @@ const (
 	HeaderFailureModeAllow = "x-envoy-auth-failure-mode-allowed"
 )
 
+var (
+	replaceHttpRequestHeader = proxywasm.ReplaceHttpRequestHeader
+	resumeHttpRequest        = proxywasm.ResumeHttpRequest
+	sendResponse             = util.SendResponse
+)
+
 // Currently, x-forwarded-xxx headers only apply for forward_auth.
 const (
 	HeaderOriginalMethod   = "x-original-method"
@@ -55,8 +62,10 @@ const (
 )
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.ExtAuthConfig) types.Action {
-	// If the request's domain and path match the MatchRules, skip authentication
-	if config.MatchRules.IsAllowedByMode(ctx.Host(), ctx.Method(), wrapper.GetRequestPathWithoutQuery()) {
+	matchRequest, err := buildMatchRequest(ctx, config.MatchRules)
+	if err != nil {
+		log.Errorf("failed to read request headers for match rules: %v; continuing external authorization", err)
+	} else if !config.MatchRules.Matches(matchRequest) {
 		ctx.DontReadRequestBody()
 		return types.ActionContinue
 	}
@@ -75,6 +84,24 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.ExtAuthConfig) 
 
 	ctx.DontReadRequestBody()
 	return checkExtAuth(ctx, config, nil, types.HeaderStopAllIterationAndWatermark)
+}
+
+func buildMatchRequest(ctx wrapper.HttpContext, matchRules expr.MatchRules) (expr.RequestAttributes, error) {
+	request := expr.RequestAttributes{
+		Domain: ctx.Host(),
+		Method: ctx.Method(),
+		Path:   wrapper.GetRequestPathWithoutQuery(),
+	}
+	if !matchRules.RequiresRequestHeaders() {
+		return request, nil
+	}
+
+	requestHeaders, err := proxywasm.GetHttpRequestHeaders()
+	if err != nil {
+		return expr.RequestAttributes{}, err
+	}
+	request.HeaderNames = expr.NewHeaderNameSet(requestHeaders)
+	return request, nil
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config config.ExtAuthConfig, body []byte) types.Action {
@@ -102,7 +129,8 @@ func checkExtAuth(ctx wrapper.HttpContext, cfg config.ExtAuthConfig, body []byte
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			if statusCode != http.StatusOK {
 				log.Errorf("failed to call ext auth server, status: %d", statusCode)
-				callExtAuthServerErrorHandler(cfg, statusCode, responseHeaders, responseBody)
+				// The callback only runs after the request has been paused for the external auth response.
+				callExtAuthServerErrorHandler(cfg, statusCode, responseHeaders, responseBody, true)
 				return
 			}
 
@@ -120,7 +148,8 @@ func checkExtAuth(ctx wrapper.HttpContext, cfg config.ExtAuthConfig, body []byte
 	if err != nil {
 		log.Errorf("failed to call ext auth server: %v", err)
 		// Since the handling logic for call errors and HTTP status code 500 is the same, we directly use 500 here.
-		callExtAuthServerErrorHandler(cfg, http.StatusInternalServerError, nil, nil)
+		// Dispatch errors return ActionContinue below, so there is no paused request to resume.
+		callExtAuthServerErrorHandler(cfg, http.StatusInternalServerError, nil, nil, false)
 		return types.ActionContinue
 	}
 	return pauseAction
@@ -175,12 +204,14 @@ func buildExtAuthRequestHeaders(ctx wrapper.HttpContext, cfg config.ExtAuthConfi
 	return extAuthReqHeaders
 }
 
-func callExtAuthServerErrorHandler(config config.ExtAuthConfig, statusCode int, extAuthRespHeaders http.Header, responseBody []byte) {
+func callExtAuthServerErrorHandler(config config.ExtAuthConfig, statusCode int, extAuthRespHeaders http.Header, responseBody []byte, requestPaused bool) {
 	if statusCode >= http.StatusInternalServerError && config.FailureModeAllow {
 		if config.FailureModeAllowHeaderAdd {
-			_ = proxywasm.ReplaceHttpRequestHeader(HeaderFailureModeAllow, "true")
+			_ = replaceHttpRequestHeader(HeaderFailureModeAllow, "true")
 		}
-		proxywasm.ResumeHttpRequest()
+		if requestPaused {
+			resumeHttpRequest()
+		}
 		return
 	}
 
@@ -200,5 +231,5 @@ func callExtAuthServerErrorHandler(config config.ExtAuthConfig, statusCode int, 
 	if statusCode >= http.StatusInternalServerError {
 		statusToUse = int(config.StatusOnError)
 	}
-	_ = util.SendResponse(uint32(statusToUse), "ext-auth.unauthorized", respHeaders, responseBody)
+	_ = sendResponse(uint32(statusToUse), "ext-auth.unauthorized", respHeaders, responseBody)
 }

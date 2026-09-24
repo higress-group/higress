@@ -14,9 +14,7 @@
 
 package validator
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestValidateConfig_RestServer(t *testing.T) {
 	// Test REST server configuration
@@ -150,6 +148,31 @@ func TestValidateConfig_InvalidConfig(t *testing.T) {
 
 	if result.Error == nil {
 		t.Errorf("Expected validation error, but got nil")
+	}
+}
+
+func TestValidateConfig_AcceptsAdmissibleUnsupportedRESTInputSchemaSemantics(t *testing.T) {
+	configJSON := `{
+		"server":{"name":"test-rest-server"},
+		"tools":[{
+			"name":"test-tool",
+			"description":"A test tool",
+			"args":[{
+				"name":"items",
+				"description":"Items",
+				"type":"array",
+				"items":{"oneOf":[{"type":"string"},{"type":"integer"}]}
+			}],
+			"requestTemplate":{"url":"https://api.example.com/test","method":"POST"}
+		}]
+	}`
+
+	result, err := ValidateConfig(configJSON)
+	if err != nil {
+		t.Fatalf("ValidateConfig returned error: %v", err)
+	}
+	if !result.IsValid || result.Error != nil {
+		t.Fatalf("admissible unsupported schema unexpectedly rejected: %#v", result)
 	}
 }
 

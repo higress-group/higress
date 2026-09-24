@@ -8,8 +8,8 @@
 
 <div align="center">
     
-[![Build Status](https://github.com/alibaba/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/alibaba/higress/actions)
-[![license](https://img.shields.io/github/license/alibaba/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
+[![Build Status](https://github.com/higress-group/higress/actions/workflows/build-and-test.yaml/badge.svg?branch=main)](https://github.com/higress-group/higress/actions)
+[![license](https://img.shields.io/github/license/higress-group/higress.svg)](https://www.apache.org/licenses/LICENSE-2.0.html)
 [![CNCF Sandbox](https://img.shields.io/badge/CNCF-Sandbox-30638E?logo=linuxfoundation&logoColor=white)](https://www.cncf.io/projects/)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12667/badge)](https://www.bestpractices.dev/projects/12667)
 
@@ -37,7 +37,7 @@ Higress 是一款云原生 API 网关，内核基于 Istio 和 Envoy，可以用
 
 ### 核心使用场景
 
-Higress 的 AI 网关能力支持国内外所有[主流模型供应商](https://github.com/alibaba/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider)和基于 vllm/ollama 等自建的 DeepSeek 模型。同时，Higress 支持通过插件方式托管 MCP (Model Context Protocol) 服务器，使 AI Agent 能够更容易地调用各种工具和服务。借助 [openapi-to-mcp 工具](https://github.com/higress-group/openapi-to-mcpserver)，您可以快速将 OpenAPI 规范转换为远程 MCP 服务器进行托管。Higress 提供了对 LLM API 和 MCP API 的统一管理。
+Higress 的 AI 网关能力支持国内外所有[主流模型供应商](https://github.com/higress-group/higress/tree/main/plugins/wasm-go/extensions/ai-proxy/provider)和基于 vllm/ollama 等自建的 DeepSeek 模型。同时，Higress 支持通过插件方式托管 MCP (Model Context Protocol) 服务器，使 AI Agent 能够更容易地调用各种工具和服务。借助 [openapi-to-mcp 工具](https://github.com/higress-group/openapi-to-mcpserver)，您可以快速将 OpenAPI 规范转换为远程 MCP 服务器进行托管。Higress 提供了对 LLM API 和 MCP API 的统一管理。
 
 **🌟 立即体验 [https://mcp.higress.ai/](https://mcp.higress.ai/)** 基于 Higress 托管的远程 MCP 服务器:
 
@@ -45,13 +45,10 @@ Higress 的 AI 网关能力支持国内外所有[主流模型供应商](https://
 
 ### 生产环境采用
 
-Higress 在阿里内部为解决 Tengine reload 对长连接业务有损，以及 gRPC/Dubbo 负载均衡能力不足而诞生。在阿里云内部，Higress 的 AI 网关能力支撑了通义千问 APP、通义百炼模型工作室、机器学习 PAI 平台等核心 AI 应用。同时服务国内头部的 AIGC 企业（如零一万物），以及 AI 产品（如 FastGPT）。阿里云基于 Higress 构建了云原生 API 网关产品，为大量企业客户提供 99.99% 的网关高可用保障服务能力。
-
-可以点下方按钮安装企业版 Higress: 
-
-[![Deploy on AlibabaCloud](https://img.alicdn.com/imgextra/i4/O1CN01tHRaNm22hflDqxKV5_!!6000000007152-55-tps-170-40.svg)](https://www.aliyun.com/product/apigateway?spm=higress-github.topbar.0.0.0)
-
-如果您使用开源的Higress并希望获得企业级支持，可以联系johnlanni的邮箱：zty98751@alibaba-inc.com或社交媒体账号（微信号：nomadao，钉钉号：chengtanzty）。添加好友时请备注Higress :）
+Higress 最初在阿里内部为解决网关 reload 对长连接业务有损，以及
+gRPC/Dubbo 负载均衡能力不足而诞生。Higress 目前作为厂商中立的 CNCF
+项目由社区共同开发，并已被多个行业的组织采用。公开采用者和使用场景见
+[`ADOPTERS.md`](https://github.com/higress-group/community/blob/main/ADOPTERS.md)。
 
 ## Summary
 
@@ -80,7 +77,8 @@ docker run -d --rm --name higress-ai -v ${PWD}:/data \
 - 8080 端口：网关 HTTP 协议入口
 - 8443 端口：网关 HTTPS 协议入口
 
-**Higress 的所有 Docker 镜像都一直使用自己独享的仓库，不受 Docker Hub 境内访问受限的影响**
+**Higress 通过多个区域的项目镜像仓库发布镜像。使用者也可以将镜像同步到
+自己控制的仓库，并通过 Helm 的 `global.hub` 参数进行配置。**
 
 > 如果从 `higress-registry.cn-hangzhou.cr.aliyuncs.com` 拉取镜像超时，可以尝试使用以下镜像加速源：
 > 
@@ -102,13 +100,13 @@ docker run -d --rm --name higress-ai -v ${PWD}:/data \
 
 K8s 下使用 Helm 部署等其他安装方式可以参考官网 [Quick Start 文档](https://higress.cn/docs/latest/user/quickstart/)。
 
-如果您是在云上部署，推荐使用[企业版](https://www.aliyun.com/product/apigateway?spm=higress-github.topbar.0.0.0)
-
 ## 使用场景
 
 - **AI 网关**:
 
   Higress 能够用统一的协议对接国内外所有 LLM 模型厂商，同时具备丰富的 AI 可观测、多模型负载均衡/fallback、AI token 流控、AI 缓存等能力：
+
+  Higress 同时也是 [Gateway API Inference Extension 一致性实现](https://gateway-api-inference-extension.sigs.k8s.io/implementations/gateways/#higress)，支持在 Kubernetes 上进行推理感知路由。
 
   ![](https://img.alicdn.com/imgextra/i1/O1CN01fNnhCp1cV8mYPRFeS_!!6000000003605-0-tps-1080-608.jpg)
 
@@ -128,9 +126,9 @@ K8s 下使用 Helm 部署等其他安装方式可以参考官网 [Quick Start �
 
 - **Kubernetes Ingress 网关**:
 
-  Higress 可以作为 K8s 集群的 Ingress 入口网关, 并且兼容了大量 K8s Nginx Ingress 的注解，可以从 K8s Nginx Ingress 快速平滑迁移到 Higress。
+  Higress 已被 [Kubernetes Ingress Controllers 官方文档](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/)收录，可作为 K8s 集群的 Ingress 入口网关，并且兼容大量 K8s Nginx Ingress 注解，可以从 K8s Nginx Ingress 快速平滑迁移到 Higress。
   
-  支持 [Gateway API](https://gateway-api.sigs.k8s.io/) 标准，支持用户从 Ingress API 平滑迁移到 Gateway API。
+  Higress 支持 [Gateway API](https://gateway-api.sigs.k8s.io/) 标准，并被列为 [Gateway API 一致性实现](https://gateway-api.sigs.k8s.io/implementations/#higress)，支持用户从 Ingress API 平滑迁移到 Gateway API。
 
   相比 ingress-nginx，资源开销大幅下降，路由变更生效速度有十倍提升：
 
@@ -226,12 +224,12 @@ K8s 下使用 Helm 部署等其他安装方式可以参考官网 [Quick Start �
 ### 行为准则（Code of Conduct）
 
 Higress 社区遵循 [**CNCF Code of Conduct**](https://github.com/cncf/foundation/blob/main/code-of-conduct.md)。
-项目采纳的行为准则详见 [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md)，参与社区前请先阅读。
+项目采纳的行为准则详见 [`CODE_OF_CONDUCT.md`](https://github.com/higress-group/community/blob/main/CODE_OF_CONDUCT.md)，参与社区前请先阅读。
 
 ### 治理与维护者
 
-项目治理、维护者名单与贡献模型分别记录于 [`GOVERNANCE.md`](./GOVERNANCE.md) 与
-[`MAINTAINERS.md`](./MAINTAINERS.md)，新贡献者请先查阅
+项目治理、维护者名单与贡献模型分别记录于 [`GOVERNANCE.md`](https://github.com/higress-group/community/blob/main/GOVERNANCE.md) 与
+[`MAINTAINERS.md`](https://github.com/higress-group/community/blob/main/MAINTAINERS.md)，新贡献者请先查阅
 [`CONTRIBUTING_CN.md`](./CONTRIBUTING_CN.md)。
 
 ### 安全
@@ -261,13 +259,13 @@ Higress 社区遵循 [**CNCF Code of Conduct**](https://github.com/cncf/foundati
 
 ### 贡献者
 
-<a href="https://github.com/alibaba/higress/graphs/contributors">
-  <img alt="contributors" src="https://contrib.rocks/image?repo=alibaba/higress"/>
+<a href="https://github.com/higress-group/higress/graphs/contributors">
+  <img alt="contributors" src="https://contrib.rocks/image?repo=higress-group/higress"/>
 </a>
 
 ### Star History
 
-[![Star History](https://api.star-history.com/svg?repos=alibaba/higress&type=Date)](https://star-history.com/#alibaba/higress&Date)
+[![Star History](https://api.star-history.com/svg?repos=higress-group/higress&type=Date)](https://star-history.com/#higress-group/higress&Date)
 
 ---
 

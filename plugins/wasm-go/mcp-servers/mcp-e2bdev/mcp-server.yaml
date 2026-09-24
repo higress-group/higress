@@ -4,6 +4,7 @@ server:
     apiKey: ""
 tools:
   - name: create_sandbox
+    legacyOnly: true
     description: Create e2b sandbox and return sandboxID
     args:
     - name: templateID

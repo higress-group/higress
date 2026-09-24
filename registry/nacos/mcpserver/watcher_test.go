@@ -35,7 +35,7 @@ import (
 )
 
 type mockWatcher struct {
-	watcher
+	*watcher
 	mock.Mock
 }
 
@@ -50,6 +50,7 @@ func newTestWatcher(cache memory.Cache, opts ...WatcherOption) mockWatcher {
 	}
 
 	w.NacosRefreshInterval = int64(DefaultRefreshInterval)
+	w.NacosTimeout = DefaultNacosTimeout
 
 	for _, opt := range opts {
 		opt(w)
@@ -59,7 +60,42 @@ func newTestWatcher(cache memory.Cache, opts ...WatcherOption) mockWatcher {
 		w.NacosNamespace = w.NacosNamespaceId
 	}
 
-	return mockWatcher{watcher: *w, Mock: mock.Mock{}}
+	return mockWatcher{watcher: w, Mock: mock.Mock{}}
+}
+
+func TestWithNacosTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout int64
+		want    int64
+	}{
+		{
+			name:    "uses custom timeout",
+			timeout: 45000,
+			want:    45000,
+		},
+		{
+			name:    "uses default for zero timeout",
+			timeout: 0,
+			want:    DefaultNacosTimeout,
+		},
+		{
+			name:    "uses default for negative timeout",
+			timeout: -1,
+			want:    DefaultNacosTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &watcher{}
+			WithNacosTimeout(tt.timeout)(w)
+
+			if w.NacosTimeout != tt.want {
+				t.Fatalf("expected timeout %d, got %d", tt.want, w.NacosTimeout)
+			}
+		})
+	}
 }
 
 func testCallback(msc *McpServerConfig) memory.Cache {

@@ -1,0 +1,11 @@
+{
+  "name": "higress-mcp-server-typescript-interop",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0"
+  }
+}

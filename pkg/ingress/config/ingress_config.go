@@ -41,6 +41,7 @@ import (
 	"istio.io/istio/pkg/cluster"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/constants"
+	gatewaykube "istio.io/istio/pkg/config/gateway/kube"
 	"istio.io/istio/pkg/config/schema/collection"
 	"istio.io/istio/pkg/config/schema/gvk"
 	"istio.io/istio/pkg/log"
@@ -56,6 +57,7 @@ import (
 	extlisterv1 "github.com/alibaba/higress/v2/client/pkg/listers/extensions/v1alpha1"
 	netlisterv1 "github.com/alibaba/higress/v2/client/pkg/listers/networking/v1"
 	"github.com/alibaba/higress/v2/pkg/cert"
+	higressconfig "github.com/alibaba/higress/v2/pkg/config"
 	higressconst "github.com/alibaba/higress/v2/pkg/config/constants"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/annotations"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/common"
@@ -375,6 +377,13 @@ func (m *IngressConfig) listFromIngressControllers(typ config.GroupVersionKind, 
 }
 
 func (m *IngressConfig) listFromGatewayControllers(typ config.GroupVersionKind, namespace string) []config.Config {
+	if typ == gvk.WasmPlugin {
+		var virtualServices []config.Config
+		for _, gatewayController := range m.remoteGatewayControllers {
+			virtualServices = append(virtualServices, gatewayController.List(gvk.VirtualService, namespace)...)
+		}
+		return m.convertBuiltinInferenceEndpointPicker(virtualServices)
+	}
 	var configs []config.Config
 	for _, gatewayController := range m.remoteGatewayControllers {
 		if clusterConfigs := gatewayController.List(typ, namespace); clusterConfigs != nil {
@@ -382,6 +391,52 @@ func (m *IngressConfig) listFromGatewayControllers(typ config.GroupVersionKind, 
 		}
 	}
 	return configs
+}
+
+// Keep the synthetic resource name valid for the namespace/name resource key
+// used by MCP when forwarding it to Pilot.
+const builtinInferenceEndpointPickerPluginName = "higress-internal-ai-endpoint-picker"
+
+func (m *IngressConfig) convertBuiltinInferenceEndpointPicker(virtualServices []config.Config) []config.Config {
+	routeSet := sets.New[string]()
+	for _, virtualService := range virtualServices {
+		configs, ok := virtualService.Extra[constants.ConfigExtraPerRouteRuleInferencePoolConfigs].(map[string]gatewaykube.InferencePoolRouteRuleConfig)
+		if !ok {
+			continue
+		}
+		for routeName, routeConfig := range configs {
+			if routeConfig.Mode == gatewaykube.InferencePoolEndpointPickerModeBuiltin {
+				routeSet.Insert(routeName)
+			}
+		}
+	}
+	if routeSet.Len() == 0 {
+		return nil
+	}
+	routeNames := sets.SortedList(routeSet)
+	rules := make([]*_struct.Value, 0, len(routeNames))
+	for _, routeName := range routeNames {
+		rules = append(rules, &_struct.Value{Kind: &_struct.Value_StructValue{StructValue: &_struct.Struct{Fields: map[string]*_struct.Value{
+			"_match_route_": {Kind: &_struct.Value_ListValue{ListValue: &_struct.ListValue{Values: []*_struct.Value{
+				{Kind: &_struct.Value_StringValue{StringValue: routeName}},
+			}}}},
+		}}}})
+	}
+	pluginConfig := &_struct.Struct{Fields: map[string]*_struct.Value{
+		"_rules_": {Kind: &_struct.Value_ListValue{ListValue: &_struct.ListValue{Values: rules}}},
+	}}
+	return []config.Config{{
+		Meta: config.Meta{GroupVersionKind: gvk.WasmPlugin, Name: builtinInferenceEndpointPickerPluginName, Namespace: m.namespace},
+		Spec: &extensions.WasmPlugin{
+			Selector: &istiotype.WorkloadSelector{MatchLabels: map[string]string{
+				m.commonOptions.GatewaySelectorKey: m.commonOptions.GatewaySelectorValue,
+			}},
+			Url:          higressconfig.AIEndpointPickerPluginURL,
+			PluginName:   "ai-endpoint-picker",
+			PluginConfig: pluginConfig,
+			FailStrategy: extensions.FailStrategy_FAIL_OPEN,
+		},
+	}}
 }
 
 func (m *IngressConfig) createWrapperConfigs(configs []config.Config) []common.WrapperConfig {

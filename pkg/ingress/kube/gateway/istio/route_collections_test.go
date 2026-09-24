@@ -27,6 +27,40 @@ import (
 	"istio.io/istio/pkg/test"
 )
 
+func TestSelectOldestRoute(t *testing.T) {
+	stop := test.NewStop(t)
+	key := "default/gateway/tcp/*"
+	baseVirtualServices := krt.NewStaticCollection[RouteWithKey](nil, []RouteWithKey{
+		{
+			Config: &config.Config{
+				Meta: config.Meta{Name: "newer", Namespace: "default", CreationTimestamp: time.Unix(2, 0)},
+				Spec: &istio.VirtualService{Hosts: []string{"newer"}},
+			},
+			Key: key,
+		},
+		{
+			Config: &config.Config{
+				Meta: config.Meta{Name: "older", Namespace: "default", CreationTimestamp: time.Unix(1, 0)},
+				Spec: &istio.VirtualService{Hosts: []string{"older"}},
+			},
+			Key: key,
+		},
+	}, krt.WithStop(stop), krt.WithName("tcp-routes"))
+
+	selected := selectOldestRoute(baseVirtualServices, krt.WithStop(stop), krt.WithName("selected-tcp-route"))
+	selected.WaitUntilSynced(stop)
+	got := selected.List()
+	if len(got) != 1 {
+		t.Fatalf("expected one selected VirtualService, got %d", len(got))
+	}
+	if got[0].Name != strings.ReplaceAll(key, "/", "~") {
+		t.Fatalf("expected deterministic name %q, got %q", strings.ReplaceAll(key, "/", "~"), got[0].Name)
+	}
+	if hosts := got[0].Spec.(*istio.VirtualService).Hosts; len(hosts) != 1 || hosts[0] != "older" {
+		t.Fatalf("expected oldest route to be selected, got hosts %v", hosts)
+	}
+}
+
 func TestMergeHTTPRoutesMergesInferencePoolExtra(t *testing.T) {
 	stop := test.NewStop(t)
 	routeKey := "default/gateway/example.com"
@@ -122,7 +156,7 @@ func TestMergeHTTPRoutesMergesInferencePoolExtra(t *testing.T) {
 	if len(gotInferenceConfigs) != 2 {
 		t.Fatalf("expected 2 merged InferencePool configs, got %d: %v", len(gotInferenceConfigs), gotInferenceConfigs)
 	}
-	if gotInferenceConfigs[baseRouteName].FQDN != baseInferenceConfigs[baseRouteName].FQDN {
+	if gotInferenceConfigs[baseRouteName].FQDN != baseInferenceConfigs[baseRouteName].FQDN || gotInferenceConfigs[baseRouteName].Mode != "" {
 		t.Fatalf("expected base route InferencePool config to be preserved, got %v", gotInferenceConfigs[baseRouteName])
 	}
 	if gotInferenceConfigs[otherRouteName].FQDN != otherInferenceConfigs[otherRouteName].FQDN {
@@ -136,5 +170,15 @@ func TestMergeHTTPRoutesMergesInferencePoolExtra(t *testing.T) {
 	}
 	if _, found := baseInferenceConfigs[otherRouteName]; found {
 		t.Fatalf("expected base InferencePool config map not to be mutated by merge")
+	}
+}
+
+func TestMixedEndpointPickerModesUseUniqueHTTPRouteNames(t *testing.T) {
+	first := &istio.HTTPRoute{Name: "default/mixed-picker-route"}
+	second := &istio.HTTPRoute{Name: first.Name}
+	disambiguateHTTPRouteName(first, 0, 0)
+	disambiguateHTTPRouteName(second, 1, 0)
+	if first.Name == second.Name {
+		t.Fatalf("expected unique mixed-mode route names, both were %q", first.Name)
 	}
 }

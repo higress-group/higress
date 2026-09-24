@@ -19,6 +19,8 @@ func TestGetCookieValue(t *testing.T) {
 		{`cna=pf_9be76347560439f3b87daede1b485e37; userid=222`, "userid", "222"},
 		{`uid=333`, "uid", "333"},
 		{`cna=pf_9be76347560439f3b87daede1b485e37;`, "uid", ""},
+		{`user; other=alice`, "user", ""},
+		{`user=alice=admin; other=value`, "user", "alice=admin"},
 	}
 	for _, test := range tests {
 		testName := test.cookie

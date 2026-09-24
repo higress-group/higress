@@ -94,12 +94,12 @@ func ExtractAndRemoveIncomingCredential(scheme SecurityScheme) (string, error) {
 
 		if scheme.Scheme == "bearer" {
 			if !strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
-				return "", fmt.Errorf("incoming Authorization header is not Bearer auth: %s", authHeader)
+				return "", errors.New("incoming Authorization header is not Bearer auth")
 			}
 			credentialValue = strings.TrimSpace(authHeader[len("Bearer "):])
 		} else if scheme.Scheme == "basic" {
 			if !strings.HasPrefix(strings.ToLower(authHeader), "basic ") {
-				return "", fmt.Errorf("incoming Authorization header is not Basic auth: %s", authHeader)
+				return "", errors.New("incoming Authorization header is not Basic auth")
 			}
 			credentialValue = strings.TrimSpace(authHeader[len("Basic "):])
 		} else {
@@ -132,7 +132,7 @@ func ExtractAndRemoveIncomingCredential(scheme SecurityScheme) (string, error) {
 
 			requestURL, parseErr := url.Parse(pathHeader)
 			if parseErr != nil {
-				return "", fmt.Errorf("failed to parse incoming :path header '%s': %v", pathHeader, parseErr)
+				return "", errors.New("failed to parse incoming request path")
 			}
 
 			queryValues := requestURL.Query()

@@ -3,8 +3,8 @@ package server
 import (
 	"fmt"
 
-	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
+	"github.com/higress-group/wasm-go/pkg/log"
 )
 
 // ComposedMCPServer represents a server composed of tools from other servers.
@@ -51,9 +51,11 @@ func (cs *ComposedMCPServer) GetMCPTools() map[string]Tool {
 
 			composedToolName := fmt.Sprintf("%s%s%s", originalServerName, consts.ToolSetNameSplitter, originalToolName)
 			composedTools[composedToolName] = &DescriptiveTool{
-				description:  toolInfo.Description,
-				inputSchema:  toolInfo.InputSchema,
-				outputSchema: toolInfo.OutputSchema, // New field for MCP Protocol Version 2025-06-18
+				description:             toolInfo.Description,
+				inputSchema:             toolInfo.InputSchema,
+				inputSchemaSerializable: toolInfo.inputSchemaSerializable,
+				outputSchema:            toolInfo.OutputSchema, // New field for MCP Protocol Version 2025-06-18
+				legacyOnly:              toolInfo.LegacyOnly,
 			}
 		}
 	}
@@ -89,9 +91,11 @@ func (cs *ComposedMCPServer) Clone() Server {
 // DescriptiveTool is a placeholder Tool implementation for ComposedMCPServer.
 // Its Call and Create methods should never be invoked.
 type DescriptiveTool struct {
-	description  string
-	inputSchema  map[string]any
-	outputSchema map[string]any // New field for MCP Protocol Version 2025-06-18
+	description             string
+	inputSchema             map[string]any
+	inputSchemaSerializable bool
+	outputSchema            map[string]any // New field for MCP Protocol Version 2025-06-18
+	legacyOnly              bool
 }
 
 // Create for DescriptiveTool should not be called.
@@ -99,9 +103,11 @@ func (dt *DescriptiveTool) Create(params []byte) Tool {
 	log.Errorf("DescriptiveTool.Create called for tool used in ComposedMCPServer. This should not happen.")
 	// Return a new instance to fulfill the interface, though it's an error state.
 	return &DescriptiveTool{
-		description:  dt.description,
-		inputSchema:  dt.inputSchema,
-		outputSchema: dt.outputSchema,
+		description:             dt.description,
+		inputSchema:             dt.inputSchema,
+		inputSchemaSerializable: dt.inputSchemaSerializable,
+		outputSchema:            dt.outputSchema,
+		legacyOnly:              dt.legacyOnly,
 	}
 }
 
@@ -121,7 +127,15 @@ func (dt *DescriptiveTool) InputSchema() map[string]any {
 	return dt.inputSchema
 }
 
+func (dt *DescriptiveTool) capturedInputSchema() (map[string]any, bool) {
+	return dt.inputSchema, dt.inputSchemaSerializable
+}
+
 // OutputSchema returns the tool's output schema (MCP Protocol Version 2025-06-18).
 func (dt *DescriptiveTool) OutputSchema() map[string]any {
 	return dt.outputSchema
+}
+
+func (dt *DescriptiveTool) legacyOnlyInputSchema() bool {
+	return dt.legacyOnly
 }

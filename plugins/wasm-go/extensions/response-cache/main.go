@@ -71,13 +71,18 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, c config.PluginConfig) types.
 
 		ctx.SetContext(CACHE_KEY_CONTEXT_KEY, key)
 
-		if err := CheckCacheForKey(key, ctx, c); err != nil {
+		err := CheckCacheForKey(key, ctx, c)
+		if err != nil {
 			log.Errorf("[onHttpRequestHeaders] check cache for key: %s failed, error: %v", key, err)
 		}
 		ctx.DisableReroute()
 		_ = proxywasm.RemoveHttpRequestHeader("Accept-Encoding")
 		ctx.DontReadRequestBody()
-		return types.ActionContinue
+		if err != nil {
+			return types.ActionContinue
+		}
+		// The Redis callback responds locally on a hit or resumes on a miss/error.
+		return types.HeaderStopAllIterationAndWatermark
 	}
 
 	// cache from request body but does not have a body or not application/json format
@@ -141,15 +146,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, c config.PluginConfig) types
 	}
 
 	// 状态码判断
-	found := false
-	respCode, _ := strconv.Atoi(status)
-	for _, element := range c.CacheResponseCode {
-		if element == int32(respCode) {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !isCacheableResponseStatus(status, c.CacheResponseCode) {
 		log.Infof("[onHttpResponseBody] status not allow to cached: %s", status)
 		proxywasm.AddHttpResponseHeader("x-cache-status", "skip")
 		ctx.DontReadResponseBody()
@@ -167,6 +164,19 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, c config.PluginConfig) types
 	}
 	ctx.SetResponseBodyBufferLimit(DEFAULT_MAX_BODY_BYTES)
 	return types.ActionContinue
+}
+
+func isCacheableResponseStatus(status string, allowed []int32) bool {
+	code, err := strconv.ParseInt(status, 10, 32)
+	if err != nil || code < 100 || code > 599 {
+		return false
+	}
+	for _, allowedCode := range allowed {
+		if allowedCode == int32(code) {
+			return true
+		}
+	}
+	return false
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, c config.PluginConfig, body []byte) types.Action {

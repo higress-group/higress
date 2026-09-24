@@ -16,7 +16,7 @@ package istio
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	gateway "sigs.k8s.io/gateway-api/apis/v1beta1"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 
 	higressconstants "github.com/alibaba/higress/v2/pkg/config/constants"
 )

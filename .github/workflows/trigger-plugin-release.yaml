@@ -1,0 +1,71 @@
+name: Trigger Plugin Release
+
+# One-click entry into the immutable plugin release pipeline: derives what
+# the maintainer used to type by hand (exact main-head target_ref and the
+# latest checked-in snapshot), then dispatches prepare-plugin-release.
+# Changed plugins auto-bump via plan/nextVersion; human review stays at the
+# prep-PR merge and the promote step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      gateway_version:
+        description: "Upcoming gateway version (e.g. 2.2.5)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: trigger-plugin-release
+  cancel-in-progress: false
+
+run-name: trigger-plugin-release ${{ inputs.gateway_version }}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Derive inputs and guard against duplicate snapshot
+        id: derive
+        env:
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+        run: |
+          set -euo pipefail
+          [[ "$GATEWAY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [ -f "plugins/release/snapshots/$GATEWAY_VERSION.json" ]; then
+            echo "snapshot for this gateway version already exists: plugins/release/snapshots/$GATEWAY_VERSION.json" >&2
+            exit 1
+          fi
+          target_ref=$(git rev-parse HEAD)
+          previous_snapshot=$(ls plugins/release/snapshots/*.json | sort -V | tail -1)
+          test -n "$previous_snapshot"
+          echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
+          echo "previous_snapshot=$previous_snapshot" >> "$GITHUB_OUTPUT"
+      - name: Dispatch prepare-plugin-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          TARGET_REF: ${{ steps.derive.outputs.target_ref }}
+          PREVIOUS_SNAPSHOT: ${{ steps.derive.outputs.previous_snapshot }}
+        run: |
+          set -euo pipefail
+          gh workflow run prepare-plugin-release.yaml --ref main \
+            -f gateway_version="$GATEWAY_VERSION" \
+            -f target_ref="$TARGET_REF" \
+            -f previous_snapshot="$PREVIOUS_SNAPSHOT" \
+            -f version_overrides='{}' \
+            -f dry_run=false
+          # dry_run must be passed explicitly: prepare's default is true and
+          # would no-op without candidate uploads or a preparation PR.
+          # gh workflow run returns before the run starts; resolve the newest
+          # run for the summary.
+          sleep 5
+          run_url=$(gh run list --workflow=prepare-plugin-release.yaml --limit 1 --json url --jq '.[0].url')
+          echo "Dispatched prepare-plugin-release for $GATEWAY_VERSION: $run_url" | tee -a "$GITHUB_STEP_SUMMARY"

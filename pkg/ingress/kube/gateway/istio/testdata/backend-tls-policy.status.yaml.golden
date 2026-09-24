@@ -1,4 +1,4 @@
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: bad-configmap-type
@@ -23,7 +23,7 @@ status:
       type: ResolvedRefs
     controllerName: istio.io/mesh-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: bad-service
@@ -49,7 +49,7 @@ status:
       type: ResolvedRefs
     controllerName: istio.io/mesh-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: existing-status
@@ -85,7 +85,7 @@ status:
       type: ResolvedRefs
     controllerName: istio.io/mesh-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: malformed-configmap
@@ -112,7 +112,7 @@ status:
       type: ResolvedRefs
     controllerName: istio.io/mesh-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: multi-host-service-entry
@@ -137,7 +137,7 @@ status:
       type: ResolvedRefs
     controllerName: istio.io/mesh-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: multi-host-service-entry-section-name
@@ -163,7 +163,7 @@ status:
       type: ResolvedRefs
     controllerName: istio.io/mesh-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: tls-external-service-https
@@ -207,7 +207,7 @@ status:
       type: ResolvedRefs
     controllerName: istio.io/mesh-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: tls-upstream-echo
@@ -232,7 +232,7 @@ status:
       type: ResolvedRefs
     controllerName: istio.io/mesh-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: tls-upstream-echo-https-merged-rules
@@ -309,7 +309,7 @@ status:
       type: ResolvedRefs
     controllerName: higress.io/gateway-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: unknown-configmap
@@ -336,7 +336,7 @@ status:
       type: ResolvedRefs
     controllerName: istio.io/mesh-controller
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: higress
@@ -349,7 +349,7 @@ status:
     status: "True"
     type: Accepted
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: gateway
@@ -400,7 +400,7 @@ status:
     - group: gateway.networking.k8s.io
       kind: GRPCRoute
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: http

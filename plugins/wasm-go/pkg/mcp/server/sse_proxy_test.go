@@ -131,10 +131,17 @@ func TestExtractEndpointURL(t *testing.T) {
 	}{
 		{
 			name:         "full URL",
-			endpointData: "http://example.com/messages?session=123",
+			endpointData: "http://backend.com/messages?session=123",
 			baseURL:      "http://backend.com/mcp",
-			want:         "http://example.com/messages?session=123",
+			want:         "http://backend.com/messages?session=123",
 			wantErr:      false,
+		},
+		{
+			name:         "cross-origin full URL",
+			endpointData: "https://other.example/messages",
+			baseURL:      "https://backend.com/mcp",
+			want:         "",
+			wantErr:      true,
 		},
 		{
 			name:         "path only",
@@ -362,10 +369,10 @@ func TestParseSSEMessage_UnknownFieldIgnored(t *testing.T) {
 // ExtractEndpointURL — edge cases not in the table
 // -----------------------------------------------------------------------------
 
-func TestExtractEndpointURL_HttpsPassthrough(t *testing.T) {
-	got, err := ExtractEndpointURL("https://other.example/x", "http://b.example")
+func TestExtractEndpointURL_NormalizesDefaultPortForSameOrigin(t *testing.T) {
+	got, err := ExtractEndpointURL("https://backend.example:443/x", "https://backend.example/mcp")
 	require.NoError(t, err)
-	assert.Equal(t, "https://other.example/x", got, "full https URL must pass through unchanged")
+	assert.Equal(t, "https://backend.example:443/x", got)
 }
 
 func TestExtractEndpointURL_EmptyEndpointData_PathOnlyBase(t *testing.T) {
@@ -471,4 +478,34 @@ func TestApplyProxyAuthenticationForSSE_PreservesFragment(t *testing.T) {
 	got, err := applyProxyAuthenticationForSSE(server, "K", "", &headers, "http://backend/path#section-2")
 	require.NoError(t, err)
 	assert.Contains(t, got, "#section-2", "fragment must round-trip")
+}
+
+func TestPrepareSSEUpstreamRequest_ForwardsExplicitAuthorizationOnSameOrigin(t *testing.T) {
+	server := NewMcpProxyServer("p")
+	server.SetMcpServerURL("https://backend.example/mcp")
+	headers := [][2]string{{"traceparent", "trace"}}
+	authInfo := &ProxyAuthInfo{ForwardAuthorization: "Bearer forwarded"}
+
+	got, err := prepareSSEUpstreamRequest(server, authInfo, &headers, "https://backend.example/messages")
+	require.NoError(t, err)
+	assert.Equal(t, "https://backend.example/messages", got)
+	authorization, exists := findHeader(headers, "Authorization")
+	require.True(t, exists)
+	assert.Equal(t, "Bearer forwarded", authorization)
+}
+
+func TestPrepareSSEUpstreamRequest_RejectsCrossOriginBeforeApplyingCredentials(t *testing.T) {
+	server := NewMcpProxyServer("p")
+	server.SetMcpServerURL("https://backend.example/mcp")
+	server.AddSecurityScheme(SecurityScheme{
+		ID: "K", Type: "apiKey", In: "header", Name: "X-Api-Key", DefaultCredential: "configured",
+	})
+	headers := [][2]string{{"traceparent", "trace"}}
+	authInfo := &ProxyAuthInfo{SecuritySchemeID: "K", Server: server}
+
+	got, err := prepareSSEUpstreamRequest(server, authInfo, &headers, "https://other.example/messages")
+	require.Error(t, err)
+	assert.Empty(t, got)
+	_, exists := findHeader(headers, "X-Api-Key")
+	assert.False(t, exists)
 }

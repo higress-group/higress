@@ -98,8 +98,19 @@ func TestRetryOnFailure_FromJson_defaults(t *testing.T) {
 	c.FromJson(gjson.Parse(`{"type":"openai","apiTokens":["t"],"retryOnFailure":{"enabled":true}}`))
 	require.True(t, c.IsRetryOnFailureEnabled())
 	assert.Equal(t, int64(1), c.retryOnFailure.maxRetries)
-	assert.Equal(t, int64(60*1000), c.retryOnFailure.retryTimeout)
+	assert.Equal(t, int64(defaultRetryFailureTimeout), c.retryOnFailure.retryTimeout)
 	assert.Equal(t, []string{"4.*", "5.*"}, c.retryOnFailure.retryOnStatus)
+}
+
+func TestRetryOnFailure_FromJson_explicitRetryTimeout(t *testing.T) {
+	var c ProviderConfig
+	c.FromJson(gjson.Parse(`{
+		"type":"openai",
+		"apiTokens":["t"],
+		"retryOnFailure":{"enabled":true,"retryTimeout":90000}
+	}`))
+	require.True(t, c.IsRetryOnFailureEnabled())
+	assert.Equal(t, int64(90000), c.retryOnFailure.retryTimeout)
 }
 
 func TestOnRequestFailed_offlineBranches(t *testing.T) {

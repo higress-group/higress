@@ -1,0 +1,58 @@
+apiVersion: 1.0.0
+info:
+  gatewayMinVersion: "2.1.3"
+  type: oss
+  category: ai
+  name: mcp-router
+  image: platform_wasm/mcp-router
+  title: MCP Router
+  x-title-i18n:
+    zh-CN: MCP 路由
+  description: Route namespaced MCP tool calls to their configured MCP server domain and path.
+  x-description-i18n:
+    zh-CN: 按工具名称中的服务器命名空间，将 MCP 工具调用路由到配置的域名与路径。
+  readmeUrl: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/mcp-router/README_ZH.md
+  x-readmeUrl-i18n:
+    en-US: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/mcp-router/README.md
+  version: 2.0.1
+  contact:
+    name: Higress Team
+    url: https://higress.io/
+    email: admin@higress.io
+spec:
+  phase: default
+  priority: 1000
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        servers:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              domain:
+                type: string
+              path:
+                type: string
+            required:
+              - name
+              - path
+      required:
+        - servers
+      example:
+        servers:
+          - name: random-user
+            domain: mcp.example.com
+            path: /mcp-servers/mcp-random-user-server
+  routeConfigSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        enable:
+          type: boolean
+          default: true
+      example:
+        enable: true

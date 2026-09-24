@@ -1,0 +1,57 @@
+apiVersion: 1.0.0
+info:
+  gatewayMinVersion: "2.0.0"
+  type: oss
+  category: auth
+  name: simple-jwt-auth
+  image: platform_wasm/simple-jwt-auth
+  title: Simple JWT Authentication
+  x-title-i18n:
+    zh-CN: 简易 JWT 认证
+  description: Validate a JWT from a configurable request header with a shared secret.
+  x-description-i18n:
+    zh-CN: 使用共享密钥校验指定请求头中的 JWT。
+  readmeUrl: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/simple-jwt-auth/README.md
+  x-readmeUrl-i18n:
+    en-US: https://github.com/alibaba/higress/blob/main/plugins/release/console/simple-jwt-auth/README_EN.md
+  version: 1.0.1
+  contact:
+    name: Higress Team
+    url: https://higress.io/
+    email: admin@higress.io
+spec:
+  phase: AUTHN
+  priority: 200
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        token_secret_key:
+          type: string
+          format: password
+          title: JWT Secret
+          x-title-i18n:
+            zh-CN: JWT 密钥
+        token_headers:
+          type: string
+          title: Token Header
+          x-title-i18n:
+            zh-CN: Token 请求头
+      required:
+        - token_secret_key
+        - token_headers
+      example:
+        token_secret_key: change-me
+        token_headers: authorization
+  routeConfigSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        token_secret_key:
+          type: string
+          format: password
+        token_headers:
+          type: string
+      required:
+        - token_secret_key
+        - token_headers

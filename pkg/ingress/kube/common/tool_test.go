@@ -154,6 +154,50 @@ func TestConstructRouteName(t *testing.T) {
 	}
 }
 
+func TestWrapperConfigForMcpDestinationProtocol(t *testing.T) {
+	base := &WrapperConfig{
+		AnnotationsConfig: &annotations.Ingress{
+			UpstreamTLS: &annotations.UpstreamTLSConfig{
+				BackendProtocol: "HTTPS",
+				EnableSNI:       true,
+				SNI:             "example.com",
+			},
+			Destination: &annotations.DestinationConfig{
+				Protocols: map[string]string{
+					"plain.example.com:80":   "HTTP",
+					"secure.example.com:443": "HTTPS",
+				},
+			},
+		},
+	}
+
+	httpWrapper := WrapperConfigForMcpDestination(base, &networking.HTTPRouteDestination{
+		Destination: &networking.Destination{
+			Host: "plain.example.com",
+			Port: &networking.PortSelector{Number: 80},
+		},
+	})
+	assert.Nil(t, httpWrapper.AnnotationsConfig.UpstreamTLS)
+	assert.NotSame(t, base, httpWrapper)
+	assert.NotNil(t, base.AnnotationsConfig.UpstreamTLS)
+
+	httpsWrapper := WrapperConfigForMcpDestination(base, &networking.HTTPRouteDestination{
+		Destination: &networking.Destination{
+			Host: "secure.example.com",
+			Port: &networking.PortSelector{Number: 443},
+		},
+	})
+	assert.NotSame(t, base, httpsWrapper)
+	assert.Equal(t, "HTTPS", httpsWrapper.AnnotationsConfig.UpstreamTLS.BackendProtocol)
+	assert.True(t, httpsWrapper.AnnotationsConfig.UpstreamTLS.EnableSNI)
+	assert.Equal(t, "example.com", httpsWrapper.AnnotationsConfig.UpstreamTLS.SNI)
+
+	plainWrapper := WrapperConfigForMcpDestination(base, &networking.HTTPRouteDestination{
+		Destination: &networking.Destination{Host: "other.example.com"},
+	})
+	assert.Same(t, base, plainWrapper)
+}
+
 func TestGenerateUniqueRouteName(t *testing.T) {
 	input := &WrapperHTTPRoute{
 		WrapperConfig: &WrapperConfig{
@@ -1024,6 +1068,104 @@ func TestSortIngressByCreationTime(t *testing.T) {
 	}
 
 	assert.Equal(t, expectedNamespace, actualNamespace, "When the names are the same, the configuration should be sorted by namespace")
+
+	mixedConfigs := []config.Config{
+		{
+			Meta: config.Meta{
+				Name:      "z-ingress",
+				Namespace: "a-ns",
+			},
+		},
+		{
+			Meta: config.Meta{
+				Name:      "a-ingress",
+				Namespace: "b-ns",
+			},
+		},
+	}
+
+	expectedNamespacedNames := []string{"a-ns/z-ingress", "b-ns/a-ingress"}
+
+	SortIngressByCreationTime(mixedConfigs)
+
+	var actualNamespacedNames []string
+	for _, cfg := range mixedConfigs {
+		actualNamespacedNames = append(actualNamespacedNames, cfg.Namespace+"/"+cfg.Name)
+	}
+
+	assert.Equal(t, expectedNamespacedNames, actualNamespacedNames, "When timestamps are the same, configurations should be sorted by namespace before name")
+
+	// When timestamps are equal and canary names share the base name as a
+	// prefix (e.g. "xx-hg" and "xx-hg-canary-*"), namespace-then-name ordering
+	// places the base ingress first. This is a lexicographic consequence, not
+	// active canary detection (see the non-prefixed counter-example below).
+	prefixedCanaryConfigs := []config.Config{
+		{
+			Meta: config.Meta{
+				Name:      "xx-hg-canary-by-header",
+				Namespace: "default",
+			},
+		},
+		{
+			Meta: config.Meta{
+				Name:      "xx-hg",
+				Namespace: "default",
+			},
+		},
+		{
+			Meta: config.Meta{
+				Name:      "xx-hg-canary-by-weight",
+				Namespace: "default",
+			},
+		},
+	}
+
+	expectedPrefixedCanary := []string{"xx-hg", "xx-hg-canary-by-header", "xx-hg-canary-by-weight"}
+
+	SortIngressByCreationTime(prefixedCanaryConfigs)
+
+	var actualPrefixedCanary []string
+	for _, cfg := range prefixedCanaryConfigs {
+		actualPrefixedCanary = append(actualPrefixedCanary, cfg.Name)
+	}
+
+	assert.Equal(t, expectedPrefixedCanary, actualPrefixedCanary, "When canary names share the base prefix, the base ingress sorts first as a lexicographic consequence (not active canary detection)")
+
+	// Counter-example: the sorter does NOT actively identify canary ingresses.
+	// Canary status is determined by annotations, not by name. When a canary
+	// ingress is named without the base name as a prefix and its name sorts
+	// before the base lexicographically, it will NOT be ordered after the base.
+	nonPrefixedCanaryConfigs := []config.Config{
+		{
+			Meta: config.Meta{
+				Name:      "xx-hg",
+				Namespace: "default",
+			},
+		},
+		{
+			Meta: config.Meta{
+				Name:      "canary-xx-hg-by-header",
+				Namespace: "default",
+			},
+		},
+		{
+			Meta: config.Meta{
+				Name:      "canary-xx-hg-by-weight",
+				Namespace: "default",
+			},
+		},
+	}
+
+	expectedNonPrefixedCanary := []string{"canary-xx-hg-by-header", "canary-xx-hg-by-weight", "xx-hg"}
+
+	SortIngressByCreationTime(nonPrefixedCanaryConfigs)
+
+	var actualNonPrefixedCanary []string
+	for _, cfg := range nonPrefixedCanaryConfigs {
+		actualNonPrefixedCanary = append(actualNonPrefixedCanary, cfg.Name)
+	}
+
+	assert.Equal(t, expectedNonPrefixedCanary, actualNonPrefixedCanary, "Without a shared name prefix, canary ingresses are not recognized and may sort before the base")
 }
 
 func TestPartMd5(t *testing.T) {
@@ -1182,4 +1324,133 @@ func TestGetLbStatusListV1AndV1Beta1(t *testing.T) {
 			{Hostname: tencentHostname},
 		}, lbiList)
 	})
+}
+
+
+func makeSortRoute(path string, pathType PathType, isDefault bool, match *networking.HTTPMatchRequest) *WrapperHTTPRoute {
+	r := &WrapperHTTPRoute{
+		HTTPRoute: &networking.HTTPRoute{
+			Match: nil,
+		},
+		WrapperConfig: &WrapperConfig{
+			Config: &config.Config{},
+		},
+		OriginPath:       path,
+		OriginPathType:   pathType,
+		IsDefaultBackend: isDefault,
+	}
+	if match != nil {
+		r.HTTPRoute.Match = []*networking.HTTPMatchRequest{match}
+	}
+	return r
+}
+
+func TestSortHTTPRoutes_EmptyMatchSlice(t *testing.T) {
+	routes := []*WrapperHTTPRoute{
+		makeSortRoute("/api/v1", Exact, false, nil),
+		makeSortRoute("/", Prefix, false, &networking.HTTPMatchRequest{}),
+	}
+	routes[0].HTTPRoute.Match = []*networking.HTTPMatchRequest{}
+
+	SortHTTPRoutes(routes)
+
+	if routes[0].OriginPath != "/api/v1" {
+		t.Errorf("expected /api/v1 first, got %s", routes[0].OriginPath)
+	}
+}
+
+func TestSortHTTPRoutes_NilMatchSlice(t *testing.T) {
+	routes := []*WrapperHTTPRoute{
+		makeSortRoute("/api/v1", Exact, false, &networking.HTTPMatchRequest{}),
+		makeSortRoute("/", Prefix, false, nil),
+	}
+
+	SortHTTPRoutes(routes)
+
+	if routes[0].OriginPath != "/api/v1" {
+		t.Errorf("expected /api/v1 first, got %s", routes[0].OriginPath)
+	}
+}
+
+func TestSortHTTPRoutes_DefaultBackendLast(t *testing.T) {
+	routes := []*WrapperHTTPRoute{
+		makeSortRoute("", "", true, nil),
+		makeSortRoute("/api", Prefix, false, &networking.HTTPMatchRequest{}),
+	}
+
+	SortHTTPRoutes(routes)
+
+	if !routes[1].IsDefaultBackend {
+		t.Errorf("expected default backend last")
+	}
+}
+
+func TestSortHTTPRoutes_AllCatchLast(t *testing.T) {
+	routes := []*WrapperHTTPRoute{
+		makeSortRoute("/", Prefix, false, nil),
+		makeSortRoute("/api/v1", Prefix, false, &networking.HTTPMatchRequest{}),
+	}
+
+	SortHTTPRoutes(routes)
+
+	if routes[0].OriginPath != "/api/v1" {
+		t.Errorf("expected /api/v1 first, got %s", routes[0].OriginPath)
+	}
+}
+
+func TestSortHTTPRoutes_ExactBeforePrefix(t *testing.T) {
+	routes := []*WrapperHTTPRoute{
+		makeSortRoute("/api", Prefix, false, &networking.HTTPMatchRequest{}),
+		makeSortRoute("/api", Exact, false, &networking.HTTPMatchRequest{}),
+	}
+
+	SortHTTPRoutes(routes)
+
+	if routes[0].OriginPathType != Exact {
+		t.Errorf("expected Exact first, got %s", routes[0].OriginPathType)
+	}
+}
+
+func TestSortHTTPRoutes_LongerPathFirst(t *testing.T) {
+	routes := []*WrapperHTTPRoute{
+		makeSortRoute("/api", Prefix, false, &networking.HTTPMatchRequest{}),
+		makeSortRoute("/api/v1/users", Prefix, false, &networking.HTTPMatchRequest{}),
+	}
+
+	SortHTTPRoutes(routes)
+
+	if routes[0].OriginPath != "/api/v1/users" {
+		t.Errorf("expected /api/v1/users first, got %s", routes[0].OriginPath)
+	}
+}
+
+func TestSortHTTPRoutes_EmptyVsNonEmptyMatch(t *testing.T) {
+	routes := []*WrapperHTTPRoute{
+		makeSortRoute("/api", Prefix, false, nil),
+		makeSortRoute("/api", Prefix, false, &networking.HTTPMatchRequest{}),
+	}
+	routes[0].HTTPRoute.Match = []*networking.HTTPMatchRequest{}
+
+	SortHTTPRoutes(routes)
+
+	// Route with match should come before route with empty match
+	if len(routes[0].HTTPRoute.Match) == 0 {
+		t.Errorf("expected route with match first")
+	}
+}
+
+func TestSortHTTPRoutes_NoPanic(t *testing.T) {
+	routes := []*WrapperHTTPRoute{
+		makeSortRoute("", "", true, nil),
+		makeSortRoute("/", Prefix, false, nil),
+		makeSortRoute("/api", Prefix, false, &networking.HTTPMatchRequest{}),
+		makeSortRoute("/api/exact", Exact, false, &networking.HTTPMatchRequest{}),
+	}
+	routes[1].HTTPRoute.Match = []*networking.HTTPMatchRequest{}
+
+	SortHTTPRoutes(routes)
+
+	if !routes[len(routes)-1].IsDefaultBackend {
+		t.Errorf("expected default backend last")
+	}
 }

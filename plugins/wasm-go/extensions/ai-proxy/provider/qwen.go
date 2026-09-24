@@ -551,7 +551,7 @@ func (m *qwenProvider) buildEmbeddingsResponse(ctx wrapper.HttpContext, qwenResp
 	return &embeddingsResponse{
 		Object: "list",
 		Data:   data,
-		Model:  ctx.GetContext(ctxKeyFinalRequestModel).(string),
+		Model:  ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
 		Usage: usage{
 			PromptTokens: qwenResponse.Usage.TotalTokens,
 			TotalTokens:  qwenResponse.Usage.TotalTokens,

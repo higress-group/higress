@@ -84,12 +84,20 @@ func (f *filter) DecodeData(buffer api.BufferInstance, endStream bool) api.Statu
 				// Call the handleMessage method of SSEServer with complete body
 				httpStatus := server.BaseServer.HandleMessage(recorder, f.req, buffer.Bytes())
 				f.message = false
-				f.callbacks.DecoderFilterCallbacks().SendLocalReply(httpStatus, recorder.Body.String(), recorder.Header(), 0, "")
+				f.callbacks.DecoderFilterCallbacks().SendLocalReply(httpStatus, recorder.Body.String(), localReplyHeaders(recorder), 0, "")
 				return api.LocalReply
 			}
 		}
 	}
 	return api.Continue
+}
+
+func localReplyHeaders(recorder *httptest.ResponseRecorder) map[string][]string {
+	contentType := recorder.Result().Header.Get("Content-Type")
+	if contentType == "" {
+		return nil
+	}
+	return map[string][]string{"Content-Type": {contentType}}
 }
 
 func (f *filter) EncodeHeaders(header api.ResponseHeaderMap, endStream bool) api.StatusType {

@@ -1,0 +1,76 @@
+apiVersion: 1.0.0
+info:
+  gatewayMinVersion: "2.2.4"
+  type: oss
+  category: ai
+  name: ai-context-limit
+  image: platform_wasm/ai-context-limit
+  title: AI Context Limit
+  x-title-i18n:
+    zh-CN: AI 上下文限制
+  description: Reject oversized LLM requests by estimating input tokens before they reach the model provider.
+  x-description-i18n:
+    zh-CN: 在请求到达模型提供方之前估算输入 Token 数，并拒绝超出上下文限制的请求。
+  readmeUrl: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/ai-context-limit/README.md
+  x-readmeUrl-i18n:
+    en-US: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/ai-context-limit/README_EN.md
+  version: 1.0.0
+  contact:
+    name: Higress Team
+    url: https://higress.io/
+    email: admin@higress.io
+spec:
+  phase: default
+  priority: 100
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        max_context_tokens:
+          type: integer
+          minimum: 0
+          title: Maximum Context Tokens
+          x-title-i18n:
+            zh-CN: 最大上下文 Token 数
+          description: Maximum estimated input tokens. Zero disables rejection.
+          x-description-i18n:
+            zh-CN: 允许的最大输入 Token 估算值，配置为 0 时不拦截。
+        error_status_code:
+          type: integer
+          minimum: 400
+          maximum: 599
+          default: 400
+          title: Error Status Code
+          x-title-i18n:
+            zh-CN: 超限响应状态码
+        buffer_ratio:
+          type: number
+          minimum: 0
+          maximum: 10
+          default: 1.1
+          title: Estimation Buffer Ratio
+          x-title-i18n:
+            zh-CN: 估算缓冲系数
+      required:
+        - max_context_tokens
+      example:
+        max_context_tokens: 128000
+        error_status_code: 400
+        buffer_ratio: 1.1
+  routeConfigSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        max_context_tokens:
+          type: integer
+          minimum: 0
+        error_status_code:
+          type: integer
+          minimum: 400
+          maximum: 599
+        buffer_ratio:
+          type: number
+          minimum: 0
+          maximum: 10
+      required:
+        - max_context_tokens

@@ -99,7 +99,7 @@ allow:
 - consumer1
 ```
 
-在`*.exmaple.com`和`test.com`两个域名做如下插件配置：
+在`*.example.com`和`test.com`两个域名做如下插件配置：
 
 ```yaml
 allow:

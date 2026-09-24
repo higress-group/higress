@@ -2,26 +2,39 @@
 
 This SDK is used to develop the WASM Plugins for Higress in Go.
 
+The MCP `2026-07-28` conformance path for `mcp-server` has an explicit build entry that does not depend on the batch builder's `VERSION`/`-alpha` discovery rule:
+
+```bash
+make build-mcp-server-wasmplugin
+cd plugins/wasm-go/extensions/mcp-server && ./testdata/interop/run.sh
+```
+
+The interoperability harness locks the official Go SDK to `v1.7.0` and the TypeScript client to `2.0.0`; they require Go 1.25+ and Node.js 20+, respectively. See the [mcp-server documentation](extensions/mcp-server/README_EN.md).
+
 ## Quick build with Higress wasm-go builder
 
 The wasm-go plugin can be built quickly with the following command:
 
 ```bash
 # NOTE: if you want to set EXTRA_TAGS for the wasm plugin
-# please set them in the .buildrc file under extensions/${PLUGIN_NAME} directory
-$ PLUGIN_NAME=request-block make build
+# please set them in the .buildrc file under ${PLUGIN_ROOT}/${PLUGIN_NAME}
+# NOTE: to override the output image short name (default: plugin directory name),
+# add `IMAGE_NAME=<your-image-name>` to .buildrc.
+# The image name must contain only [a-z0-9._-], or the build will fail.
+# This affects the pushed image tag only, not the source code path.
+$ PLUGIN_ROOT=examples PLUGIN_NAME=request-block make build
 ```
 
 <details>
 <summary>Output</summary>
 <pre><code>
-DOCKER_BUILDKIT=1 docker build --build-arg PLUGIN_NAME=request-block \
+DOCKER_BUILDKIT=1 docker build --build-arg PLUGIN_ROOT=examples --build-arg PLUGIN_NAME=request-block \
                                -t request-block:20230223-173305-3b1a471 \
-                               --output extensions/request-block .
+                               --output examples/request-block .
 [+] Building 67.7s (12/12) FINISHED
 
 image:            request-block:20230223-173305-3b1a471
-output wasm file: extensions/request-block/plugin.wasm
+output wasm file: examples/request-block/plugin.wasm
 </code></pre>
 </details>
 
@@ -34,6 +47,7 @@ You can also use `make build-push` to build and push the image at the same time.
 | Name          | Optional/Required | Default                                                                                                      | meaning                                                                                                                              |
 |---------------|---------------|--------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
 | `PLUGIN_NAME` | Optional      | hello-world                                                                                                  | The name of the plugin to build.                                                                                                     |
+| `PLUGIN_ROOT` | Optional      | extensions                                                                                                   | The plugin root; use `examples` for a reference plugin.                                                                              |
 | `REGISTRY`    | Optional      | empty                                                                                                        | The registry address of the generated image, e.g. `example.registry.io/my-name/`.  Note that the REGISTRY value should end with /.   |
 | `IMG`         | Optional      | If it is empty, it is generated based on the repository address, plugin name, build time, and git commit id. | The generated image tag will override the `REGISTRY` parameter if it is not empty.                                                   |
 
@@ -43,12 +57,12 @@ You can also build wasm locally and copy it to a Docker image. This requires a l
 
 Go version: >= 1.24
 
-The following is an example of building the plugin [request-block](extensions/request-block).
+The following is an example of building the [request-block](examples/request-block) reference plugin.
 
 ### step1. build wasm
 
 ```bash
-GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ./extensions/request-block/main.wasm ./extensions/request-block
+GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ./examples/request-block/main.wasm ./examples/request-block
 ```
 
 ### step2. build and push docker image
@@ -202,9 +216,9 @@ spec:
   defaultConfig:
     block_urls:
     - "swagger.html"
-  url: file:///opt/plugins/wasm-go/extensions/request-block/plugin.wasm
+  url: file:///opt/plugins/wasm-go/examples/request-block/plugin.wasm
 ```
-`Above of the url, the name of after extensions indicates the name of the folder where the plug-in resides.`
+`In the URL above, request-block is a reference plugin under examples. Reference plugins are not included in official plugin releases.`
 
 ./test/e2e/conformance/tests/request-block.go
 
@@ -241,5 +255,5 @@ cSuite.Setup(t)
 Considering that building wasm locally is time-consuming, we support building only the plug-ins that need to be tested (at the same time, you can also temporarily modify the list of test cases in the second small step above, and only execute your newly written cases).
 
 ```bash
-PLUGIN_NAME=request-block make higress-wasmplugin-test
+PLUGIN_ROOT=examples PLUGIN_NAME=request-block make higress-wasmplugin-test
 ```

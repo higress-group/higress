@@ -1,0 +1,572 @@
+name: Emergency Overwrite Plugin Tag
+
+# One-off, maintainer-only workflow for emergency same-version overwrites of a
+# public plugin tag. It is intentionally outside immutable prepare/promote and
+# must be used only while an administrator has temporarily lifted registry tag
+# immutability. A successful overwrite is followed by an automated evidence PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      gateway_version:
+        description: "Stable gateway version whose evidence and snapshot bind this plugin release"
+        required: true
+        type: string
+      logical_id:
+        description: "Plugin logical ID in the release catalog (e.g. mcp-server)"
+        required: true
+        type: string
+      version:
+        description: "Existing stable version tag to overwrite (e.g. 2.0.1)"
+        required: true
+        type: string
+      source_commit:
+        description: "Exact 40-char merged commit containing the fix"
+        required: true
+        type: string
+      move_latest:
+        description: "Also move latest to the overwritten digest (opt-in: an older version can regress latest)"
+        required: true
+        default: false
+        type: boolean
+      dry_run:
+        description: "Authorize, validate, build, and verify lineage inputs only; never push"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+run-name: emergency-overwrite ${{ inputs.gateway_version }} ${{ inputs.logical_id }}:${{ inputs.version }} @ ${{ inputs.source_commit }}
+
+concurrency:
+  group: emergency-overwrite-${{ inputs.logical_id }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    name: Authorize triggering maintainer
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require maintain or admin permission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # BEGIN emergency-authorization-contract
+          actor="$TRIGGERING_ACTOR"
+          if ! [[ "$actor" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]]; then
+            echo "Emergency authorization: actor=${actor:-<invalid>} role_name=invalid-actor" >> "$GITHUB_STEP_SUMMARY"
+            echo "emergency overwrite is not authorized: invalid triggering actor" >&2
+            exit 1
+          fi
+          role_name=api-error
+          if response=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission"); then
+            if ! role_name=$(jq -er '.role_name | strings | select(length > 0)' <<<"$response"); then
+              role_name=invalid-response
+            fi
+          fi
+          echo "Emergency authorization: actor=$actor role_name=$role_name" >> "$GITHUB_STEP_SUMMARY"
+          case "$role_name" in
+            maintain|admin) ;;
+            *) echo "emergency overwrite is not authorized: $actor has role_name $role_name; require maintain or admin" >&2; exit 1 ;;
+          esac
+          # END emergency-authorization-contract
+
+  validate:
+    name: Validate + build (no registry writes)
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      evidence_base: ${{ steps.tool.outputs.evidence_base }}
+      image: ${{ steps.resolve.outputs.image }}
+      public_registry: ${{ steps.resolve.outputs.public_registry }}
+      public_repository: ${{ steps.resolve.outputs.public_repository }}
+      input_hash: ${{ steps.hash.outputs.input_hash }}
+    steps:
+      - name: Harden runner
+        run: |
+          sudo rm -rf /usr/local/bin/gsutil /usr/local/bin/gh /usr/local/bin/docker-credential-* || true
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Pin evidence and the release tool to the dispatch commit so rerunning
+          # the same workflow run keeps the same deterministic evidence base.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.24.0"
+      - uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20 # v1.2.3
+        with:
+          version: 1.2.3
+      - name: Build current release tool and validate source ancestry
+        id: tool
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$WORKFLOW_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
+          git cat-file -e "$SOURCE_COMMIT^{commit}"
+          git fetch --no-tags origin main
+          evidence_base=$WORKFLOW_SHA
+          git merge-base --is-ancestor "$evidence_base" refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_COMMIT" "$evidence_base"
+          mkdir -p /tmp/emergency-overwrite-artifact
+          (cd tools/plugin-release && GOMAXPROCS=1 go build -p 1 -o /tmp/emergency-overwrite-artifact/plugin-release .)
+          echo "evidence_base=$evidence_base" >> "$GITHUB_OUTPUT"
+      - name: Resolve catalog entry and validate release evidence binding
+        id: resolve
+        env:
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          LOGICAL_ID: ${{ inputs.logical_id }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$GATEWAY_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$LOGICAL_ID" =~ ^[a-z0-9][a-z0-9._-]*$ ]]
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          entry=$(jq -cer --arg id "$LOGICAL_ID" '[.plugins[] | select(.logicalId==$id and .releaseEligible!=false)] | select(length == 1) | .[0]' plugins/release/catalog.json)
+          implementation=$(jq -r .implementation <<<"$entry")
+          source_dir=$(jq -r .sourceDir <<<"$entry")
+          image=$(jq -r .image <<<"$entry")
+          registry=$(jq -er .registry plugins/release/catalog.json)
+          [[ "$registry" =~ ^[a-z0-9][a-z0-9.-]*(\:[0-9]+)?$ ]]
+          repository="$registry/$image"
+          [[ "$implementation" = "go" ]] || { echo "emergency overwrite currently supports go plugins only" >&2; exit 1; }
+          [[ "$source_dir" = plugins/wasm-go/extensions/* ]]
+          evidence="plugins/release/evidence/$GATEWAY_VERSION.json"
+          snapshot="plugins/release/snapshots/$GATEWAY_VERSION.json"
+          test -f "$evidence"; test -f "$snapshot"
+          candidate=$(jq -cer --arg id "$LOGICAL_ID" '.plugins[$id]' "$evidence")
+          release=$(jq -cer --arg id "$LOGICAL_ID" '[.plugins[] | select(.logicalId==$id)] | select(length == 1) | .[0]' "$snapshot")
+          test "$(jq -er .gatewayVersion "$snapshot")" = "$GATEWAY_VERSION"
+          test "$(jq -er .version <<<"$release")" = "$VERSION"
+          test "$(jq -er .image <<<"$release")" = "$image"
+          test "$(jq -er .ociRef <<<"$release")" = "$repository:$VERSION"
+          candidate_digest=$(jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))' <<<"$candidate")
+          candidate_source=$(jq -er '.sourceCommit | select(test("^[0-9a-f]{40}$"))' <<<"$candidate")
+          test "$(jq -er .digest <<<"$release")" = "$candidate_digest"
+          test "$(jq -er .inputHash <<<"$release")" = "$(jq -er .inputHash <<<"$candidate")"
+          test "$(jq -er .sourceCommit <<<"$release")" = "$candidate_source"
+          candidate_ref=$(jq -er .candidateRef <<<"$candidate")
+          test "$(jq -er .candidateRef <<<"$release")" = "$candidate_ref"
+          [[ "$candidate_ref" == *"@$candidate_digest" ]]
+          /tmp/emergency-overwrite-artifact/plugin-release validate-catalog --root . --catalog plugins/release/catalog.json
+          echo "IMPLEMENTATION=$implementation" >> "$GITHUB_ENV"
+          echo "SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          echo "BUILD_NAME=$(basename "$source_dir")" >> "$GITHUB_ENV"
+          echo "CANDIDATE_SOURCE_COMMIT=$candidate_source" >> "$GITHUB_ENV"
+          echo "EVIDENCE_PATH=$evidence" >> "$GITHUB_ENV"
+          echo "SNAPSHOT_PATH=$snapshot" >> "$GITHUB_ENV"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "public_registry=$registry" >> "$GITHUB_OUTPUT"
+          echo "public_repository=$repository" >> "$GITHUB_OUTPUT"
+      - name: Switch tree to the selected source and validate build inputs
+        env:
+          LOGICAL_ID: ${{ inputs.logical_id }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git checkout -q "$SOURCE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          git merge-base --is-ancestor "$CANDIDATE_SOURCE_COMMIT" "$SOURCE_COMMIT"
+          entry=$(jq -cer --arg id "$LOGICAL_ID" '[.plugins[] | select(.logicalId==$id and .releaseEligible!=false)] | select(length == 1) | .[0]' plugins/release/catalog.json)
+          test "$(jq -r .implementation <<<"$entry")" = "$IMPLEMENTATION"
+          test "$(jq -r .sourceDir <<<"$entry")" = "$SOURCE_DIR"
+          test "$(jq -r .image <<<"$entry")" = "$IMAGE"
+          committed=$(tr -d '[:space:]' < "$SOURCE_DIR/VERSION")
+          test "$committed" = "$VERSION" || { echo "VERSION file says $committed, refusing to overwrite $VERSION" >&2; exit 1; }
+          /tmp/emergency-overwrite-artifact/plugin-release validate-catalog --root . --catalog plugins/release/catalog.json
+      - name: Compute input hash (current release-tool contract)
+        id: hash
+        env:
+          LOGICAL_ID: ${{ inputs.logical_id }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          /tmp/emergency-overwrite-artifact/plugin-release emergency-input-hash --root . --catalog plugins/release/catalog.json \
+            --id "$LOGICAL_ID" --commit "$SOURCE_COMMIT" --version "$VERSION" > /tmp/input-hash.txt
+          grep -Eq '^sha256:[0-9a-f]{64}$' /tmp/input-hash.txt
+          echo "input_hash=$(cat /tmp/input-hash.txt)" >> "$GITHUB_OUTPUT"
+      - name: Test and build plugin (pipeline build contract)
+        run: |
+          set -euo pipefail
+          source="$SOURCE_DIR"; build_name="$BUILD_NAME"
+          if [ -f "$source/prepare.sh" ]; then (cd "$source" && sh ./prepare.sh); fi
+          (cd "$source" && go test ./...)
+          make -C plugins/wasm-go PLUGIN_NAME="$build_name" build
+          test -s "$source/plugin.wasm"
+          cp "$source/plugin.wasm" /tmp/emergency-overwrite-artifact/plugin.wasm
+          sha256sum /tmp/emergency-overwrite-artifact/plugin.wasm | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload current tool and built artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: emergency-overwrite-artifact
+          path: /tmp/emergency-overwrite-artifact/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Overwrite tag and publish evidence PR
+    needs: [authorize, validate]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Re-affirm the dispatch authorization inside the only job that mutates the
+      # public registry. "Re-run failed jobs" resumes this job without running
+      # `authorize` again, and github.triggering_actor is then whoever clicked
+      # the re-run, so the early gate alone does not cover a resumed run. This
+      # must stay the first step: ahead of App-token creation, checkout,
+      # registry login, and every write. The body is byte-identical to the
+      # authorize job's contract so the two gates cannot drift.
+      - name: Re-require maintain or admin permission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # BEGIN emergency-authorization-contract
+          actor="$TRIGGERING_ACTOR"
+          if ! [[ "$actor" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]]; then
+            echo "Emergency authorization: actor=${actor:-<invalid>} role_name=invalid-actor" >> "$GITHUB_STEP_SUMMARY"
+            echo "emergency overwrite is not authorized: invalid triggering actor" >&2
+            exit 1
+          fi
+          role_name=api-error
+          if response=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission"); then
+            if ! role_name=$(jq -er '.role_name | strings | select(length > 0)' <<<"$response"); then
+              role_name=invalid-response
+            fi
+          fi
+          echo "Emergency authorization: actor=$actor role_name=$role_name" >> "$GITHUB_STEP_SUMMARY"
+          case "$role_name" in
+            maintain|admin) ;;
+            *) echo "emergency overwrite is not authorized: $actor has role_name $role_name; require maintain or admin" >&2; exit 1 ;;
+          esac
+          # END emergency-authorization-contract
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
+          owner: higress-group
+          repositories: higress
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.evidence_base }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: emergency-overwrite-artifact
+          path: /tmp/emergency-overwrite-artifact
+      - uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20 # v1.2.3
+        with:
+          version: 1.2.3
+      - name: Stage desired manifest and update stable tag
+        id: publish
+        env:
+          REGISTRY: ${{ needs.validate.outputs.public_registry }}
+          REPOSITORY: ${{ needs.validate.outputs.public_repository }}
+          CONFIGURED_REGISTRY: ${{ vars.PLUGIN_PUBLIC_REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.PRODUCTION_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.PRODUCTION_REGISTRY_PASSWORD }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          LOGICAL_ID: ${{ inputs.logical_id }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          IMAGE_REF: ${{ needs.validate.outputs.image }}
+          INPUT_HASH: ${{ needs.validate.outputs.input_hash }}
+        run: |
+          set -euo pipefail
+          test -n "$REGISTRY"; test -n "$REPOSITORY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
+          # BEGIN emergency-registry-binding-contract
+          validate_emergency_repository() {
+            local configured_registry=$1 validated_registry=$2 validated_repository=$3 image=$4
+            test "$configured_registry" = "$validated_registry" || { echo "production registry does not match the validated catalog registry" >&2; return 1; }
+            test "$validated_repository" = "$validated_registry/$image" || { echo "validated public repository does not match the selected catalog image" >&2; return 1; }
+          }
+          # END emergency-registry-binding-contract
+          validate_emergency_repository "$CONFIGURED_REGISTRY" "$REGISTRY" "$REPOSITORY" "$IMAGE_REF"
+          echo "$REGISTRY_PASSWORD" | oras login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+          ref="$REPOSITORY:$VERSION"
+          emergency_candidate="$REPOSITORY:emergency-${SOURCE_COMMIT}-${INPUT_HASH#sha256:}"
+          echo "::warning::Emergency overwrite may replace $ref; registry tag immutability must have been temporarily lifted by an administrator."
+          # BEGIN plugin-manifest-publish-contract
+          publish_plugin_manifest() {
+            local ref=$1 wasm=$2 source_commit=$3 version=$4 input_hash=$5
+            local stage push_result digest manifest repo source_created wasm_digest wasm_size
+            # Bash normally clears errexit inside command substitution. Restore it
+            # because both callers capture this function's digest that way.
+            set -e
+            if ! [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then echo "invalid plugin source commit" >&2; return 1; fi
+            if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then echo "invalid stable plugin version" >&2; return 1; fi
+            if ! [[ "$input_hash" =~ ^sha256:[0-9a-f]{64}$ ]]; then echo "invalid plugin input hash" >&2; return 1; fi
+            if ! test -s "$wasm"; then echo "plugin.wasm is missing or empty" >&2; return 1; fi
+            if ! source_created=$(git show -s --format=%cI "$source_commit"); then echo "cannot resolve plugin source commit time" >&2; return 1; fi
+            if ! [[ "$source_created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$ ]]; then echo "invalid plugin source commit time" >&2; return 1; fi
+            wasm_digest="sha256:$(sha256sum "$wasm" | awk '{print $1}')"
+            wasm_size=$(wc -c < "$wasm"); wasm_size=${wasm_size//[[:space:]]/}
+            stage=$(mktemp -d)
+            if ! printf '%s' '{}' > "$stage/config.json" || ! cp "$wasm" "$stage/plugin.wasm"; then
+              rm -rf "$stage"; echo "failed to stage plugin manifest layers" >&2; return 1
+            fi
+            if ! push_result=$(cd "$stage" && oras push "$ref" \
+              "config.json:application/vnd.module.wasm.config.v1+json" \
+              "plugin.wasm:application/vnd.module.wasm.content.layer.v1+wasm" \
+              --image-spec v1.0 \
+              --annotation "org.opencontainers.image.created=$source_created" \
+              --annotation "org.opencontainers.image.revision=$source_commit" \
+              --annotation "org.opencontainers.image.version=$version" \
+              --annotation "io.higress.plugin.input-hash=$input_hash" \
+              --format json); then
+              rm -rf "$stage"; echo "plugin manifest push failed: $ref" >&2; return 1
+            fi
+            rm -rf "$stage"
+            if ! digest=$(jq -ser 'select(length == 1) | .[0].digest | strings | select(test("^sha256:[0-9a-f]{64}$"))' <<<"$push_result"); then
+              echo "plugin manifest push returned a malformed descriptor: $ref" >&2; return 1
+            fi
+            repo=${ref%:*}
+            if ! manifest=$(oras manifest fetch "$repo@$digest"); then
+              echo "published plugin manifest cannot be resolved by digest: $repo@$digest" >&2; return 1
+            fi
+            if ! jq -se --arg commit "$source_commit" --arg created "$source_created" --arg version "$version" --arg input_hash "$input_hash" --arg wasm_digest "$wasm_digest" --argjson wasm_size "$wasm_size" '
+              length == 1 and (.[0] |
+                (keys == ["annotations","config","layers","mediaType","schemaVersion"]) and
+                .schemaVersion == 2 and
+                .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+                (.config == {
+                  "mediaType":"application/vnd.unknown.config.v1+json",
+                  "digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                  "size":2
+                }) and
+                (.annotations == {
+                  "org.opencontainers.image.created": $created,
+                  "org.opencontainers.image.revision": $commit,
+                  "org.opencontainers.image.version": $version,
+                  "io.higress.plugin.input-hash": $input_hash
+                }) and
+                (.layers | type == "array" and length == 2) and
+                (.layers[0] == {
+                  "mediaType":"application/vnd.module.wasm.config.v1+json",
+                  "digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                  "size":2,
+                  "annotations":{"org.opencontainers.image.title":"config.json"}
+                }) and
+                (.layers[1] == {
+                  "mediaType":"application/vnd.module.wasm.content.layer.v1+wasm",
+                  "digest":$wasm_digest,
+                  "size":$wasm_size,
+                  "annotations":{"org.opencontainers.image.title":"plugin.wasm"}
+                })
+              )
+            ' >/dev/null <<<"$manifest"; then
+              echo "published plugin manifest does not match the deterministic two-layer contract: $ref" >&2; return 1
+            fi
+            printf '%s\n' "$digest"
+          }
+          # END plugin-manifest-publish-contract
+          digest=$(publish_plugin_manifest "$emergency_candidate" /tmp/emergency-overwrite-artifact/plugin.wasm "$SOURCE_COMMIT" "$VERSION" "$INPUT_HASH")
+          candidate_digest=$(oras manifest fetch "$emergency_candidate" --descriptor | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))')
+          test "$candidate_digest" = "$digest"
+
+          tool=/tmp/emergency-overwrite-artifact/plugin-release
+          chmod 0700 "$tool"
+          test -x "$tool"
+          # BEGIN emergency-pull-verification-contract
+          # The incident channel is the only path that replaces a public stable
+          # tag, so it must clear the same loadability gate the immutable
+          # pipeline applies before a latest move. Verification re-pulls the
+          # staged candidate from the registry by digest and inspects what the
+          # registry actually serves: the manifest bytes, both layer blobs, and
+          # the Wasm module compiled from the pulled layer. Local build output is
+          # never a substitute, because a registry-side transformation or a
+          # partial push is exactly what this gate has to catch.
+          verify_emergency_pull() {
+            local tool=$1 repository=$2 digest=$3 source_commit=$4 version=$5 input_hash=$6 pull_dir=$7
+            local source_created
+            if ! test -x "$tool"; then echo "release tool is not executable: $tool" >&2; return 1; fi
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then echo "invalid staged candidate digest" >&2; return 1; fi
+            if ! [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then echo "invalid plugin source commit" >&2; return 1; fi
+            if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then echo "invalid stable plugin version" >&2; return 1; fi
+            if ! [[ "$input_hash" =~ ^sha256:[0-9a-f]{64}$ ]]; then echo "invalid plugin input hash" >&2; return 1; fi
+            if ! [[ "$repository" == */* ]]; then echo "invalid public plugin repository: $repository" >&2; return 1; fi
+            if ! source_created=$(git show -s --format=%cI "$source_commit"); then echo "cannot resolve plugin source commit time" >&2; return 1; fi
+            if ! [[ "$source_created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$ ]]; then
+              echo "invalid plugin source commit time" >&2; return 1
+            fi
+            rm -rf "$pull_dir"
+            if ! mkdir -p "$pull_dir"; then echo "cannot create the emergency pull directory: $pull_dir" >&2; return 1; fi
+            if ! oras manifest fetch "$repository@$digest" --output "$pull_dir/manifest.json"; then
+              rm -rf "$pull_dir"; echo "staged emergency candidate manifest cannot be pulled: $repository@$digest" >&2; return 1
+            fi
+            if ! oras pull "$repository@$digest" --output "$pull_dir" >/dev/null; then
+              rm -rf "$pull_dir"; echo "staged emergency candidate layers cannot be pulled: $repository@$digest" >&2; return 1
+            fi
+            if ! "$tool" verify-pulled-plugin --manifest "$pull_dir/manifest.json" --config "$pull_dir/config.json" --wasm "$pull_dir/plugin.wasm" \
+              --digest "$digest" --source-commit "$source_commit" --source-created "$source_created" --version "$version" --input-hash "$input_hash"; then
+              rm -rf "$pull_dir"
+              echo "staged emergency candidate failed pulled-artifact verification; the stable tag was not modified: $repository@$digest" >&2
+              return 1
+            fi
+            rm -rf "$pull_dir"
+          }
+          # END emergency-pull-verification-contract
+          verify_emergency_pull "$tool" "$REPOSITORY" "$digest" "$SOURCE_COMMIT" "$VERSION" "$INPUT_HASH" /tmp/emergency-pull-verification
+          echo "Staged emergency candidate \`$emergency_candidate@$digest\` passed the pulled-artifact verification gate." >> "$GITHUB_STEP_SUMMARY"
+
+          # Validate and stage the exact lineage bytes before touching the stable
+          # tag. If the later evidence publication fails, a same-run retry can
+          # reuse the desired digest without performing a second overwrite.
+          evidence="plugins/release/evidence/$GATEWAY_VERSION.json"
+          snapshot="plugins/release/snapshots/$GATEWAY_VERSION.json"
+          "$tool" append-emergency-lineage --evidence "$evidence" --snapshot "$snapshot" --output /tmp/staged-emergency-evidence.json \
+            --gateway-version "$GATEWAY_VERSION" --id "$LOGICAL_ID" --version "$VERSION" --image "$IMAGE_REF" \
+            --digest "$digest" --input-hash "$INPUT_HASH" --source-commit "$SOURCE_COMMIT" --workflow-run-id "$WORKFLOW_RUN_ID"
+          predecessor=$(jq -er --arg id "$LOGICAL_ID" '.plugins[$id] | if ((.lineage // []) | length) > 0 then .lineage[-1].digest else .digest end | select(test("^sha256:[0-9a-f]{64}$"))' "$evidence")
+
+          # BEGIN emergency-stable-overwrite-contract
+          promote_emergency_candidate() {
+            local candidate_ref=$1 stable_ref=$2 predecessor=$3 desired=$4 run_attempt=$5
+            local descriptor current after candidate_repo
+            if ! [[ "$run_attempt" =~ ^[1-9][0-9]*$ ]]; then
+              echo "invalid workflow run attempt" >&2
+              return 1
+            fi
+            if ! descriptor=$(oras manifest fetch "$stable_ref" --descriptor); then
+              echo "emergency stable tag is absent or cannot be resolved: $stable_ref" >&2
+              return 1
+            fi
+            if ! current=$(jq -ser 'select(length == 1) | .[0] | select(.mediaType == "application/vnd.oci.image.manifest.v1+json") | .digest | strings | select(test("^sha256:[0-9a-f]{64}$"))' <<<"$descriptor"); then
+              echo "emergency stable tag descriptor is malformed: $stable_ref" >&2
+              return 1
+            fi
+            if [ "$current" = "$predecessor" ]; then
+              candidate_repo=${candidate_ref%:*}
+              oras cp "$candidate_repo@$desired" "$stable_ref"
+            elif [ "$current" = "$desired" ] && [ "$run_attempt" -gt 1 ]; then
+              echo "Stable tag already serves the desired digest; healing same-run evidence retry." >&2
+            else
+              echo "emergency stable tag predecessor conflict: $stable_ref has $current, expected $predecessor" >&2
+              return 1
+            fi
+            if ! after=$(oras manifest fetch "$stable_ref" --descriptor | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))'); then
+              echo "emergency stable tag cannot be re-resolved after publication: $stable_ref" >&2
+              return 1
+            fi
+            test "$after" = "$desired" || { echo "emergency stable tag does not serve the desired digest after publication" >&2; return 1; }
+            EMERGENCY_PREVIOUS_DIGEST=$current
+          }
+          # END emergency-stable-overwrite-contract
+          promote_emergency_candidate "$emergency_candidate" "$ref" "$predecessor" "$digest" "$RUN_ATTEMPT"
+          before=$EMERGENCY_PREVIOUS_DIGEST
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Emergency overwrite report"
+            echo "- ref: \`$ref\`"
+            echo "- staged candidate: \`$emergency_candidate@$digest\`"
+            echo "- committed predecessor: \`$predecessor\`"
+            echo "- previous digest: \`$before\`"
+            echo "- new digest: \`$digest\`"
+            echo "- input hash: \`$INPUT_HASH\`"
+            echo "- source commit: \`$SOURCE_COMMIT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Create or update deterministic emergency evidence PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+          LOGICAL_ID: ${{ inputs.logical_id }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          EVIDENCE_BASE: ${{ needs.validate.outputs.evidence_base }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EVIDENCE_BASE"
+          evidence="plugins/release/evidence/$GATEWAY_VERSION.json"
+          test -s /tmp/staged-emergency-evidence.json
+          cp /tmp/staged-emergency-evidence.json "$evidence"
+          branch="release/plugin-emergency-evidence-$GATEWAY_VERSION-$LOGICAL_ID-$WORKFLOW_RUN_ID"
+          title="chore: record emergency plugin lineage $GATEWAY_VERSION $LOGICAL_ID"
+          body="Records emergency overwrite workflow run $WORKFLOW_RUN_ID for $LOGICAL_ID:$VERSION at $DIGEST. The registry write precedes this PR, so a failed evidence publication must be retried with the same run ID."
+          gh auth setup-git
+          remote_line=$(git ls-remote --heads origin "refs/heads/$branch")
+          if [ -n "$remote_line" ]; then
+            remote_sha=${remote_line%%[[:space:]]*}
+            [[ "$remote_sha" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags origin "refs/heads/$branch"
+            test "$(git rev-parse FETCH_HEAD)" = "$remote_sha"
+            test "$(git rev-parse FETCH_HEAD^)" = "$EVIDENCE_BASE"
+            mapfile -t remote_paths < <(git diff --name-only "$EVIDENCE_BASE" FETCH_HEAD)
+            test "${#remote_paths[@]}" = 1
+            test "${remote_paths[0]}" = "$evidence"
+            test "$(git show "FETCH_HEAD:$evidence" | sha256sum | awk '{print $1}')" = "$(sha256sum "$evidence" | awk '{print $1}')"
+          else
+            git checkout -q -B "$branch" "$EVIDENCE_BASE"
+            git add -- "$evidence"
+            mapfile -t staged_paths < <(git diff --cached --name-only)
+            test "${#staged_paths[@]}" = 1
+            test "${staged_paths[0]}" = "$evidence"
+            git -c user.name="higress-release-bot" -c user.email="release-bot@higress.io" commit -s -m "chore: record emergency plugin lineage $GATEWAY_VERSION $LOGICAL_ID"
+            git push --set-upstream origin "HEAD:refs/heads/$branch"
+          fi
+          gh pr create --base main --head "$branch" --title "$title" --body "$body" || gh pr edit "$branch" --title "$title" --body "$body"
+          echo "Emergency evidence PR branch: \`$branch\`" >> "$GITHUB_STEP_SUMMARY"
+      # Retention rule: the emergency-<source-commit>-<input-hash> staging tag
+      # is retained permanently as public provenance of what was verified and
+      # promoted. It is content-addressed by commit+input-hash (one per overwrite
+      # attempt, collision-free) and serves the same manifest as the stable tag.
+      # Registries commonly implement tag deletion as manifest deletion (ACR
+      # included), so untagging the staging reference could destroy the manifest
+      # the stable tag serves; oras 1.2.3 has no portable tag-only unlink. Do not
+      # attempt cleanup: the durable record of an overwrite is the committed
+      # lineage evidence and its PR, and the staging tag is the auditable pointer
+      # to exactly what was verified before promotion.
+      - name: Record the retained emergency staging tag
+        env:
+          REPOSITORY: ${{ needs.validate.outputs.public_repository }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          INPUT_HASH: ${{ needs.validate.outputs.input_hash }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # BEGIN emergency-staging-cleanup-contract
+          # Retention policy: the emergency-<source-commit>-<input-hash> staging
+          # tag is RETAINED as public provenance of what was verified and
+          # promoted. It is content-addressed by commit+input-hash (collision
+          # free, one per overwrite attempt) and serves the same manifest as the
+          # stable tag. Registries commonly implement tag deletion as manifest
+          # deletion (ACR included), so untagging the staging reference could
+          # destroy the manifest the stable tag serves; there is no portable
+          # tag-only unlink in oras 1.2.3. Do NOT attempt cleanup here.
+          staging_ref="$REPOSITORY:emergency-${SOURCE_COMMIT}-${INPUT_HASH#sha256:}"
+          echo "- emergency staging tag **retained** as provenance: \`$staging_ref\` (shares manifest $DIGEST with the stable tag by design)" >> "$GITHUB_STEP_SUMMARY"
+          # END emergency-staging-cleanup-contract
+      - name: Move latest only after evidence publication
+        if: ${{ inputs.move_latest }}
+        env:
+          REPOSITORY: ${{ needs.validate.outputs.public_repository }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          oras cp "$REPOSITORY@$DIGEST" "$REPOSITORY:latest"
+          test "$(oras manifest fetch "$REPOSITORY:latest" --descriptor | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))')" = "$DIGEST"
+          echo "Emergency latest moved to \`$DIGEST\` after evidence PR publication." >> "$GITHUB_STEP_SUMMARY"

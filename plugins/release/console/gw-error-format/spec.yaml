@@ -1,0 +1,87 @@
+apiVersion: 1.0.0
+info:
+  gatewayMinVersion: "2.0.0"
+  type: oss
+  category: transform
+  name: gw-error-format
+  image: platform_wasm/gw-error-format
+  title: Gateway Error Formatter
+  x-title-i18n:
+    zh-CN: 网关错误格式化
+  description: Rewrite gateway-generated error status, headers, and response bodies without changing upstream responses.
+  x-description-i18n:
+    zh-CN: 重写网关自身产生的错误状态码、响应头和响应体，不修改上游服务返回的响应。
+  readmeUrl: https://github.com/alibaba/higress/blob/main/plugins/wasm-go/extensions/gw-error-format/README.md
+  x-readmeUrl-i18n:
+    en-US: https://github.com/alibaba/higress/blob/main/plugins/release/console/gw-error-format/README_EN.md
+  version: 1.0.0
+  contact:
+    name: Higress Team
+    url: https://higress.io/
+    email: admin@higress.io
+spec:
+  phase: default
+  priority: 0
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        rules:
+          type: array
+          title: Rewrite Rules
+          x-title-i18n:
+            zh-CN: 重写规则
+          items:
+            type: object
+            properties:
+              match:
+                type: object
+                properties:
+                  statuscode:
+                    type: string
+                  responsebody:
+                    type: string
+                required:
+                  - statuscode
+              replace:
+                type: object
+                properties:
+                  statuscode:
+                    type: string
+                  responsebody:
+                    type: string
+                required:
+                  - statuscode
+            required:
+              - match
+              - replace
+        set_header:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: string
+      required:
+        - rules
+      example:
+        rules:
+          - match:
+              statuscode: "503"
+              responsebody: no healthy upstream
+            replace:
+              statuscode: "200"
+              responsebody: '{"code":503,"message":"service unavailable"}'
+        set_header:
+          - content-type: application/json
+  routeConfigSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        rules:
+          type: array
+          items:
+            type: object
+        set_header:
+          type: array
+          items:
+            type: object

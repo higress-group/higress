@@ -9,12 +9,23 @@ on:
 jobs:
   generate-release-notes:
     runs-on: ubuntu-latest
+    environment: higress-release-manager
     env:
       DASHSCOPE_API_KEY: ${{ secrets.HIGRESS_OPENAI_API_KEY }}
       MODEL_NAME: ${{ secrets.HIGRESS_OPENAI_API_MODEL }}
       MODEL_SERVER: ${{ secrets.MODEL_SERVER }}
 
     steps:
+      - name: Create canonical release reader token
+        id: release-reader
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ vars.RELEASE_MANAGER_APP_ID }}
+          private-key: ${{ secrets.RELEASE_MANAGER_APP_PRIVATE_KEY }}
+          owner: higress-group
+          repositories: higress,higress-console
+          permission-contents: write
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -35,7 +46,7 @@ jobs:
           chmod u+x github-mcp-serve
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
@@ -60,40 +71,39 @@ jobs:
           cat > generate_release_report.sh << 'EOF'
           #!/bin/bash
           # Script to generate release notes for Higress projects
+          set -euo pipefail
 
           echo "Fetching GitHub generated release notes for ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}..."
-          curl -L \
-              "https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/tag/${RELEASE_VERSION}" \
-              -o release_page.html
+          payload=$(jq -cn --arg tag "$RELEASE_VERSION" '{tag_name:$tag}')
+          curl --fail-with-body --silent --show-error --location --request POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/generate-notes" \
+              --data "$payload" -o generated_release_notes.json
+          jq -er .body generated_release_notes.json > generated_release_notes.md
 
-          # Extract system prompt content from HTML
+          # Keep the optional operator prompt from the existing release body,
+          # but never use that mutable body as the source of included PRs.
+          curl --fail-with-body --silent --show-error --location \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/releases/tags/${RELEASE_VERSION}" \
+              -o existing_release.json
+
+          # Extract an optional Markdown `## system prompt` section.
           echo "Extracting system prompt content..."
-          pip install beautifulsoup4 markdownify
-          SYSTEM_PROMPT=$(python3 -c "
-          import sys
-          from bs4 import BeautifulSoup
-          from markdownify import markdownify
+          SYSTEM_PROMPT=$(python3 - <<'PY'
+          import json
+          import re
 
-          with open('release_page.html', 'r') as f:
-              soup = BeautifulSoup(f, 'html.parser')
-          
-          system_prompt_header = soup.find('h2', string='system prompt')
-          if system_prompt_header:
-              content = []
-              for sibling in system_prompt_header.next_siblings:
-                  if sibling.name == 'h2':
-                      break
-                  content.append(str(sibling))
-              html_content = ''.join(content).strip()
-              # Convert HTML to Markdown
-              if html_content:
-                  markdown_content = markdownify(html_content)
-                  print(markdown_content.strip())
-              else:
-                  print('')
-          else:
-              print('')
-          ")
+          with open("existing_release.json", encoding="utf-8") as stream:
+              body = json.load(stream).get("body") or ""
+          match = re.search(r"(?ims)^##\s+system prompt\s*$\n(.*?)(?=^##\s|\Z)", body)
+          print(match.group(1).strip() if match else "")
+          PY
+          )
           if [ -z "${SYSTEM_PROMPT}" ]; then
               echo "No system prompt found in release notes."
           else
@@ -101,19 +111,35 @@ jobs:
           fi
 
           echo "Extracting PR numbers from ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME} release notes..."
-          PR_NUMS=$(cat release_page.html | grep -o "/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/pull/[0-9]*" | grep -o "[0-9]*$" | sort -n | uniq | tr '\n' ',')
-          PR_NUMS=${PR_NUMS%,}
+          PR_NUMS=$(python3 - "$GITHUB_REPO_OWNER" "$GITHUB_REPO_NAME" <<'PY'
+          import re
+          import sys
+
+          owner, repo = sys.argv[1:]
+          body = open("generated_release_notes.md", encoding="utf-8").read()
+          values = sorted({int(value) for value in re.findall(rf"https://github\.com/{re.escape(owner)}/{re.escape(repo)}/pull/(\d+)", body)})
+          print(",".join(map(str, values)))
+          PY
+          )
           if [ -z "${PR_NUMS}" ]; then
               echo "No PR numbers found in release notes for ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME} tag=${RELEASE_VERSION}."
-              rm release_page.html
-              exit 0
+              exit 1
           fi
 
           echo "Identifying important PRs..."
-          IMPORTANT_PR_NUMS=$(cat release_page.html | grep -o "<strong>.*/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/pull/[0-9]*.*</strong>" | grep -o "pull/[0-9]*" | grep -o "[0-9]*" | sort -n | uniq | tr '\n' ',')
-          IMPORTANT_PR_NUMS=${IMPORTANT_PR_NUMS%,}
+          IMPORTANT_PR_NUMS=$(python3 - "$GITHUB_REPO_OWNER" "$GITHUB_REPO_NAME" <<'PY'
+          import re
+          import sys
 
-          rm release_page.html
+          owner, repo = sys.argv[1:]
+          body = open("generated_release_notes.md", encoding="utf-8").read()
+          pattern = rf"(?m)^.*\*\*.*https://github\.com/{re.escape(owner)}/{re.escape(repo)}/pull/(\d+).*\*\*.*$"
+          values = sorted({int(value) for value in re.findall(pattern, body)})
+          print(",".join(map(str, values)))
+          PY
+          )
+
+          rm generated_release_notes.json generated_release_notes.md existing_release.json
 
           echo "Extracted PR numbers for ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}: ${PR_NUMS}"
           echo "Important PR numbers: ${IMPORTANT_PR_NUMS}"
@@ -167,9 +193,9 @@ jobs:
 
       - name: Generate Release Notes for Higress
         env:
-          GITHUB_REPO_OWNER: alibaba
+          GITHUB_REPO_OWNER: higress-group
           GITHUB_REPO_NAME: higress
-          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ steps.release-reader.outputs.token }}
           REPORT_TITLE: Higress
         run: |
           export MAIN_RELEASE_VERSION=$(cat ${GITHUB_WORKSPACE}/VERSION)
@@ -180,7 +206,7 @@ jobs:
         env:
           GITHUB_REPO_OWNER: higress-group
           GITHUB_REPO_NAME: higress-console
-          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ steps.release-reader.outputs.token }}
           REPORT_TITLE: Higress Console
         run: |
           export MAIN_RELEASE_VERSION=$(cat ${GITHUB_WORKSPACE}/VERSION)
@@ -236,7 +262,7 @@ jobs:
 
       - name: Update Release Notes
         env:
-          GITHUB_REPO_OWNER: alibaba
+          GITHUB_REPO_OWNER: higress-group
           GITHUB_REPO_NAME: higress
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

@@ -1,4 +1,4 @@
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: higress
@@ -11,7 +11,7 @@ status:
     status: "True"
     type: Accepted
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: gateway
@@ -62,7 +62,7 @@ status:
     - group: gateway.networking.k8s.io
       kind: GRPCRoute
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: invalid-cert-kind
@@ -74,9 +74,9 @@ status:
     value: higress-gateway.higress-system.svc.domain.suffix
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: Resource programmed, assigned to service(s) higress-gateway.higress-system.svc.domain.suffix:34000
@@ -114,7 +114,7 @@ status:
     - group: gateway.networking.k8s.io
       kind: GRPCRoute
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: invalid-cert-malformed
@@ -123,9 +123,9 @@ spec: null
 status:
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: 'Failed to assign to any requested addresses: no instances found for
@@ -164,7 +164,7 @@ status:
     - group: gateway.networking.k8s.io
       kind: GRPCRoute
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: invalid-cert-notfound
@@ -176,9 +176,9 @@ status:
     value: higress-gateway.higress-system.svc.domain.suffix
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: Resource programmed, assigned to service(s) higress-gateway.higress-system.svc.domain.suffix:34001
@@ -216,7 +216,7 @@ status:
     - group: gateway.networking.k8s.io
       kind: GRPCRoute
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: invalid-service
@@ -265,7 +265,7 @@ status:
     - group: gateway.networking.k8s.io
       kind: GRPCRoute
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: protocol-lower-case
@@ -274,9 +274,9 @@ spec: null
 status:
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: 'Failed to assign to any requested addresses: no instances found for
@@ -310,7 +310,7 @@ status:
     name: http
     supportedKinds: []
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: target-port-reference
@@ -359,7 +359,7 @@ status:
     - group: gateway.networking.k8s.io
       kind: GRPCRoute
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: udp-protocol
@@ -368,9 +368,9 @@ spec: null
 status:
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: 'Failed to assign to any requested addresses: no instances found for
@@ -404,7 +404,7 @@ status:
     name: udp
     supportedKinds: []
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: unknown-protocol
@@ -413,9 +413,9 @@ spec: null
 status:
   conditions:
   - lastTransitionTime: fake
-    message: Resource accepted
-    reason: Accepted
-    status: "True"
+    message: None of the Gateway's listeners are valid
+    reason: ListenersNotValid
+    status: "False"
     type: Accepted
   - lastTransitionTime: fake
     message: 'Failed to assign to any requested addresses: no instances found for
@@ -449,7 +449,7 @@ status:
     name: unknown
     supportedKinds: []
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: invalid-gateway-address
@@ -498,7 +498,7 @@ status:
     - group: gateway.networking.k8s.io
       kind: GRPCRoute
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-backendRef-hostname
@@ -523,7 +523,7 @@ status:
       kind: Service
       name: httpbin
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-backendRef-kind
@@ -547,7 +547,7 @@ status:
       name: gateway
       namespace: higress-system
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-backendRef-mirror
@@ -572,7 +572,7 @@ status:
       kind: Service
       name: httpbin
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-backendRef-mixed
@@ -596,7 +596,7 @@ status:
       name: gateway
       namespace: higress-system
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-backendRef-notfound
@@ -620,7 +620,7 @@ status:
       name: gateway
       namespace: higress-system
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-backendRef-serviceimport
@@ -645,7 +645,7 @@ status:
       kind: Service
       name: httpbin
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-mirror
@@ -669,7 +669,7 @@ status:
       name: gateway
       namespace: higress-system
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-parentRef-port
@@ -694,7 +694,7 @@ status:
       namespace: higress-system
       port: 1234
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-parentRef-service
@@ -719,7 +719,7 @@ status:
       kind: Service
       name: not-found
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-parentRef-service-entry
@@ -744,7 +744,7 @@ status:
       kind: ServiceEntry
       name: not-found
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: invalid-sectionname-port
@@ -769,7 +769,7 @@ status:
       namespace: higress-system
       sectionName: fake
 ---
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: no-backend

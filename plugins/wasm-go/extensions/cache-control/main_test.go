@@ -234,7 +234,7 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 			// 验证是否添加了缓存控制头
 			responseHeaders := host.GetResponseHeaders()
 			require.True(t, test.HasHeader(responseHeaders, "expires"))
-			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "maxAge=3600"))
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "max-age=3600"))
 
 			host.CompleteHttp()
 		})
@@ -264,7 +264,7 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 			// 验证是否添加了缓存控制头
 			responseHeaders := host.GetResponseHeaders()
 			require.True(t, test.HasHeader(responseHeaders, "expires"))
-			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "maxAge=315360000"))
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "max-age=315360000"))
 
 			host.CompleteHttp()
 		})
@@ -354,7 +354,7 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 			// 验证是否添加了缓存控制头
 			responseHeaders := host.GetResponseHeaders()
 			require.True(t, test.HasHeader(responseHeaders, "expires"))
-			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "maxAge=7200"))
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "max-age=7200"))
 
 			host.CompleteHttp()
 		})
@@ -384,7 +384,7 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 			// 验证是否添加了缓存控制头
 			responseHeaders := host.GetResponseHeaders()
 			require.True(t, test.HasHeader(responseHeaders, "expires"))
-			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "maxAge=1800"))
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "max-age=1800"))
 
 			host.CompleteHttp()
 		})
@@ -414,7 +414,7 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 			// 验证是否添加了缓存控制头
 			responseHeaders := host.GetResponseHeaders()
 			require.True(t, test.HasHeader(responseHeaders, "expires"))
-			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "maxAge=3600"))
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "max-age=3600"))
 
 			host.CompleteHttp()
 		})
@@ -452,7 +452,7 @@ func TestCompleteFlow(t *testing.T) {
 
 			// 验证是否添加了必要的缓存控制响应头
 			require.True(t, test.HasHeader(responseHeaders, "expires"))
-			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "maxAge=3600"))
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "cache-control", "max-age=3600"))
 
 			host.CompleteHttp()
 		})

@@ -1,4 +1,5 @@
 PLUGIN_NAME ?= hello-world
+PLUGIN_ROOT ?= extensions
 BUILDER_REGISTRY ?= higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/
 REGISTRY ?= higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/
 GO_VERSION ?= 1.24.4
@@ -16,16 +17,18 @@ GOPROXY := $(shell go env GOPROXY)
 .DEFAULT:
 build:
 	DOCKER_BUILDKIT=1 docker build --build-arg PLUGIN_NAME=${PLUGIN_NAME} \
+	                            --build-arg PLUGIN_ROOT=${PLUGIN_ROOT} \
 	                            --build-arg BUILDER=${BUILDER}  \
 	                            --build-arg GOPROXY=$(GOPROXY) \
 	                            -t ${IMG} \
-	                            --output extensions/${PLUGIN_NAME} \
+	                            --output ${PLUGIN_ROOT}/${PLUGIN_NAME} \
 	                            .
 	@echo ""
-	@echo "output wasm file: extensions/${PLUGIN_NAME}/plugin.wasm"
+	@echo "output wasm file: ${PLUGIN_ROOT}/${PLUGIN_NAME}/plugin.wasm"
 
 build-image:
 	DOCKER_BUILDKIT=1 docker build --build-arg PLUGIN_NAME=${PLUGIN_NAME} \
+	                            --build-arg PLUGIN_ROOT=${PLUGIN_ROOT} \
 	                            --build-arg BUILDER=${BUILDER}  \
 	                            --build-arg GOPROXY=$(GOPROXY) \
 	                            -t ${IMG} \
@@ -43,7 +46,7 @@ build-push: build-image
 # If you want to use Go/TinyGo/Oras with another version, please modify GO_VERSION/TINYGO_VERSION/ORAS_VERSION.
 # After your wasm-go-builder image is built, you can use it to build plugin image.
 # e.g.
-#   PLUGIN_NAME=request-block BUILDER=<your-wasm-go-builder> make
+#   PLUGIN_ROOT=examples PLUGIN_NAME=request-block BUILDER=<your-wasm-go-builder> make
 builder:
 	docker buildx build --no-cache \
 			--platform linux/amd64,linux/arm64 \
@@ -60,15 +63,15 @@ builder:
 	@echo "image: ${BUILDER}"
 
 local-build:
-	cd extensions/${PLUGIN_NAME}; \
+	cd ${PLUGIN_ROOT}/${PLUGIN_NAME}; \
 	if [ -f prepare.sh ]; then sh ./prepare.sh; fi; \
 	GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o ./main.wasm .
 
 	@echo ""
-	@echo "wasm: extensions/${PLUGIN_NAME}/main.wasm"
+	@echo "wasm: ${PLUGIN_ROOT}/${PLUGIN_NAME}/main.wasm"
 
 local-run:
-	python3 .devcontainer/gen_config.py ${PLUGIN_NAME}
-	envoy -c extensions/${PLUGIN_NAME}/config.yaml --concurrency 0 --log-level info --component-log-level wasm:debug
+	python3 .devcontainer/gen_config.py ${PLUGIN_NAME} ${PLUGIN_ROOT}
+	envoy -c ${PLUGIN_ROOT}/${PLUGIN_NAME}/config.yaml --concurrency 0 --log-level info --component-log-level wasm:debug
 
 local-all: local-build local-run

@@ -15,13 +15,49 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
+	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type capturedRouteCall struct {
+	method  string
+	url     string
+	headers [][2]string
+	body    []byte
+}
+
+type proxyRouteTestContext struct {
+	*protocolTestHTTPContext
+	calls []capturedRouteCall
+}
+
+func (c *proxyRouteTestContext) RouteCall(method, target string, headers [][2]string, body []byte, callback iface.RouteResponseCallback) error {
+	c.calls = append(c.calls, capturedRouteCall{method: method, url: target, headers: headers, body: append([]byte(nil), body...)})
+	return nil
+}
+
+func modernProxyTestContext(method string, raw []byte) *proxyRouteTestContext {
+	request := &protocol.RequestContext{
+		Era:     protocol.EraModern,
+		Version: protocol.Version20260728,
+		Envelope: protocol.Envelope{
+			Method: method,
+			Raw:    append([]byte(nil), raw...),
+		},
+	}
+	return &proxyRouteTestContext{protocolTestHTTPContext: &protocolTestHTTPContext{values: map[string]any{
+		consts.CtxProtocolRequest: request,
+		"mcp_proxy_server":        NewMcpProxyServer("proxy"),
+	}}}
+}
 
 // -----------------------------------------------------------------------------
 // NewMcpProtocolHandler
@@ -33,6 +69,115 @@ func TestNewMcpProtocolHandler(t *testing.T) {
 	assert.Equal(t, "http://backend.example/mcp", h.backendURL)
 	assert.Equal(t, 5000, h.timeout)
 	assert.Empty(t, h.sessionID, "fresh handler has no session id until Initialize runs")
+}
+
+func TestLegacyDownstreamToModernUpstreamIsRejectedBeforeRouteCall(t *testing.T) {
+	ctx := &proxyRouteTestContext{protocolTestHTTPContext: &protocolTestHTTPContext{values: map[string]any{}}}
+	h := NewMcpProtocolHandler("http://backend.example/mcp", 5000)
+	h.SetProtocolStrategy(ProtocolStrategyModern)
+	err := h.ForwardToolsList(ctx, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "legacy downstream")
+	assert.Empty(t, ctx.calls)
+}
+
+func TestOutboundHeaderProfilesAreRequestScopedAndIsolated(t *testing.T) {
+	ctx := &protocolTestHTTPContext{values: map[string]any{CtxMcpProxyHeaders: [][2]string{
+		{"traceparent", "trace"},
+		{"Mcp-Param-Future", "opaque"},
+		{"Mcp-Param-Bad Name", "drop"},
+		{"Cookie", "drop"},
+	}}}
+	modern := baseOutboundHeaders(ctx, true, "tools/list", "", "downstream-session")
+	assert.Equal(t, "opaque", mustHeaderValue(t, modern, "Mcp-Param-Future"))
+	assert.Equal(t, "tools/list", mustHeaderValue(t, modern, protocol.HeaderMethod))
+	for _, forbidden := range []string{"Mcp-Param-Bad Name", "Cookie", "Mcp-Session-Id"} {
+		_, exists := findHeader(modern, forbidden)
+		assert.False(t, exists)
+	}
+
+	legacyInit := baseOutboundHeaders(ctx, false, "", "", "")
+	_, paramOnInit := findHeader(legacyInit, "Mcp-Param-Future")
+	assert.False(t, paramOnInit, "modern parameter headers must never reach legacy initialize")
+	legacyTool := baseOutboundHeaders(ctx, false, "tools/list", "", "legacy-session")
+	assert.Equal(t, "legacy-session", mustHeaderValue(t, legacyTool, "Mcp-Session-Id"))
+	_, paramOnLegacy := findHeader(legacyTool, "Mcp-Param-Future")
+	assert.False(t, paramOnLegacy)
+}
+
+func TestModernOutboundPreservesValidatedEncodedNameHeaderExactly(t *testing.T) {
+	const encodedName = "=?B?5bel5YW35ZCN?="
+	ctx := modernProxyTestContext("tools/call", []byte(`{}`))
+	request := ctx.GetContext(consts.CtxProtocolRequest).(*protocol.RequestContext)
+	request.Transport = protocol.Transport{
+		ProtocolVersion: string(protocol.Version20260728),
+		MCPMethod:       "tools/call",
+		MCPName:         encodedName,
+	}
+	headers := baseOutboundHeaders(ctx, true, "tools/call", "decoded-name", "")
+	assert.Equal(t, encodedName, mustHeaderValue(t, headers, protocol.HeaderName))
+}
+
+func TestProxyResultAdaptationPreservesModernOpaqueInputRequiredOnlySameEra(t *testing.T) {
+	ctx := modernProxyTestContext("tools/call", []byte(`{}`))
+	modernResult := map[string]any{
+		"resultType": "input_required",
+		"content":    []any{map[string]any{"type": "text", "text": "continue"}},
+		"opaque":     map[string]any{"future": true},
+	}
+	assert.Equal(t, modernResult, adaptProxyResult(ctx, true, modernResult), "same-era result must remain opaque")
+
+	legacyResult := map[string]any{"content": []any{}}
+	bridged := adaptProxyResult(ctx, false, legacyResult)
+	assert.Equal(t, resultTypeComplete, bridged["resultType"])
+	assert.NotContains(t, bridged, "input_required", "cross-era bridge must not synthesize input-required state")
+	assert.NotContains(t, legacyResult, "resultType", "legacy source result must not be mutated")
+}
+
+func TestUpstreamAuthHeadersPreserveOnlyChallenges(t *testing.T) {
+	headers := upstreamAuthHeaders([][2]string{
+		{"WWW-Authenticate", `Bearer realm="mcp"`},
+		{"Set-Cookie", "session=secret"},
+		{"Mcp-Session-Id", "secret-session"},
+		{"WWW-Authenticate", "Basic realm=legacy"},
+	})
+	assert.Equal(t, 2, countHeader(headers, "WWW-Authenticate"))
+	_, cookie := findHeader(headers, "Set-Cookie")
+	assert.False(t, cookie)
+	_, session := findHeader(headers, "Mcp-Session-Id")
+	assert.False(t, session)
+}
+
+func TestModernBridgeCancellationCleansRequestScopedSessionState(t *testing.T) {
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
+	transport := protocol.NewTransport("POST", "mcp.example.com", [][2]string{
+		{"Content-Type", "application/json"},
+		{"Accept", "application/json, text/event-stream"},
+		{protocol.HeaderProtocolVersion, string(protocol.Version20260728)},
+		{protocol.HeaderMethod, "tools/list"},
+	})
+	request, protocolErr := protocol.PrepareRequest(transport, body, func(method string) bool { return method == "tools/list" })
+	require.Nil(t, protocolErr)
+	ctx := &protocolTestHTTPContext{values: map[string]any{
+		consts.CtxProtocolRequest: request,
+		CtxMcpProxySessionID:      "request-session",
+		CtxMcpProxyInitialized:    true,
+		CtxMcpProxyHeaders:        [][2]string{{"traceparent", "trace"}},
+	}}
+	registerProxyCancellation(ctx)
+	require.NotNil(t, ctx.GetContext(CtxMcpProxyCancel))
+
+	request.Cancel()
+	assert.Nil(t, ctx.GetContext(CtxMcpProxySessionID))
+	assert.Nil(t, ctx.GetContext(CtxMcpProxyInitialized))
+	assert.Nil(t, ctx.GetContext(CtxMcpProxyHeaders))
+}
+
+func mustHeaderValue(t *testing.T, headers [][2]string, name string) string {
+	t.Helper()
+	value, exists := findHeader(headers, name)
+	require.True(t, exists, "missing header %s in %#v", name, headers)
+	return value
 }
 
 // -----------------------------------------------------------------------------
@@ -158,6 +303,15 @@ func TestParseBackendResponse_StringErrorField(t *testing.T) {
 	require.NotNil(t, resp)
 	assert.True(t, isErr)
 	assert.Equal(t, "jsonrpc_error", etype)
+}
+
+func TestParseBackendResponse_PreservesOpaqueIntegerPrecision(t *testing.T) {
+	response, isErr, _ := ParseBackendResponse([]byte(`{"jsonrpc":"2.0","id":1,"result":{"resultType":"input_required","requestState":900719925474099312345}}`))
+	require.False(t, isErr)
+	result := response["result"].(map[string]interface{})
+	state, ok := result["requestState"].(json.Number)
+	require.True(t, ok)
+	assert.Equal(t, "900719925474099312345", state.String())
 }
 
 func TestParseBackendResponse_NoResultNoError(t *testing.T) {

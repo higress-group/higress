@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legacy-mcp
+  namespace: mcp-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: legacy-mcp
+  template:
+    metadata:
+      labels:
+        app: legacy-mcp
+    spec:
+      containers:
+        - name: legacy-mcp
+          image: docker.io/library/python:3.12-alpine
+          command: ["python", "/fixture/server.py"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+          volumeMounts:
+            - name: fixture
+              mountPath: /fixture
+              readOnly: true
+      volumes:
+        - name: fixture
+          configMap:
+            name: legacy-mcp-fixture
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: legacy-mcp
+  namespace: mcp-demo
+spec:
+  selector:
+    app: legacy-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

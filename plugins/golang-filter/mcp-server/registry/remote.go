@@ -23,7 +23,7 @@ const (
 	DEFAULT_HTTP_PATH     = "/"
 )
 
-func getHttpCredentialHandle(name string) (func(*CredentialInfo, *HttpRemoteCallHandle), error) {
+func getHttpCredentialHandle(name string) (func(*CredentialInfo, *HttpRemoteCallHandle) error, error) {
 	if name == "fixed-query-token" {
 		return FixedQueryToken, nil
 	}
@@ -46,10 +46,25 @@ type HttpRemoteCallHandle struct {
 }
 
 // http credentials handles
-func FixedQueryToken(cred *CredentialInfo, h *HttpRemoteCallHandle) {
-	key, _ := cred.Credentials[FIX_QUERY_TOKEN_KEY]
-	value, _ := cred.Credentials[FIX_QUERY_TOKEN_VALUE]
-	h.Query[key.(string)] = value.(string)
+func FixedQueryToken(cred *CredentialInfo, h *HttpRemoteCallHandle) error {
+	key, ok := cred.Credentials[FIX_QUERY_TOKEN_KEY]
+	if !ok {
+		return fmt.Errorf("missing %q in fixed-query-token credentials", FIX_QUERY_TOKEN_KEY)
+	}
+	value, ok := cred.Credentials[FIX_QUERY_TOKEN_VALUE]
+	if !ok {
+		return fmt.Errorf("missing %q in fixed-query-token credentials", FIX_QUERY_TOKEN_VALUE)
+	}
+	keyStr, ok := key.(string)
+	if !ok {
+		return fmt.Errorf("%q in fixed-query-token credentials is not a string", FIX_QUERY_TOKEN_KEY)
+	}
+	valueStr, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("%q in fixed-query-token credentials is not a string", FIX_QUERY_TOKEN_VALUE)
+	}
+	h.Query[keyStr] = valueStr
+	return nil
 }
 
 func newHttpRemoteCallHandle(ctx *RpcContext) (*HttpRemoteCallHandle, error) {
@@ -87,7 +102,9 @@ func (h *HttpRemoteCallHandle) HandleToolCall(ctx *RpcContext, parameters map[st
 		if err != nil {
 			return nil, err
 		}
-		credentialHandle(ctx.Credential, h)
+		if err := credentialHandle(ctx.Credential, h); err != nil {
+			return nil, err
+		}
 	}
 
 	err := h.handleParamMapping(&ctx.ToolMeta.ParametersMapping, parameters)

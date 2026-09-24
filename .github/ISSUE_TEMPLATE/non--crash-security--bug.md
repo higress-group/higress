@@ -7,10 +7,16 @@ assignees: ''
 
 ---
 
-**If you are reporting *any* crash or *any* potential security issue, *do not*
-open an issue in this repo. Please report the issue via [ASRC](https://security.alibaba.com/)(Alibaba Security Response Center) where the issue will be triaged appropriately.**
+**If you are reporting a potential security issue, do not open a public issue.
+Please submit it through a
+[GitHub Private Security Advisory](https://github.com/higress-group/higress/security/advisories/new),
+the project's required and sufficient private intake. You may also submit the
+same report to the [Alibaba Security Response Center](https://security.alibaba.com/)
+as an optional additional channel, as described in the project's
+[security policy](https://github.com/higress-group/higress/blob/main/SECURITY.md).
+A crash with no suspected security impact may be reported with this template.**
 
-- [ ] I have searched the [issues](https://github.com/alibaba/higress/issues) of this repository and believe that this is not a duplicate.
+- [ ] I have searched the [issues](https://github.com/higress-group/higress/issues) of this repository and believe that this is not a duplicate.
 
 ### Ⅰ. Issue Description
 

@@ -5,6 +5,8 @@ on:
     branches: [ main ]
     paths:
       - 'plugins/wasm-go/extensions/**'
+      - 'plugins/wasm-go/examples/**'
+      - 'plugins/wasm-go/pkg/mcp/**'
       - '.github/workflows/wasm-plugin-unit-test.yml'
       - 'go.mod'
       - 'go.sum'
@@ -12,6 +14,8 @@ on:
     branches: [ "*" ]
     paths:
       - 'plugins/wasm-go/extensions/**'
+      - 'plugins/wasm-go/examples/**'
+      - 'plugins/wasm-go/pkg/mcp/**'
       - '.github/workflows/wasm-plugin-unit-test.yml'
       - 'go.mod'
       - 'go.sum'
@@ -52,33 +56,43 @@ jobs:
         echo "Changed files:"
         echo "$CHANGED_FILES"
         
-        # 提取变更的插件名称
-        CHANGED_PLUGINS=""
+        # Build a matrix containing both the plugin name and its repository path.
+        # Ignore deleted directories so moves from extensions to examples do not
+        # schedule a duplicate job for the old path.
+        PLUGINS_JSON='[]'
+        add_plugin() {
+          local plugin_path="$1"
+          local plugin_name="${plugin_path##*/}"
+
+          if [ ! -d "plugins/wasm-go/$plugin_path" ]; then
+            return
+          fi
+
+          if ! jq -e --arg path "$plugin_path" 'any(.[]; .path == $path)' <<< "$PLUGINS_JSON" >/dev/null; then
+            PLUGINS_JSON=$(jq -c \
+              --arg name "$plugin_name" \
+              --arg path "$plugin_path" \
+              '. + [{name: $name, path: $path}] | sort_by(.path)' \
+              <<< "$PLUGINS_JSON")
+          fi
+        }
+
         for file in $CHANGED_FILES; do
-          if [[ $file =~ ^plugins/wasm-go/extensions/([^/]+)/ ]]; then
-            PLUGIN_NAME="${BASH_REMATCH[1]}"
-            if [[ ! " $CHANGED_PLUGINS " =~ " $PLUGIN_NAME " ]]; then
-              # 修复：只在非空时添加空格
-              if [ -z "$CHANGED_PLUGINS" ]; then
-                CHANGED_PLUGINS="$PLUGIN_NAME"
-              else
-                CHANGED_PLUGINS="$CHANGED_PLUGINS $PLUGIN_NAME"
-              fi
-            fi
+          if [[ $file =~ ^plugins/wasm-go/(extensions|examples)/([^/]+)/ ]]; then
+            add_plugin "${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+          elif [[ $file =~ ^plugins/wasm-go/pkg/mcp/ ]]; then
+            add_plugin "extensions/mcp-server"
           fi
         done
         
         # 如果没有插件变更，不触发测试
-        if [ -z "$CHANGED_PLUGINS" ]; then
+        if [ "$PLUGINS_JSON" = '[]' ]; then
           echo "No plugin changes detected, skipping tests"
           echo "has-changes=false" >> $GITHUB_OUTPUT
           echo "plugins=[]" >> $GITHUB_OUTPUT
         else
-          echo "Changed plugins: $CHANGED_PLUGINS"
+          echo "Changed plugins: $PLUGINS_JSON"
           echo "has-changes=true" >> $GITHUB_OUTPUT
-          # 将空格分隔转换为 JSON 数组格式
-          PLUGINS_JSON=$(echo "$CHANGED_PLUGINS" | sed 's/ /","/g' | sed 's/^/["/' | sed 's/$/"]/')
-          echo "PLUGINS_JSON: $PLUGINS_JSON"
           echo "plugins=$PLUGINS_JSON" >> $GITHUB_OUTPUT
         fi
 
@@ -100,7 +114,7 @@ jobs:
         fetch-depth: 0
       
     - name: Set up Go 1.24
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: 1.24
         cache: true
@@ -110,10 +124,10 @@ jobs:
         go install gotest.tools/gotestsum@latest
         # 移除gocov工具，直接使用Codecov
         
-    - name: Build WASM for ${{ matrix.plugin }}
-      working-directory: plugins/wasm-go/extensions/${{ matrix.plugin }}
+    - name: Build WASM for ${{ matrix.plugin.name }}
+      working-directory: plugins/wasm-go/${{ matrix.plugin.path }}
       run: |
-        echo "Building WASM for ${{ matrix.plugin }}..."
+        echo "Building WASM for ${{ matrix.plugin.name }}..."
         
         # Run prepare.sh if it exists (e.g., download BPE vocabulary)
         if [ -f prepare.sh ]; then sh ./prepare.sh; fi
@@ -123,72 +137,111 @@ jobs:
         
         # 构建WASM文件，失败时直接退出
         if ! go build -buildmode=c-shared -o main.wasm ./; then
-          echo "❌ WASM build failed for ${{ matrix.plugin }}"
+          echo "❌ WASM build failed for ${{ matrix.plugin.name }}"
           exit 1
         fi
         
         # 验证WASM文件是否生成
         if [ ! -f "main.wasm" ]; then
-          echo "❌ WASM file not generated for ${{ matrix.plugin }}"
+          echo "❌ WASM file not generated for ${{ matrix.plugin.name }}"
           exit 1
         fi
         
-        echo "✅ WASM build successful for ${{ matrix.plugin }}"
+        echo "✅ WASM build successful for ${{ matrix.plugin.name }}"
 
         
     - name: Set WASM_PATH environment variable
       run: |
-        echo "WASM_PATH=$(pwd)/plugins/wasm-go/extensions/${{ matrix.plugin }}/main.wasm" >> $GITHUB_ENV
+        echo "WASM_PATH=$(pwd)/plugins/wasm-go/${{ matrix.plugin.path }}/main.wasm" >> $GITHUB_ENV
         
-    - name: Run tests with coverage for ${{ matrix.plugin }}
-      working-directory: plugins/wasm-go/extensions/${{ matrix.plugin }}
+    - name: Run tests with coverage for ${{ matrix.plugin.name }}
+      working-directory: plugins/wasm-go/${{ matrix.plugin.path }}
       run: |
         # 检查是否存在main_test.go文件
         if [ -f "main_test.go" ]; then
-          echo "Running tests for ${{ matrix.plugin }}..."
+          echo "Running tests for ${{ matrix.plugin.name }}..."
           
           # 运行测试并生成覆盖率报告
-          gotestsum --junitfile ../../../../test-results-${{ matrix.plugin }}.xml \
+          gotestsum --junitfile ../../../../test-results-${{ matrix.plugin.name }}.xml \
                    --format standard-verbose \
-                   --jsonfile ../../../../test-output-${{ matrix.plugin }}.json \
-                   -- -coverprofile=coverage-${{ matrix.plugin }}.out -covermode=atomic -coverpkg=./... ./...
+                   --jsonfile ../../../../test-output-${{ matrix.plugin.name }}.json \
+                   -- -coverprofile=coverage-${{ matrix.plugin.name }}.out -covermode=atomic -coverpkg=./... ./...
           
-          echo "✅ Tests completed for ${{ matrix.plugin }}"
+          echo "✅ Tests completed for ${{ matrix.plugin.name }}"
         else
-          echo "No tests found for ${{ matrix.plugin }}, skipping..."
+          echo "No tests found for ${{ matrix.plugin.name }}, skipping..."
           # 创建空的测试结果文件
-          echo '<?xml version="1.0" encoding="UTF-8"?><testsuites><testsuite name="no-tests" tests="0" failures="0" errors="0" time="0"></testsuite></testsuites>' > ../../../../test-results-${{ matrix.plugin }}.xml
+          echo '<?xml version="1.0" encoding="UTF-8"?><testsuites><testsuite name="no-tests" tests="0" failures="0" errors="0" time="0"></testsuite></testsuites>' > ../../../../test-results-${{ matrix.plugin.name }}.xml
         fi
         
-    - name: Upload test results for ${{ matrix.plugin }}
+    - name: Upload test results for ${{ matrix.plugin.name }}
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: test-results-${{ matrix.plugin }}
+        name: test-results-${{ matrix.plugin.name }}
         path: |
-          test-results-${{ matrix.plugin }}.xml
-          test-output-${{ matrix.plugin }}.json
+          test-results-${{ matrix.plugin.name }}.xml
+          test-output-${{ matrix.plugin.name }}.json
         retention-days: 30
         
-    - name: Upload coverage report for ${{ matrix.plugin }}
+    - name: Upload coverage report for ${{ matrix.plugin.name }}
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: coverage-${{ matrix.plugin }}
-        path: plugins/wasm-go/extensions/${{ matrix.plugin }}/coverage-${{ matrix.plugin }}.out
+        name: coverage-${{ matrix.plugin.name }}
+        path: plugins/wasm-go/${{ matrix.plugin.path }}/coverage-${{ matrix.plugin.name }}.out
         retention-days: 30
         
-    - name: Upload coverage to Codecov for ${{ matrix.plugin }}
+    - name: Upload coverage to Codecov for ${{ matrix.plugin.name }}
       uses: codecov/codecov-action@v4
       if: always()
       env:
         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       with:
-        file: plugins/wasm-go/extensions/${{ matrix.plugin }}/coverage-${{ matrix.plugin }}.out
-        flags: wasm-go-plugin-${{ matrix.plugin }}
-        name: codecov-${{ matrix.plugin }}
+        file: plugins/wasm-go/${{ matrix.plugin.path }}/coverage-${{ matrix.plugin.name }}.out
+        flags: wasm-go-plugin-${{ matrix.plugin.name }}
+        name: codecov-${{ matrix.plugin.name }}
         fail_ci_if_error: false
         verbose: true
+
+  mcp-server-interop:
+    name: MCP 2026 Conformance and Official SDK Interop
+    runs-on: ubuntu-latest
+    needs: detect-changed-plugins
+    if: contains(needs.detect-changed-plugins.outputs.changed-plugins, 'mcp-server')
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go 1.25
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Set up Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Test production MCP packages
+      working-directory: plugins/wasm-go/pkg/mcp
+      run: go test -count=1 ./...
+
+    - name: Test mcp-server conformance and legacy regressions
+      working-directory: plugins/wasm-go/extensions/mcp-server
+      run: go test -count=1 ./...
+
+    - name: Build mcp-server WASM explicitly
+      working-directory: plugins/wasm-go/extensions/mcp-server
+      run: GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o "${RUNNER_TEMP}/mcp-server.wasm" ./
+
+    - name: Run official Go and TypeScript SDK interoperability
+      working-directory: plugins/wasm-go/extensions/mcp-server
+      env:
+        npm_config_registry: https://registry.npmjs.org
+      run: ./testdata/interop/run.sh
 
   test-summary:
     name: Test Summary & Coverage
@@ -201,7 +254,7 @@ jobs:
       uses: actions/checkout@v4
       
     - name: Set up Go 1.25
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: 1.25
         cache: true
@@ -303,6 +356,9 @@ jobs:
             if [ -s "$coverage_file" ]; then
               # 将覆盖率文件复制到对应插件目录
               plugin_dir="plugins/wasm-go/extensions/$plugin_name"
+              if [ ! -d "$plugin_dir" ]; then
+                plugin_dir="plugins/wasm-go/examples/$plugin_name"
+              fi
               if [ -d "$plugin_dir" ]; then
                 cp "$coverage_file" "$plugin_dir/"
                 cd "$plugin_dir"

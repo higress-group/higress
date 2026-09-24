@@ -1,0 +1,260 @@
+{
+  "schemaVersion": 1,
+  "gatewayVersion": "2.2.4",
+  "snapshotPath": "plugins/release/snapshots/2.2.4.json",
+  "snapshotSha256": "09bc798df37e50dae2e684947885c31eb756636c76a98761a9a980fc031e3a1a",
+  "imageRepository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/console",
+  "originalConsoleCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+  "originalImageDigest": "sha256:c8cb47ad0a550e58df4cfee57f2f358eb0b1635a0812c77e04388dfb17bbebb6",
+  "requiredSourceBranch": "main",
+  "plugins": [
+    {
+      "logicalId": "ai-context-limit",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-context-limit:1.0.0",
+      "digest": "sha256:6325ca94b20a3f5ab5e9df4014b60daca8d86e7d0999e74abb2c1ddd29b36f83",
+      "console": {
+        "propertyKey": "ai-context-limit",
+        "resourceDir": "ai-context-limit",
+        "urlForm": "oci",
+        "marketplace": {
+          "repository": "higress-group/higress",
+          "files": [
+            {
+              "sourcePath": "plugins/release/console/ai-context-limit/spec.yaml",
+              "targetPath": "spec.yaml",
+              "sha256": "4507454263642ba71290f11a59905850054c868a22228f812a33c4fdb3f3e82e"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/ai-context-limit/README.md",
+              "targetPath": "README.md",
+              "sha256": "64613bf129cf37f9a5a25beeb044a6e0364907f884819842ae7ef1538e4e18b2"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/ai-context-limit/README_EN.md",
+              "targetPath": "README_EN.md",
+              "sha256": "b57b8beca499787203ad73ea05388ed5a16b7ccbe5790a07252aeb0e0dc55ce7"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "logicalId": "gw-error-format",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/gw-error-format:1.0.0",
+      "digest": "sha256:a0b80b448e995cc3c5697397167e81d3d557205f8ec00e44b16b00997c4082e9",
+      "console": {
+        "propertyKey": "gw-error-format",
+        "resourceDir": "gw-error-format",
+        "urlForm": "oci",
+        "marketplace": {
+          "repository": "higress-group/higress",
+          "files": [
+            {
+              "sourcePath": "plugins/release/console/gw-error-format/spec.yaml",
+              "targetPath": "spec.yaml",
+              "sha256": "26ec5ed1220efb0b5bbcec6342a48fcfc01ad68321b56c1e28a99301fd34a7b1"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/gw-error-format/README.md",
+              "targetPath": "README.md",
+              "sha256": "9d083183ae678c2089ad676745893c2c2697d85a3e5253fffd44c5738aa017a8"
+            },
+            {
+              "sourcePath": "plugins/release/console/gw-error-format/README_EN.md",
+              "targetPath": "README_EN.md",
+              "sha256": "f4a795ef32d155264089d9336c28f1948dcafaed1408cabd7902f5c0d651645c"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "logicalId": "hmac-auth-apisix",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/hmac-auth-apisix:2.0.1",
+      "digest": "sha256:9c4ffddfd75efc557840d2b5844a03d7292268ed97deb3af69ebf3583d3a0633",
+      "console": {
+        "propertyKey": "hmac-auth-apisix",
+        "resourceDir": "hmac-auth-apisix",
+        "urlForm": "oci",
+        "marketplace": {
+          "repository": "higress-group/higress",
+          "files": [
+            {
+              "sourcePath": "plugins/release/console/hmac-auth-apisix/spec.yaml",
+              "targetPath": "spec.yaml",
+              "sha256": "d8ea901848ebe354471297840a4ba8da3f50fff55998e85bd656396b5608815b"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/hmac-auth-apisix/README.md",
+              "targetPath": "README.md",
+              "sha256": "fa896d226dd92482ca1e273387831f4048445499aa0410935da242369f6ebd97"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/hmac-auth-apisix/README_EN.md",
+              "targetPath": "README_EN.md",
+              "sha256": "c076fc3d6ca469456f6d53b3b8b61e4e87c721999217445e47fc19d63d6aa34d"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "logicalId": "log-request-response",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/log-request-response:1.0.0",
+      "digest": "sha256:a3e915062ffc312b79f67dd1a6a8a9e199f6f6d2bdd2afb4b272327552b68731",
+      "console": {
+        "propertyKey": "log-request-response",
+        "resourceDir": "log-request-response",
+        "urlForm": "oci",
+        "marketplace": {
+          "repository": "higress-group/higress",
+          "files": [
+            {
+              "sourcePath": "plugins/release/console/log-request-response/spec.yaml",
+              "targetPath": "spec.yaml",
+              "sha256": "abde6165cccf91e78d66b9e19ae8284a4226f9464e7424037f58557a21bdaf50"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/log-request-response/README.md",
+              "targetPath": "README.md",
+              "sha256": "fdb7250d121b614db91f0d43983a738096e35c7f389422aef0f7378b54b0a828"
+            },
+            {
+              "sourcePath": "plugins/release/console/log-request-response/README_EN.md",
+              "targetPath": "README_EN.md",
+              "sha256": "8fc32e95e06d659107fbde5962ceda12c78f4c9776449ec3f6468fe249b9ca5d"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "logicalId": "mcp-router",
+      "version": "2.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-router:2.0.1",
+      "digest": "sha256:2f888548c5284d514ed9f0384711610dfdb8b72f572e95bfcd1c64e41d199203",
+      "console": {
+        "propertyKey": "mcp-router",
+        "resourceDir": "mcp-router",
+        "urlForm": "oci",
+        "marketplace": {
+          "repository": "higress-group/higress",
+          "files": [
+            {
+              "sourcePath": "plugins/release/console/mcp-router/spec.yaml",
+              "targetPath": "spec.yaml",
+              "sha256": "b00360eba38939b01dd96b943e994b0d92c55a18248eaa0fd732c548fb477d05"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/mcp-router/README_ZH.md",
+              "targetPath": "README.md",
+              "sha256": "9ebba52208d391bc088b3348e5ce197b654381a3e1f68ec7aa4ae5645d6cdcf6"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/mcp-router/README.md",
+              "targetPath": "README_EN.md",
+              "sha256": "fc2d9557522e45c2b616eb002d5b7ab6a40d4744c325d31c55895a0f5fc39758"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "logicalId": "nginx-rewrite-compatible",
+      "version": "1.0.0",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/nginx-rewrite-compatible:1.0.0",
+      "digest": "sha256:9ab80c0c7e9abd30e099ef92964efc0291f1161175ea2a6873019d1d47a06922",
+      "console": {
+        "propertyKey": "nginx-rewrite-compatible",
+        "resourceDir": "nginx-rewrite-compatible",
+        "urlForm": "oci",
+        "marketplace": {
+          "repository": "higress-group/higress",
+          "files": [
+            {
+              "sourcePath": "plugins/release/console/nginx-rewrite-compatible/spec.yaml",
+              "targetPath": "spec.yaml",
+              "sha256": "1071a2c29f25f1513117e2ee6891857618aab3f30194f885ea660412458c7605"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/nginx-rewrite-compatible/README.md",
+              "targetPath": "README.md",
+              "sha256": "cfa7a2fbf89eed3cfa90869a3e3f8201697c95472ac8fb660e0de2a2f32840b1"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/nginx-rewrite-compatible/README_EN.md",
+              "targetPath": "README_EN.md",
+              "sha256": "fe06fbd011ef589883957b8dac2e471ebd969bc0a15e3013ed6e8827e0b22029"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "logicalId": "response-cache",
+      "version": "1.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/response-cache:1.0.1",
+      "digest": "sha256:48ac08f29879b14b76e154ec5107a67137a82dc2b90964726177e7f5abdd97e5",
+      "console": {
+        "propertyKey": "response-cache",
+        "resourceDir": "response-cache",
+        "urlForm": "oci",
+        "marketplace": {
+          "repository": "higress-group/higress",
+          "files": [
+            {
+              "sourcePath": "plugins/release/console/response-cache/spec.yaml",
+              "targetPath": "spec.yaml",
+              "sha256": "d16817a650a724cac0e39b01522f759c9ef158240d4f91f4b60339152c2d6700"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/response-cache/README.md",
+              "targetPath": "README.md",
+              "sha256": "057c46050edbbd3c192e1ac37fbc6dbaa703b3a2295bd9930e42eb34e93f5610"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/response-cache/README_EN.md",
+              "targetPath": "README_EN.md",
+              "sha256": "cd8a8e1870783ef0e827cfa730aac74e2fdb23f86bf61874629a25c20a2e080e"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "logicalId": "simple-jwt-auth",
+      "version": "1.0.1",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/simple-jwt-auth:1.0.1",
+      "digest": "sha256:fc47399ea9eb53bf3b15485a7819b1c4d00e777f8bb5223e0502087b19b1d53e",
+      "console": {
+        "propertyKey": "simple-jwt-auth",
+        "resourceDir": "simple-jwt-auth",
+        "urlForm": "oci",
+        "marketplace": {
+          "repository": "higress-group/higress",
+          "files": [
+            {
+              "sourcePath": "plugins/release/console/simple-jwt-auth/spec.yaml",
+              "targetPath": "spec.yaml",
+              "sha256": "9bb20f8c9605c8bb223f1b6d8b62db333de35dd6e99edf795b2e7ca26137fb2f"
+            },
+            {
+              "sourcePath": "plugins/wasm-go/extensions/simple-jwt-auth/README.md",
+              "targetPath": "README.md",
+              "sha256": "51d6ca11c72db254affe7b43b25ef6cd96dfc4b5aa37fa281d03f1a68a3da566"
+            },
+            {
+              "sourcePath": "plugins/release/console/simple-jwt-auth/README_EN.md",
+              "targetPath": "README_EN.md",
+              "sha256": "ff07ee2ed988153105b7869e5ff0f3e2f46097d66ffa17f0524801ad08aa7b38"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
