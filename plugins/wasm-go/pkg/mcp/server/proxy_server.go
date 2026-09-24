@@ -210,11 +210,14 @@ func (s *McpProxyServer) GetConfig(v any) {
 // Clone implements Server interface
 func (s *McpProxyServer) Clone() Server {
 	newServer := &McpProxyServer{
-		Name:             s.Name,
-		base:             s.base.CloneBase(),
-		toolsConfig:      make(map[string]McpProxyToolConfig),
-		securitySchemes:  make(map[string]SecurityScheme),
-		protocolStrategy: s.GetProtocolStrategy(),
+		Name:                      s.Name,
+		base:                      s.base.CloneBase(),
+		toolsConfig:               make(map[string]McpProxyToolConfig),
+		securitySchemes:           make(map[string]SecurityScheme),
+		defaultDownstreamSecurity: s.defaultDownstreamSecurity,
+		defaultUpstreamSecurity:   s.defaultUpstreamSecurity,
+		protocolStrategy:          s.GetProtocolStrategy(),
+		passthroughAuthHeader:     s.passthroughAuthHeader,
 	}
 	for k, v := range s.toolsConfig {
 		newServer.toolsConfig[k] = v
