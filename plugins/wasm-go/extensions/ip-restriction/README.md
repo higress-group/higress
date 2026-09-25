@@ -25,6 +25,8 @@ description: IP 访问限制插件配置参考
 | deny           | array  | 否  | []                          | 黑名单列表                                    |
 | status         | int    | 否  | 403                         | 拒绝访问时的 HTTP 状态码                          |
 | message        | string | 否  | Your IP address is blocked. | 拒绝访问时的返回信息                               |
+| response_body  | string | 否  |                             | 拒绝访问时返回的自定义响应体，设置后覆盖默认 JSON。常用于返回 HTML 拦截页            |
+| content_type   | string | 否  | text/html; charset=utf-8    | 自定义响应 Content-Type（仅在设置 `response_body` 时生效）                       |
 
 
 ```yaml
@@ -39,5 +41,16 @@ ip_source_type: header
 ip_header_name: x-real-iP
 deny:
   - 10.0.0.1
-  - 192.169.0.0/16   
+  - 192.168.0.0/16
+```
+
+```yaml
+# 拒绝时返回自定义 HTML 拦截页
+ip_source_type: header
+ip_header_name: x-forwarded-for
+allow:
+  - 10.0.0.0/8
+status: 403
+response_body: "<html><body><h1>访问受限</h1><p>请使用内网访问。</p></body></html>"
+content_type: "text/html; charset=utf-8"
 ```
