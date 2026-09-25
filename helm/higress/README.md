@@ -318,3 +318,5 @@ The command removes all the Kubernetes components associated with the chart and 
 | tracing.sampling | int | `100` |  |
 | tracing.timeout | int | `500` |  |
 | upstream | object | `{"connectionBufferLimits":10485760,"idleTimeout":10}` | Upstream config settings |
+| upstream.connectionBufferLimits | int | `10485760` | Per-upstream-connection buffer limit in bytes. |
+| upstream.idleTimeout | int | `10` | Idle timeout in seconds for HTTP upstream connections in the connection pool. Defaults to 10. Set to 0 to disable the timeout; this does not use Envoy's one-hour default. |
