@@ -442,6 +442,36 @@ func TestOnHttpRequestBody(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+
+		// 测试 Gemini 流式 path（带 ?alt=sse query）也能从 path 正确提取模型名。
+		// 回归：正则末尾的 $ 锚点曾因 query 后缀失配，导致模型名为 UNKNOWN。
+		t.Run("gemini streaming path with query extracts model", func(t *testing.T) {
+			host, status := test.NewTestHost(requestBodyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// path 带 ?alt=sse，且 body 中没有 model 字段（Gemini 原生协议模型名在 path 里）
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1beta/models/gemini-3.1-flash-image-preview:streamGenerateContent?alt=sse"},
+				{":method", "POST"},
+			})
+
+			requestBody := []byte(`{
+				"contents": [
+					{"role": "user", "parts": [{"text": "generate an image"}]}
+				]
+			}`)
+			action := host.CallOnHttpRequestBody(requestBody)
+			require.Equal(t, types.ActionContinue, action)
+
+			// span 里的 gen_ai.request.model 应为真实模型名，而不是 UNKNOWN
+			model, ok := getSpanValue(host, ArmsRequestModel)
+			require.True(t, ok, "request model span attribute should be set")
+			require.Equal(t, "gemini-3.1-flash-image-preview", model)
+
+			host.CompleteHttp()
+		})
 	})
 }
 

@@ -740,9 +740,16 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body 
 	// If model not found in body, try to extract from path (Gemini style)
 	if requestModel == "UNKNOWN" {
 		requestPath := ctx.GetStringContext(RequestPath, "")
-		if strings.Contains(requestPath, "generateContent") || strings.Contains(requestPath, "streamGenerateContent") { // Google Gemini GenerateContent
+		// Strip the query string before matching. Gemini streaming uses
+		// streamGenerateContent?alt=sse, and the trailing-$ anchor would
+		// otherwise fail to match, leaving the reported model as UNKNOWN.
+		pathOnly := requestPath
+		if i := strings.Index(pathOnly, "?"); i >= 0 {
+			pathOnly = pathOnly[:i]
+		}
+		if strings.Contains(pathOnly, "generateContent") || strings.Contains(pathOnly, "streamGenerateContent") { // Google Gemini GenerateContent
 			reg := regexp.MustCompile(`^.*/(?P<api_version>[^/]+)/models/(?P<model>[^:]+):\w+Content$`)
-			matches := reg.FindStringSubmatch(requestPath)
+			matches := reg.FindStringSubmatch(pathOnly)
 			if len(matches) == 3 {
 				requestModel = matches[2]
 			}
