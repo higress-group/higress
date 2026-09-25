@@ -54,6 +54,7 @@ then
     else
         echo "🚀 Build Rust WasmPlugin: $INNER_PLUGIN_NAME"
         PLUGIN_ROOT=${INNER_PLUGIN_ROOT:-extensions} PLUGIN_NAME=${INNER_PLUGIN_NAME} make lint
+        PLUGIN_ROOT=${INNER_PLUGIN_ROOT:-extensions} PLUGIN_NAME=${INNER_PLUGIN_NAME} make test
         PLUGIN_ROOT=${INNER_PLUGIN_ROOT:-extensions} PLUGIN_NAME=${INNER_PLUGIN_NAME} make build
     fi
 elif [ "$TYPE" == "GO" ] || [ -z "$TYPE" ]
