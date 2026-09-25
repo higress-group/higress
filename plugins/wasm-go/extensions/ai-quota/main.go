@@ -49,6 +49,8 @@ func init() {
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
+		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
+		wrapper.ProcessResponseBody(onHttpResponseBody),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingResponseBody),
 	)
 }
@@ -236,13 +238,34 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config QuotaConfig, body []byte)
 	return types.ActionContinue
 }
 
+func onHttpResponseHeaders(ctx wrapper.HttpContext, _ QuotaConfig) types.Action {
+	if chatMode, ok := ctx.GetContext("chatMode").(ChatMode); !ok || chatMode != ChatModeCompletion {
+		return types.ActionContinue
+	}
+	contentType, _ := proxywasm.GetHttpResponseHeader("content-type")
+	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		ctx.BufferResponseBody()
+	}
+	return types.ActionContinue
+}
+
+func onHttpResponseBody(ctx wrapper.HttpContext, config QuotaConfig, data []byte) types.Action {
+	processTokenUsage(ctx, config, data, true)
+	return types.ActionContinue
+}
+
 func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, data []byte, endOfStream bool) []byte {
+	processTokenUsage(ctx, config, data, endOfStream)
+	return data
+}
+
+func processTokenUsage(ctx wrapper.HttpContext, config QuotaConfig, data []byte, endOfStream bool) {
 	chatMode, ok := ctx.GetContext("chatMode").(ChatMode)
 	if !ok {
-		return data
+		return
 	}
 	if chatMode == ChatModeNone || chatMode == ChatModeAdmin {
-		return data
+		return
 	}
 	if usage := tokenusage.GetTokenUsage(ctx, data); usage.TotalToken > 0 {
 		ctx.SetContext(tokenusage.CtxKeyInputToken, usage.InputToken)
@@ -251,11 +274,11 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 
 	// chat completion mode
 	if !endOfStream {
-		return data
+		return
 	}
 
 	if ctx.GetContext(tokenusage.CtxKeyInputToken) == nil || ctx.GetContext(tokenusage.CtxKeyOutputToken) == nil || ctx.GetContext("consumer") == nil {
-		return data
+		return
 	}
 
 	inputToken, ok := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
@@ -273,7 +296,6 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 	totalToken := int(inputToken + outputToken)
 	log.Debugf("update consumer:%s, totalToken:%d", consumer, totalToken)
 	config.redisClient.DecrBy(config.RedisKeyPrefix+consumer, totalToken, nil)
-	return data
 }
 
 func deniedNoKeyAuthData() types.Action {

@@ -17,6 +17,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -235,6 +236,74 @@ func TestOnHttpRequestBody(t *testing.T) {
 	})
 }
 
+func TestOnHttpNonStreamingResponseBody(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("buffers completion responses", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"x-mse-consumer", "consumer1"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+			host.CallOnRedisCall(0, test.CreateRedisResp(1000))
+
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			// A non-streaming JSON response may still arrive in multiple Envoy body
+			// callbacks. It must be buffered so token usage is parsed from the
+			// complete document.
+			action = host.CallOnHttpStreamingResponseBody(
+				[]byte(`{"choices":[{"message":{"content":"hello"}}],`),
+				false,
+			)
+			require.Equal(t, types.ActionPause, action)
+
+			action = host.CallOnHttpStreamingResponseBody(
+				[]byte(`"usage":{"prompt_tokens":10,"completion_tokens":15,"total_tokens":25}}`),
+				true,
+			)
+			require.Equal(t, types.ActionContinue, action)
+			require.Contains(t, strings.Join(host.GetDebugLogs(), "\n"), "update consumer:consumer1, totalToken:25")
+
+			host.CompleteHttp()
+		})
+
+		t.Run("does not buffer unrelated responses", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/other/path"},
+				{":method", "GET"},
+				{"x-mse-consumer", "consumer1"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			action = host.CallOnHttpStreamingResponseBody([]byte(`{"message":`), false)
+			require.Equal(t, types.ActionContinue, action)
+
+			host.CompleteHttp()
+		})
+	})
+}
+
 func TestOnHttpStreamingResponseBody(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试聊天完成模式的流式响应体处理
@@ -244,33 +313,38 @@ func TestOnHttpStreamingResponseBody(t *testing.T) {
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
 			// 先设置请求头
-			host.CallOnHttpRequestHeaders([][2]string{
+			action := host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 				{"x-mse-consumer", "consumer1"},
 			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+			host.CallOnRedisCall(0, test.CreateRedisResp(1000))
+
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "text/event-stream; charset=utf-8"},
+			})
+			require.Equal(t, types.ActionContinue, action)
 
 			// 测试流式响应体处理
-			data := []byte(`{"choices": [{"delta": {"content": "Hello"}}]}`)
-			action := host.CallOnHttpStreamingResponseBody(data, false)
-
+			data := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n")
+			action = host.CallOnHttpStreamingResponseBody(data, false)
 			require.Equal(t, types.ActionContinue, action)
 			result := host.GetResponseBody()
 			// 非结束流应该返回原始数据
 			require.Equal(t, data, result)
 
 			// 测试结束流
-			action = host.CallOnHttpStreamingResponseBody(data, true)
+			lastChunk := []byte("data: {\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":18,\"total_tokens\":30}}\n\n")
+			action = host.CallOnHttpStreamingResponseBody(lastChunk, true)
 
 			require.Equal(t, types.ActionContinue, action)
 			result = host.GetResponseBody()
 			// 结束流应该返回原始数据
-			require.Equal(t, data, result)
-
-			// 模拟Redis调用响应（减少配额）
-			resp := test.CreateRedisRespArray([]interface{}{30})
-			host.CallOnRedisCall(0, resp)
+			require.Equal(t, lastChunk, result)
+			require.Contains(t, strings.Join(host.GetDebugLogs(), "\n"), "update consumer:consumer1, totalToken:30")
 
 			host.CompleteHttp()
 		})
