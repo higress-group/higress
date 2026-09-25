@@ -73,5 +73,8 @@ func (g *groqProvider) GetApiName(path string) ApiName {
 	if strings.Contains(path, groqChatCompletionPath) {
 		return ApiNameChatCompletion
 	}
+	if strings.Contains(path, groqResponsesPath) {
+		return ApiNameResponses
+	}
 	return ""
 }
