@@ -70,7 +70,7 @@ helm delete higress -n higress-system
 | controller.probe.initialDelaySeconds | int | `1` | 初始延迟秒数 |
 | controller.probe.periodSeconds | int | `3` | 健康检查间隔秒数 |
 | controller.probe.timeoutSeconds | int | `5` | 超时秒数 |
-| controller.rbac.create | bool | `true` | 是否创建 RBAC 相关资源 |
+| controller.rbac.create | bool | `true` | 是否创建控制器的 ClusterRole 和 ClusterRoleBinding。当集群管理员已预先创建集群级 RBAC 资源时，可设为 false。 |
 | controller.replicas | int | `1` | Higress 控制器 Pod 的数量 |
 | controller.resources.limits.cpu | string | `"1000m"` | CPU 上限 |
 | controller.resources.limits.memory | string | `"2048Mi"` | 内存上限 |
@@ -117,6 +117,8 @@ helm delete higress -n higress-system
 | gateway.name | string | `"higress-gateway"` | 网关名称 |
 | gateway.networkGateway | string | `""` | 网络网关指定 |
 | gateway.nodeSelector | object | `{}` | 节点选择器 |
+| gateway.rbac.enabled | bool | `true` | 是否创建网关访问证书所需的 RBAC 资源。使用 Gateway API 时不需要开启。 |
+| gateway.rbac.create | bool | `true` | 是否创建网关的 ClusterRole 和 ClusterRoleBinding。当集群管理员已预先创建集群级 RBAC 资源时，可设为 false。 |
 | gateway.replicas | int | `2` | Higress Gateway pod 的数量 |
 | gateway.resources.limits.cpu | string | `"2000m"` | 容器资源限制的 CPU |
 | gateway.resources.limits.memory | string | `"2048Mi"` | 容器资源限制的内存 |
