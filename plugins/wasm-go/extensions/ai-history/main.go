@@ -347,7 +347,11 @@ func processSSEMessage(ctx wrapper.HttpContext, config PluginConfig, sseMessage 
 				ctx.SetContext(AnswerContentContextKey, content)
 			} else {
 				append := TrimQuote(gjson.Get(bodyJson, config.AnswerStreamValueFrom.ResponseBody).Raw)
-				content = tempContentI.(string) + append
+				if prevContent, ok := tempContentI.(string); ok {
+					content = prevContent + append
+				} else {
+					content = append
+				}
 				ctx.SetContext(AnswerContentContextKey, content)
 			}
 		} else if gjson.Get(bodyJson, "choices.0.delta.content.tool_calls").Exists() {
@@ -386,14 +390,21 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 				ctx.SetContext(AnswerContentContextKey, chunk)
 				return chunk
 			}
-			tempContent := tempContentI.([]byte)
-			tempContent = append(tempContent, chunk...)
-			ctx.SetContext(AnswerContentContextKey, tempContent)
+			if tempContent, ok := tempContentI.([]byte); ok {
+				tempContent = append(tempContent, chunk...)
+				ctx.SetContext(AnswerContentContextKey, tempContent)
+			} else {
+				ctx.SetContext(AnswerContentContextKey, chunk)
+			}
 		} else {
 			var partialMessage []byte
 			partialMessageI := ctx.GetContext(PartialMessageContextKey)
 			if partialMessageI != nil {
-				partialMessage = append(partialMessageI.([]byte), chunk...)
+				if pm, ok := partialMessageI.([]byte); ok {
+					partialMessage = append(pm, chunk...)
+				} else {
+					partialMessage = chunk
+				}
 			} else {
 				partialMessage = chunk
 			}
@@ -451,7 +462,11 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 			if tempContentI == nil {
 				return chunk
 			}
-			value = tempContentI.(string)
+			if v, ok := tempContentI.(string); ok {
+				value = v
+			} else {
+				return chunk
+			}
 		}
 	}
 	saveChatHistory(ctx, config, questionI, value, log)
@@ -459,7 +474,11 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 }
 
 func saveChatHistory(ctx wrapper.HttpContext, config PluginConfig, questionI any, value string, log log.Log) {
-	question := questionI.(string)
+	question, ok := questionI.(string)
+	if !ok {
+		log.Errorf("questionI is not a string, skip saving chat history")
+		return
+	}
 	identityKey := ctx.GetStringContext(IdentityKey, "")
 	var chat []ChatHistory
 	chatHistories := ctx.GetStringContext(ChatHistories, "")
