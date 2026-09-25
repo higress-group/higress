@@ -2,6 +2,8 @@ package test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math/rand"
 	"mime/multipart"
@@ -13,6 +15,17 @@ import (
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
 )
+
+// tokenByFingerprintPrefix lets tests verify key consistency without logging plaintext keys.
+func tokenByFingerprintPrefix(tokens []string, fingerprintPrefix string) string {
+	for _, token := range tokens {
+		sum := sha256.Sum256([]byte(token))
+		if strings.HasPrefix(hex.EncodeToString(sum[:]), fingerprintPrefix) {
+			return token
+		}
+	}
+	return ""
+}
 
 // 测试配置：Vertex 标准模式配置
 var basicVertexConfig = func() json.RawMessage {
@@ -420,10 +433,10 @@ func RunVertexExpressModeOnHttpRequestBodyTests(t *testing.T) {
 				{"Content-Type", "application/json"},
 			})
 
-			// 从 debug log 中提取请求头阶段固定的 apiTokenInUse
+			// Map the fingerprint fixed during request-header processing back to the test key.
 			var apiTokenInUse string
 			for _, debugLog := range host.GetDebugLogs() {
-				const prefix = "Use apiToken "
+				const prefix = "Use apiToken fingerprint "
 				const suffix = " to send request"
 				start := strings.Index(debugLog, prefix)
 				if start == -1 {
@@ -434,7 +447,7 @@ func RunVertexExpressModeOnHttpRequestBodyTests(t *testing.T) {
 				if end == -1 {
 					continue
 				}
-				apiTokenInUse = debugLog[start : start+end]
+				apiTokenInUse = tokenByFingerprintPrefix(tokens, debugLog[start:start+end])
 				break
 			}
 			require.Contains(t, tokens, apiTokenInUse, "apiTokenInUse should be selected from configured tokens")
@@ -491,10 +504,10 @@ func RunVertexExpressModeOnHttpRequestBodyTests(t *testing.T) {
 				{"Content-Type", "application/json"},
 			})
 
-			// 从 debug log 中提取请求头阶段固定的 apiTokenInUse
+			// Map the fingerprint fixed during request-header processing back to the test key.
 			var apiTokenInUse string
 			for _, debugLog := range host.GetDebugLogs() {
-				const prefix = "Use apiToken "
+				const prefix = "Use apiToken fingerprint "
 				const suffix = " to send request"
 				start := strings.Index(debugLog, prefix)
 				if start == -1 {
@@ -505,7 +518,7 @@ func RunVertexExpressModeOnHttpRequestBodyTests(t *testing.T) {
 				if end == -1 {
 					continue
 				}
-				apiTokenInUse = debugLog[start : start+end]
+				apiTokenInUse = tokenByFingerprintPrefix(tokens, debugLog[start:start+end])
 				break
 			}
 			require.Contains(t, tokens, apiTokenInUse, "apiTokenInUse should be selected from configured tokens")
@@ -2701,10 +2714,11 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 			keyInPath := query.Get("key")
 			require.NotEmpty(t, keyInPath, "Path should contain key query parameter")
 
-			// 从 debug log 中提取本次请求固定的 apiTokenInUse
+			// Map the request's fixed fingerprint back to the test key.
 			var apiTokenInUse string
+			tokens := []string{"test-api-key-raw-a", "test-api-key-raw-b"}
 			for _, debugLog := range host.GetDebugLogs() {
-				const prefix = "Use apiToken "
+				const prefix = "Use apiToken fingerprint "
 				const suffix = " to send request"
 				start := strings.Index(debugLog, prefix)
 				if start == -1 {
@@ -2715,7 +2729,7 @@ func RunVertexRawModeOnHttpRequestBodyTests(t *testing.T) {
 				if end == -1 {
 					continue
 				}
-				apiTokenInUse = debugLog[start : start+end]
+				apiTokenInUse = tokenByFingerprintPrefix(tokens, debugLog[start:start+end])
 				break
 			}
 			require.NotEmpty(t, apiTokenInUse, "apiTokenInUse should be logged")

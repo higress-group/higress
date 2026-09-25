@@ -52,6 +52,7 @@ Plugin execution priority: `100`
 | `context`        | object                 | Optional    | -       | Configuration for AI conversation context information                                                                                                                                                                                                                                                                                                                                     |
 | `customSettings` | array of customSetting | Optional    | -       | Specifies overrides or fills parameters for AI requests                                                                                                                                                                                                                                                                                                                                   |
 | `failover`       | object                 | Optional    | -       | Configures apiToken failover. When an apiToken becomes unavailable, it is removed from the available token list and restored after a successful health check or after the cooldown period expires.                                                                                                                                                                                        |
+| `apiKeyAffinity` | object                 | Optional    | -       | Persistently binds an `x-mse-consumer` consumer to one apiToken and switches Key after a failure. Disabled by default and requires Redis when enabled.                                                                                                                                                                                                                                    |
 | `basePath`        | string                 | Optional    | -       | If configured, basePath can be used to remove the prefix from the request path, or prepend the prefix to the request path. Defaults to removal.                                                                                                                                                                                                                                              |
 | `basePathHandling` | string               | Optional    | removePrefix | basePathHandling specifies how basePath is processed. Possible values: removePrefix (removes the basePath prefix from the request path before forwarding to upstream), prepend (adds the basePath prefix to the request path when forwarding to upstream)                                                                                                                                                                                                                                                                                                |
 | `contextCleanupCommands` | array of string | Optional    | -       | List of context cleanup commands. When a user message in the request exactly matches any of the configured commands, that message and all non-system messages before it will be removed, keeping only system messages and messages after the command. This enables users to actively clear conversation history.                                                                           |
@@ -100,6 +101,40 @@ For most protocols, `custom-setting` modifies or fills parameters at the root pa
 | `failoverOnStatus`    | array of string | Optional                                         | ["4.*", "5.*"] | Response status codes that trigger failover for original requests. Regular expressions are supported.                 |
 
 At least one of `healthCheckModel` and `cooldownDuration` must be configured when failover is enabled. If both are configured, an apiToken can be restored either by a successful health check or after the cooldown period expires.
+
+**Details for the `apiKeyAffinity` configuration fields:**
+
+| Name             | Data Type | Requirement          | Default | Description                                                                 |
+| ---------------- | --------- | -------------------- | ------- | --------------------------------------------------------------------------- |
+| `enabled`        | bool      | Optional             | false   | Enables persistent API Key affinity                                         |
+| `redis`          | object    | Required when enabled| -       | Redis connection configuration                                              |
+| `bindingTTLDays` | int       | Optional             | 7       | Binding lifetime in days; successful requests renew after the rounded 80% point |
+| `maxRetries`     | int       | Optional             | 3       | Maximum Key switches after the original failure, from 0 through 10          |
+| `retryTimeout`   | int       | Optional             | 30000   | Shared retry budget from the first failure, in milliseconds                 |
+
+`redis` supports `serviceName`, `servicePort`, `username`, `password`, `database`, and `timeout`. `serviceName` is required. Static services default to port 80; other services default to 6379. The default timeout is 1000 milliseconds.
+
+```yaml
+provider:
+  type: claude
+  apiTokens:
+    - key-a
+    - key-b
+  apiKeyAffinity:
+    enabled: true
+    redis:
+      serviceName: redis.static
+      servicePort: 6379
+      database: 0
+      timeout: 1000
+    bindingTTLDays: 7
+    maxRetries: 3
+    retryTimeout: 30000
+```
+
+The same consumer keeps using its bound Key. When Redis has no binding, the first request uses the gateway's existing Key selection algorithm and persists the binding only after success. Responses `401`, `402`, `403`, and `429` retry the current request with another available Key; the binding changes only after that Key returns any `2xx`. Each retry's upstream timeout is reduced to the remaining `retryTimeout` budget. When failover has available Keys, affinity only selects from that list. If every Key is unavailable, the first attempt preserves failover's existing last-resort behavior, but a failure does not switch to another suspended Key. A temporary Redis failure fails open and records `api_key_affinity_status=redis_degraded` in the existing `ai_log`.
+
+This feature does not query Coding Plan quotas, infer daily or weekly reset times, or manage an account pool. Streaming Key switches require the global `custom_response` internal retry rule shipped in the same Helm version, so update the gateway configuration together with the plugin. The rule triggers only when the internal `299` status and the dedicated retry response header are both present, preventing an unrelated route from replaying a request because of the header alone. Request-body replay for internal retries uses the gateway's existing downstream buffer configuration; this feature does not override the global request-body buffer size.
 
 ### Provider-Specific Configurations
 

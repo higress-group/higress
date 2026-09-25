@@ -24,6 +24,17 @@ var multiTokenOpenAIConfig = func() json.RawMessage {
 	return data
 }()
 
+// Test configuration for a multi-token vLLM provider with native Anthropic Messages support.
+var multiTokenVllmConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "vllm",
+			"apiTokens": []string{"sk-token-1", "sk-token-2", "sk-token-3"},
+		},
+	})
+	return data
+}()
+
 // 测试配置：单 API Token 配置
 var singleTokenOpenAIConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -140,6 +151,62 @@ func RunConsumerAffinityOnHttpRequestHeadersTests(t *testing.T) {
 				{":method", "POST"},
 				{"Content-Type", "application/json"},
 				{"x-mse-consumer", "consumer-finetuning"},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.NotNil(t, requestHeaders)
+
+			authValue, hasAuth := test.GetHeaderValue(requestHeaders, "Authorization")
+			require.True(t, hasAuth, "Authorization header should exist")
+			require.True(t, strings.Contains(authValue, "sk-token-"), "Authorization should contain one of the tokens")
+		})
+
+		// Anthropic Messages uses a pool key normally when affinity is not explicitly enabled.
+		t.Run("anthropic messages with consumer header works without default affinity", func(t *testing.T) {
+			pick := func(consumer string) string {
+				host, status := test.NewTestHost(multiTokenVllmConfig)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				action := host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/v1/messages"},
+					{":method", "POST"},
+					{"Content-Type", "application/json"},
+					{"x-mse-consumer", consumer},
+				})
+
+				require.Equal(t, types.HeaderStopIteration, action)
+
+				requestHeaders := host.GetRequestHeaders()
+				require.NotNil(t, requestHeaders)
+
+				authValue, hasAuth := test.GetHeaderValue(requestHeaders, "Authorization")
+				require.True(t, hasAuth, "Authorization header should exist")
+				require.True(t, strings.Contains(authValue, "sk-token-"), "Authorization should contain one of the tokens")
+				return authValue
+			}
+
+			first := pick("consumer-anthropic")
+			second := pick("consumer-anthropic")
+			validTokens := []string{"Bearer sk-token-1", "Bearer sk-token-2", "Bearer sk-token-3"}
+			require.Contains(t, validTokens, first)
+			require.Contains(t, validTokens, second)
+		})
+
+		// Requests without x-mse-consumer fall back to random selection.
+		t.Run("anthropic messages without consumer header works normally", func(t *testing.T) {
+			host, status := test.NewTestHost(multiTokenVllmConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/messages"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
 			})
 
 			require.Equal(t, types.HeaderStopIteration, action)

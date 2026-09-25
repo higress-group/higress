@@ -340,6 +340,9 @@ type ProviderConfig struct {
 	// @Title zh-CN 失败请求重试
 	// @Description zh-CN 对失败的请求立即进行重试
 	retryOnFailure *retryOnFailure `required:"false" yaml:"retryOnFailure" json:"retryOnFailure"`
+	// @Title zh-CN API Key 亲和
+	// @Description zh-CN 将同一消费者持久绑定到同一 API Key，并在 Key 失败时切换
+	apiKeyAffinity *apiKeyAffinity `required:"false" yaml:"apiKeyAffinity" json:"apiKeyAffinity"`
 	// @Title zh-CN 禁用流式使用统计
 	// @Description zh-CN 禁用后流式请求不会注入 stream_options.include_usage 字段。启用此选项后，流式请求的 token 使用统计将不可用，影响 ai-statistics/access-log 的 usage 字段。适用于不支持 stream_options 的旧版推理引擎（如 vLLM 0.4.3）。
 	disableStreamUsageStats bool `required:"false" yaml:"disableStreamUsageStats" json:"disableStreamUsageStats"`
@@ -726,6 +729,10 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	if retryOnFailureJson.Exists() {
 		c.retryOnFailure.FromJson(retryOnFailureJson)
 	}
+	c.apiKeyAffinity = &apiKeyAffinity{}
+	if affinityJSON := json.Get("apiKeyAffinity"); affinityJSON.Exists() {
+		c.apiKeyAffinity.fromJSON(affinityJSON)
+	}
 	c.disableStreamUsageStats = json.Get("disableStreamUsageStats").Bool()
 	c.difyApiUrl = json.Get("difyApiUrl").String()
 	c.botType = json.Get("botType").String()
@@ -802,6 +809,11 @@ func (c *ProviderConfig) Validate() error {
 
 	if c.failover.enabled {
 		if err := c.failover.Validate(); err != nil {
+			return err
+		}
+	}
+	if c.apiKeyAffinity != nil {
+		if err := c.apiKeyAffinity.validate(); err != nil {
 			return err
 		}
 	}
@@ -1252,7 +1264,7 @@ func (c *ProviderConfig) handleRequestBody(
 		converter := &ClaudeToOpenAIConverter{}
 		body, err = converter.ConvertClaudeRequestToOpenAIWithOptions(body, ClaudeToOpenAIConvertOptions{
 			PreserveMessageReasoningContent: c.supportsMessageReasoningContent(),
-			DisableStreamUsageStats:          c.disableStreamUsageStats,
+			DisableStreamUsageStats:         c.disableStreamUsageStats,
 		})
 		if err != nil {
 			return types.ActionContinue, fmt.Errorf("failed to convert claude request to openai: %v", err)
