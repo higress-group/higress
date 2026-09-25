@@ -1575,6 +1575,119 @@ func TestGatewayReferenceAllowedParentHostnameParsing(t *testing.T) {
 	}
 }
 
+func TestBuildDestinationHigressServiceBackend(t *testing.T) {
+	group := k8s.Group("networking.higress.io")
+	serviceKind := k8s.Kind("Service")
+	unsupportedKind := k8s.Kind("McpBridge")
+	port := k8s.PortNumber(80)
+
+	tests := []struct {
+		name       string
+		backendRef k8s.BackendRef
+		wantPort   *uint32
+		wantReason ConfigErrorReason
+	}{
+		{
+			name: "explicit service kind and port",
+			backendRef: k8s.BackendRef{BackendObjectReference: k8s.BackendObjectReference{
+				Group: &group,
+				Kind:  &serviceKind,
+				Name:  "llm-inclouder.internal.static",
+				Port:  &port,
+			}},
+			wantPort: ptr.Of(uint32(80)),
+		},
+		{
+			name: "default service kind without port",
+			backendRef: k8s.BackendRef{BackendObjectReference: k8s.BackendObjectReference{
+				Group: &group,
+				Name:  "llm-inclouder.internal.static",
+			}},
+		},
+		{
+			name: "unsupported kind",
+			backendRef: k8s.BackendRef{BackendObjectReference: k8s.BackendObjectReference{
+				Group: &group,
+				Kind:  &unsupportedKind,
+				Name:  "default",
+			}},
+			wantReason: InvalidDestinationKind,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			destination, inferencePool, configErr := buildDestination(
+				RouteContext{}, tt.backendRef, "default", false, gvk.HTTPRoute,
+			)
+			if tt.wantReason != "" {
+				if configErr == nil || configErr.Reason != tt.wantReason {
+					t.Fatalf("buildDestination() error = %v, want reason %q", configErr, tt.wantReason)
+				}
+				return
+			}
+			if configErr != nil {
+				t.Fatalf("buildDestination() unexpected error: %v", configErr)
+			}
+			if inferencePool != nil {
+				t.Fatalf("buildDestination() inference pool config = %v, want nil", inferencePool)
+			}
+			if destination.Host != string(tt.backendRef.Name) {
+				t.Fatalf("buildDestination() host = %q, want %q", destination.Host, tt.backendRef.Name)
+			}
+			if tt.wantPort == nil {
+				if destination.Port != nil {
+					t.Fatalf("buildDestination() port = %v, want nil", destination.Port)
+				}
+			} else if destination.Port == nil || destination.Port.Number != *tt.wantPort {
+				t.Fatalf("buildDestination() port = %v, want %d", destination.Port, *tt.wantPort)
+			}
+		})
+	}
+}
+
+func TestConvertHTTPRouteWithHigressServiceBackend(t *testing.T) {
+	group := k8s.Group("networking.higress.io")
+	kind := k8s.Kind("Service")
+	port := k8s.PortNumber(80)
+	rule := k8s.HTTPRouteRule{BackendRefs: []k8s.HTTPBackendRef{{
+		BackendRef: k8s.BackendRef{BackendObjectReference: k8s.BackendObjectReference{
+			Group: &group,
+			Kind:  &kind,
+			Name:  "llm-inclouder.internal.static",
+			Port:  &port,
+		}},
+	}}}
+	obj := &k8s.HTTPRoute{ObjectMeta: metav1.ObjectMeta{
+		Name:      "ai-route-test",
+		Namespace: "higress-system",
+	}}
+
+	route, inferencePool, configErr := convertHTTPRoute(RouteContext{}, rule, obj, 0, false)
+	if configErr != nil {
+		t.Fatalf("convertHTTPRoute() unexpected error: %v", configErr)
+	}
+	if inferencePool != nil {
+		t.Fatalf("convertHTTPRoute() inference pool config = %v, want nil", inferencePool)
+	}
+	if route == nil {
+		t.Fatal("convertHTTPRoute() route is nil")
+	}
+	if len(route.Route) != 1 {
+		t.Fatalf("convertHTTPRoute() destinations = %d, want 1", len(route.Route))
+	}
+	destination := route.Route[0].Destination
+	if destination == nil {
+		t.Fatal("convertHTTPRoute() destination is nil")
+	}
+	if destination.Host != "llm-inclouder.internal.static" {
+		t.Fatalf("convertHTTPRoute() host = %q, want %q", destination.Host, "llm-inclouder.internal.static")
+	}
+	if destination.Port == nil || destination.Port.Number != 80 {
+		t.Fatalf("convertHTTPRoute() port = %v, want 80", destination.Port)
+	}
+}
+
 func TestRouteParentReferenceHostnameIntersection(t *testing.T) {
 	tests := []struct {
 		name         string
