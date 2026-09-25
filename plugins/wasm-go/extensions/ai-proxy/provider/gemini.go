@@ -32,6 +32,13 @@ const (
 	geminiEmbeddingPath            = "batchEmbedContents"
 	geminiModelsPath               = "models"
 	geminiImageGenerationPath      = "predict"
+
+	// Function calling modes exposed by toolConfig.functionCallingConfig. VALIDATED
+	// is Gemini's counterpart of OpenAI's `strict` tools: the arguments are checked
+	// against the declared schema before they are returned.
+	geminiFunctionCallingModeAny       = "ANY"
+	geminiFunctionCallingModeNone      = "NONE"
+	geminiFunctionCallingModeValidated = "VALIDATED"
 )
 
 var geminiThinkingModels = map[string]bool{
@@ -333,6 +340,7 @@ type geminiGenerationContentRequest struct {
 	SafetySettings    []geminiChatSafetySetting  `json:"safetySettings,omitempty"`
 	GenerationConfig  geminiChatGenerationConfig `json:"generationConfig,omitempty"`
 	Tools             []geminiChatTools          `json:"tools,omitempty"`
+	ToolConfig        *geminiToolConfig          `json:"toolConfig,omitempty"`
 }
 
 type geminiChatContent struct {
@@ -369,6 +377,19 @@ type geminiChatGenerationConfig struct {
 
 type geminiChatTools struct {
 	FunctionDeclarations any `json:"function_declarations,omitempty"`
+}
+
+// geminiToolConfig carries Gemini's function calling configuration. Tool
+// selection (a named tool, an allow-list, `none`) and strict argument validation
+// are only honoured through this field, so dropping it silently re-enabled every
+// declared tool.
+type geminiToolConfig struct {
+	FunctionCallingConfig *geminiFunctionCallingConfig `json:"functionCallingConfig,omitempty"`
+}
+
+type geminiFunctionCallingConfig struct {
+	Mode                 string   `json:"mode,omitempty"`
+	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
 }
 
 type geminiPart struct {
@@ -441,16 +462,30 @@ func (g *geminiProvider) buildGeminiChatRequest(request *chatCompletionRequest) 
 		}
 	}
 
+	if request.ParallelToolCalls != nil && !*request.ParallelToolCalls {
+		// Gemini has no switch for this, so report the field instead of letting the
+		// caller believe parallel tool calls were disabled.
+		log.Warnf("[ai-proxy] gemini: parallel_tool_calls=false has no Gemini equivalent and cannot be enforced")
+	}
+
 	if request.Tools != nil {
 		functions := make([]function, 0, len(request.Tools))
-		for _, tool := range request.Tools {
-			functions = append(functions, tool.Function)
+		for _, t := range request.Tools {
+			// Copy the fields explicitly instead of forwarding t.Function: Google's
+			// schema rejects unknown members, so `strict` must never be serialized
+			// into the declaration (it is mapped onto functionCallingConfig below).
+			functions = append(functions, function{
+				Description: t.Function.Description,
+				Name:        t.Function.Name,
+				Parameters:  t.Function.Parameters,
+			})
 		}
 		geminiRequest.Tools = []geminiChatTools{
 			{
 				FunctionDeclarations: functions,
 			},
 		}
+		geminiRequest.ToolConfig = buildGeminiToolConfig(request)
 	}
 	// shouldAddDummyModelMessage := false
 	for _, message := range request.Messages {
@@ -467,9 +502,24 @@ func (g *geminiProvider) buildGeminiChatRequest(request *chatCompletionRequest) 
 				})
 			case contentTypeImageUrl:
 				content.Parts = append(content.Parts, g.handleContentTypeImageUrl(c.ImageUrl))
+			case contentTypeFile:
+				// Gemini can only take file bytes inline; an OpenAI file id has no
+				// Gemini counterpart and used to yield an empty (invalid) parts array.
+				part, ok := geminiPartFromFile(c.File)
+				if !ok {
+					continue
+				}
+				content.Parts = append(content.Parts, part)
 			default:
 				log.Debugf("currently gemini did not support this type: %s", c.Type)
 			}
+		}
+
+		if len(content.Parts) == 0 {
+			// Gemini rejects empty `parts`, so a turn whose content is entirely
+			// untranslatable is reported and skipped instead of being forwarded.
+			log.Warnf("[ai-proxy] gemini: dropping message with role %q, no content is portable to Gemini", message.Role)
+			continue
 		}
 
 		// there's no assistant role in gemini and API shall vomit if role is not user or model
@@ -486,6 +536,80 @@ func (g *geminiProvider) buildGeminiChatRequest(request *chatCompletionRequest) 
 	}
 
 	return &geminiRequest
+}
+
+// buildGeminiToolConfig maps OpenAI tool selection onto Gemini's
+// functionCallingConfig. Gemini always keeps the declared tools available, so a
+// selection is expressed through the calling mode plus, when the caller sent a
+// subset, allowedFunctionNames; without this the configuration was dropped and
+// tools the caller had ruled out stayed callable.
+func buildGeminiToolConfig(request *chatCompletionRequest) *geminiToolConfig {
+	if len(request.Tools) == 0 {
+		// Gemini rejects toolConfig for requests without tools.
+		return nil
+	}
+	config := &geminiFunctionCallingConfig{}
+	switch request.getToolChoiceType() {
+	case "none":
+		config.Mode = geminiFunctionCallingModeNone
+	case "required":
+		config.Mode = geminiFunctionCallingModeAny
+	case "function":
+		if tc := request.getToolChoiceObject(); tc != nil && tc.Function.Name != "" {
+			config.Mode = geminiFunctionCallingModeAny
+			config.AllowedFunctionNames = []string{tc.Function.Name}
+		}
+	case "allowed_tools":
+		if names := request.getAllowedToolNames(); len(names) > 0 {
+			config.Mode = geminiFunctionCallingModeAny
+			config.AllowedFunctionNames = names
+		}
+	}
+	if config.Mode == "" && hasStrictTool(request) {
+		// OpenAI's `strict` tools require schema-validated arguments, which Gemini
+		// only performs in VALIDATED mode.
+		config.Mode = geminiFunctionCallingModeValidated
+	}
+	if config.Mode == "" {
+		return nil
+	}
+	return &geminiToolConfig{FunctionCallingConfig: config}
+}
+
+// hasStrictTool reports whether any declared tool asked for schema-validated
+// arguments.
+func hasStrictTool(request *chatCompletionRequest) bool {
+	for _, t := range request.Tools {
+		if t.Function.Strict {
+			return true
+		}
+	}
+	return false
+}
+
+// geminiPartFromFile converts an OpenAI `file` content part into a Gemini
+// inlineData part. Gemini's fileData variant needs a Google file URI that an
+// OpenAI file id can never resolve to, so only inline bytes are portable and
+// everything else is reported rather than turned into an empty part list.
+func geminiPartFromFile(file *chatMessageContentFile) (geminiPart, bool) {
+	if file == nil {
+		return geminiPart{}, false
+	}
+	if mediaType, data, isInline := filePartMediaType(file); isInline {
+		if mediaType == "" {
+			log.Warnf("[ai-proxy] gemini: cannot tell the media type of file part %q, send file_data as a data URL (data:<media type>;base64,<data>) or set file_name", file.FileName)
+		} else {
+			return geminiPart{InlineData: &geminiInlineData{MimeType: mediaType, Data: data}}, true
+		}
+	}
+	if file.FileId != "" {
+		log.Warnf("[ai-proxy] gemini: dropping file part %q, Gemini cannot resolve OpenAI file ids, send the file as inline file_data instead", file.FileId)
+		return geminiPart{}, false
+	}
+	if file.FileData == "" {
+		log.Warnf("[ai-proxy] gemini: dropping file part, neither file_data nor file_id is set")
+	}
+	return geminiPart{}, false
 }
 
 func (g *geminiProvider) countImageUrl(request *geminiGenerationContentRequest) int {

@@ -229,8 +229,11 @@ var (
 	errUnsupportedApiName = errors.New("unsupported API name")
 
 	// Providers that support the "developer" role. Other providers will have "developer" roles converted to "system".
+	// OpenAI's own Chat Completions API understands the role, so converting it
+	// there rewrote a valid request; only targets that reject it are converted.
 	developerRoleSupportedProviders = map[string]bool{
-		providerTypeAzure: true,
+		providerTypeAzure:  true,
+		providerTypeOpenAI: true,
 	}
 
 	providerInitializers = map[string]providerInitializer{
