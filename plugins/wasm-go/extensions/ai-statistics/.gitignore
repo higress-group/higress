@@ -1,2 +1,4 @@
 main.wasm
 config.yaml
+wasm-unit-test.wasm
+plugin.wasm

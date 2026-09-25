@@ -153,6 +153,12 @@ const (
 	CtxStreamingToolCallsBuffer = "streamingToolCallsBuffer"
 )
 
+var defaultEnabledPathSuffixes = []string{
+	"/completions",
+	"/messages",
+	"/responses",
+}
+
 // getDefaultAttributes returns the default attributes configuration for empty config
 // This includes all attributes but may consume significant memory for large conversations
 func getDefaultAttributes() []Attribute {
@@ -629,10 +635,11 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 	pathSuffixes := configJson.Get("enable_path_suffixes").Array()
 	config.enablePathSuffixes = make([]string, 0, len(pathSuffixes))
 
-	// If use_default_attributes or use_default_response_attributes is enabled and enable_path_suffixes is not configured, use default path suffixes
+	// Preserve the all-paths behavior for an explicit empty list. Apply the
+	// constrained defaults only when the field is omitted in default-attribute modes.
 	if (useDefaultAttributes || useDefaultResponseAttributes) && !configJson.Get("enable_path_suffixes").Exists() {
-		config.enablePathSuffixes = []string{"/completions", "/messages"}
-		log.Infof("Using default path suffixes: /completions, /messages")
+		config.enablePathSuffixes = append([]string(nil), defaultEnabledPathSuffixes...)
+		log.Infof("Using default path suffixes: %s", strings.Join(defaultEnabledPathSuffixes, ", "))
 	} else {
 		// Process manually configured path suffixes
 		for _, suffix := range pathSuffixes {
@@ -1470,10 +1477,10 @@ func setSpanAttribute(key string, value interface{}) {
 
 // isErrorResponse checks whether the LLM response indicates an error.
 // Detects errors by:
-// 1. Response body contains non-null "error" field at root level (OpenAI/Anthropic format).
-//    Handles both raw JSON and SSE "data: " prefixed chunks, including multi-event
-//    streaming buffers.
-// 2. HTTP status code >= 400 as fallback when body is empty.
+//  1. Response body contains non-null "error" field at root level (OpenAI/Anthropic format).
+//     Handles both raw JSON and SSE "data: " prefixed chunks, including multi-event
+//     streaming buffers.
+//  2. HTTP status code >= 400 as fallback when body is empty.
 //
 // Note: some providers (e.g. Anthropic streaming responses) emit {"error":""}
 // even on success; an empty-string error is treated as not-an-error to avoid

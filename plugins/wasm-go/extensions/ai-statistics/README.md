@@ -29,7 +29,7 @@ description: AI可观测配置参考
 | `attributes` | []Attribute | 非必填  | -   | 用户希望记录在log/span中的信息 |
 | `disable_openai_usage` | bool | 非必填  | false   | 非openai兼容协议时，model、token的支持非标，配置为true时可以避免报错 |
 | `value_length_limit` | int | 非必填  | 4000   | 记录的单个value的长度限制 |
-| `enable_path_suffixes` | []string    | 非必填   | []     | 只对这些特定路径后缀的请求生效，可以配置为 "\*" 以匹配所有路径（通配符检查会优先进行以提高性能）。如果为空数组，则对所有路径生效 |
+| `enable_path_suffixes` | []string    | 非必填   | []（未开启默认属性时对所有路径生效）；开启 `use_default_attributes` / `use_default_response_attributes` 且未显式配置时默认为 `["/completions", "/messages", "/responses"]` | 只对这些特定路径后缀的请求生效，可以配置为 "\*" 以匹配所有路径（通配符检查会优先进行以提高性能）。如果为空数组，则对所有路径生效。默认列表通过后缀匹配覆盖 `/v1/chat/completions`、`/v1/messages`、`/v1/responses` 等 |
 | `enable_content_types` | []string    | 非必填   | []     | 只对这些内容类型的响应进行缓冲处理。如果为空数组，则对所有内容类型生效                                                           |
 | `session_id_header` | string | 非必填  | -   | 指定读取 session ID 的 header 名称。如果不配置，将按以下优先级自动查找：`x-openclaw-session-key`、`x-clawdbot-session-key`、`x-moltbot-session-key`、`x-agent-session`。session ID 可用于追踪多轮 Agent 对话 |
 
@@ -406,6 +406,8 @@ data: {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\
 use_default_response_attributes: true
 ```
 
+开启该模式且未配置 `enable_path_suffixes` 时，插件默认只处理路径后缀为 `/completions`、`/messages`、`/responses` 的请求（覆盖 Chat Completions、Anthropic Messages、OpenAI Responses）。如需统计其他路径，请显式配置 `enable_path_suffixes`（或设为 `"*"`）。
+
 此配置是**推荐的生产环境配置**，特别适合高并发、高延迟的场景：
 
 | 字段 | 说明 |
@@ -447,6 +449,8 @@ LLM 请求有两个显著特点：**延迟高**（通常数秒到数十秒）和
 ```yaml
 use_default_attributes: true
 ```
+
+完整模式与轻量模式使用相同的默认路径后缀规则：未配置 `enable_path_suffixes` 时处理 `/completions`、`/messages`、`/responses`；显式配置空数组时处理所有路径。
 
 此配置会自动记录以下字段，**但会缓冲完整的请求体和流式响应体**：
 
@@ -581,8 +585,10 @@ print(result)
 
 ```yaml
 enable_path_suffixes:
-  - "/v1/chat/completions"
-  - "/v1/embeddings"
+  - "/completions"
+  - "/messages"
+  - "/responses"
+  - "/embeddings"
   - "/generateContent"
 ```
 
