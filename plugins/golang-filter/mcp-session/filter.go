@@ -325,6 +325,7 @@ func (f *filter) encodeDataFromSSEUpstream(buffer api.BufferInstance, endStream 
 		endpointUrl = endpointUrl[:queryStringIndex]
 	}
 
+	outputData := combinedData
 	if changed, newEndpointUrl := f.rewriteEndpointUrl(endpointUrl); changed {
 		api.LogDebugf("The endpoint URL is changed.\n  Old: %s\n  New: %s", endpointUrl, newEndpointUrl)
 
@@ -332,12 +333,14 @@ func (f *filter) encodeDataFromSSEUpstream(buffer api.BufferInstance, endStream 
 		if endpointUrlIndex == -1 {
 			api.LogWarnf("Something wrong, the previously found endpoint URL %s not found in the SSE data now", endpointUrl)
 		} else {
-			newBufferData := combinedData[:endpointUrlIndex] + newEndpointUrl + combinedData[endpointUrlIndex+len(endpointUrl):]
-			_ = buffer.SetString(newBufferData)
+			outputData = combinedData[:endpointUrlIndex] + newEndpointUrl + combinedData[endpointUrlIndex+len(endpointUrl):]
 		}
 	} else {
 		api.LogDebugf("The endpoint URL %s is not changed", endpointUrl)
 	}
+
+	// Preserve cached fragments even when the endpoint URL is unchanged.
+	_ = buffer.SetString(outputData)
 
 	f.needProcess = false
 	return api.Continue

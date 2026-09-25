@@ -39,6 +39,91 @@ func createTestMatchRule() common.MatchRule {
 	}
 }
 
+type testBuffer struct {
+	api.BufferInstance
+	data []byte
+}
+
+func (b *testBuffer) Bytes() []byte {
+	return b.data
+}
+
+func (b *testBuffer) Reset() {
+	b.data = nil
+}
+
+func (b *testBuffer) SetString(data string) error {
+	b.data = []byte(data)
+	return nil
+}
+
+func TestEncodeDataFromSSEUpstreamPreservesCachedFragmentWithoutPathRewrite(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	rule := createTestMatchRule()
+	rule.EnablePathRewrite = false
+	f := &filter{
+		matchedRule: rule,
+		needProcess: true,
+	}
+
+	first := &testBuffer{data: []byte("event: endpoint\ndata: /api/v1/m")}
+	f.encodeDataFromSSEUpstream(first, false)
+	if got := string(first.data); got != "" {
+		t.Fatalf("first fragment should be buffered, got %q", got)
+	}
+
+	second := &testBuffer{data: []byte("essages?sessionId=demo\n\n")}
+	f.encodeDataFromSSEUpstream(second, false)
+
+	want := "event: endpoint\ndata: /api/v1/messages?sessionId=demo\n\n"
+	if got := string(second.data); got != want {
+		t.Fatalf("assembled SSE event = %q, want %q", got, want)
+	}
+	if len(f.cachedResponseBody) != 0 {
+		t.Fatalf("cached response body should be cleared after the endpoint is found")
+	}
+	if f.needProcess {
+		t.Fatalf("filter should stop processing after the endpoint is found")
+	}
+}
+
+func TestEncodeDataFromSSEUpstreamRewritesAssembledEndpoint(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	f := &filter{
+		matchedRule: createTestMatchRule(),
+		needProcess: true,
+	}
+	buffer := &testBuffer{data: []byte("event: endpoint\ndata: /api/v1/messages?sessionId=demo\n\n")}
+
+	f.encodeDataFromSSEUpstream(buffer, false)
+
+	want := "event: endpoint\ndata: /mcp/messages?sessionId=demo\n\n"
+	if got := string(buffer.data); got != want {
+		t.Fatalf("rewritten SSE event = %q, want %q", got, want)
+	}
+}
+
+func TestEncodeDataFromSSEUpstreamPreservesAssembledEndpointWhenRewritePrefixDoesNotMatch(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	f := &filter{
+		matchedRule: createTestMatchRule(),
+		needProcess: true,
+	}
+	first := &testBuffer{data: []byte("event: endpoint\ndata: /other/m")}
+	f.encodeDataFromSSEUpstream(first, false)
+
+	second := &testBuffer{data: []byte("essages?sessionId=demo\n\n")}
+	f.encodeDataFromSSEUpstream(second, false)
+
+	want := "event: endpoint\ndata: /other/messages?sessionId=demo\n\n"
+	if got := string(second.data); got != want {
+		t.Fatalf("unmodified SSE event = %q, want %q", got, want)
+	}
+}
+
 // TestFindEndpointUrl_ValidEndpointMessage tests the current behavior with a valid endpoint message
 func TestFindEndpointUrl_ValidEndpointMessage(t *testing.T) {
 	// Setup mock API
