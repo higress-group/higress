@@ -93,8 +93,8 @@ func (c *ToolSearchConfig) parseVectorConfig(config map[string]any) error {
 		return errors.New("missing vector.type")
 	}
 
-	if c.Vector.Type != "milvus" {
-		return fmt.Errorf("unsupported vector.type: %s, only 'milvus' is supported", c.Vector.Type)
+	if c.Vector.Type != "milvus" && c.Vector.Type != "qdrant" {
+		return fmt.Errorf("unsupported vector.type: %s, supported values are 'milvus' and 'qdrant'", c.Vector.Type)
 	}
 
 	if host, ok := config["host"].(string); ok {
@@ -179,17 +179,10 @@ func (c *ToolSearchConfig) NewServer(serverName string) (*common.MCPServer, erro
 	embeddingClient := NewEmbeddingClient(c.Embedding.APIKey, c.Embedding.BaseURL, c.Embedding.Model, c.Embedding.Dimensions)
 
 	// Create search service，使用写死的fixedMaxTools值
-	searchService := NewSearchService(
-		c.Vector.Host,
-		c.Vector.Port,
-		c.Vector.Database,
-		c.Vector.Username,
-		c.Vector.Password,
-		c.Vector.TableName,
-		embeddingClient,
-		c.Embedding.Dimensions,
-		fixedMaxTools, // 使用写死的值
-	)
+	searchService, err := NewSearchService(c.Vector, embeddingClient, c.Embedding.Dimensions, fixedMaxTools)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create search service: %w", err)
+	}
 
 	// Add tool search tool
 	mcpServer.AddTool(

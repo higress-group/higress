@@ -90,13 +90,13 @@ Higress RAG MCP Server 提供以下工具，根据配置不同，可用工具也
 | embedding.model            | string | 必填 | text-embedding-ada-002 | 嵌入模型名称 |
 | embedding.dimensions       | integer | 可选 | 1536 | 嵌入维度 |
 | **vectordb**               | object | 必填 | - | 向量数据库配置（所有工具必需） |
-| vectordb.provider          | string | 必填 | milvus | 向量数据库提供商 |
+| vectordb.provider          | string | 必填 | milvus | 向量数据库提供商：`milvus` 或 `qdrant` |
 | vectordb.host              | string | 必填 | localhost | 数据库主机地址 |
-| vectordb.port              | integer | 必填 | 19530 | 数据库端口 |
-| vectordb.database          | string | 必填 | default | 数据库名称 |
+| vectordb.port              | integer | 必填 | 19530 | 数据库端口。Milvus 默认 19530，Qdrant gRPC 默认 6334 |
+| vectordb.database          | string | 必填 | default | 数据库名称。Qdrant 忽略此项 |
 | vectordb.collection        | string | 必填 | test_collection | 集合名称 |
-| vectordb.username          | string | 可选 | - | 数据库用户名 |
-| vectordb.password          | string | 可选 | - | 数据库密码 |
+| vectordb.username          | string | 可选 | - | 数据库用户名。Qdrant 忽略此项 |
+| vectordb.password          | string | 可选 | - | Milvus 密码，Qdrant 用作 API key |
 | **vectordb.mapping**       | object | 可选 | - | 字段映射配置 |
 | vectordb.mapping.fields    | array | 可选 | - | 字段映射列表 |
 | vectordb.mapping.fields[].standard_name | string | 必填 | - | 标准字段名称（如 id, content, vector 等） |
@@ -190,16 +190,20 @@ data:
                   efConstruction: 32
               search:
                 metric_type: IP
-                params:
-                  ef: 32
+                 params:
+                   ef: 32
 
 ```
+
+Qdrant 把上面的 `vectordb` 改成 `provider: qdrant`、`port: 6334`。`password` 填 API key。文档 ID 必须是 UUID 或无符号整数。
+
 ### 支持的提供商
 #### Embedding
 - **OpenAI 兼容**
 
 #### Vector Database
 - **Milvus**
+- **Qdrant**
 
 #### LLM 
 - **OpenAI 兼容**
@@ -321,6 +325,18 @@ Attu 是 Milvus 的可视化管理工具，用于查看和管理 Milvus 中的�
 docker run -p 8000:3000 -e MILVUS_URL=http://<本机 IP>:19530  zilliz/attu:v2.6
 Open your browser and navigate to http://localhost:8000
 ```
+
+## Qdrant 安装
+
+RAG 连 gRPC 端口 6334。Dashboard 在 REST 6333。
+
+```
+docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+```
+
+打开 http://localhost:6333/dashboard
+
+
 
 
 ## 如何对接已有的向量数据库
@@ -844,9 +860,9 @@ vector_db:
   database: "default"
   collection: "langchain_rag"
   mapping:
-    # 字段映射配置：当标准字段名与 Milvus Collection 中实际字段名不一致时，需要通过 mapping 进行映射
+    # 字段映射配置：当标准字段名与 Collection 中实际字段名不一致时，需要通过 mapping 进行映射
     # standard_name: 系统内部使用的标准字段名（如 id, content, vector, metadata, created_at）
-    # raw_name: milvus collection 中的实际字段名
+    # raw_name: collection 中的实际字段名
     fields:
       - standard_name: "id"
         raw_name: "pk"

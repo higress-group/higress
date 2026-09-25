@@ -109,11 +109,11 @@ func (m *DefaultVectorDBMapper) ParseMapping(provider string, cfg config.Mapping
 		}
 		cfg.Fields = defaultFields
 	}
+	m.mappingConfig.Fields = cfg.Fields
 
 	// Parse field mappings
-	for i, field := range cfg.Fields {
-		// Save pointer for future reference
-		fieldPtr := &cfg.Fields[i]
+	for i, field := range m.mappingConfig.Fields {
+		fieldPtr := &m.mappingConfig.Fields[i]
 		m.standardFieldMap[field.StandardName] = fieldPtr
 		m.rawFieldMap[field.RawName] = fieldPtr
 	}
