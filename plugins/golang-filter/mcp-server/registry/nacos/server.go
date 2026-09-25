@@ -141,7 +141,11 @@ func (c *NacosConfig) ParseConfig(config map[string]any) error {
 
 	matchers := map[string]string{}
 	for key, value := range serviceMatcher {
-		matchers[key] = value.(string)
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("serviceMatcher value for key %q must be a string", key)
+		}
+		matchers[key] = v
 	}
 
 	c.ServiceMatcher = &matchers
