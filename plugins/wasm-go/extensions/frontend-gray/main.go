@@ -168,8 +168,10 @@ func onHttpResponseHeader(ctx wrapper.HttpContext, grayConfig config.GrayConfig)
 			responseHeaders, _ := proxywasm.GetHttpResponseHeaders()
 			headersMap := util.ConvertHeaders(responseHeaders)
 			delete(headersMap, "content-length")
-			headersMap[":status"][0] = "200"
-			headersMap["content-type"][0] = "text/html"
+			// 整键赋值，避免对可能缺失的 header slice 取下标导致 panic（issue #4354），
+			// 同时保证 content-type 唯一
+			headersMap[":status"] = []string{"200"}
+			headersMap["content-type"] = []string{"text/html"}
 			ctx.BufferResponseBody()
 			proxywasm.ReplaceHttpResponseHeaders(util.ReconvertHeaders(headersMap))
 		} else {
