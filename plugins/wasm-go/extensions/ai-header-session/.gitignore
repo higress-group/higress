@@ -1,0 +1,4 @@
+main.wasm
+plugin.wasm
+tmp/
+out/
