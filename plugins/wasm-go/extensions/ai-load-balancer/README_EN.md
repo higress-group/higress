@@ -174,6 +174,7 @@ sequenceDiagram
 |--------------------|-----------------|------------------|-------------|-------------------------------------|
 | `metric_policy`      | string | required | | How to use the metrics exposed by LLM for load balancing, currently supporting `[default, least, most]` |
 | `target_metric`      | string | optional | | The metric name to use. This is valid only when `metric_policy` is `least` or `most` |
+| `engine`      | string | optional | vllm | The inference engine that exposes the metrics, supporting `[vllm, sglang]` |
 | `rate_limit`      | string | optional | 1 | The maximum percentage of requests a single node can receive, 0~1 |
 
 ## Configuration Example
@@ -207,6 +208,19 @@ lb_policy: metrics_based
 lb_config:
   metric_policy: least
   target_metric: vllm:num_requests_running
+  rate_limit: 0.6
+```
+
+When the backend is SGLang instead of vLLM, set `engine: sglang` so the metrics are
+parsed with the SGLang metric names (the equivalent `target_metric` would be
+`sglang:num_queue_reqs` / `sglang:num_running_reqs`):
+
+```yaml
+lb_type: endpoint
+lb_policy: metrics_based
+lb_config:
+  metric_policy: default
+  engine: sglang
   rate_limit: 0.6
 ```
 
