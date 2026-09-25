@@ -82,9 +82,13 @@ func (p *TemplateProcessor) ProcessConfig(cfg *config.Config) error {
 
 		// Get value using the provided getter function
 		value, err := p.getValue(valueType, namespace, name, key)
-		if err != nil {
-			return fmt.Errorf("failed to get %s value for %s/%s.%s: %v", valueType, namespace, name, key, err)
-		}
+		if err == nil {
+            // Replace placeholder with actual value
+            configStr = strings.Replace(configStr, match[0], value, 1)
+        } else {
+            // Ingore replacement if there is an error
+            IngressLog.Errorf("failed to get %s value for %s/%s.%s: %v", valueType, namespace, name, key, err)
+        }
 
 		// Add secret dependency if this is a secret reference
 		if valueType == "secret" && p.secretConfigMgr != nil {
@@ -94,8 +98,6 @@ func (p *TemplateProcessor) ProcessConfig(cfg *config.Config) error {
 				IngressLog.Errorf("failed to add secret dependency: %v", err)
 			}
 		}
-		// Replace placeholder with actual value
-		configStr = strings.Replace(configStr, match[0], value, 1)
 	}
 
 	// Create a new instance of the same type as cfg.Spec
