@@ -35,7 +35,7 @@ An implementation of the Model Context Protocol (MCP) server that integrates soc
 In the `mcp-server.yaml` file, set the `apikey` field to a valid API key.
 
 ### Knowledge Base
-1. Import [city_data.xls](https://github.com/alibaba/higress/raw/refs/heads/main/plugins/wasm-go/mcp-servers/mcp-shebao-tools/city_data.xls) into the knowledge base.
+1. Import [city_data.xls](https://github.com/higress-group/higress/raw/refs/heads/main/plugins/wasm-go/mcp-servers/mcp-shebao-tools/city_data.xls) into the knowledge base.
 
 ### Integrate into MCP Client
 
