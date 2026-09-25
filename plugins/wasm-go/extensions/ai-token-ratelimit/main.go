@@ -40,7 +40,9 @@ func init() {
 		"ai-token-ratelimit",
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
+		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingBody),
+		wrapper.ProcessResponseBody(onHttpResponseBody),
 	)
 }
 
@@ -217,7 +219,24 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 	return types.HeaderStopAllIterationAndWatermark
 }
 
+func onHttpResponseHeaders(ctx wrapper.HttpContext, _ config.AiTokenRateLimitConfig) types.Action {
+	contentType, _ := proxywasm.GetHttpResponseHeader("content-type")
+	if strings.HasPrefix(strings.ToLower(contentType), "application/json") {
+		ctx.BufferResponseBody()
+	}
+	return types.ActionContinue
+}
+
 func onHttpStreamingBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig, data []byte, endOfStream bool) []byte {
+	return processResponseBody(ctx, cfg, data, endOfStream)
+}
+
+func onHttpResponseBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig, body []byte) types.Action {
+	processResponseBody(ctx, cfg, body, true)
+	return types.ActionContinue
+}
+
+func processResponseBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig, data []byte, endOfStream bool) []byte {
 	if usage := tokenusage.GetTokenUsage(ctx, data); usage.TotalToken > 0 {
 		log.Debugf("ai-token-ratelimit: token usage detected input=%d output=%d total=%d",
 			usage.InputToken, usage.OutputToken, usage.TotalToken)
