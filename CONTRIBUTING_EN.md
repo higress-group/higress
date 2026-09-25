@@ -79,7 +79,7 @@ Since you are ready to improve Higress with a PR, we suggest you could take a lo
 
 To put forward a PR, we assume you have registered a GitHub ID. Then you could finish the preparation in the following steps:
 
-1. **FORK** Higress to your repository. To make this work, you just need to click the button Fork in right-left of[alibaba/higress](https://github.com/alibaba/higress) main page. Then you will end up with your repository in 
+1. **FORK** Higress to your repository. To make this work, you just need to click the button Fork on the right side of [alibaba/higress](https://github.com/alibaba/higress) main page. Then you will end up with your repository in 
    `https://github.com/<your-username>/higress`, in which `your-username` is your GitHub username.
 
 1. **CLONE** your own repository to develop locally. Use `git clone git@github.com:<your-username>/higress.git` to clone repository to your local machine. Then you can create new branches to finish the change you wish to make.
