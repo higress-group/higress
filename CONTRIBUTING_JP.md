@@ -27,7 +27,7 @@ Higress のハッキングに興味がある場合は、温かく歓迎します
 
 ## 一般的な問題の報告
 
-正直なところ、Higress のすべてのユーザーを非常に親切な貢献者と見なしています。Higress を体験した後、プロジェクトに対するフィードバックがあるかもしれません。その場合は、[NEW ISSUE](https://github.com/alibaba/higress/issues/new/choose) を通じて問題を開くことを自由に行ってください。
+正直なところ、Higress のすべてのユーザーを非常に親切な貢献者と見なしています。Higress を体験した後、プロジェクトに対するフィードバックがあるかもしれません。その場合は、[NEW ISSUE](https://github.com/higress-group/higress/issues/new/choose) を通じて問題を開くことを自由に行ってください。
 
 Higress プロジェクトを分散型で協力しているため、**よく書かれた**、**詳細な**、**明確な**問題報告を高く評価します。コミュニケーションをより効率的にするために、問題が検索リストに存在するかどうかを検索することを希望します。存在する場合は、新しい問題を開くのではなく、既存の問題のコメントに詳細を追加してください。
 
@@ -78,14 +78,14 @@ Higress を PR で改善する準備ができたら、ここで PR ルールを�
 
 PR を提出するために、GitHub ID に登録していることを前提とします。その後、以下の手順で準備を完了できます：
 
-1. Higress を自分のリポジトリに **FORK** します。この作業を行うには、[alibaba/higress](https://github.com/alibaba/higress) のメインページの右上にある Fork ボタンをクリックするだけです。その後、`https://github.com/<your-username>/higress` に自分のリポジトリが作成されます。ここで、`your-username` はあなたの GitHub ユーザー名です。
+1. Higress を自分のリポジトリに **FORK** します。この作業を行うには、[higress-group/higress](https://github.com/higress-group/higress) のメインページの右上にある Fork ボタンをクリックするだけです。その後、`https://github.com/<your-username>/higress` に自分のリポジトリが作成されます。ここで、`your-username` はあなたの GitHub ユーザー名です。
 
 2. 自分のリポジトリをローカルに **CLONE** します。`git clone git@github.com:<your-username>/higress.git` を使用してリポジトリをローカルマシンにクローンします。その後、新しいブランチを作成して、行いたい変更を完了できます。
 
-3. リモートを `git@github.com:alibaba/higress.git` に設定します。以下の2つのコマンドを使用します：
+3. リモートを `git@github.com:higress-group/higress.git` に設定します。以下の2つのコマンドを使用します：
 
 ```bash
-git remote add upstream git@github.com:alibaba/higress.git
+git remote add upstream git@github.com:higress-group/higress.git
 git remote set-url --push upstream no-pushing
 ```
 
@@ -95,7 +95,7 @@ git remote set-url --push upstream no-pushing
 $ git remote -v
 origin     git@github.com:<your-username>/higress.git (fetch)
 origin     git@github.com:<your-username>/higress.git (push)
-upstream   git@github.com:alibaba/higress.git (fetch)
+upstream   git@github.com:higress-group/higress.git (fetch)
 upstream   no-pushing (push)
 ```
 
@@ -103,7 +103,7 @@ upstream   no-pushing (push)
 
 ### ブランチの定義
 
-現在、プルリクエストを通じたすべての貢献は Higress の [main ブランチ](https://github.com/alibaba/higress/tree/main) に対するものであると仮定します。貢献する前に、ブランチの定義を理解することは非常に役立ちます。
+現在、プルリクエストを通じたすべての貢献は Higress の [main ブランチ](https://github.com/higress-group/higress/tree/main) に対するものであると仮定します。貢献する前に、ブランチの定義を理解することは非常に役立ちます。
 
 貢献者として、プルリクエストを通じたすべての貢献は main ブランチに対するものであることを再度覚えておいてください。Higress プロジェクトには、リリースブランチ（例：0.6.0、0.6.1）、機能ブランチ、ホットフィックスブランチなど、いくつかの他のブランチがあります。
 

@@ -27,7 +27,7 @@
 
 ## 报告一般问题
 
-老实说，我们把每一个 Higress 用户都视为非常善良的贡献者。在体验了 Higress 之后，您可能会对项目有一些反馈。然后随时通过 [NEW ISSUE](https://github.com/alibaba/higress/issues/new/choose)打开一个问题。
+老实说，我们把每一个 Higress 用户都视为非常善良的贡献者。在体验了 Higress 之后，您可能会对项目有一些反馈。然后随时通过 [NEW ISSUE](https://github.com/higress-group/higress/issues/new/choose)打开一个问题。
 
 因为我们在一个分布式的方式合作项目Higress，我们欣赏写得很好的，详细的，准确的问题报告。为了让沟通更高效，我们希望每个人都可以搜索您的问题是否在搜索列表中。如果您发现它存在，请在现有问题下的评论中添加您的详细信息，而不是打开一个全新的问题。
 
@@ -79,15 +79,15 @@
 
 为了提出 PR，我们假设你已经注册了一个 GitHub ID。然后您可以通过以下步骤完成准备工作：
 
-1. **FORK** Higress 到您的存储库。要完成这项工作，您只需单击 [alibaba/higress](https://github.com/alibaba/higress) 主页右侧的 Fork 按钮。然后你将在 
+1. **FORK** Higress 到您的存储库。要完成这项工作，您只需单击 [higress-group/higress](https://github.com/higress-group/higress) 主页右侧的 Fork 按钮。然后你将在 
    中得到你的存储库`https://github.com/<your-username>/higress`，其中your-username是你的 GitHub 用户名。
 
 2. **克隆** 您自己的存储库以在本地开发. 用于 `git clone git@github.com:<your-username>/higress.git` 将存储库克隆到本地计算机。 然后您可以创建新分支来完成您希望进行的更改。
 
-3. **设置远程** 将上游设置为 `git@github.com:alibaba/higress.git` 使用以下两个命令：
+3. **设置远程** 将上游设置为 `git@github.com:higress-group/higress.git` 使用以下两个命令：
 
 ```bash
-git remote add upstream git@github.com:alibaba/higress.git
+git remote add upstream git@github.com:higress-group/higress.git
 git remote set-url --push upstream no-pushing
 ```
 
@@ -97,7 +97,7 @@ git remote set-url --push upstream no-pushing
 $ git remote -v
 origin     git@github.com:<your-username>/higress.git (fetch)
 origin     git@github.com:<your-username>/higress.git (push)
-upstream   git@github.com:alibaba/higress.git (fetch)
+upstream   git@github.com:higress-group/higress.git (fetch)
 upstream   no-pushing (push)
 ```
 
@@ -105,7 +105,7 @@ upstream   no-pushing (push)
 
 ### 分支定义
 
-现在我们假设通过拉取请求的每个贡献都是针对 Higress 中的 [主分支](https://github.com/alibaba/higress/tree/main) 。在贡献之前，请注意分支定义会很有帮助。
+现在我们假设通过拉取请求的每个贡献都是针对 Higress 中的 [主分支](https://github.com/higress-group/higress/tree/main) 。在贡献之前，请注意分支定义会很有帮助。
 
 作为贡献者，请再次记住，通过拉取请求的每个贡献都是针对主分支的。而在Higress项目中，还有其他几个分支，我们一般称它们为release分支（如0.6.0、0.6.1）、feature分支、hotfix分支。
 
