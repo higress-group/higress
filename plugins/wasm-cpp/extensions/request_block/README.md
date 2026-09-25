@@ -48,7 +48,7 @@ curl http://example.com/Swagger.html?foo=Bar
 ## 屏蔽正则匹配的请求 url 路径
 
 ```yaml
-block_exact_urls:
+block_regexp_urls:
 - .*swagger.*
 case_sensitive: false
 ```
