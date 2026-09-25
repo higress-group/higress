@@ -44,6 +44,9 @@ func NewMetricsEndpointLoadBalancer(json gjson.Result) (MetricsEndpointLoadBalan
 
 // Callbacks which are called in request path
 func (lb MetricsEndpointLoadBalancer) HandleHttpRequestHeaders(ctx wrapper.HttpContext) types.Action {
+	if !ctx.HasRequestBody() {
+		return types.ActionContinue
+	}
 	// If return types.ActionContinue, SetUpstreamOverrideHost will not take effect
 	return types.HeaderStopIteration
 }
