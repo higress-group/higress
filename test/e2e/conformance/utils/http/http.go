@@ -22,6 +22,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path"
 	"reflect"
 	"strings"
 	"testing"
@@ -546,6 +547,68 @@ func CompareRequest(req *roundtripper.Request, cReq *roundtripper.CapturedReques
 		}
 	}
 	return nil
+}
+
+// QueryPrometheus queries Prometheus API and returns the raw response body.
+// It handles URL construction, timeout, and basic error checking.
+// The response body is limited to 10MB to prevent excessive memory usage.
+func QueryPrometheus(prometheusAddr string, query string) ([]byte, error) {
+	// Normalize base URL
+	baseURL := prometheusAddr
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "http://" + baseURL
+	}
+
+	// Parse base URL to ensure it's valid
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid prometheus address %q: %w", prometheusAddr, err)
+	}
+
+	// Construct query URL properly
+	parsedURL.Path = path.Join(parsedURL.Path, "/api/v1/query")
+	queryParams := parsedURL.Query()
+	queryParams.Set("query", query)
+	parsedURL.RawQuery = queryParams.Encode()
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	// Execute query
+	resp, err := client.Get(parsedURL.String())
+	if err != nil {
+		return nil, fmt.Errorf("prometheus query failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check HTTP status code
+	if resp.StatusCode != 200 {
+		// Limit error response body to 1KB
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("prometheus returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Read response body with size limit (10MB)
+	// This prevents excessive memory usage when Prometheus returns large datasets
+	const maxResponseSize = 10 * 1024 * 1024 // 10MB
+	limitedReader := io.LimitReader(resp.Body, maxResponseSize)
+	body, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read prometheus response: %w", err)
+	}
+
+	// Check if response was truncated
+	if len(body) == maxResponseSize {
+		// Try to read one more byte to confirm truncation
+		extraByte := make([]byte, 1)
+		if n, _ := resp.Body.Read(extraByte); n > 0 {
+			return nil, fmt.Errorf("prometheus response exceeds maximum size of %d bytes (likely too many metrics or large time range)", maxResponseSize)
+		}
+	}
+
+	return body, nil
 }
 
 func CompareResponse(cRes *roundtripper.CapturedResponse, expected Assertion) error {
