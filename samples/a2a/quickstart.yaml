@@ -1,0 +1,69 @@
+# Copyright (c) 2026 Alibaba Group Holding Ltd.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: weather-agent
+  namespace: default
+spec:
+  type: ExternalName
+  externalName: agent.example.com
+  ports:
+    - name: https
+      port: 443
+      targetPort: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: a2a-weather-agent
+  namespace: default
+  annotations:
+    higress.io/backend-protocol: HTTPS
+spec:
+  ingressClassName: higress
+  rules:
+    - host: agents.example.com
+      http:
+        paths:
+          - path: /a2a
+            pathType: Prefix
+            backend:
+              service:
+                name: weather-agent
+                port:
+                  number: 443
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: a2a-protocol
+  namespace: higress-system
+spec:
+  phase: AUTHN
+  priority: 300
+  defaultConfigDisable: true
+  matchRules:
+    - ingress:
+        - default/a2a-weather-agent
+      config:
+        protocolVersion: "1.0"
+        mode: enforce
+        legacy03:
+          enabled: false
+        agent:
+          id: weather-agent
+          externalBaseURL: https://agents.example.com/a2a
+        agentCard:
+          path: /.well-known/agent-card.json
+          rewrite: true
+          signatureMode: preserve
+          maxResponseBytes: 262144
+        jsonrpc:
+          maxRequestBytes: 4194304
+          maxSSEEventBytes: 262144
+        authorization:
+          exposeInternalHeaders: true
+  # Replace this with an operator-approved, published image before applying.
+  url: oci://REGISTRY/REPOSITORY:TAG

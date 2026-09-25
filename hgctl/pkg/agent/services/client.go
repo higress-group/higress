@@ -18,11 +18,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 )
+
+var errResourceAlreadyExists = errors.New("resource already exists")
 
 type HigressClient struct {
 	baseURL    string
@@ -202,7 +205,7 @@ func (c *HimarketClient) request(method, path string, data interface{}) ([]byte,
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 409 {
-		return nil, fmt.Errorf("resource already exists")
+		return nil, errResourceAlreadyExists
 	}
 
 	if resp.StatusCode == 400 {
@@ -255,7 +258,7 @@ func (c *HigressClient) request(method, path string, data interface{}) ([]byte, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 409 {
-		return nil, fmt.Errorf("resource already exists")
+		return nil, errResourceAlreadyExists
 	}
 
 	// fmt.Println(resp)
