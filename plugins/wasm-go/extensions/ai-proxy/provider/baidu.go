@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
-	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 // baiduProvider is the provider for baidu service.
@@ -72,6 +72,9 @@ func (g *baiduProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiName
 func (g *baiduProvider) GetApiName(path string) ApiName {
 	if strings.Contains(path, baiduChatCompletionPath) {
 		return ApiNameChatCompletion
+	}
+	if strings.Contains(path, baiduEmbeddings) {
+		return ApiNameEmbeddings
 	}
 	return ""
 }
