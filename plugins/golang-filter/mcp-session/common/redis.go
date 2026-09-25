@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
@@ -53,8 +54,9 @@ func ParseRedisConfig(config map[string]interface{}) (*RedisConfig, error) {
 
 // RedisClient is a struct to handle Redis connections and operations
 type RedisClient struct {
-	client *redis.Client
-	ctx    context.Context
+	clientMu sync.RWMutex
+	client   *redis.Client
+	ctx      context.Context
 	cancel context.CancelFunc
 	config *RedisConfig
 	crypto *Crypto
@@ -124,12 +126,18 @@ func (r *RedisClient) keepAlive() {
 
 // checkConnection verifies if the Redis connection is still alive
 func (r *RedisClient) checkConnection() error {
-	_, err := r.client.Ping(r.ctx).Result()
+	r.clientMu.RLock()
+	client := r.client
+	r.clientMu.RUnlock()
+	_, err := client.Ping(r.ctx).Result()
 	return err
 }
 
 // reconnect attempts to establish a new connection to Redis
 func (r *RedisClient) reconnect() error {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
+
 	// Close the old client
 	if err := r.client.Close(); err != nil {
 		api.LogErrorf("Error closing old Redis connection: %v", err)
@@ -143,8 +151,9 @@ func (r *RedisClient) reconnect() error {
 		DB:       r.config.db,
 	})
 
-	// Test the new connection
-	if err := r.checkConnection(); err != nil {
+	// Test the new connection (inline to avoid recursive RLock)
+	_, err := r.client.Ping(r.ctx).Result()
+	if err != nil {
 		return fmt.Errorf("failed to reconnect to Redis: %w", err)
 	}
 
@@ -154,7 +163,10 @@ func (r *RedisClient) reconnect() error {
 
 // Publish publishes a message to a Redis channel
 func (r *RedisClient) Publish(channel string, message string) error {
-	err := r.client.Publish(r.ctx, channel, message).Err()
+	r.clientMu.RLock()
+	client := r.client
+	r.clientMu.RUnlock()
+	err := client.Publish(r.ctx, channel, message).Err()
 	if err != nil {
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
@@ -163,7 +175,10 @@ func (r *RedisClient) Publish(channel string, message string) error {
 
 // Subscribe subscribes to a Redis channel and processes messages
 func (r *RedisClient) Subscribe(channel string, stopChan chan struct{}, callback func(message string)) error {
-	pubsub := r.client.Subscribe(r.ctx, channel)
+	r.clientMu.RLock()
+	client := r.client
+	r.clientMu.RUnlock()
+	pubsub := client.Subscribe(r.ctx, channel)
 	_, err := pubsub.Receive(r.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to channel: %w", err)
@@ -222,7 +237,10 @@ func (r *RedisClient) Set(key string, value string, expiration time.Duration) er
 		finalValue = value
 	}
 
-	err := r.client.Set(r.ctx, key, finalValue, expiration).Err()
+	r.clientMu.RLock()
+	client := r.client
+	r.clientMu.RUnlock()
+	err := client.Set(r.ctx, key, finalValue, expiration).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set key: %w", err)
 	}
@@ -231,7 +249,10 @@ func (r *RedisClient) Set(key string, value string, expiration time.Duration) er
 
 // Get retrieves the value of a key from Redis
 func (r *RedisClient) Get(key string) (string, error) {
-	value, err := r.client.Get(r.ctx, key).Result()
+	r.clientMu.RLock()
+	client := r.client
+	r.clientMu.RUnlock()
+	value, err := client.Get(r.ctx, key).Result()
 	if err == redis.Nil {
 		return "", fmt.Errorf("key does not exist")
 	} else if err != nil {
@@ -252,7 +273,10 @@ func (r *RedisClient) Get(key string) (string, error) {
 
 // Expire sets the expiration time for a key
 func (r *RedisClient) Expire(key string, expiration time.Duration) error {
-	ok, err := r.client.Expire(r.ctx, key, expiration).Result()
+	r.clientMu.RLock()
+	client := r.client
+	r.clientMu.RUnlock()
+	ok, err := client.Expire(r.ctx, key, expiration).Result()
 	if err != nil {
 		return fmt.Errorf("failed to set expiration for key: %w", err)
 	}
@@ -265,12 +289,17 @@ func (r *RedisClient) Expire(key string, expiration time.Duration) error {
 // Close closes the Redis client and stops the keepalive goroutine
 func (r *RedisClient) Close() error {
 	r.cancel()
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
 	return r.client.Close()
 }
 
 // Eval executes a Lua script
 func (r *RedisClient) Eval(script string, numKeys int, keys []string, args []interface{}) (interface{}, error) {
-	result, err := r.client.Eval(r.ctx, script, keys, args...).Result()
+	r.clientMu.RLock()
+	client := r.client
+	r.clientMu.RUnlock()
+	result, err := client.Eval(r.ctx, script, keys, args...).Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute Lua script: %w", err)
 	}

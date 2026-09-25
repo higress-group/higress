@@ -98,6 +98,7 @@ func (s *SSEServer) HandleSSE(cb api.FilterCallbackHandler, stopChan chan struct
 	u, err := url.Parse(s.baseURL + s.messageEndpoint)
 	if err != nil {
 		api.LogErrorf("Failed to parse base URL: %v", err)
+		return
 	}
 
 	q := u.Query()
@@ -128,6 +129,11 @@ func (s *SSEServer) HandleSSE(cb api.FilterCallbackHandler, stopChan chan struct
 	// 		}
 	// 	}
 	// }()
+
+	if s.redisClient == nil {
+		api.LogErrorf("Redis client is not configured, SSE subscription skipped")
+		return
+	}
 
 	err = s.redisClient.Subscribe(channel, stopChan, func(message string) {
 		defer cb.EncoderFilterCallbacks().RecoverPanic()
