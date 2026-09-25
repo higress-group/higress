@@ -289,6 +289,10 @@ spec:
                       type: string
                     domain:
                       type: string
+                    ecdhCurves:
+                      items:
+                        type: string
+                      type: array
                     enableMCPServer:
                       type: boolean
                     enableScopeMcpServers:

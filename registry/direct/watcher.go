@@ -94,6 +94,12 @@ func WithSNI(sni string) WatcherOption {
 	}
 }
 
+func WithEcdhCurves(ecdhCurves []string) WatcherOption {
+	return func(w *watcher) {
+		w.EcdhCurves = ecdhCurves
+	}
+}
+
 func WithProxyName(proxyName string) WatcherOption {
 	return func(w *watcher) {
 		w.ProxyName = proxyName
@@ -250,9 +256,10 @@ func (w *watcher) generateProxyConfig(entry *v1alpha3.ServiceEntry) *ingress.Ser
 		return nil
 	}
 	return &ingress.ServiceProxyConfig{
-		ProxyName:        w.ProxyName,
-		UpstreamProtocol: common.ParseProtocol(entry.Ports[0].Protocol),
-		UpstreamSni:      w.getSni(entry),
+		ProxyName:          w.ProxyName,
+		UpstreamProtocol:   common.ParseProtocol(entry.Ports[0].Protocol),
+		UpstreamSni:        w.getSni(entry),
+		UpstreamEcdhCurves: w.EcdhCurves,
 	}
 }
 

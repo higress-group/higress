@@ -69,6 +69,15 @@ message RegistryConfig {
   string authSecretName = 17;
   string protocol = 18;
   string sni = 19;
+  // ECDH curves offered in the TLS handshake with the upstream when this registry is bound to a
+  // proxy server. When it is empty, Envoy uses the defaults of its linked TLS library, e.g. X25519
+  // and P-256 for non-FIPS BoringSSL builds. An upstream that only presents a certificate on
+  // another curve (P-384 for instance) is then rejected during a TLS 1.2 handshake, because the
+  // curve of the certificate is not listed in the client's supported_groups
+  // (RFC 8422, section 5.1.1).
+  // Note that X25519 is not FIPS approved: on a gateway built for FIPS 140-2, list P-256 and/or
+  // P-384 only.
+  repeated string ecdhCurves = 29;
   repeated string mcpServerExportDomains = 20;
   string mcpServerBaseUrl = 21;
   google.protobuf.BoolValue enableMCPServer = 22;
