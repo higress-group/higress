@@ -876,7 +876,8 @@ func (m *IngressConfig) convertEnvoyFilter(convertOptions *common.ConvertOptions
 		}
 	}
 
-	if proxyEnvoyFilters := constructProxyEnvoyFilters(convertOptions.ProxyWrappers, convertOptions.ServiceWrappers, m.namespace); len(proxyEnvoyFilters) != 0 {
+	upstream := m.configmapMgr.GetUpstream()
+	if proxyEnvoyFilters := constructProxyEnvoyFilters(convertOptions.ProxyWrappers, convertOptions.ServiceWrappers, m.namespace, upstream); len(proxyEnvoyFilters) != 0 {
 		for _, ef := range proxyEnvoyFilters {
 			envoyFilters = append(envoyFilters, *ef)
 		}
@@ -1907,7 +1908,7 @@ func constructBasicAuthEnvoyFilter(rules *common.BasicAuthRules, namespace strin
 	}, nil
 }
 
-func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, serviceWrappers map[string]*common.ServiceWrapper, namespace string) []*config.Config {
+func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, serviceWrappers map[string]*common.ServiceWrapper, namespace string, upstream *configmap.Upstream) []*config.Config {
 	var envoyFilters []*config.Config
 	for _, proxyWrapper := range proxyWrappers {
 		envoyFilters = append(envoyFilters, &config.Config{
@@ -1973,10 +1974,14 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 					},
 				})
 
+				connectTimeoutMs := int(proxyWrapper.ConnectTimeout)
+				if connectTimeoutMs <= 0 {
+					connectTimeoutMs = 1200 // aligned with registry/proxy/factory.go defaultProxyConnectTimeout
+				}
 				patchObj := map[string]interface{}{
 					"name":            clusterName,
 					"type":            "STATIC",
-					"connect_timeout": "10s",
+					"connect_timeout": fmt.Sprintf("%dms", connectTimeoutMs),
 					"load_assignment": map[string]interface{}{
 						"cluster_name": clusterName,
 						"endpoints": []map[string]interface{}{
@@ -2007,6 +2012,20 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 					patchObj["transport_socket"] = map[string]interface{}{
 						"name":         "envoy.transport_sockets.tls",
 						"typed_config": tlsTypedConfig,
+					}
+				}
+				if upstream != nil {
+					// Mirror global-option's constructUpstream, which always renders
+					// idleTimeout (even 0 -> "0s" = disabled). Injecting unconditionally
+					// keeps proxy-enabled clusters consistent with non-proxy clusters
+					// that receive the same value via the global-option MERGE patch;
+					// gating on >0 would make an explicit idleTimeout:0 disable silently
+					// no-op on proxy clusters while disabling on non-proxy ones.
+					patchObj["common_http_protocol_options"] = map[string]interface{}{
+						"idleTimeout": fmt.Sprintf("%ds", upstream.IdleTimeout),
+					}
+					if upstream.ConnectionBufferLimits > 0 {
+						patchObj["per_connection_buffer_limit_bytes"] = upstream.ConnectionBufferLimits
 					}
 				}
 				patchJson, _ := json.Marshal(patchObj)

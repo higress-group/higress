@@ -155,9 +155,10 @@ func BuildProxyWrapper(config *apiv1.ProxyConfig) *ingress.ProxyWrapper {
 	}
 
 	return &ingress.ProxyWrapper{
-		ProxyName:    config.Name,
-		ListenerPort: config.ListenerPort,
-		EnvoyFilter:  envoyFilter,
+		ProxyName:      config.Name,
+		ListenerPort:   config.ListenerPort,
+		ConnectTimeout: config.ConnectTimeout,
+		EnvoyFilter:    envoyFilter,
 	}
 }
 

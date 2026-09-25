@@ -120,6 +120,18 @@ func (c *ConfigmapMgr) RegisterMcpServerProvider(provider mcpserver.McpServerPro
 	}
 }
 
+// GetUpstream returns the current global upstream option, or nil if unavailable.
+func (c *ConfigmapMgr) GetUpstream() *Upstream {
+	for _, itemController := range c.ItemControllers {
+		if g, ok := itemController.(*GlobalOptionController); ok {
+			if global := g.GetGlobal(); global != nil {
+				return global.Upstream
+			}
+		}
+	}
+	return nil
+}
+
 func (c *ConfigmapMgr) AddItemControllers(controllers ...ItemController) {
 	c.ItemControllers = append(c.ItemControllers, controllers...)
 }
