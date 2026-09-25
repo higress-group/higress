@@ -24,6 +24,7 @@ import (
 
 	template "github.com/higress-group/gjson_template"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
@@ -466,6 +467,18 @@ func (t *RestMCPTool) Create(params []byte) Tool {
 	}
 
 	return newTool
+}
+
+func validateRequiredArguments(arguments map[string]gjson.Result, args []RestToolArg) error {
+	for _, arg := range args {
+		if !arg.Required || arg.Default != nil {
+			continue
+		}
+		if _, ok := arguments[arg.Name]; !ok {
+			return fmt.Errorf("required argument %q is missing", arg.Name)
+		}
+	}
+	return nil
 }
 
 // convertArgToString converts an argument value to a string representation

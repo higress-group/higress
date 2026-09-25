@@ -820,6 +820,16 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				}
 			} else {
 				toolToCall, ok = config.server.GetMCPTools()[toolName]
+				if restTool, isRestTool := toolToCall.(*RestMCPTool); isRestTool {
+					if err := validateRequiredArguments(args.Map(), restTool.toolConfig.Args); err != nil {
+						sendToolExecutionError(
+							ctx,
+							fmt.Errorf("invalid arguments for tool %q: %w", toolName, err),
+							fmt.Sprintf("mcp:%s:tools/call:invalid_arguments", currentServerNameForHandlers),
+						)
+						return nil
+					}
+				}
 			}
 			if !ok {
 				utils.OnMCPResponseError(ctx, fmt.Errorf("unknown tool: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:invalid_tool_name", currentServerNameForHandlers))
