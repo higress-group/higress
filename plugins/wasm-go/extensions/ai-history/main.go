@@ -427,7 +427,7 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 
 		value = TrimQuote(bodyJson.Get(config.AnswerValueFrom.ResponseBody).Raw)
 		if value == "" {
-			log.Warnf("parse value from response body failded, body:%s", body)
+			log.Warnf("parse value from response body failed, body:%s", body)
 			return chunk
 		}
 	} else {
