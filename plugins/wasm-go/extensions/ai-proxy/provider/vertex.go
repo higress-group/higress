@@ -728,10 +728,11 @@ func (v *vertexProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name A
 		return chunk, nil
 	}
 
-	// OpenAI 兼容模式: 透传响应，但需要解码 Unicode 转义序列
-	// Vertex AI OpenAI-compatible API 返回 ASCII-safe JSON，将非 ASCII 字符编码为 \uXXXX
+	// OpenAI 兼容模式: 透传响应。Vertex AI OpenAI-compatible API may return
+	// ASCII-safe JSON with non-ASCII characters encoded as \uXXXX; that is
+	// valid JSON and should be decoded by the downstream JSON/SSE client.
 	if ctx.GetContext(contextOpenAICompatibleMarker) != nil && ctx.GetContext(contextOpenAICompatibleMarker).(bool) {
-		return util.DecodeUnicodeEscapesInSSE(chunk), nil
+		return chunk, nil
 	}
 
 	if ctx.GetContext(contextClaudeMarker) != nil && ctx.GetContext(contextClaudeMarker).(bool) {
@@ -812,10 +813,11 @@ func (v *vertexProvider) TransformResponseBody(ctx wrapper.HttpContext, apiName 
 		return body, nil
 	}
 
-	// OpenAI 兼容模式: 透传响应，但需要解码 Unicode 转义序列
-	// Vertex AI OpenAI-compatible API 返回 ASCII-safe JSON，将非 ASCII 字符编码为 \uXXXX
+	// OpenAI 兼容模式: 透传响应。Vertex AI OpenAI-compatible API may return
+	// ASCII-safe JSON with non-ASCII characters encoded as \uXXXX; that is
+	// valid JSON and should be decoded by the downstream JSON client.
 	if ctx.GetContext(contextOpenAICompatibleMarker) != nil && ctx.GetContext(contextOpenAICompatibleMarker).(bool) {
-		return util.DecodeUnicodeEscapes(body), nil
+		return body, nil
 	}
 
 	if ctx.GetContext(contextClaudeMarker) != nil && ctx.GetContext(contextClaudeMarker).(bool) {
