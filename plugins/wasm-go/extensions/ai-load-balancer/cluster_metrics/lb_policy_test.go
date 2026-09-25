@@ -600,7 +600,12 @@ func (f *fakeHTTPContext) WriteUserAttributeToLog() error                   { re
 func (f *fakeHTTPContext) WriteUserAttributeToLogWithKey(key string) error  { return nil }
 func (f *fakeHTTPContext) WriteUserAttributeToTrace() error                 { return nil }
 func (f *fakeHTTPContext) DontReadRequestBody()                             {}
+func (f *fakeHTTPContext) HasRequestBody() bool                             { return false }
 func (f *fakeHTTPContext) DontReadResponseBody()                            {}
+func (f *fakeHTTPContext) HasResponseBody() bool                            { return false }
+func (f *fakeHTTPContext) IsWebsocket() bool                                { return false }
+func (f *fakeHTTPContext) IsBinaryRequestBody() bool                        { return false }
+func (f *fakeHTTPContext) IsBinaryResponseBody() bool                       { return false }
 func (f *fakeHTTPContext) BufferRequestBody()                               {}
 func (f *fakeHTTPContext) BufferResponseBody()                              {}
 func (f *fakeHTTPContext) NeedPauseStreamingResponse()                      {}
