@@ -2,6 +2,8 @@ package mcp_session
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-session/common"
@@ -460,5 +462,83 @@ func TestFindNextLineBreak(t *testing.T) {
 				t.Errorf("Expected line break '%v', got '%v'", []byte(tc.expectedBreak), []byte(lineBreak))
 			}
 		})
+	}
+}
+
+// minimal RequestHeaderMap mock for header-phase tests
+type testHeaderMap struct {
+	api.RequestHeaderMap
+	values map[string]string
+}
+
+func (h testHeaderMap) Get(key string) (string, bool) {
+	v, ok := h.values[key]
+	return v, ok
+}
+
+func (h testHeaderMap) Set(key, value string) { h.values[key] = value }
+func (h testHeaderMap) Del(key string)        { delete(h.values, key) }
+
+// TestRestUpstreamSkipsBodyBufferingWithoutRateLimit verifies that plain
+// REST/streamable MCP proxying does not buffer the request body, so that large
+// requests are not rejected with a 413. See #3238.
+func TestRestUpstreamSkipsBodyBufferingWithoutRateLimit(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	for _, upstreamType := range []common.UpstreamType{common.RestUpstream, common.StreamableUpstream} {
+		t.Run(string(upstreamType), func(t *testing.T) {
+			parsedURL, _ := url.Parse("http://example.com/mcp/api")
+			f := &filter{
+				config:      &config{enableUserLevelServer: false},
+				matchedRule: common.MatchRule{UpstreamType: upstreamType},
+				needProcess: true,
+				req:         &http.Request{Method: http.MethodPost, URL: parsedURL},
+			}
+			header := testHeaderMap{values: map[string]string{}}
+
+			// endStream=false would previously return StopAndBuffer and buffer
+			// the whole body. Without rate limiting we should stream instead.
+			status := f.processMcpRequestHeadersForRestUpstream(header, false)
+			if status != api.Continue {
+				t.Errorf("expected api.Continue, got %v", status)
+			}
+			if !f.skipRequestBody {
+				t.Errorf("expected skipRequestBody to be true")
+			}
+
+			// DecodeData must then pass the body through untouched.
+			if got := f.DecodeData(nil, false); got != api.Continue {
+				t.Errorf("expected DecodeData to Continue when body is skipped, got %v", got)
+			}
+		})
+	}
+}
+
+// TestRestUpstreamBuffersBodyWhenRateLimitEnabled verifies that the body is
+// still buffered when user-level rate limiting is enabled, since that path
+// needs to inspect the JSON-RPC method in the body.
+func TestRestUpstreamBuffersBodyWhenRateLimitEnabled(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	// Use a path with fewer than 3 segments so the config handler (which is
+	// nil in this test) is never queried; f.ratelimit is still set to true
+	// because enableUserLevelServer is enabled.
+	parsedURL, _ := url.Parse("http://example.com/mcp")
+	f := &filter{
+		config:      &config{enableUserLevelServer: true},
+		matchedRule: common.MatchRule{UpstreamType: common.RestUpstream},
+		needProcess: true,
+		req:         &http.Request{Method: http.MethodPost, URL: parsedURL},
+	}
+
+	header := testHeaderMap{values: map[string]string{}}
+	status := f.processMcpRequestHeadersForRestUpstream(header, false)
+	if status != api.StopAndBuffer {
+		t.Errorf("expected api.StopAndBuffer when rate limiting is enabled, got %v", status)
+	}
+	if f.skipRequestBody {
+		t.Errorf("expected skipRequestBody to be false when buffering is required")
 	}
 }
