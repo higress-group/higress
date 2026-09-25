@@ -208,7 +208,7 @@ func accessDockerCompose(cmd *cobra.Command) error {
 	for _, container := range list {
 		if strings.Contains(container.Service, "console") {
 			// not support define ip address
-			if container.Publishers != nil {
+			if len(container.Publishers) > 0 {
 				url := fmt.Sprintf("http://localhost:%d", container.Publishers[0].PublishedPort)
 				openBrowser(url, cmd.OutOrStdout(), browser)
 			}
