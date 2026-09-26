@@ -142,7 +142,7 @@ On the other side, we discourage contributors from committing message like the f
 * ~~update~~
 * ~~add doc~~
 
-If you get lost, please see [How to Write a Git Commit Message](http://chris.beams.io/posts/git-commit/) for a start.
+If you get lost, please see [How to Write a Git Commit Message](https://chris.beams.io/posts/git-commit/) for a start.
 
 #### Commit Content
 
