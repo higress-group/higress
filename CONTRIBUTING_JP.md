@@ -139,7 +139,7 @@ upstream   no-pushing (push)
 * ~~更新~~
 * ~~ドキュメント追加~~
 
-迷った場合は、[Git コミットメッセージの書き方](http://chris.beams.io/posts/git-commit/) を参照してください。
+迷った場合は、[Git コミットメッセージの書き方](https://chris.beams.io/posts/git-commit/) を参照してください。
 
 #### コミット内容
 
