@@ -142,7 +142,7 @@ upstream   no-pushing (push)
 * ~~更新~~
 * ~~添加文档~~
 
-如果你不知道该怎么做，请参阅 [如何编写 Git 提交消息](http://chris.beams.io/posts/git-commit/) 作为开始。
+如果你不知道该怎么做，请参阅 [如何编写 Git 提交消息](https://chris.beams.io/posts/git-commit/) 作为开始。
 
 #### 提交内容
 
