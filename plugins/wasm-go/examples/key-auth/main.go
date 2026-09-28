@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -62,6 +63,13 @@ type Consumer struct {
 	// @Description en-US The credentials of the consumer. Cannot be configured together with credential.
 	// @Scope GLOBAL
 	Credentials []string `yaml:"credentials"`
+
+	// @Title 所属分组
+	// @Title en-US Consumer Group
+	// @Description 该调用方所属的分组，可用于 ai-quota 等下游插件按组聚合。
+	// @Description en-US The group this consumer belongs to. Downstream plugins such as ai-quota can aggregate by group.
+	// @Scope GLOBAL
+	Group string `yaml:"group,omitempty"`
 }
 
 // @Name key-auth
@@ -134,7 +142,7 @@ type KeyAuthConfig struct {
 	// @Description en-US Consumers to be allowed for matched requests.
 	allow []string `yaml:"allow"`
 
-	credential2Name map[string]string `yaml:"-"`
+	credential2Consumer map[string]Consumer `yaml:"-"`
 }
 
 func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) error {
@@ -142,7 +150,7 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 
 	// init
 	ruleSet = false
-	global.credential2Name = make(map[string]string)
+	global.credential2Consumer = make(map[string]Consumer)
 
 	// global_auth
 	globalAuth := json.Get("global_auth")
@@ -220,7 +228,7 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 		}
 
 		for _, credential := range consumerCredentials {
-			if _, ok := global.credential2Name[credential]; ok {
+			if _, ok := global.credential2Consumer[credential]; ok {
 				return errors.New("duplicate consumer credential: " + credential)
 			}
 		}
@@ -234,10 +242,35 @@ func parseGlobalConfig(json gjson.Result, global *KeyAuthConfig, log log.Log) er
 			consumer.Credentials = consumerCredentials
 		}
 
+		if group := item.Get("group"); group.Exists() {
+			consumer.Group = group.String()
+		}
+
 		global.consumers = append(global.consumers, consumer)
 		for _, credential := range consumerCredentials {
-			global.credential2Name[credential] = name.String()
+			global.credential2Consumer[credential] = consumer
 		}
+	}
+
+	// G ∩ N 校验：group 名集合与 consumer name 集合必须互斥。
+	// 冲突会让 ai-quota 把 group 写入 chat_quota:<group> 时覆盖同名 consumer 的私有池 quota key。
+	// 全部冲突必须一次列出，避免运维改一个冲突再重启一次才发现下一个。
+	consumerNames := make(map[string]struct{})
+	groups := make(map[string]struct{})
+	for _, c := range global.consumers {
+		consumerNames[c.Name] = struct{}{}
+		if c.Group != "" {
+			groups[c.Group] = struct{}{}
+		}
+	}
+	var conflicts []string
+	for g := range groups {
+		if _, ok := consumerNames[g]; ok {
+			conflicts = append(conflicts, g)
+		}
+	}
+	if len(conflicts) > 0 {
+		return fmt.Errorf("consumer groups conflict with consumer names: %s", strings.Join(conflicts, ", "))
 	}
 	return nil
 }
@@ -324,41 +357,46 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config KeyAuthConfig, log log
 	}
 
 	// 验证token
-	name, ok := config.credential2Name[tokens[0]]
+	consumer, ok := config.credential2Consumer[tokens[0]]
 	if !ok {
 		log.Warnf("credential %q is not configured", tokens[0])
 		return deniedUnauthorizedConsumer()
 	}
 
-	proxywasm.AddHttpRequestHeader("X-Mse-Consumer", name)
+	log.Infof("Consumer %q, Consumer-Group %q", consumer.Name, consumer.Group)
+
+	proxywasm.AddHttpRequestHeader("X-Mse-Consumer", consumer.Name)
+	if consumer.Group != "" {
+		proxywasm.AddHttpRequestHeader("X-Mse-Consumer-Group", consumer.Group)
+	}
 
 	// 全局生效：
 	// - global_auth == true 且 当前 domain/route 未配置该插件
 	// - global_auth 未设置 且 没有任何一个 domain/route 配置该插件
 	if (globalAuthSetTrue && noAllow) || (globalAuthNoSet && !ruleSet) {
-		log.Infof("consumer %q authenticated", name)
-		return authenticated(name)
+		log.Infof("consumer %q authenticated", consumer.Name)
+		return authenticated(consumer.Name)
 	}
 
 	// 全局生效，但当前 domain/route 配置了 allow 列表
 	if globalAuthSetTrue && !noAllow {
-		if !contains(config.allow, name) {
-			log.Warnf("consumer %q is not allowed", name)
+		if !contains(config.allow, consumer.Name) {
+			log.Warnf("consumer %q is not allowed", consumer.Name)
 			return deniedUnauthorizedConsumer()
 		}
-		log.Infof("consumer %q authenticated", name)
-		return authenticated(name)
+		log.Infof("consumer %q authenticated", consumer.Name)
+		return authenticated(consumer.Name)
 	}
 
 	// 非全局生效
 	if globalAuthSetFalse || (globalAuthNoSet && ruleSet) {
 		if !noAllow { // 配置了 allow 列表
-			if !contains(config.allow, name) {
-				log.Warnf("consumer %q is not allowed", name)
+			if !contains(config.allow, consumer.Name) {
+				log.Warnf("consumer %q is not allowed", consumer.Name)
 				return deniedUnauthorizedConsumer()
 			}
-			log.Infof("consumer %q authenticated", name)
-			return authenticated(name)
+			log.Infof("consumer %q authenticated", consumer.Name)
+			return authenticated(consumer.Name)
 		}
 	}
 
