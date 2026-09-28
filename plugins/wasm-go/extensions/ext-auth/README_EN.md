@@ -24,6 +24,7 @@ Plugin Execution Priority: `360`
 | `failure_mode_allow` | bool | No | false | When set to true, client requests will be accepted even if the communication with the authorization service fails or the authorization service returns an HTTP 5xx error |
 | `failure_mode_allow_header_add` | bool | No | false | When both `failure_mode_allow` and `failure_mode_allow_header_add` are set to true, if the communication with the authorization service fails or the authorization service returns an HTTP 5xx error, the `x-envoy-auth-failure-mode-allowed: true` header will be added to the request header |
 | `status_on_error` | int | No | 403 | Sets the HTTP status code returned to the client when the authorization service is inaccessible or has a 5xx status code. The default status code is `403` |
+| `cache` | object | No | - | Auth-result cache configuration, disabled by default. When enabled, allowed requests that hit the cache no longer call the authorization service |
 
 Configuration fields for each item in `http_service`
 
@@ -34,6 +35,25 @@ Configuration fields for each item in `http_service`
 | `timeout` | int | No | 1000 | The connection timeout for the `ext-auth` service in milliseconds |
 | `authorization_request` | object | No | - | Configuration for sending the authentication request |
 | `authorization_response` | object | No | - | Configuration for handling the authentication response |
+| `success_condition` | array of Condition | No | - | After the authorization service returns HTTP 200, further validate its response with a set of conditions; the request is allowed only when all conditions match, otherwise it is rejected with the `status_on_error` status code |
+
+Configuration fields for each item of `Condition` type in `success_condition`
+
+| Name | Data Type | Required | Default Value | Description |
+| --- | --- | --- | --- | --- |
+| `source` | string | Yes | - | Where the value is extracted from: `status_code` (the authorization response status code), `header` (a response header), or `body_json` (the response body, by gjson path) |
+| `key` | string | Required when `source` is `header` or `body_json` | - | For `header`, the response-header name (case-insensitive); for `body_json`, a gjson path such as `data.code`; ignored for `status_code` |
+| `op` | string | Yes | - | Comparison operator: `eq`, `ne`, `in`, `not_in`, `exists`, `not_exists`, `gt`, or `lt` |
+| `value` | string or array of string | Required except for `exists` and `not_exists` | - | The target value. For `in` and `not_in` it is the list of candidates; other operators use the first element or a plain scalar |
+
+`Condition` evaluation semantics:
+
+- Conditions are ANDed: the request is allowed only when every condition matches; otherwise it is rejected with the `status_on_error` status code.
+- It only takes effect when the authorization service returns HTTP 200; non-200 responses follow the original handling.
+- `header` names are matched case-insensitively, but `eq`, `ne`, `in`, and `not_in` compare the extracted value case-sensitively (exact match).
+- `exists` reflects whether a value can be extracted: a `header` with an empty value counts as absent; a `body_json` path that is explicitly `null` counts as present with an empty-string value.
+- `gt` and `lt` compare both sides as floating-point numbers; if either side fails to parse, the condition does not match.
+- When no value can be extracted (unknown source, missing header, non-existent gjson path, or empty body), every operator except `not_exists` does not match.
 
 Configuration fields for each item in `endpoint`
 
@@ -70,6 +90,21 @@ Configuration fields for each item in `authorization_response`
 | --- | --- | --- | --- | --- |
 | `allowed_upstream_headers` | array of StringMatcher | No | - | The response headers of the authentication request that match the items will be added to the original client request headers. Please note that the request headers with the same name will be overwritten |
 | `allowed_client_headers` | array of StringMatcher | No | - | If not set, when the request is rejected, all the response headers of the authentication request will be added to the client's response headers. When set, when the request is rejected, the response headers of the authentication request that match the items will be added to the client's response headers |
+| `mapped_upstream_headers` | array of HeaderMapping | No | - | Extract a value from the authorization response by source and forward it to the upstream request under a new header name. Complements `allowed_upstream_headers`, which forwards same-name headers |
+
+Configuration fields for each item of `HeaderMapping` type in `mapped_upstream_headers`
+
+| Name | Data Type | Required | Default Value | Description |
+| --- | --- | --- | --- | --- |
+| `source` | string | Yes | - | Where the value is extracted from: `status_code`, `header`, or `body_json`, with the same meaning as in `Condition` |
+| `key` | string | Required when `source` is `header` or `body_json` | - | For `header`, the response-header name (case-insensitive); for `body_json`, a gjson path; ignored for `status_code` |
+| `to_header` | string | Yes | - | The request-header name used when forwarding to the upstream |
+
+`HeaderMapping` forwarding semantics:
+
+- It only takes effect when the request is allowed (after `success_condition` passes), and runs after `allowed_upstream_headers`.
+- When no value can be extracted or the value is an empty string, the header is skipped and not injected.
+- The header is set with an overwrite, so an existing upstream request header with the same name is replaced.
 
 Configuration fields for each item of `StringMatcher` type. When using `array of StringMatcher`, the StringMatchers defined in the array will be configured in order.
 
@@ -97,6 +132,46 @@ Configuration fields for each item of `HeaderPresenceCondition` type:
 | --- | --- | --- | --- | --- |
 | `name` | string | Yes | - | An HTTP request-header name, matched case-insensitively. Case-insensitive duplicates within one rule are not allowed |
 | `exists` | bool | Yes | - | `true` requires the header to be present and `false` requires it to be absent. A header with an empty value is still present |
+
+Configuration fields for each item in `cache`
+
+| Name | Data Type | Required | Default Value | Description |
+| --- | --- | --- | --- | --- |
+| `enabled` | bool | No | false | Whether to enable the auth-result cache. Disabled by default; when disabled no Redis client is created and every request goes straight to the authorization service |
+| `ttl` | int | Required when enabled | - | Cache entry lifetime in seconds, in the range `[1, 600]`; values above the maximum are clamped to `600`; when missing or non-positive the cache stays off (treated as disabled, not an error) |
+| `key_fields` | array | No | - | The list of fields that compose a custom cache key. When omitted the default key is used (method + path + all request headers forwarded to the authorization service); when set, the key is composed only of the method, the query-free path, and the fields listed here. An invalid value (not an array, an item missing `source`/`key`, an unsupported `source`, or an empty `key`) causes the whole plugin configuration to be rejected |
+| `redis` | object | Required when enabled | - | The Redis service used by the cache |
+
+Configuration fields for each item in `cache.key_fields`
+
+| Name | Data Type | Required | Default Value | Description |
+| --- | --- | --- | --- | --- |
+| `source` | string | Yes | - | Where the field is read from: `header` (a request header) or `query` (a query parameter) |
+| `key` | string | Yes | - | The request header name or query parameter name; must not be empty |
+
+Configuration fields for each item in `cache.redis`
+
+| Name | Data Type | Required | Default Value | Description |
+| --- | --- | --- | --- | --- |
+| `service_name` | string | Yes | - | The Redis service name, a full FQDN with the service type, such as `redis.dns` or `redis.my-ns.svc.cluster.local` |
+| `service_port` | int | No | 6379 | The Redis service port; defaults to `80` when `service_name` ends with `.static`, otherwise `6379` |
+| `timeout` | int | No | 1000 | The Redis call timeout in milliseconds |
+| `username` | string | No | - | The Redis username |
+| `password` | string | No | - | The Redis password |
+| `database` | int | No | 0 | The Redis database number |
+
+`cache` semantics:
+
+- Only allow decisions are cached: the headers injected upstream are written to the cache only when the authorization service returns HTTP 200 and `success_condition` (if configured) passes; rejections are never cached.
+- The cache key has two modes:
+  - Default (`key_fields` not set): derived with SHA-256 from the method and path sent to the authorization service plus all request headers forwarded to the authorization service (including credentials), so any change lands on a different entry and avoids cross-contamination. Suited to credentials that stay stable and reusable for a period of time.
+  - Custom (`key_fields` set): derived with SHA-256 only from the method, the query-free path, and the values of the fields listed in `key_fields` in declaration order. In this mode the query string is no longer folded into the key wholesale, and `Authorization` and the headers automatically added by `forward_auth` are not included unless explicitly listed. Suited to credentials that are unique per request (such as a per-request-signed `Authorization`), where the default key would never hit the cache.
+  - In custom mode the method and the query-free path are always part of the key as a floor, and a listed field that is absent from the request contributes an empty value. Make sure the listed fields are enough to tell callers apart: inputs that are not listed do not participate in the key, so requests landing on the same key share one cached allow decision until its `ttl` expires.
+- On a cache hit, the headers injected by the previous allow are replayed and the request is allowed without calling the authorization service again.
+- Fail-open: when Redis is not ready, a connection or call fails, or the cached value is corrupt, the request falls back to a real authorization call; a cache problem never blocks a request.
+- The cache is skipped when `authorization_request.with_request_body` is `true`, because the body influences the decision but is not part of the key, which would risk cross-contamination.
+- The cache gate requires `enabled: true`, a positive `ttl`, and no forwarded request body; if any is unmet the cache is treated as off — no Redis client is created, no error is raised, and the request follows the original cache-free flow.
+- The TTL is capped at `600` seconds so a stale allow can never outlive it.
 
 ### Differences between the two `endpoint_mode`
 
@@ -303,6 +378,94 @@ X-Route-Name: your-route-name
 ```
 
 By configuring `allowed_properties`, you can map Envoy filter state properties like `route_name` to HTTP headers and send them to the authorization service, enabling the authorization service to make decisions based on routing information.
+
+#### Example 4: Validate the authorization response and forward fields to the upstream
+
+Configuration of the `ext-auth` plugin:
+
+```yaml
+http_service:
+  endpoint_mode: envoy
+  endpoint:
+    service_name: ext-auth.backend.svc.cluster.local
+    service_port: 8090
+    path_prefix: /auth
+  timeout: 1000
+  # After the authorization service returns 200, also require response body data.code == "0" to allow
+  success_condition:
+    - source: body_json
+      key: data.code
+      op: eq
+      value: "0"
+  authorization_response:
+    # Extract fields from the authorization response and forward them to the upstream under new names
+    mapped_upstream_headers:
+      - source: body_json
+        key: data.uid
+        to_header: x-auth-user-id
+      - source: header
+        key: x-user-token
+        to_header: x-auth-token
+```
+
+When the authorization service returns HTTP 200 with the body `{"data": {"code": "0", "uid": "1001"}}` and the response header `x-user-token: abc`, the request is allowed and the request sent to the upstream carries `x-auth-user-id: 1001` and `x-auth-token: abc`. If `data.code` is not `"0"`, the client request is rejected with `status_on_error` (403 by default) even though the status code is 200.
+
+#### Example 5: Enable the auth-result cache
+
+Configuration of the `ext-auth` plugin:
+
+```yaml
+http_service:
+  endpoint_mode: envoy
+  endpoint:
+    service_name: ext-auth.backend.svc.cluster.local
+    service_port: 8090
+    path_prefix: /auth
+  timeout: 1000
+  authorization_response:
+    allowed_upstream_headers:
+      - exact: x-user-id
+# Enable the auth-result cache; allow decisions are cached in Redis for 60 seconds
+cache:
+  enabled: true
+  ttl: 60
+  redis:
+    service_name: redis.dns
+    service_port: 6379
+```
+
+Once enabled, for the same request method, path, and request headers forwarded to the authorization service (including credentials), the first request calls the authorization service; after it is allowed, the headers injected upstream (such as `x-user-id`) are written to Redis and live for `ttl` seconds. Subsequent requests that hit the cache replay that allow decision and no longer call the authorization service. When Redis is not ready, a call fails, or the cached value is corrupt, the request always fails open (falling back to a real authorization call). The cache is not used when `authorization_request.with_request_body` is `true`.
+
+If the credential is unique per request (for example an `Authorization` signed per request), the default key treats every request as a new entry and almost never hits the cache. In that case use `key_fields` to specify which fields compose the key — for example telling callers apart only by the query parameter `userId` and the request header `x-app-key`:
+
+```yaml
+http_service:
+  endpoint_mode: envoy
+  endpoint:
+    service_name: ext-auth.backend.svc.cluster.local
+    service_port: 8090
+    path_prefix: /auth
+  timeout: 1000
+  authorization_response:
+    allowed_upstream_headers:
+      - exact: x-user-id
+cache:
+  enabled: true
+  ttl: 60
+  # The cache key is composed only of the method, the query-free path, and the
+  # fields listed below; Authorization and unlisted query parameters no longer
+  # take part in the key
+  key_fields:
+    - source: query
+      key: userId
+    - source: header
+      key: x-app-key
+  redis:
+    service_name: redis.dns
+    service_port: 6379
+```
+
+Note: inputs not listed in `key_fields` (including `Authorization` and unlisted query parameters) do not take part in the key, so requests landing on the same key share one cached allow decision until its `ttl` expires. Make sure the listed fields are enough to tell callers apart.
 
 ### When endpoint_mode is forward_auth
 
