@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-server/registry"
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
@@ -18,6 +19,7 @@ type NacosMcpRegistry struct {
 	serviceMatcher           map[string]string
 	configClient             config_client.IConfigClient
 	namingClient             naming_client.INamingClient
+	toolsMutex               sync.RWMutex
 	toolsDescription         map[string]*registry.ToolDescription
 	toolsRpcContext          map[string]*registry.RpcContext
 	toolChangeEventListeners []registry.ToolChangeEventListener
@@ -30,30 +32,42 @@ const (
 )
 
 func (n *NacosMcpRegistry) ListToolsDescription() []*registry.ToolDescription {
+	n.toolsMutex.RLock()
 	if n.toolsDescription == nil {
+		n.toolsMutex.RUnlock()
 		n.refreshToolsList()
+		n.toolsMutex.RLock()
 	}
 
 	result := []*registry.ToolDescription{}
 	for _, tool := range n.toolsDescription {
 		result = append(result, tool)
 	}
+	n.toolsMutex.RUnlock()
 	return result
 }
 
 func (n *NacosMcpRegistry) GetToolRpcContext(toolName string) (*registry.RpcContext, bool) {
+	n.toolsMutex.RLock()
 	if n.toolsRpcContext == nil {
+		n.toolsMutex.RUnlock()
 		n.refreshToolsList()
+		n.toolsMutex.RLock()
 	}
 	tool, ok := n.toolsRpcContext[toolName]
+	n.toolsMutex.RUnlock()
 	return tool, ok
 }
 
 func (n *NacosMcpRegistry) RegisterToolChangeEventListener(listener registry.ToolChangeEventListener) {
+	n.toolsMutex.Lock()
+	defer n.toolsMutex.Unlock()
 	n.toolChangeEventListeners = append(n.toolChangeEventListeners, listener)
 }
 
 func (n *NacosMcpRegistry) refreshToolsList() bool {
+	n.toolsMutex.Lock()
+	defer n.toolsMutex.Unlock()
 	changed := false
 	for group, serviceMatcher := range n.serviceMatcher {
 		if n.refreshToolsListForGroup(group, serviceMatcher) {
@@ -272,7 +286,9 @@ func (n *NacosMcpRegistry) listenToService(group string, service string) {
 		DataId: makeToolsConfigId(service),
 		Group:  group,
 		OnChange: func(namespace, group, dataId, data string) {
+			n.toolsMutex.Lock()
 			n.refreshToolsListForServiceWithContent(group, service, &data, nil)
+			n.toolsMutex.Unlock()
 			for _, listener := range n.toolChangeEventListeners {
 				listener.OnToolChanged(n)
 			}
@@ -286,7 +302,9 @@ func (n *NacosMcpRegistry) listenToService(group string, service string) {
 		ServiceName: service,
 		GroupName:   group,
 		SubscribeCallback: func(services []model.Instance, err error) {
+			n.toolsMutex.Lock()
 			n.refreshToolsListForServiceWithContent(group, service, nil, &services)
+			n.toolsMutex.Unlock()
 			for _, listener := range n.toolChangeEventListeners {
 				listener.OnToolChanged(n)
 			}
