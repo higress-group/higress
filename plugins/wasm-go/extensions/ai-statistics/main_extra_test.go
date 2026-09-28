@@ -128,3 +128,125 @@ func TestConvertToUInt_NilAndSlice_FallToDefault(t *testing.T) {
 	require.False(t, ok)
 	require.Equal(t, uint64(0), v)
 }
+
+// === Module C — rule-level config inheritance (issue #4173) =============
+//
+// With matchRules configured, the SDK parses each rule independently. Before
+// the ParseOverrideConfig fix, a rule-level config that did not repeat the
+// attributes list silently dropped the global (defaultConfig) attributes.
+// The tests below pin the new inheritance contract implemented by
+// parseOverrideConfig. The test host's default route name is
+// "test-route-default", so `_match_route_: ["test-route-default"]` makes
+// GetMatchConfig return the rule-level config.
+
+// Reproduces the exact issue #4173 scenario: global config defines
+// attributes=[consumer] with use_default_attributes=false, and the matchRule
+// only sets `use_default_response_attributes: false`. The rule-level
+// effective config must inherit the global attributes instead of ending up
+// with an empty attribute list.
+func TestOverrideRuleInheritsGlobalAttributes(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{
+			"use_default_attributes": false,
+			"attributes": [
+				{
+					"key": "consumer",
+					"value_source": "request_header",
+					"value": "x-mse-consumer",
+					"apply_to_log": true
+				}
+			],
+			"_rules_": [
+				{
+					"_match_route_": ["test-route-default"],
+					"use_default_response_attributes": false
+				}
+			]
+		}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		conf, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		c := conf.(*AIStatisticsConfig)
+		require.Len(t, c.attributes, 1)
+		require.Equal(t, "consumer", c.attributes[0].Key)
+		require.Equal(t, "x-mse-consumer", c.attributes[0].Value)
+	})
+}
+
+// A rule that explicitly configures its own attributes list must override
+// the inherited global attributes, and buffering flags must be recalculated
+// for the new attribute set.
+func TestOverrideRuleRedefinesAttributes(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{
+			"attributes": [
+				{
+					"key": "consumer",
+					"value_source": "request_header",
+					"value": "x-mse-consumer",
+					"apply_to_log": true
+				}
+			],
+			"_rules_": [
+				{
+					"_match_route_": ["test-route-default"],
+					"attributes": [
+						{
+							"key": "model",
+							"value_source": "request_body",
+							"value": "model",
+							"apply_to_log": true
+						}
+					]
+				}
+			]
+		}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		conf, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		c := conf.(*AIStatisticsConfig)
+		require.Len(t, c.attributes, 1)
+		require.Equal(t, "model", c.attributes[0].Key)
+		// The new attribute set reads from the request body, so the
+		// buffering flag must be refreshed accordingly.
+		require.True(t, c.shouldBufferRequestBody)
+	})
+}
+
+// A rule that only overrides a scalar field (value_length_limit) must keep
+// the inherited global attributes while applying the new limit.
+func TestOverrideRuleOverridesScalar(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{
+			"attributes": [
+				{
+					"key": "consumer",
+					"value_source": "request_header",
+					"value": "x-mse-consumer",
+					"apply_to_log": true
+				}
+			],
+			"_rules_": [
+				{
+					"_match_route_": ["test-route-default"],
+					"value_length_limit": 500
+				}
+			]
+		}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		conf, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		c := conf.(*AIStatisticsConfig)
+		// Attributes inherited from the global config.
+		require.Len(t, c.attributes, 1)
+		require.Equal(t, "consumer", c.attributes[0].Key)
+		// Scalar overridden by the rule-level config.
+		require.Equal(t, 500, c.valueLengthLimit)
+	})
+}
