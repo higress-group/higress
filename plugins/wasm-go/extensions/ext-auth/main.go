@@ -164,6 +164,9 @@ func buildExtAuthRequestHeaders(ctx wrapper.HttpContext, cfg config.ExtAuthConfi
 	reqHeaders, _ := proxywasm.GetHttpRequestHeaders()
 	if requestConfig.AllowedHeaders != nil {
 		for _, header := range reqHeaders {
+			if len(header) < 2 {
+				continue
+			}
 			headK := header[0]
 			if requestConfig.AllowedHeaders.Match(headK) {
 				extAuthReqHeaders.Set(headK, header[1])
