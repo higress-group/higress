@@ -40,11 +40,18 @@ func init() {
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingBody),
 		wrapper.ProcessResponseBody(onHttpResponseBody),
-		wrapper.WithRebuildMaxMemBytes[AIStatisticsConfig](200*1024*1024),
+		wrapper.WithRebuildMaxMemBytes[AIStatisticsConfig](vmRebuildMaxMemBytes),
 	)
 }
 
 const (
+	// vmRebuildMaxMemBytes is the wasm VM memory ceiling that triggers a VM
+	// rebuild. The buffered request body is copied into the VM, so a buffer
+	// limit above this value cannot be served without forcing a rebuild.
+	vmRebuildMaxMemBytes = 200 * 1024 * 1024
+	// maxRequestBodyBytesCeiling is the largest accepted max_request_body_bytes.
+	maxRequestBodyBytesCeiling = vmRebuildMaxMemBytes
+
 	defaultMaxBodyBytes uint32 = 100 * 1024 * 1024
 	// Context consts
 	StatisticsRequestStartTime = "ai-statistics-request-start-time"
@@ -569,12 +576,21 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 
 	// Set max_request_body_bytes (request body buffer limit). Supports
 	// matchRules route-level overrides. Defaults to defaultMaxBodyBytes.
-	if configJson.Get("max_request_body_bytes").Exists() {
-		config.maxRequestBodyBytes = uint32(configJson.Get("max_request_body_bytes").Uint())
+	// The value is validated as a number in (0, maxRequestBodyBytesCeiling]
+	// before narrowing to uint32, so out-of-range input is rejected instead
+	// of silently wrapping.
+	config.maxRequestBodyBytes = defaultMaxBodyBytes
+	if limitJson := configJson.Get("max_request_body_bytes"); limitJson.Exists() {
+		if limitJson.Type != gjson.Number {
+			return fmt.Errorf("max_request_body_bytes must be a number, got %s", limitJson.Raw)
+		}
+		limit := limitJson.Int()
+		if limit <= 0 || limit > maxRequestBodyBytesCeiling {
+			return fmt.Errorf("max_request_body_bytes must be in the range (0, %d], got %s", maxRequestBodyBytesCeiling, limitJson.Raw)
+		}
+		config.maxRequestBodyBytes = uint32(limit)
 	}
-	if config.maxRequestBodyBytes == 0 {
-		config.maxRequestBodyBytes = defaultMaxBodyBytes
-	}
+	log.Infof("request body buffer limit: %d bytes", config.maxRequestBodyBytes)
 
 	// Parse attributes or use defaults
 	if useDefaultAttributes {
