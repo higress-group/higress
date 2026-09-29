@@ -1211,6 +1211,14 @@ func (v *vertexProvider) buildVertexChatRequest(request *chatCompletionRequest) 
 			}
 		}
 
+		if len(content.Parts) == 0 {
+			// Vertex rejects empty `parts`, so a turn whose content is entirely
+			// untranslatable is dropped the same way the Gemini path drops it
+			// instead of being forwarded in an invalid shape.
+			log.Warnf("[ai-proxy] vertex: dropping message with role %q, no content is portable to Vertex", message.Role)
+			continue
+		}
+
 		// there's no assistant role in vertex and API shall vomit if role is not user or model
 		switch content.Role {
 		case roleAssistant:
