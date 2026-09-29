@@ -88,7 +88,7 @@ func (h *HigressComponent) RenderManifest() (string, error) {
 	}
 	manifest, err2 := renderComponentManifest(valsYaml, h.renderer, true, h.ComponentName(), h.opts.Namespace)
 	if err2 != nil {
-		return "", err
+		return "", err2
 	}
 	return manifest, nil
 }
@@ -102,10 +102,14 @@ func NewHigressComponent(kubeCli kubernetes.CLIClient, profile *helm.Profile, wr
 	if len(newOpts.RepoURL) == 0 {
 		return nil, errors.New("Higress helm chart url can't be empty")
 	}
+	if newOpts.Name == "" {
+		newOpts.Name = newOpts.ChartName
+	}
 
 	// Higress can only be installed by remote type
 	renderer, err := helm.NewRemoteRenderer(
-		helm.WithName(newOpts.ChartName),
+		helm.WithName(newOpts.Name),
+		helm.WithChartName(newOpts.ChartName),
 		helm.WithNamespace(newOpts.Namespace),
 		helm.WithRepoURL(newOpts.RepoURL),
 		helm.WithVersion(newOpts.Version),

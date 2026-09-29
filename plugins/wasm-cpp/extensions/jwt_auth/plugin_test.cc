@@ -38,6 +38,8 @@ class MockContext : public proxy_wasm::ContextBase {
   MOCK_METHOD(WasmResult, getHeaderMapValue,
               (WasmHeaderMapType /* type */, std::string_view /* jwt */,
                std::string_view* /*result */));
+  MOCK_METHOD(WasmResult, removeHeaderMapValue,
+              (WasmHeaderMapType /* type */, std::string_view /* key */));
   MOCK_METHOD(WasmResult, addHeaderMapValue,
               (WasmHeaderMapType /* type */, std::string_view /* jwt */,
                std::string_view /* value */));
@@ -310,6 +312,11 @@ TEST_F(JwtAuthTest, ClaimToHeader) {
   EXPECT_CALL(*mock_context_,
               addHeaderMapValue(testing::_, std::string_view("x-exp"),
                                 std::string_view("1665673819")));
+  // The gateway replaces rather than appends the consumer identity, so any
+  // client-supplied X-Mse-Consumer is dropped before its own value is set.
+  EXPECT_CALL(*mock_context_,
+              removeHeaderMapValue(testing::_,
+                                   std::string_view("X-Mse-Consumer")));
   EXPECT_CALL(*mock_context_,
               addHeaderMapValue(testing::_, std::string_view("X-Mse-Consumer"),
                                 std::string_view("consumer-2")));

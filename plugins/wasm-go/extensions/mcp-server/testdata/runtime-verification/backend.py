@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic observable REST and MCP backend for Envoy runtime verification."""
 
+import auto_backend
 import json
 import os
 import threading
@@ -47,6 +48,8 @@ def safe_event(handler, body):
         "unrelatedCredentialPresent": truthy_header(headers, "x-unrelated-credential"),
     }
     parsed_url = urlparse(handler.path)
+    if parsed_url.path.startswith("/auto"):
+        event.update(auto_backend.event_fields(handler, parsed))
     if parsed_url.path.startswith(("/compat/", "/corpus/")):
         event["compatibilityRequest"] = {
             "query": parse_qs(parsed_url.query),
@@ -100,7 +103,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         if parsed_url.path == "/__state":
             with LOCK:
-                state = {"origin": ORIGIN, "events": list(EVENTS)}
+                state = {"origin": ORIGIN, "events": list(EVENTS), "auto": auto_backend.state()}
             return self.send_json(200, state)
         if parsed_url.path == "/healthz":
             return self.send_json(200, {"ok": True, "origin": ORIGIN})
@@ -124,7 +127,11 @@ class Handler(BaseHTTPRequestHandler):
                 SEQ = 0
             return self.send_json(200, {"reset": True, "origin": ORIGIN})
 
+        if auto_backend.control(self, parsed_url.path, body):
+            return
         request = safe_event(self, body)
+        if parsed_url.path.startswith("/auto"):
+            return auto_backend.handle(self, request)
         if parsed_url.path.startswith("/compat/"):
             return self.send_json(200, {"ok": True, "path": parsed_url.path, "origin": ORIGIN})
         mode = self.headers.get("Mcp-Param-Test-Mode")

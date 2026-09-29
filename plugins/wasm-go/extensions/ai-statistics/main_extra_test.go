@@ -128,3 +128,83 @@ func TestConvertToUInt_NilAndSlice_FallToDefault(t *testing.T) {
 	require.False(t, ok)
 	require.Equal(t, uint64(0), v)
 }
+
+// === Module C — max_request_body_bytes configurable buffer limit =========
+//
+// The request-body buffer limit was previously a hard-coded 100 MiB
+// (defaultMaxBodyBytes), which rejected large non-AI uploads with HTTP 413.
+// These tests pin the configurable-limit contract: an unset value falls
+// back to the default, an in-range value (up to and including the VM
+// rebuild ceiling) is honored, and any value that is not a number in
+// (0, maxRequestBodyBytesCeiling] fails plugin start instead of silently
+// wrapping when narrowed to uint32.
+func TestParseConfig_MaxRequestBodyBytes_DefaultWhenUnset(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{
+			"enable_path_suffixes": ["*"]
+		}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		conf, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		c := conf.(*AIStatisticsConfig)
+		require.Equal(t, defaultMaxBodyBytes, c.maxRequestBodyBytes)
+	})
+}
+
+func TestParseConfig_MaxRequestBodyBytes_HonorsExplicitValue(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{
+			"max_request_body_bytes": 157286400
+		}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		conf, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		c := conf.(*AIStatisticsConfig)
+		require.Equal(t, uint32(157286400), c.maxRequestBodyBytes)
+	})
+}
+
+func TestParseConfig_MaxRequestBodyBytes_HonorsCeiling(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{
+			"max_request_body_bytes": 209715200
+		}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		conf, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		c := conf.(*AIStatisticsConfig)
+		require.Equal(t, uint32(maxRequestBodyBytesCeiling), c.maxRequestBodyBytes)
+	})
+}
+
+// Each of these values previously produced a wrong limit without any error:
+// -1 wrapped to 4 GiB, 4294967296 wrapped to 0 (then silently fell back to
+// 100 MiB), and 5000000000 wrapped to ~672 MiB. They must now fail start.
+func TestParseConfig_MaxRequestBodyBytes_InvalidValuesFailStart(t *testing.T) {
+	cases := map[string]string{
+		"zero":               `0`,
+		"negative":           `-1`,
+		"one above ceiling":  `209715201`,
+		"exactly 4 GiB":      `4294967296`,
+		"above uint32 range": `5000000000`,
+		"string":             `"104857600"`,
+		"boolean":            `true`,
+	}
+	for name, value := range cases {
+		t.Run(name, func(t *testing.T) {
+			test.RunGoTest(t, func(t *testing.T) {
+				host, status := test.NewTestHost([]byte(`{
+					"max_request_body_bytes": ` + value + `
+				}`))
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusFailed, status)
+			})
+		})
+	}
+}

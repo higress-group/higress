@@ -36,6 +36,7 @@ type K8sInstaller struct {
 	writer       io.Writer
 	profileStore ProfileStore
 	helmChecker  helmOwnershipChecker
+	execOptions  ExecutionOptions
 }
 
 type helmOwnershipChecker interface {
@@ -44,18 +45,20 @@ type helmOwnershipChecker interface {
 
 func (o *K8sInstaller) Install() error {
 	// check if higress is installed by helm
-	fmt.Fprintf(o.writer, "\n⌛️ Detecting higress installed by helm or not... \n\n")
-	helmChecker := o.helmChecker
-	if helmChecker == nil {
-		helmChecker = NewHelmAgent(o.profile, o.writer, false)
-	}
-	helmInstalled, err := helmChecker.IsHigressInstalled()
-	if err != nil {
-		return fmt.Errorf("check Higress Helm ownership: %w", err)
-	}
-	if helmInstalled {
-		fmt.Fprintf(o.writer, "\n🧐 You have already installed higress by helm, please use \"helm upgrade\" to upgrade higress!\n")
-		return nil
+	if o.execOptions.SourceMode != RecoveredHelmExecutionSource {
+		fmt.Fprintf(o.writer, "\n⌛️ Detecting higress installed by helm or not... \n\n")
+		helmChecker := o.helmChecker
+		if helmChecker == nil {
+			helmChecker = NewHelmAgent(o.profile, o.writer, false)
+		}
+		helmInstalled, err := helmChecker.IsHigressInstalled()
+		if err != nil {
+			return fmt.Errorf("check Higress Helm ownership: %w", err)
+		}
+		if helmInstalled {
+			fmt.Fprintf(o.writer, "\n🧐 You have already installed higress by helm, please use \"helm upgrade\" to upgrade higress!\n")
+			return nil
+		}
 	}
 
 	if err := o.Run(); err != nil {
@@ -64,28 +67,53 @@ func (o *K8sInstaller) Install() error {
 
 	manifestMap, err := o.RenderManifests()
 	if err != nil {
-		return err
+		return o.sanitizeRecoveredHelmError("render recovered Helm target manifests failed", err)
 	}
 
 	fmt.Fprintf(o.writer, "\n⌛️ Processing installation... \n\n")
 	if err := o.ApplyManifests(manifestMap); err != nil {
-		return err
+		return o.sanitizeRecoveredHelmError("apply recovered Helm target manifests failed; resources may be partially applied and no rollback was performed", err)
 	}
 
-	profileName, err1 := o.profileStore.Save(o.profile)
-	if err1 != nil {
-		return err1
+	if o.execOptions.ProfilePersistence != DoNotPersistProfile {
+		profileName, err1 := o.profileStore.Save(o.profile)
+		if err1 != nil {
+			return err1
+		}
+		fmt.Fprintf(o.writer, "\n✔️ Wrote Profile in kubernetes configmap: \"%s\" \n", profileName)
+		fmt.Fprintf(o.writer, "\n   Use below kubectl command to edit profile for upgrade. \n")
+		fmt.Fprintf(o.writer, "   ================================================================================== \n")
+		names := strings.Split(profileName, "/")
+		fmt.Fprintf(o.writer, "   kubectl edit configmap %s -n %s \n", names[1], names[0])
+		fmt.Fprintf(o.writer, "   ================================================================================== \n")
 	}
-	fmt.Fprintf(o.writer, "\n✔️ Wrote Profile in kubernetes configmap: \"%s\" \n", profileName)
-	fmt.Fprintf(o.writer, "\n   Use below kubectl command to edit profile for upgrade. \n")
-	fmt.Fprintf(o.writer, "   ================================================================================== \n")
-	names := strings.Split(profileName, "/")
-	fmt.Fprintf(o.writer, "   kubectl edit configmap %s -n %s \n", names[1], names[0])
-	fmt.Fprintf(o.writer, "   ================================================================================== \n")
 
 	fmt.Fprintf(o.writer, "\n🎊 Install All Resources Complete!\n")
 
 	return nil
+}
+
+func (o *K8sInstaller) sanitizeRecoveredHelmError(message string, err error) error {
+	if o.execOptions.SourceMode != RecoveredHelmExecutionSource {
+		return err
+	}
+	return recoveredHelmSanitizedError{
+		message: message,
+		cause:   err,
+	}
+}
+
+type recoveredHelmSanitizedError struct {
+	message string
+	cause   error
+}
+
+func (e recoveredHelmSanitizedError) Error() string {
+	return e.message
+}
+
+func (e recoveredHelmSanitizedError) Unwrap() error {
+	return e.cause
 }
 
 func (o *K8sInstaller) UnInstall() error {
@@ -266,9 +294,21 @@ func (o *K8sInstaller) isNamespacedObject(obj *object.K8sObject) bool {
 	return false
 }
 
-func NewK8sInstaller(profile *helm.Profile, cli kubernetes.CLIClient, writer io.Writer, quiet bool, devel bool, installerMode InstallerMode) (*K8sInstaller, error) {
+func NewK8sInstaller(profile *helm.Profile, cli kubernetes.CLIClient, writer io.Writer, quiet bool, devel bool, installerMode InstallerMode, execOptions ...ExecutionOptions) (*K8sInstaller, error) {
 	if profile == nil {
 		return nil, errors.New("install profile is empty")
+	}
+	options := ExecutionOptions{ProfilePersistence: PersistProfile}
+	if len(execOptions) > 0 {
+		options = execOptions[0]
+	}
+	releaseName := options.ReleaseName
+	if releaseName == "" {
+		releaseName = profile.Charts.Higress.Name
+	}
+	releaseNamespace := options.ReleaseNamespace
+	if releaseNamespace == "" {
+		releaseNamespace = profile.Global.Namespace
 	}
 	// initialize server info
 	serverInfo, _ := NewServerInfo(cli)
@@ -286,7 +326,8 @@ func NewK8sInstaller(profile *helm.Profile, cli kubernetes.CLIClient, writer io.
 	}
 	components := make(map[ComponentName]Component)
 	opts := []ComponentOption{
-		WithComponentNamespace(profile.Global.Namespace),
+		WithComponentName(releaseName),
+		WithComponentNamespace(releaseNamespace),
 		WithComponentChartPath(profile.InstallPackagePath),
 		WithComponentVersion(higressVersion),
 		WithComponentRepoURL(profile.Charts.Higress.Url),
@@ -356,6 +397,7 @@ func NewK8sInstaller(profile *helm.Profile, cli kubernetes.CLIClient, writer io.
 		kubeCli:      cli,
 		writer:       writer,
 		profileStore: profileStore,
+		execOptions:  options,
 	}
 	return op, nil
 }

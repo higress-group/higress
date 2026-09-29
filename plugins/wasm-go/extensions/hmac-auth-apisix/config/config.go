@@ -24,8 +24,13 @@ type HmacAuthConfig struct {
 	ValidateRequestBody bool       `json:"validate_request_body,omitempty" yaml:"validate_request_body,omitempty"`
 	HideCredentials     bool       `json:"hide_credentials,omitempty" yaml:"hide_credentials,omitempty"`
 	AnonymousConsumer   string     `json:"anonymous_consumer,omitempty" yaml:"anonymous_consumer,omitempty"`
+	// Allow lists the consumers authorized at the rule scope. It is only parsed from
+	// domain/route override rules (ParseOverrideRuleConfig); the global config parser
+	// deliberately ignores a global "allow" key, so an empty Allow at global scope means
+	// "no extra fine-grained restriction", never "deny all". The fail-closed semantics in
+	// onHttpRequestHeaders depend on this invariant together with RuleSet.
 	Allow               []string   `json:"allow,omitempty" yaml:"allow,omitempty"`
-	// RuleSet 插件是否至少在一个 domain 或 route 上生效
+	// RuleSet 当前请求是否命中了 domain/route 级规则，即插件是否在该 domain/route 上被显式启用
 	RuleSet bool `json:"-" yaml:"-"`
 }
 

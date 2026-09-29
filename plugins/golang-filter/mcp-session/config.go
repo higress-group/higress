@@ -77,11 +77,11 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 	enableUserLevelServer, ok := v.AsMap()["enable_user_level_server"].(bool)
 	if !ok {
 		enableUserLevelServer = false
-		if conf.redisClient == nil {
-			return nil, fmt.Errorf("redis configuration is not provided, enable_user_level_server is true")
-		}
 	}
 	conf.enableUserLevelServer = enableUserLevelServer
+	if enableUserLevelServer && conf.redisClient == nil {
+		return nil, fmt.Errorf("redis configuration is required when enable_user_level_server is true")
+	}
 
 	if rateLimit, ok := v.AsMap()["rate_limit"].(map[string]interface{}); ok {
 		rateLimitConfig := &handler.MCPRatelimitConfig{}
@@ -117,8 +117,14 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 }
 
 func (p *Parser) Merge(parent interface{}, child interface{}) interface{} {
-	parentConfig := parent.(*config)
-	childConfig := child.(*config)
+	parentConfig, ok := parent.(*config)
+	if !ok || parentConfig == nil {
+		return child
+	}
+	childConfig, ok := child.(*config)
+	if !ok || childConfig == nil {
+		return parentConfig
+	}
 
 	newConfig := *parentConfig
 	if childConfig.matchList != nil {

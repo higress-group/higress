@@ -122,9 +122,19 @@ func (f *filter) processMcpRequestHeadersForRestUpstream(header api.RequestHeade
 		}
 		if endStream {
 			return api.Continue
-		} else {
-			return api.StopAndBuffer
 		}
+		// The request body only needs to be buffered when user-level rate
+		// limiting is enabled, since that path inspects the JSON-RPC method in
+		// the body (see DecodeData). For plain REST/streamable MCP proxying we
+		// never touch the body, so skip buffering it and stream it directly to
+		// the upstream. Buffering the full body would otherwise cause large
+		// requests to be rejected with a 413 once the body exceeds Envoy's
+		// buffer limit, which cannot be enlarged from the Go filter. See #3238.
+		if !f.ratelimit {
+			f.skipRequestBody = true
+			return api.Continue
+		}
+		return api.StopAndBuffer
 	}
 
 	if method != http.MethodGet {
@@ -295,9 +305,12 @@ func (f *filter) encodeDataFromSSEUpstream(buffer api.BufferInstance, endStream 
 	bufferData := string(bufferBytes)
 	api.LogDebugf("Received SSE data: %q, length: %d, endStream: %v", bufferData, len(bufferData), endStream)
 
-	// Combine cached data with new data
+	// Combine cached data with new data. Cached chunks were already drained from
+	// the wire, so every path that consumes the cache must put the assembled data
+	// back into the buffer, otherwise the client only sees the last chunk. See #4651.
 	var combinedData string
-	if len(f.cachedResponseBody) > 0 {
+	hasCachedData := len(f.cachedResponseBody) > 0
+	if hasCachedData {
 		combinedData = string(f.cachedResponseBody) + bufferData
 		api.LogDebugf("Combined with cached data: %q, total length: %d", combinedData, len(combinedData))
 	} else {
@@ -308,6 +321,10 @@ func (f *filter) encodeDataFromSSEUpstream(buffer api.BufferInstance, endStream 
 	if err != nil {
 		api.LogWarnf("Failed to find endpoint URL in SSE data: %v", err)
 		f.needProcess = false
+		f.cachedResponseBody = nil
+		if hasCachedData {
+			_ = buffer.SetString(combinedData)
+		}
 		return api.Continue
 	}
 	if endpointUrl == "" {
@@ -331,12 +348,18 @@ func (f *filter) encodeDataFromSSEUpstream(buffer api.BufferInstance, endStream 
 		endpointUrlIndex := strings.Index(combinedData, endpointUrl)
 		if endpointUrlIndex == -1 {
 			api.LogWarnf("Something wrong, the previously found endpoint URL %s not found in the SSE data now", endpointUrl)
+			if hasCachedData {
+				_ = buffer.SetString(combinedData)
+			}
 		} else {
 			newBufferData := combinedData[:endpointUrlIndex] + newEndpointUrl + combinedData[endpointUrlIndex+len(endpointUrl):]
 			_ = buffer.SetString(newBufferData)
 		}
 	} else {
 		api.LogDebugf("The endpoint URL %s is not changed", endpointUrl)
+		if hasCachedData {
+			_ = buffer.SetString(combinedData)
+		}
 	}
 
 	f.needProcess = false

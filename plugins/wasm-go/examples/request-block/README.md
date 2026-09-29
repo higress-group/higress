@@ -28,7 +28,7 @@ case_sensitive: false
 
 ```bash
 curl http://example.com?foo=Bar
-curl http://exmaple.com/Swagger.html
+curl http://example.com/Swagger.html
 ```
 
 ## 屏蔽请求 header
@@ -42,7 +42,7 @@ block_headers:
 
 ```bash
 curl http://example.com -H 'example-key: 123'
-curl http://exmaple.com -H 'my-header: example-value'
+curl http://example.com -H 'my-header: example-value'
 ```
 
 ## 屏蔽请求 body
@@ -56,7 +56,7 @@ case_sensitive: false
 
 ```bash
 curl http://example.com -d 'Hello World'
-curl http://exmaple.com -d 'hello world'
+curl http://example.com -d 'hello world'
 ```
 
 ## 对特定路由或域名开启

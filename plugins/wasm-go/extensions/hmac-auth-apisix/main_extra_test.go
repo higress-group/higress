@@ -425,6 +425,39 @@ func TestBodyValidation_HeaderStageReturnsHeaderStopIteration(t *testing.T) {
 	})
 }
 
+// The deprecated header heuristic reported no body when content-length,
+// content-type and transfer-encoding were all absent, so a body delivered as
+// HTTP/2 DATA frames skipped digest validation. ctx.HasRequestBody() keys off
+// endOfStream instead, which the harness leaves false unless told otherwise.
+func TestBodyValidation_BodyWithoutContentHeadersStillPauses(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(createConfig(
+			[]map[string]interface{}{{"name": "c1", "access_key": "ak1", "secret_key": "sk1"}},
+			map[string]interface{}{
+				"global_auth":           true,
+				"validate_request_body": true,
+			},
+		))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		body := []byte(`{"hello":"world"}`)
+		digest := calculateBodyDigest(body)
+		d := gmt()
+		ah := authHeaderRequestTargetDate("ak1", "sk1", "hmac-sha256", "POST", "/p", d)
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "e.com"}, {":path", "/p"}, {":method", "POST"},
+			{"authorization", ah}, {"date", d},
+			{"digest", digest},
+		})
+		require.Equal(t, types.ActionPause, action,
+			"a body following the header phase must be validated even without content headers")
+
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+		require.Nil(t, host.GetLocalResponse())
+	})
+}
+
 // === Anonymous consumer fallback for malformed Authorization =============
 
 func TestAnonymousConsumer_AppliedWhenAuthorizationCannotBeParsed(t *testing.T) {
@@ -521,5 +554,82 @@ func TestAuthorization_UnknownFieldsIgnored(t *testing.T) {
 		})
 		require.Equal(t, types.ActionContinue, action)
 		require.Nil(t, host.GetLocalResponse())
+	})
+}
+
+// === X-Mse-Consumer replace semantics ====================================
+//
+// The authenticated consumer published via setConsumerHeader must REPLACE
+// anything the caller sent rather than be appended to it: downstream readers
+// take the first value for the header, so an appended client-supplied copy
+// would be trusted as the caller's identity.
+
+// countConsumerHeaders counts entries for name case-insensitively, so an
+// accidentally duplicated header is caught rather than silently tolerated.
+func countConsumerHeaders(headers [][2]string, name string) int {
+	n := 0
+	for _, h := range headers {
+		if strings.EqualFold(h[0], name) {
+			n++
+		}
+	}
+	return n
+}
+
+// A caller that sends its own X-Mse-Consumer alongside a valid signature must
+// end up with exactly one header, holding the gateway's assertion.
+func TestClientSuppliedConsumerHeaderIsReplaced(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(createConfig(
+			[]map[string]interface{}{{"name": "c1", "access_key": "ak1", "secret_key": "sk1"}},
+			map[string]interface{}{"global_auth": true},
+		))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		d := gmt()
+		ah := authHeaderRequestTargetDate("ak1", "sk1", "hmac-sha256", "GET", "/p", d)
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "e.com"}, {":path", "/p"}, {":method", "GET"},
+			{"authorization", ah}, {"date", d},
+			{"X-Mse-Consumer", "spoofed-admin"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+		require.Nil(t, host.GetLocalResponse())
+
+		headers := host.GetRequestHeaders()
+		require.Equal(t, 1, countConsumerHeaders(headers, "X-Mse-Consumer"),
+			"exactly one X-Mse-Consumer may reach downstream")
+		consumer, ok := findHeader(headers, "X-Mse-Consumer")
+		require.True(t, ok)
+		require.Equal(t, "c1", consumer,
+			"the surviving value must be the authenticated consumer, not the spoofed one")
+	})
+}
+
+// With no client-supplied header, authentication still publishes exactly one.
+func TestNoClientConsumerHeaderAddsExactlyOne(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(createConfig(
+			[]map[string]interface{}{{"name": "c1", "access_key": "ak1", "secret_key": "sk1"}},
+			map[string]interface{}{"global_auth": true},
+		))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		d := gmt()
+		ah := authHeaderRequestTargetDate("ak1", "sk1", "hmac-sha256", "GET", "/p", d)
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "e.com"}, {":path", "/p"}, {":method", "GET"},
+			{"authorization", ah}, {"date", d},
+		})
+		require.Equal(t, types.ActionContinue, action)
+		require.Nil(t, host.GetLocalResponse())
+
+		headers := host.GetRequestHeaders()
+		require.Equal(t, 1, countConsumerHeaders(headers, "X-Mse-Consumer"))
+		consumer, ok := findHeader(headers, "X-Mse-Consumer")
+		require.True(t, ok)
+		require.Equal(t, "c1", consumer)
 	})
 }

@@ -29,6 +29,14 @@ if os.environ.get("RUNTIME_DESCRIPTOR_SELF_TEST") == "1":
 matrix_path = root / "matrix.json"
 matrix = json.loads(matrix_path.read_text()) if matrix_path.exists() else {"cases": []}
 
+expected_main_path = root / "expected-main-cases.json"
+expected_main = json.loads(expected_main_path.read_text()) if expected_main_path.exists() else []
+observed_main = [case.get("case") for case in matrix["cases"]]
+main_complete = bool(expected_main) and len(expected_main) == len(set(expected_main)) and Counter(observed_main) == Counter(expected_main)
+matrix["cases"].append({"case": "main-case-completeness", "status": "PASS" if main_complete else "FAIL",
+                        "detail": {"expectedCases": expected_main} if main_complete else
+                        {"error": "expected main case set is absent, duplicated or incomplete"}})
+
 baseline_log = (root / "gateway-baseline.log").read_text(errors="replace") if (root / "gateway-baseline.log").exists() else ""
 baseline_state = json.loads((root / "backend-baseline-state.json").read_text()) if (root / "backend-baseline-state.json").exists() else {"events": ["missing"]}
 baseline_ok = (
@@ -232,13 +240,55 @@ matrix["cases"].append({
 
 auto_log = (root / "gateway-auto.log").read_text(errors="replace") if (root / "gateway-auto.log").exists() else ""
 auto_state = json.loads((root / "backend-auto-state.json").read_text()) if (root / "backend-auto-state.json").exists() else {"events": ["missing"]}
-auto_ok = "invalid protocolStrategy value: auto" in auto_log and auto_state.get("events") == []
+auto_ok = "invalid protocolStrategy value: unknown" in auto_log and auto_state.get("events") == []
 matrix["cases"].append({
-    "case": "proxy-auto-configuration-is-rejected",
+    "case": "proxy-unknown-configuration-is-rejected",
     "status": "PASS" if auto_ok else "FAIL",
-    "detail": {"configuredValue": "auto", "accepted": False, "upstreamCalls": 0, "backendEvents": {"backend-primary": []}}
+    "detail": {"configuredValue": "unknown", "accepted": False, "upstreamCalls": 0, "backendEvents": {"backend-primary": []}}
     if auto_ok else {"error": "expected configuration rejection absent from sanitized gateway log"},
 })
+auto_baseline_log_path = root / "gateway-auto-baseline.log"
+auto_baseline_state_path = root / "backend-auto-baseline-state.json"
+auto_baseline_ok = (auto_baseline_log_path.exists() and auto_baseline_state_path.exists()
+                    and "invalid protocolStrategy value: auto" in auto_baseline_log_path.read_text(errors="replace")
+                    and json.loads(auto_baseline_state_path.read_text()).get("events") == [])
+matrix["cases"].append({
+    "case": "auto-prechange-baseline-rejected", "status": "PASS" if auto_baseline_ok else "FAIL",
+    "detail": {"sourceSha": os.environ["AUTO_BASELINE_SHA"], "pluginSha256": os.environ["AUTO_BASELINE_PLUGIN_SHA256"],
+               "upstreamCalls": 0} if auto_baseline_ok else {"error": "auto pre-change rejection evidence missing"},
+})
+
+explicit_path = root / "auto-explicit-baseline.json"
+explicit = json.loads(explicit_path.read_text()) if explicit_path.exists() else {"cases": [], "exchanges": []}
+explicit_names = {
+    "proxy-modern-stateless-and-header-isolation", "proxy-modern-to-legacy-isolated-handshakes",
+    "proxy-default-is-legacy-for-three-versions", "proxy-legacy-to-modern-is-explicitly-unsupported",
+    "proxy-auth-errors-and-cross-origin-isolation",
+}
+candidate_explicit = [case for case in matrix["cases"] if case.get("case") in explicit_names]
+baseline_explicit = explicit.get("cases", [])
+explicit_client_path = root / "client-exchanges.json"
+candidate_exchanges = json.loads(explicit_client_path.read_text()).get("exchanges", []) if explicit_client_path.exists() else []
+candidate_exchanges = [exchange for exchange in candidate_exchanges if exchange.get("case") in explicit_names]
+explicit_log_path = root / "gateway-auto-explicit-baseline.log"
+explicit_log = explicit_log_path.read_text(errors="replace") if explicit_log_path.exists() else ""
+explicit_ids = [exchange.get("accessRequestId") for exchange in explicit.get("exchanges", [])]
+explicit_access = re.findall(r"access request_id=([^ ]+)", explicit_log)
+explicit_ok = (
+    {case.get("case") for case in baseline_explicit} == explicit_names
+    and all(case.get("status") == "PASS" for case in baseline_explicit)
+    and candidate_explicit == baseline_explicit
+    and candidate_exchanges == explicit.get("exchanges")
+    and bool(explicit_ids) and Counter(explicit_ids) == Counter(explicit_access)
+    and len(explicit_ids) == len(set(explicit_ids))
+)
+matrix["cases"].append({
+    "case": "auto-explicit-strategy-baseline-differential", "status": "PASS" if explicit_ok else "FAIL",
+    "detail": {"sourceSha": os.environ["AUTO_BASELINE_SHA"], "caseNames": sorted(explicit_names),
+               "clientExchangeCount": len(explicit_ids), "comparison": "status, selected headers, normalized response, backend sequence and access IDs"}
+    if explicit_ok else {"error": "explicit baseline/candidate contract or access evidence differs"},
+})
+
 matrix["summary"] = {
     "pass": sum(case["status"] == "PASS" for case in matrix["cases"]),
     "fail": sum(case["status"] != "PASS" for case in matrix["cases"]),
@@ -282,6 +332,8 @@ manifest = {
     "source_tree_clean": os.environ.get("SOURCE_TREE_CLEAN") == "true",
     "plugin_sha256": os.environ["PLUGIN_SHA256"],
     "baseline_source_sha": os.environ["BASELINE_SHA"],
+    "auto_baseline_source_sha": os.environ["AUTO_BASELINE_SHA"],
+    "auto_baseline_plugin_sha256": os.environ["AUTO_BASELINE_PLUGIN_SHA256"],
     "baseline_plugin_sha256": os.environ["BASELINE_PLUGIN_SHA256"],
     "oracle_source_sha": os.environ["ORACLE_SHA"],
     "oracle_plugin_sha256": os.environ["ORACLE_PLUGIN_SHA256"],
@@ -301,6 +353,8 @@ manifest = {
     "client_exchange_count": len(client_exchanges),
     "access_coverage": access_coverage,
     "evidence_index": [
+        "expected-main-cases.json", "auto-explicit-baseline.json", "envoy-auto-baseline.yaml", "envoy-auto-explicit-baseline.yaml",
+        "gateway-auto-baseline.log", "gateway-auto-explicit-baseline.log", "backend-auto-baseline-state.json",
         "manifest.json", "matrix.json", "client-exchanges.json", "access-coverage.json", "compose-config.yaml", "compose-config.json", "envoy.yaml", "envoy-auto.yaml",
         "envoy-baseline.yaml", "envoy-oracle.yaml", "envoy-control-candidate.yaml",
         "envoy-control-affected.yaml", "envoy-control-oracle.yaml", "envoy-generation.yaml", "lds-generation-valid-before.yaml",
@@ -325,7 +379,7 @@ manifest = {
 checksums = []
 for path in sorted(root.iterdir()):
     if path.is_file() and path.name not in (
-        "plugin.wasm", "baseline-plugin.wasm", "oracle-plugin.wasm",
+        "plugin.wasm", "baseline-plugin.wasm", "oracle-plugin.wasm", "auto-baseline-plugin.wasm",
         "corpus-plugin-candidate.wasm", "corpus-plugin-affected.wasm", "corpus-plugin-oracle.wasm", "SHA256SUMS",
     ):
         checksums.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}")

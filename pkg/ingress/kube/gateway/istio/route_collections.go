@@ -37,6 +37,8 @@ import (
 	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/slices"
 	"istio.io/istio/pkg/util/sets"
+
+	"github.com/alibaba/higress/v2/pkg/ingress/kube/util"
 )
 
 type AncestorBackend struct {
@@ -678,6 +680,17 @@ func computeRoute[T controllers.Object, O comparable](ctx RouteContext, obj T, t
 			if err != nil {
 				res.error = err
 			}
+			// Start - Added by Higress
+			// A route whose spec could not be inspected for secret references must not be
+			// emitted: its references would be resolved against whichever namespace the
+			// merged config carries.
+			if defuseErr := defuseRouteSecretTemplates(obj, vs); defuseErr != nil {
+				return conversionResult[O]{error: &ConfigError{
+					Reason:  InvalidConfiguration,
+					Message: defuseErr.Error(),
+				}}
+			}
+			// End - Added by Higress
 			res.routes = append(res.routes, vs)
 		}
 		return res
@@ -699,6 +712,25 @@ func computeRoute[T controllers.Object, O comparable](ctx RouteContext, obj T, t
 	parents := createRouteStatus(rpResults, obj.GetNamespace(), obj.GetGeneration(), GetCommonRouteStateParents(obj))
 	return parents, parentRefs, meshResult, gwResult
 }
+
+// Start - Added by Higress
+
+// defuseRouteSecretTemplates restricts the secret templates a Gateway API object put into a
+// converted route to that object's own namespace.
+//
+// This has to happen here, while the source object is still in scope. Routes are merged by
+// parent and host, so a merged VirtualService can carry routes from several namespaces under
+// the namespace of only one of them, and configs derived from routes are re-stamped with the
+// Higress system namespace afterwards. Neither leaves the owner recoverable from a generated
+// config, so resolving templates against that namespace would let a tenant reference secrets
+// in any namespace it can name.
+func defuseRouteSecretTemplates(obj controllers.Object, route any) error {
+	_, err := util.DefuseSpecTemplates(route, obj.GetNamespace(),
+		fmt.Sprintf("route %s/%s", obj.GetNamespace(), obj.GetName()))
+	return err
+}
+
+// End - Added by Higress
 
 // RouteContext defines a common set of inputs to a route collection. This should be built once per route translation and
 // not shared outside of that.

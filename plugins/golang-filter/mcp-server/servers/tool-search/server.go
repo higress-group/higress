@@ -178,7 +178,7 @@ func (c *ToolSearchConfig) NewServer(serverName string) (*common.MCPServer, erro
 	// Create embedding client
 	embeddingClient := NewEmbeddingClient(c.Embedding.APIKey, c.Embedding.BaseURL, c.Embedding.Model, c.Embedding.Dimensions)
 
-	// Create search service，使用写死的fixedMaxTools值
+	// Create search service
 	searchService, err := NewSearchService(c.Vector, embeddingClient, c.Embedding.Dimensions, fixedMaxTools)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create search service: %w", err)

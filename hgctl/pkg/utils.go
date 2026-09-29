@@ -38,38 +38,60 @@ func GetXDSResource(resourceType envoyConfigType, configDump []byte) (any, error
 	if resourceType == AllEnvoyConfigType {
 		return cd, nil
 	}
-	configs := cd["configs"]
-	globalConfigs := configs.([]any)
+	globalConfigs, ok := cd["configs"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("invalid config dump: configs field is missing or not an array")
+	}
 
 	switch resourceType {
 	case BootstrapEnvoyConfigType:
 		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.BootstrapConfigDump" {
+			m, ok := config.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if m["@type"] == "type.googleapis.com/envoy.admin.v3.BootstrapConfigDump" {
 				return config, nil
 			}
 		}
 	case EndpointEnvoyConfigType:
 		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.EndpointsConfigDump" {
+			m, ok := config.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if m["@type"] == "type.googleapis.com/envoy.admin.v3.EndpointsConfigDump" {
 				return config, nil
 			}
 		}
 
 	case ClusterEnvoyConfigType:
 		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.ClustersConfigDump" {
+			m, ok := config.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if m["@type"] == "type.googleapis.com/envoy.admin.v3.ClustersConfigDump" {
 				return config, nil
 			}
 		}
 	case ListenerEnvoyConfigType:
 		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.ListenersConfigDump" {
+			m, ok := config.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if m["@type"] == "type.googleapis.com/envoy.admin.v3.ListenersConfigDump" {
 				return config, nil
 			}
 		}
 	case RouteEnvoyConfigType:
 		for _, config := range globalConfigs {
-			if config.(map[string]interface{})["@type"] == "type.googleapis.com/envoy.admin.v3.RoutesConfigDump" {
+			m, ok := config.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if m["@type"] == "type.googleapis.com/envoy.admin.v3.RoutesConfigDump" {
 				return config, nil
 			}
 		}

@@ -310,7 +310,10 @@ func (m *IngressConfig) List(typ config.GroupVersionKind, namespace string) []co
 	}
 
 	if configsFromGateway := m.listFromGatewayControllers(typ, namespace); configsFromGateway != nil {
-		// Process templates for gateway configs
+		// Process templates for gateway configs. These are merged across namespaces and some of
+		// them are re-stamped with the Higress system namespace, so the namespace of the object
+		// a config was generated from cannot be recovered here. Their references are restricted
+		// during the Gateway API conversion instead, while that namespace is still known.
 		for i := range configsFromGateway {
 			if err := m.templateProcessor.ProcessConfig(&configsFromGateway[i]); err != nil {
 				IngressLog.Errorf("Failed to process template for config %s/%s: %v",
@@ -459,6 +462,17 @@ func (m *IngressConfig) createWrapperConfigs(configs []config.Config) []common.W
 
 	for idx := range configs {
 		rawConfig := configs[idx]
+		// Annotation values are the only tenant-writable strings that reach generated
+		// configs, and those configs are merged across namespaces under the Higress system
+		// namespace, so this is the last point where the owning namespace is still known.
+		// A reference with no namespace is expanded to the Ingress's own namespace and a
+		// reference to any other namespace is replaced with an opaque placeholder.
+		sanitizedAnnotations, refused := m.templateProcessor.RestrictTemplatesToNamespace(rawConfig.Annotations, rawConfig.Namespace)
+		rawConfig.Annotations = sanitizedAnnotations
+		if len(refused) > 0 {
+			IngressLog.Errorf("Ingress %s/%s references secrets outside its own namespace, replacing them with %q: %v",
+				rawConfig.Namespace, rawConfig.Name, util.RefusedReferencePlaceholder, refused)
+		}
 		annotationsConfig := &annotations.Ingress{
 			Meta: annotations.Meta{
 				Namespace:    rawConfig.Namespace,
@@ -923,6 +937,10 @@ func (m *IngressConfig) convertServiceEntry([]common.WrapperConfig) []config.Con
 	out := make([]config.Config, 0, len(serviceEntries))
 	hostSets := sets.Set[string]{}
 	for _, se := range serviceEntries {
+		if len(se.ServiceEntry.Hosts) == 0 {
+			IngressLog.Warnf("Skipping service entry with empty hosts: %s", se.ServiceName)
+			continue
+		}
 		out = append(out, config.Config{
 			Meta: config.Meta{
 				GroupVersionKind:  gvk.ServiceEntry,
@@ -942,6 +960,9 @@ func (m *IngressConfig) convertServiceEntry([]common.WrapperConfig) []config.Con
 	seFromMcp := m.RegistryReconciler.GetAllConfigs(gvk.ServiceEntry)
 	for _, cfg := range seFromMcp {
 		se := cfg.Spec.(*networking.ServiceEntry)
+		if len(se.Hosts) == 0 {
+			continue
+		}
 		if !hostSets.Contains(se.Hosts[0]) {
 			out = append(out, *cfg)
 		}
@@ -1643,6 +1664,10 @@ func (m *IngressConfig) constructHttp2RpcEnvoyFilter(http2rpcConfig *annotations
 	}
 
 	httpRoute := route.HTTPRoute
+	if len(httpRoute.Route) == 0 {
+		IngressLog.Errorf("Http2RpcConfig %s has no route destination", http2rpcConfig.Name)
+		return nil, errors.New("invalid http2rpcConfig has no route destination")
+	}
 	httpRouteDestination := httpRoute.Route[0]
 	typeStruct, err := m.constructHttp2RpcMethods(http2rpcCRD.GetDubbo())
 	if err != nil {
@@ -1784,6 +1809,10 @@ func (m *IngressConfig) constructHttp2RpcMethods(dubbo *higressv1.DubboService) 
 		}
 		method["parameter_mapping"] = params
 		path_matcher := make(map[string]interface{})
+		if len(serviceMethod.HttpMethods) == 0 {
+			IngressLog.Errorf("Http2Rpc serviceMethod %s has no http methods", serviceMethod.GetHttpPath())
+			continue
+		}
 		path_matcher["match_http_method_spec"] = Http2RpcMethodMap()[serviceMethod.HttpMethods[0]]
 		path_matcher["match_pattern"] = serviceMethod.GetHttpPath()
 		method["path_matcher"] = path_matcher

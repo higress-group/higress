@@ -191,7 +191,7 @@ global:
     # -- The number of successive failed probes before indicating readiness failure.
     readinessFailureThreshold: 30
 
-    # -- The number of successive successed probes before indicating readiness success.
+    # -- The number of successive successful probes before indicating readiness success.
     readinessSuccessThreshold: 30
 
     # -- The initial delay for readiness probes in seconds.
@@ -445,7 +445,7 @@ gateway:
   # -- The number of successive failed probes before indicating readiness failure.
   readinessFailureThreshold: 30
 
-  # -- The number of successive successed probes before indicating readiness success.
+  # -- The number of successive successful probes before indicating readiness success.
   readinessSuccessThreshold: 1
 
   # -- The initial delay for readiness probes in seconds.

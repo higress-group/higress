@@ -90,12 +90,12 @@
             {
               "sourcePath": "plugins/wasm-go/extensions/hmac-auth-apisix/README.md",
               "targetPath": "README.md",
-              "sha256": "fa896d226dd92482ca1e273387831f4048445499aa0410935da242369f6ebd97"
+              "sha256": "388842967031d5167c701ec3dd5aea7ed045ac08346813af0d39aef7e659518e"
             },
             {
               "sourcePath": "plugins/wasm-go/extensions/hmac-auth-apisix/README_EN.md",
               "targetPath": "README_EN.md",
-              "sha256": "c076fc3d6ca469456f6d53b3b8b61e4e87c721999217445e47fc19d63d6aa34d"
+              "sha256": "7447afe454db1452f715b3041d59b2fbfee253d5fb6ba001a99ae309507edc49"
             }
           ]
         }

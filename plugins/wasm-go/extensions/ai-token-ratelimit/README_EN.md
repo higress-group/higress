@@ -387,7 +387,7 @@ spec:
   priority: 600
 ```
 
-Note that the `service_name` in the Redis configuration of the AI Token Rate Limiting Plugin is derived from the service source configured in McpBridge. Additionally, we need to configure the access address of the qnwen service in McpBridge.
+Note that the `service_name` in the Redis configuration of the AI Token Rate Limiting Plugin is derived from the service source configured in McpBridge. Additionally, we need to configure the access address of the Qwen service in McpBridge.
 
 ```yaml
 apiVersion: networking.higress.io/v1

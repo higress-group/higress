@@ -16,11 +16,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -31,11 +33,15 @@ func main() {
 	if root == "" {
 		panic("MCP_INTEROP_ROOT is required")
 	}
-	for _, path := range []string{"direct", "proxy-modern", "proxy-legacy"} {
+	for _, path := range []string{"direct", "proxy-modern", "proxy-legacy", "proxy-auto-modern", "proxy-auto-legacy", "proxy-auto-switch", "proxy-auto-error"} {
 		if err := exercise(root + "/" + path); err != nil {
 			panic(fmt.Errorf("%s: %w", path, err))
 		}
-		fmt.Printf("go-sdk v1.7.0: %s negotiated, listed, and called successfully\n", path)
+		if path == "proxy-auto-error" {
+			fmt.Printf("go-sdk v1.7.0: %s stopped before business\n", path)
+		} else {
+			fmt.Printf("go-sdk v1.7.0: %s negotiated, listed, and called successfully\n", path)
+		}
 	}
 }
 
@@ -58,6 +64,20 @@ func exercise(endpoint string) error {
 		return fmt.Errorf("negotiated protocol %q, want %q (legacy fallback is forbidden)", got, protocolVersion)
 	}
 
+	if strings.HasSuffix(endpoint, "proxy-auto-error") {
+		_, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_weather", Arguments: map[string]any{"location": "New York"}})
+		var rpcError *jsonrpc.Error
+		if !errors.As(err, &rpcError) || rpcError.Code != -32020 {
+			return fmt.Errorf("auto probe: got %v, want JSON-RPC HeaderMismatch (-32020)", err)
+		}
+		return nil
+	}
+	if strings.Contains(endpoint, "/proxy-auto-") {
+		direct, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_weather", Arguments: map[string]any{"location": "New York"}})
+		if err != nil || len(direct.Content) == 0 {
+			return fmt.Errorf("call before list: %v", err)
+		}
+	}
 	listed, err := session.ListTools(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("tools/list: %w", err)

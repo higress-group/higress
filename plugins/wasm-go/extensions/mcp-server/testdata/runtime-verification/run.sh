@@ -30,6 +30,9 @@ export COMPOSE_PROJECT_NAME
 BASELINE_REVISION=c55d9825c90868f50edbff9764a6b3cf2eb13162
 BASELINE_SHA=$(git -C "$REPO_ROOT" rev-parse "$BASELINE_REVISION^{commit}")
 BASELINE_SOURCE_DIR=""
+AUTO_BASELINE_SHA=dc0999326b1a8df4269c13d0cf6ee2b725259f6e
+AUTO_BASELINE_SOURCE_DIR=""
+export AUTO_BASELINE_SHA
 ORACLE_REVISION=39ec41aab6eb1d40499bed2847085696de0ebb96
 ORACLE_SHA=$(git -C "$REPO_ROOT" rev-parse "$ORACLE_REVISION^{commit}")
 ORACLE_SOURCE_DIR=""
@@ -48,6 +51,9 @@ cleanup() {
   podman compose -f "$HARNESS_DIR/compose.yaml" --profile verify down --volumes --remove-orphans >/dev/null 2>&1 || true
   if test -n "$BASELINE_SOURCE_DIR" && test -d "$BASELINE_SOURCE_DIR"; then
     rm -rf -- "$BASELINE_SOURCE_DIR"
+  fi
+  if test -n "$AUTO_BASELINE_SOURCE_DIR" && test -d "$AUTO_BASELINE_SOURCE_DIR"; then
+    rm -rf -- "$AUTO_BASELINE_SOURCE_DIR"
   fi
   if test -n "$ORACLE_SOURCE_DIR" && test -d "$ORACLE_SOURCE_DIR"; then
     rm -rf -- "$ORACLE_SOURCE_DIR"
@@ -88,6 +94,13 @@ file_sha256() {
 }
 
 PLUGIN_SHA256=$(file_sha256 "$RUNTIME_EVIDENCE/plugin.wasm")
+AUTO_BASELINE_SOURCE_DIR=$(mktemp -d "$RUNTIME_EVIDENCE/auto-baseline-source.XXXXXX") || exit 3
+git -C "$REPO_ROOT" archive "$AUTO_BASELINE_SHA" | tar -x -C "$AUTO_BASELINE_SOURCE_DIR" || exit 3
+(cd "$AUTO_BASELINE_SOURCE_DIR/plugins/wasm-go/extensions/mcp-server" && GOOS=wasip1 GOARCH=wasm go build -trimpath -buildmode=c-shared -o "$RUNTIME_EVIDENCE/auto-baseline-plugin.wasm" .) || exit 3
+AUTO_BASELINE_PLUGIN_SHA256=$(file_sha256 "$RUNTIME_EVIDENCE/auto-baseline-plugin.wasm")
+export AUTO_BASELINE_PLUGIN_SHA256
+rm -rf -- "$AUTO_BASELINE_SOURCE_DIR"
+AUTO_BASELINE_SOURCE_DIR=""
 echo "building exact-head registered-schema corpus WASM from $SOURCE_SHA"
 CANDIDATE_CORPUS_SOURCE_DIR=$(mktemp -d "$RUNTIME_EVIDENCE/candidate-corpus-source.XXXXXX") || exit 3
 git -C "$REPO_ROOT" archive "$SOURCE_SHA" | tar -x -C "$CANDIDATE_CORPUS_SOURCE_DIR" || exit 3
@@ -211,6 +224,8 @@ wait_for_rejection_markers() {
 compose_runtime up -d backend-primary backend-secondary || exit 4
 wait_primary_backend_ready || exit 4
 run_static_rejection_phase gateway-auto "$RUNTIME_EVIDENCE/gateway-auto.log" "$RUNTIME_EVIDENCE/backend-auto-state.json" \
+  "invalid protocolStrategy value: unknown" "plugin start failed" || exit 4
+run_static_rejection_phase gateway-auto-baseline "$RUNTIME_EVIDENCE/gateway-auto-baseline.log" "$RUNTIME_EVIDENCE/backend-auto-baseline-state.json" \
   "invalid protocolStrategy value: auto" "plugin start failed" || exit 4
 run_static_rejection_phase gateway-baseline "$RUNTIME_EVIDENCE/gateway-baseline.log" "$RUNTIME_EVIDENCE/backend-baseline-state.json" \
   "requires a primitive type" "plugin start failed" || exit 4
@@ -275,6 +290,17 @@ stop_runtime_service gateway-generation || exit 4
 podman compose -f "$HARNESS_DIR/compose.yaml" logs --no-color gateway-generation \
   | sed -e 's/runtime-upstream-token/<redacted>/g' -e 's/runtime-key/<redacted>/g' >"$RUNTIME_EVIDENCE/gateway-generation.log"
 
+podman compose -f "$HARNESS_DIR/compose.yaml" up -d gateway-auto-explicit-baseline || exit 4
+set +e
+podman compose -f "$HARNESS_DIR/compose.yaml" --profile verify run --rm --no-deps \
+  -e RUNTIME_GATEWAY_HOST=gateway-auto-explicit-baseline -e RUNTIME_AUTO_EXPLICIT_BASELINE=1 verifier
+AUTO_EXPLICIT_STATUS=$?
+set -e
+if test "$AUTO_EXPLICIT_STATUS" -ne 0; then VERIFY_STATUS=1; fi
+stop_runtime_service gateway-auto-explicit-baseline || exit 4
+podman compose -f "$HARNESS_DIR/compose.yaml" logs --no-color gateway-auto-explicit-baseline \
+  | sed -e 's/runtime-upstream-token/<redacted>/g' -e 's/runtime-key/<redacted>/g' >"$RUNTIME_EVIDENCE/gateway-auto-explicit-baseline.log"
+
 podman compose -f "$HARNESS_DIR/compose.yaml" up -d gateway || exit 4
 set +e
 podman compose -f "$HARNESS_DIR/compose.yaml" --profile verify run --rm verifier
@@ -303,6 +329,7 @@ FINALIZE_STATUS=$?
 set -e
 unlink "$RUNTIME_EVIDENCE/plugin.wasm"
 unlink "$RUNTIME_EVIDENCE/baseline-plugin.wasm"
+unlink "$RUNTIME_EVIDENCE/auto-baseline-plugin.wasm"
 unlink "$RUNTIME_EVIDENCE/oracle-plugin.wasm"
 unlink "$RUNTIME_EVIDENCE/corpus-plugin-candidate.wasm"
 unlink "$RUNTIME_EVIDENCE/corpus-plugin-affected.wasm"

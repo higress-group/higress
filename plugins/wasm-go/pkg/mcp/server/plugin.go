@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -101,13 +102,24 @@ func setupMcpProxyServer(serverName string, serverJson gjson.Result, serverConfi
 		strategyStr = string(ProtocolStrategyLegacy)
 	}
 	strategy := ProtocolStrategy(strategyStr)
-	if strategy != ProtocolStrategyLegacy && strategy != ProtocolStrategyModern {
-		return nil, fmt.Errorf("invalid protocolStrategy value: %s, must be 'modern' or 'legacy'", strategyStr)
+	if strategy != ProtocolStrategyLegacy && strategy != ProtocolStrategyModern && strategy != ProtocolStrategyAuto {
+		return nil, fmt.Errorf("invalid protocolStrategy value: %s, must be 'modern', 'legacy' or 'auto'", strategyStr)
 	}
 	if strategy == ProtocolStrategyModern && transport != TransportHTTP {
 		return nil, errors.New("protocolStrategy 'modern' requires transport 'http'")
 	}
 	proxyServer.SetProtocolStrategy(strategy)
+	if strategy == ProtocolStrategyAuto && transport == TransportHTTP {
+		config := AutoDetectionConfig{ProbeTimeoutMs: 1000}
+		if value := serverJson.Get("autoDetection.probeTimeoutMs"); value.Exists() {
+			timeout, err := strconv.ParseUint(value.Raw, 10, 32)
+			if value.Type != gjson.Number || err != nil || timeout == 0 {
+				return nil, errors.New("autoDetection.probeTimeoutMs must be a positive integer representable as uint32")
+			}
+			config.ProbeTimeoutMs = uint32(timeout)
+		}
+		proxyServer.autoDetection = config
+	}
 
 	// Parse and validate mcpServerURL (required for mcp-proxy)
 	mcpServerURL := serverJson.Get("mcpServerURL").String()

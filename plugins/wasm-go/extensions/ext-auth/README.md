@@ -99,7 +99,7 @@ MatchRule 类型每一项的配置字段说明，在使用 `array of MatchRule` 
 
 ### 两种 `endpoint_mode` 的区别
 
-`endpoint_mode` 为 `envoy` 时，鉴权请求会使用原始请求的 HTTP Method，和配置的 `path_prefix` 作为请求路径前缀拼接上原始的请求路径
+`endpoint_mode` 为 `envoy` 时，鉴权请求会使用原始请求的 HTTP Method，和配置的 `path_prefix` 作为请求路径前缀拼接上原始的请求路径。拼接时只使用原始请求路径中 `?` 之前的部分，因此查询参数取值里的 `..` 不会被当作路径段解析。`path_prefix` 必须是绝对且规范的路径：若请求路径解析后超出 `path_prefix`、包含反斜杠（`\`），或无法被解析为合法的 URL，则不会调用鉴权服务，直接返回 HTTP 403（`ext-auth.path_traversal`）。这类拒绝不会应用 `failure_mode_allow` 配置，因为该配置针对的是鉴权服务不可用，而不是根本无法完成鉴权的请求。
 
 `endpoint_mode` 为 `forward_auth` 时，鉴权请求会使用配置的 `request_method` 作为 HTTP Method，和配置的 `path` 作为请求路径，并且 Higress 会自动生成并发送以下 header 至鉴权服务：
 

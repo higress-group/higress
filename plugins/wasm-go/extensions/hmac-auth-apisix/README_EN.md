@@ -17,6 +17,9 @@ The `hmac-auth-apisix` plugin is compatible with Apache APISIX's HMAC authentica
 **Note:**
 - In a single rule, authentication configuration and authorization configuration cannot coexist.
 - For requests that pass authentication and authorization, a `X-Mse-Consumer` field will be added to the request header to identify the caller's name.
+  The gateway **replaces** this header instead of appending to it: any client-supplied `X-Mse-Consumer` is removed
+  before the consumer name from this authentication is set. Downstream therefore always reads the gateway's own
+  assertion, so a caller cannot forge its identity by sending the header itself.
 
 
 ### Authentication Configuration
@@ -46,7 +49,14 @@ The `hmac-auth-apisix` plugin is compatible with Apache APISIX's HMAC authentica
 
 | Name    | Data Type        | Requirements                              | Default Value | Description                                                                                                                                 |
 |---------|------------------| ----------------------------------------- |---------------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| `allow` | array of string  | Optional (**Non-instance-level configuration only**) | -             | Can only be configured in fine-grained rules such as routes or domains. For requests that match the criteria, it configures the consumers allowed to access, enabling fine-grained permission control. |
+| `allow` | array of string  | Optional (**Non-instance-level configuration only**) | -             | Can only be configured in fine-grained rules such as routes or domains. For requests that match the criteria, it configures the consumers allowed to access, enabling fine-grained permission control. **When a rule enables the plugin but `allow` is missing (or an empty list), no consumer is authorized and matching requests are rejected (fail closed).** |
+
+**Fail-closed semantics of `allow`:**
+
+- Once a fine-grained rule (`_rules_`) matches the current request, the plugin is in effect on that domain or route. A missing or empty `allow` list there **no longer means "the plugin is not in effect"**; it means no consumer is authorized, so every request matching that rule is rejected with `401` and the message `{"message":"client request can't be validated: no consumer is allowed"}` instead of being forwarded without authentication.
+- This also holds when `anonymous_consumer` is configured: the anonymous identity cannot bypass the rejection above.
+- With `global_auth: true`, authentication applies globally and `allow` is only an additional fine-grained restriction, so a rule without `allow` adds no restriction and requests still have to pass signature verification.
+- With `global_auth: false`, only domains and routes matched by a rule are authenticated; requests that match no rule are passed through.
 
 
 ## Configuration Examples
@@ -87,6 +97,7 @@ allow:
 - **Route Names** (e.g., `route-a`, `route-b`): Correspond to the names defined when creating gateway routes. Only `consumer1` is allowed access when matched.
 - **Domain Matching** (e.g., `*.example.com`, `test.com`): Used to filter request domains. Only `consumer2` is allowed access when matched.
 - Callers not in the `allow` list will be denied access.
+- If the plugin is enabled on a route or domain without an `allow` list (or with an empty one), then **all** requests on that route or domain are rejected with `401` — the plugin fails closed instead of skipping authentication.
 
 
 #### To Generate a Signature, Use the Following Go Code Snippet or Other Tech Stacks:
