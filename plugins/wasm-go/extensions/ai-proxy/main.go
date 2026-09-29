@@ -232,6 +232,18 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 		} else if apiName == provider.ApiNameAnthropicMessages {
 			// Provider supports Claude protocol natively, no conversion needed
 			log.Debugf("[Auto Protocol] Claude request detected, provider supports natively, keeping original path: %s, apiName: %s", path.Path, apiName)
+		} else if apiName == provider.ApiNameResponses && !providerConfig.IsSupportedAPI(provider.ApiNameResponses) {
+			// OPE-9267: client speaks the OpenAI Responses protocol but the provider
+			// only offers chat completions (e.g. deepseek). Bridge the request to
+			// /v1/chat/completions and translate the response back, mirroring the
+			// Claude auto-conversion above. Providers that do declare the Responses
+			// capability are untouched; this branch only claims requests that would
+			// otherwise fail hard with errUnsupportedApiName.
+			newPath := strings.Replace(path.Path, provider.PathOpenAIResponses, provider.PathOpenAIChatCompletions, 1)
+			_ = proxywasm.ReplaceHttpRequestHeader(":path", newPath)
+			apiName = provider.ApiNameChatCompletion
+			ctx.SetContext("needResponsesResponseConversion", true)
+			log.Debugf("[Auto Protocol] Responses request detected, provider doesn't support natively, converted path from %s to %s, apiName: %s", path.Path, newPath, apiName)
 		}
 	}
 
@@ -307,6 +319,17 @@ func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig
 		if settingErr != nil {
 			log.Errorf("failed to replace request body by custom settings: %v", settingErr)
 		}
+		// OPE-9267: downgrade a Responses request to chat semantics before the
+		// provider sees it. Placement before normalizeOpenAiRequestBody lets the
+		// normalizer add stream_options.include_usage to the converted chat body.
+		if needResponsesConversion, _ := ctx.GetContext("needResponsesResponseConversion").(bool); needResponsesConversion {
+			converted, convErr := provider.ConvertResponsesRequestToChat(newBody)
+			if convErr != nil {
+				_ = util.ErrorHandler("ai-proxy.convert_req_from_responses_failed", fmt.Errorf("failed to convert responses request to chat: %v", convErr))
+				return types.ActionContinue
+			}
+			newBody = converted
+		}
 		// 仅 /v1/chat/completions 和 /v1/completions 接口支持 stream_options 参数
 		if providerConfig.IsOpenAIProtocol() && (apiName == provider.ApiNameChatCompletion || apiName == provider.ApiNameCompletion) {
 			newBody = normalizeOpenAiRequestBody(newBody)
@@ -374,8 +397,10 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginCo
 
 	// Check if we need to read body for Claude response conversion
 	needClaudeConversion, _ := ctx.GetContext("needClaudeResponseConversion").(bool)
+	// OPE-9267: same for the Responses→Chat bridge
+	needResponsesConversion, _ := ctx.GetContext("needResponsesResponseConversion").(bool)
 
-	if !needHandleBody && !needHandleStreamingBody && !needClaudeConversion {
+	if !needHandleBody && !needHandleStreamingBody && !needClaudeConversion && !needResponsesConversion {
 		ctx.DontReadResponseBody()
 	} else {
 		checkStream(ctx)
@@ -404,7 +429,13 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 			if convertErr != nil {
 				return modifiedChunk
 			}
-			return claudeChunk
+			// Convert back to Responses format if needed (OPE-9267; mutually
+			// exclusive with the Claude marker above)
+			responsesChunk, responsesErr := convertStreamingChatToResponses(ctx, claudeChunk, isLastChunk)
+			if responsesErr != nil {
+				return claudeChunk
+			}
+			return responsesChunk
 		}
 		return chunk
 	}
@@ -447,10 +478,15 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 		if convertErr != nil {
 			return result
 		}
-		return claudeChunk
+		// Convert back to Responses format if needed (OPE-9267)
+		responsesChunk, responsesErr := convertStreamingChatToResponses(ctx, claudeChunk, isLastChunk)
+		if responsesErr != nil {
+			return claudeChunk
+		}
+		return responsesChunk
 	}
 
-	if !needsClaudeResponseConversion(ctx) {
+	if !needsClaudeResponseConversion(ctx) && !needsResponsesResponseConversion(ctx) {
 		return chunk
 	}
 
@@ -476,7 +512,12 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 	if convertErr != nil {
 		return result
 	}
-	return claudeChunk
+	// Convert back to Responses format if needed (OPE-9267)
+	responsesChunk, responsesErr := convertStreamingChatToResponses(ctx, claudeChunk, isLastChunk)
+	if responsesErr != nil {
+		return claudeChunk
+	}
+	return responsesChunk
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig, body []byte) types.Action {
@@ -510,6 +551,13 @@ func onHttpResponseBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfi
 		return types.ActionContinue
 	}
 
+	// Convert back to Responses format if needed (OPE-9267)
+	convertedBody, err = convertResponseBodyToResponses(ctx, convertedBody)
+	if err != nil {
+		_ = util.ErrorHandler("ai-proxy.convert_resp_to_responses_failed", err)
+		return types.ActionContinue
+	}
+
 	if err = provider.ReplaceResponseBody(convertedBody); err != nil {
 		_ = util.ErrorHandler("ai-proxy.replace_resp_body_failed", fmt.Errorf("failed to replace response body: %v", err))
 	}
@@ -520,6 +568,52 @@ func onHttpResponseBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfi
 func needsClaudeResponseConversion(ctx wrapper.HttpContext) bool {
 	needClaudeConversion, _ := ctx.GetContext("needClaudeResponseConversion").(bool)
 	return needClaudeConversion
+}
+
+// needsResponsesResponseConversion 检查 OPE-9267 Responses→Chat 桥是否激活。
+func needsResponsesResponseConversion(ctx wrapper.HttpContext) bool {
+	needResponsesConversion, _ := ctx.GetContext("needResponsesResponseConversion").(bool)
+	return needResponsesConversion
+}
+
+// convertStreamingChatToResponses 把上游 chat SSE chunk 翻译成 Responses 事件流。
+// 转换器实例存在 ctx 中跨 chunk 保状态；与 claude 桥互斥（路径二选一）。
+func convertStreamingChatToResponses(ctx wrapper.HttpContext, data []byte, isLastChunk bool) ([]byte, error) {
+	if !needsResponsesResponseConversion(ctx) {
+		return data, nil
+	}
+
+	const responsesConverterKey = "responsesConverter"
+	var converter *provider.ChatToResponsesStreamConverter
+	if converterData := ctx.GetContext(responsesConverterKey); converterData != nil {
+		if c, ok := converterData.(*provider.ChatToResponsesStreamConverter); ok {
+			converter = c
+		}
+	}
+	if converter == nil {
+		converter = provider.NewChatToResponsesStreamConverter()
+		ctx.SetContext(responsesConverterKey, converter)
+	}
+
+	responsesChunk, err := converter.ProcessChunk(data, isLastChunk)
+	if err != nil {
+		log.Errorf("failed to convert streaming response to responses format: %v", err)
+		return data, err
+	}
+	return responsesChunk, nil
+}
+
+// convertResponseBodyToResponses 把上游 chat JSON 升维回 Responses 对象（非流式）。
+func convertResponseBodyToResponses(ctx wrapper.HttpContext, body []byte) ([]byte, error) {
+	if !needsResponsesResponseConversion(ctx) {
+		return body, nil
+	}
+
+	convertedBody, err := provider.ConvertChatResponseToResponses(body)
+	if err != nil {
+		return body, fmt.Errorf("failed to convert response to responses format: %v", err)
+	}
+	return convertedBody, nil
 }
 
 // Helper function to convert OpenAI streaming response to Claude format

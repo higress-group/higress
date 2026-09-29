@@ -79,16 +79,61 @@ fi
 # 生成时间戳版本号
 TIMESTAMP=$(date +"%Y%m%d%H%M%S")
 IMAGE_NAME="${PLUGIN_NAME}"
-IMAGE_TAG="${TIMESTAMP}"
 SWR_REGISTRY="swr.cn-east-3.myhuaweicloud.com"
 SWR_NAMESPACE="tob"
 SWR_IMAGE_NAME="higress-${PLUGIN_NAME}"
+
+# ============ git 护栏（OPE-9466，09-21 归因断链事故跟进） ============
+# 事故背景：本脚本编译输入是执行者本机工作副本。09-20 在落后于 wujieai-master
+# 的 checkout 上构建 ai-token-report，产出丢失 wujie_task_id 透传的镜像上生产，
+# 托管计费归因断链 ~17h。以下护栏确保：镜像可溯源（tag 带 commit）、
+# 不在脏 checkout / 落后远端的 checkout 上构建。
+if [ "${SKIP_GIT_GUARD}" = "1" ]; then
+    print_warning "SKIP_GIT_GUARD=1：已跳过 git 护栏（紧急逃生口，请勿常态化使用）"
+fi
+
+REPO_ROOT=$(git -C "${PLUGIN_DIR}" rev-parse --show-toplevel 2>/dev/null)
+if [ -z "${REPO_ROOT}" ]; then
+    print_error "插件目录不在 git 仓库内，拒绝构建：镜像将无法追溯到源码版本（如确需跳过，设 SKIP_GIT_GUARD=1）"
+    [ "${SKIP_GIT_GUARD}" = "1" ] || exit 1
+fi
+
+GIT_BRANCH=$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null)
+COMMIT_ID=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null)
+IMAGE_TAG="${TIMESTAMP}-${COMMIT_ID:-unknown}"
+
+if [ "${SKIP_GIT_GUARD}" != "1" ]; then
+    # 护栏 1：拒绝脏 checkout（已跟踪文件有未提交改动时，无法确定镜像对应哪份源码）
+    if [ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+        print_error "工作副本有未提交改动，拒绝构建：请先 commit 或 stash（否则镜像无法对应确定的源码版本）"
+        exit 1
+    fi
+
+    if [ "${GIT_BRANCH}" = "HEAD" ]; then
+        print_warning "当前处于 detached HEAD（${COMMIT_ID}），请确认这是你有意构建的版本"
+    fi
+
+    # 护栏 2：拒绝落后远端的 checkout（09-20 事故的直接机制）
+    if [ "${GIT_BRANCH}" != "HEAD" ] && git -C "${REPO_ROOT}" fetch origin "${GIT_BRANCH}" >/dev/null 2>&1 \
+        && git -C "${REPO_ROOT}" rev-parse --verify -q "origin/${GIT_BRANCH}" >/dev/null; then
+        BEHIND=$(git -C "${REPO_ROOT}" rev-list --count HEAD..origin/"${GIT_BRANCH}")
+        if [ "${BEHIND}" -gt 0 ]; then
+            print_error "本地落后 origin/${GIT_BRANCH} ${BEHIND} 个提交，拒绝构建：请先 git pull --ff-only"
+            print_error "（09-21 归因断链事故即由在旧 checkout 上构建导致，详见 OPE-9437）"
+            exit 1
+        fi
+    else
+        print_warning "无法与 origin/${GIT_BRANCH} 比对（分支可能尚未推送或无网络），跳过落后检查——tag 仍带 commit ${COMMIT_ID} 可溯源"
+    fi
+fi
+# ============ git 护栏结束 ============
 
 print_info "======================================"
 print_info "Higress 插件构建和推送脚本"
 print_info "======================================"
 print_info "插件名称: ${PLUGIN_NAME}"
 print_info "插件目录: ${PLUGIN_DIR}"
+print_info "源码版本: ${BRANCH}@${COMMIT_ID:-unknown}"
 print_info "版本号: ${IMAGE_TAG}"
 print_info "Dockerfile: ${DOCKERFILE_PATH}"
 print_info "SWR 仓库: ${SWR_REGISTRY}/${SWR_NAMESPACE}/${SWR_IMAGE_NAME}:${IMAGE_TAG}"

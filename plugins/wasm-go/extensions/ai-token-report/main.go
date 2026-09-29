@@ -41,6 +41,10 @@ const (
 	// HTTP headers
 	OriginalAPIKey = "X-Original-Api-Key"
 
+	// WujieTaskID is the business task id header (OPE-8474): forwarded by wujie backend,
+	// a plain-numeric task id (e.g. "999"). Deliberately NOT x-request-id, which Envoy overwrites.
+	WujieTaskID = "wujie_task_id"
+
 	// Metrics
 	LLMServiceDuration = "llm_service_duration"
 
@@ -61,6 +65,9 @@ type TokenUsageReportRequest struct {
 	StartTime   int64  `json:"startTime"`
 	EndTime     int64  `json:"endTime"`
 	TokenUsage  string `json:"tokenUsage"`
+	// Wujie business task id (OPE-8474), plain numeric string read from wujie_task_id header.
+	// omitempty: header absent/empty -> field not sent (Onepiece falls back to requestId dedup).
+	TaskId string `json:"taskId,omitempty"`
 }
 
 // TokenUsageReportConfig holds the configuration for token usage reporting
@@ -543,6 +550,16 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 	}
 
 	// Get Envoy request ID from x-request-id header
+	// Get wujie business task id from request header (OPE-8474).
+	// Plain numeric string only; the Onepiece receiver deserializes it into a Long taskId.
+	taskId, err := proxywasm.GetHttpRequestHeader(WujieTaskID)
+	if err != nil || taskId == "" {
+		taskId = ""
+	} else {
+		log.Debugf("ai-token-report: wujie_task_id header found: %s", taskId)
+	}
+
+	// Get Envoy request ID from property
 	envoyRequestID := ""
 	if requestIDHeader, err := proxywasm.GetHttpRequestHeader("x-request-id"); err == nil {
 		envoyRequestID = requestIDHeader
@@ -581,6 +598,7 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 		StartTime:   startTime,
 		EndTime:     endTime,
 		TokenUsage:  tokenUsage,
+		TaskId:      taskId,
 	}
 
 	// Marshal request body
