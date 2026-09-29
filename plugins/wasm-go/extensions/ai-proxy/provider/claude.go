@@ -461,10 +461,10 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 		Stream:        origRequest.Stream,
 		Temperature:   origRequest.Temperature,
 		TopP:          origRequest.TopP,
-		// Always initialize messages so the field serializes as [] instead of null:
-		// Anthropic rejects a null messages array, and a request whose only turn was
-		// converted to `system` (a lone `developer` message, for example) produced
-		// exactly that.
+		// Always initialize messages so the field serializes as [] instead of null.
+		// A request whose turns all converted into `system` (a lone `developer`
+		// message, for example) receives a placeholder user turn below, so neither
+		// null nor an empty array ever reaches the wire.
 		Messages: make([]claudeChatMessage, 0, len(origRequest.Messages)),
 		// ServiceTier:   origRequest.ServiceTier,
 	}
@@ -700,15 +700,28 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 				}
 			}
 			if len(chatMessageContents) == 0 {
-				// Anthropic rejects a message whose content array is empty, so keep the
-				// turn as an empty visible message when nothing could be translated.
-				log.Warnf("[ai-proxy] claude: message with role %q has no content portable to Claude; sending an empty message instead", message.Role)
-				claudeMessage.Content = NewStringContent("")
-			} else {
-				claudeMessage.Content = NewArrayContent(chatMessageContents)
+				// Anthropic rejects both an empty content array and an empty string
+				// content block, so a turn with nothing portable is dropped instead
+				// of being sent in an invalid shape. The API combines consecutive
+				// same-role messages, so dropping a turn keeps the request valid.
+				log.Warnf("[ai-proxy] claude: dropping message with role %q, no content is portable to Claude", message.Role)
+				continue
 			}
+			claudeMessage.Content = NewArrayContent(chatMessageContents)
 		}
 		claudeRequest.Messages = append(claudeRequest.Messages, claudeMessage)
+	}
+
+	if len(claudeRequest.Messages) == 0 {
+		// Every turn was converted into top-level `system` content (for example
+		// a lone `developer` message). Anthropic rejects both null and empty
+		// `messages` arrays, so append one placeholder user turn: the request
+		// stays valid and the system/developer content still reaches the model.
+		log.Warnf("[ai-proxy] claude: no request turn survived conversion; appending a placeholder user message")
+		claudeRequest.Messages = append(claudeRequest.Messages, claudeChatMessage{
+			Role:    roleUser,
+			Content: NewStringContent(" "),
+		})
 	}
 
 	// In Claude Code mode, add default system prompt if not present
