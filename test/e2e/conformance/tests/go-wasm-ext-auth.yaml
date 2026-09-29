@@ -1,0 +1,99 @@
+# Copyright (c) 2025 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Deployment for mock-auth-server
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ext-auth-mock-service
+  namespace: higress-conformance-infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ext-auth-mock-service
+  template:
+    metadata:
+      labels:
+        app: ext-auth-mock-service
+    spec:
+      containers:
+      - name: mock-auth
+        image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/ext-auth-mock-server:latest
+        ports:
+        - containerPort: 8090
+
+---
+
+# Service for mock-auth-server
+apiVersion: v1
+kind: Service
+metadata:
+  name: ext-auth-mock-service
+  namespace: higress-conformance-infra
+spec:
+  selector:
+    app: ext-auth-mock-service
+  ports:
+  - port: 8090
+    targetPort: 8090
+
+---
+
+# Ingress to echo-server,ext-auth使用forward_auth模式，使用ext-auth mock服务的/always-200接口
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ext-auth-forward-auth-mode-always-200
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+  - host: "test-ext-auth-ingress1.com"
+    http:
+      paths:
+      - path: "/"
+        pathType: Prefix
+        backend:
+          service:
+            name: infra-backend-v1
+            port:
+              number: 8080
+
+---
+
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ext-auth
+  namespace: higress-system
+spec:
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ext-auth:1.0.0
+  matchRules:
+    - config:
+        http_service:
+          endpoint_mode: forward_auth
+          endpoint:
+            service_name: ext-auth-mock-service.higress-conformance-infra.svc.cluster.local
+            service_port: 8090
+            path: /always-200
+          timeout: 5000
+          authorization_response:
+            allowed_upstream_headers:
+              - prefix: x-
+          authorization_request:
+            with_request_body: false
+            endpoint_mode: forward_auth
+      ingress:
+        - higress-conformance-infra/wasmplugin-ext-auth-forward-auth-mode-always-200
