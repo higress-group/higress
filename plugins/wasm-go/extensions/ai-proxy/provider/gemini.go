@@ -33,12 +33,12 @@ const (
 	geminiModelsPath               = "models"
 	geminiImageGenerationPath      = "predict"
 
-	// Function calling modes exposed by toolConfig.functionCallingConfig. VALIDATED
-	// is Gemini's counterpart of OpenAI's `strict` tools: the arguments are checked
-	// against the declared schema before they are returned.
-	geminiFunctionCallingModeAny       = "ANY"
-	geminiFunctionCallingModeNone      = "NONE"
-	geminiFunctionCallingModeValidated = "VALIDATED"
+	// Function calling modes exposed by toolConfig.functionCallingConfig.
+	// Only AUTO/ANY/NONE belong to Google's documented FunctionCallingMode
+	// enum; there is no schema-validation mode.
+	geminiFunctionCallingModeAuto = "AUTO"
+	geminiFunctionCallingModeAny  = "ANY"
+	geminiFunctionCallingModeNone = "NONE"
 )
 
 var geminiThinkingModels = map[string]bool{
@@ -566,9 +566,11 @@ func buildGeminiToolConfig(request *chatCompletionRequest) *geminiToolConfig {
 		}
 	}
 	if config.Mode == "" && hasStrictTool(request) {
-		// OpenAI's `strict` tools require schema-validated arguments, which Gemini
-		// only performs in VALIDATED mode.
-		config.Mode = geminiFunctionCallingModeValidated
+		// OpenAI's `strict` tools require schema-validated arguments, but Gemini's
+		// documented FunctionCallingMode enum has no validation mode, so the
+		// request falls back to AUTO and the downgrade is reported.
+		log.Warnf("[ai-proxy] gemini: strict tool schemas cannot be enforced, falling back to AUTO function calling mode")
+		config.Mode = geminiFunctionCallingModeAuto
 	}
 	if config.Mode == "" {
 		return nil

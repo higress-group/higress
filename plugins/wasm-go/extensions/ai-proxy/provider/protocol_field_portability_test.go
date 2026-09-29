@@ -155,14 +155,17 @@ func TestOpenAIInputAudioDoesNotEmptyClaudeContent(t *testing.T) {
 
 	claudeReq := provider.buildClaudeTextGenRequest(request)
 
+	// The audio-only turn is not portable and gets dropped; the request is then
+	// kept valid by the synthesized placeholder user turn.
 	require.Len(t, claudeReq.Messages, 1)
 	content := claudeReq.Messages[0].Content
-	assert.True(t, content.IsString, "Claude rejects an empty content array")
-	assert.Equal(t, "", content.StringValue)
+	assert.True(t, content.IsString, "the synthesized placeholder must use string content")
+	assert.Equal(t, " ", content.StringValue)
 
 	body, err := json.Marshal(claudeReq)
 	require.NoError(t, err)
 	assert.NotContains(t, string(body), `"content":[]`)
+	assert.NotContains(t, string(body), `"content":""`)
 }
 
 func TestDeveloperRoleIsOnlyConvertedForTargetsThatRejectIt(t *testing.T) {
@@ -175,7 +178,7 @@ func TestDeveloperRoleIsOnlyConvertedForTargetsThatRejectIt(t *testing.T) {
 	assert.Contains(t, string(converted), `"role":"system"`)
 }
 
-func TestSystemOnlyClaudeRequestSerializesEmptyMessagesArray(t *testing.T) {
+func TestSystemOnlyClaudeRequestGetsPlaceholderUserTurn(t *testing.T) {
 	provider := newStandardClaudeProvider()
 	request := &chatCompletionRequest{
 		Model:     "claude-sonnet-4-5-20250929",
@@ -188,12 +191,13 @@ func TestSystemOnlyClaudeRequestSerializesEmptyMessagesArray(t *testing.T) {
 	claudeReq := provider.buildClaudeTextGenRequest(request)
 
 	require.NotNil(t, claudeReq.Messages, "messages must never be null on the wire")
-	assert.Empty(t, claudeReq.Messages)
+	require.Len(t, claudeReq.Messages, 1, "Anthropic rejects both null and empty messages arrays, so a placeholder user turn must be synthesized")
+	assert.Equal(t, roleUser, claudeReq.Messages[0].Role)
 	require.NotNil(t, claudeReq.System)
 
 	body, err := json.Marshal(claudeReq)
 	require.NoError(t, err)
-	assert.Contains(t, string(body), `"messages":[]`)
+	assert.NotContains(t, string(body), `"messages":[]`)
 	assert.NotContains(t, string(body), `"messages":null`)
 }
 
@@ -230,7 +234,7 @@ func TestAllowedToolsToolChoiceNarrowsClaudeTools(t *testing.T) {
 	assert.Empty(t, claudeReq.ToolChoice.Name)
 }
 
-func TestGeminiStrictToolsUseValidatedCallingMode(t *testing.T) {
+func TestGeminiStrictToolsFallBackToAutoCallingMode(t *testing.T) {
 	provider := &geminiProvider{}
 	request := &chatCompletionRequest{
 		Model:     "gemini-2.0-flash",
@@ -251,7 +255,7 @@ func TestGeminiStrictToolsUseValidatedCallingMode(t *testing.T) {
 
 	require.NotNil(t, geminiReq.ToolConfig)
 	require.NotNil(t, geminiReq.ToolConfig.FunctionCallingConfig)
-	assert.Equal(t, geminiFunctionCallingModeValidated, geminiReq.ToolConfig.FunctionCallingConfig.Mode)
+	assert.Equal(t, geminiFunctionCallingModeAuto, geminiReq.ToolConfig.FunctionCallingConfig.Mode)
 
 	body, err := json.Marshal(geminiReq)
 	require.NoError(t, err)
