@@ -323,12 +323,17 @@ func TestGeminiFileIdPartIsNotForwardedAsEmptyParts(t *testing.T) {
 
 	geminiReq := provider.buildGeminiChatRequest(request)
 
-	// Gemini rejects an empty parts array, so the untranslatable turn is reported
-	// and skipped instead of being sent as {"role":"user","parts":[]}.
-	assert.Empty(t, geminiReq.Contents)
+	// Gemini rejects both an empty parts array and an empty contents array, so the
+	// untranslatable turn is reported and skipped, and the request is kept valid by
+	// the synthesized placeholder user turn.
+	require.Len(t, geminiReq.Contents, 1)
+	assert.Equal(t, roleUser, geminiReq.Contents[0].Role)
+	require.Len(t, geminiReq.Contents[0].Parts, 1)
+	assert.Equal(t, " ", geminiReq.Contents[0].Parts[0].Text)
 	body, err := json.Marshal(geminiReq)
 	require.NoError(t, err)
 	assert.NotContains(t, string(body), `"parts":[]`)
+	assert.NotContains(t, string(body), `"contents":[]`)
 }
 
 func TestClaudeDocumentBlockBecomesOpenAIFilePart(t *testing.T) {
@@ -499,4 +504,105 @@ func TestFilePartMediaType(t *testing.T) {
 
 	_, _, isInline = filePartMediaType(nil)
 	assert.False(t, isInline)
+}
+
+func TestClaudeEmptyStringTurnIsNotSentAsEmptyContent(t *testing.T) {
+	provider := newStandardClaudeProvider()
+	request := &chatCompletionRequest{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 8192,
+		Messages: []chatMessage{
+			{Role: roleUser, Content: "Summarize the incident report."},
+			// An empty string is not a valid Anthropic content block, so this turn
+			// must be dropped rather than forwarded as `"content":""`.
+			{Role: roleAssistant, Content: ""},
+		},
+	}
+
+	claudeReq := provider.buildClaudeTextGenRequest(request)
+
+	require.Len(t, claudeReq.Messages, 1, "the empty assistant turn must not reach the wire")
+	assert.Equal(t, roleUser, claudeReq.Messages[0].Role)
+
+	body, err := json.Marshal(claudeReq)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), `"content":""`)
+}
+
+func TestClaudeToolPairingSurvivesDroppedTurns(t *testing.T) {
+	provider := newStandardClaudeProvider()
+	request := &chatCompletionRequest{
+		Model:     "claude-sonnet-4-5-20250929",
+		MaxTokens: 8192,
+		Messages: []chatMessage{
+			{Role: roleUser, Content: "What is the weather in Lisbon?"},
+			{
+				Role: roleAssistant,
+				ToolCalls: []toolCall{{
+					Id:       "call_1",
+					Type:     "function",
+					Function: functionCall{Name: "get_weather", Arguments: `{"city":"Lisbon"}`},
+				}},
+			},
+			// A turn that is not portable is dropped while it sits between the call
+			// and its result; the result must still be emitted, otherwise the
+			// preceding tool_use is left unanswered and Anthropic rejects the request.
+			{Role: roleUser, Content: []any{map[string]any{
+				"type":        "input_audio",
+				"input_audio": map[string]any{"data": "UklGRg==", "format": "wav"},
+			}}},
+			{Role: roleTool, ToolCallId: "call_1", Content: "18C and clear."},
+		},
+	}
+
+	claudeReq := provider.buildClaudeTextGenRequest(request)
+
+	var toolUseIds, toolResultIds []string
+	for _, message := range claudeReq.Messages {
+		for _, block := range message.Content.ArrayValue {
+			switch block.Type {
+			case "tool_use":
+				toolUseIds = append(toolUseIds, block.Id)
+			case "tool_result":
+				toolResultIds = append(toolResultIds, block.ToolUseId)
+			}
+		}
+	}
+	require.Equal(t, []string{"call_1"}, toolUseIds)
+	require.Equal(t, []string{"call_1"}, toolResultIds, "every tool_use must keep a matching tool_result")
+
+	// The result has to directly follow the call it answers.
+	require.Len(t, claudeReq.Messages, 3)
+	assert.Equal(t, roleAssistant, claudeReq.Messages[1].Role)
+	assert.Equal(t, roleUser, claudeReq.Messages[2].Role)
+
+	body, err := json.Marshal(claudeReq)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), `"content":[]`)
+	assert.NotContains(t, string(body), `"content":""`)
+}
+
+func TestVertexUntranslatableTurnIsNotSentAsEmptyParts(t *testing.T) {
+	provider := &vertexProvider{}
+	request := &chatCompletionRequest{
+		Model:     "gemini-2.5-pro",
+		MaxTokens: 8192,
+		Messages: []chatMessage{{
+			Role: roleUser,
+			Content: []any{map[string]any{
+				"type":        "input_audio",
+				"input_audio": map[string]any{"data": "UklGRg==", "format": "wav"},
+			}},
+		}},
+	}
+
+	vertexReq, err := provider.buildVertexChatRequest(request)
+	require.NoError(t, err)
+
+	// Vertex rejects an empty parts array, so the turn is reported and skipped
+	// instead of being forwarded as {"role":"user","parts":[]}.
+	assert.Empty(t, vertexReq.Contents)
+	body, err := json.Marshal(vertexReq)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), `"parts":[]`)
 }
