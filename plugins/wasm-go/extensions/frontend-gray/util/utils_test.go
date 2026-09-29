@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/higress-group/wasm-go/pkg/log"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/frontend-gray/config"
 	"github.com/stretchr/testify/assert"
@@ -165,4 +166,130 @@ func TestIsIndexRequest(t *testing.T) {
 			assert.Equal(t, test.output, matchResult)
 		})
 	}
+}
+
+// TestFilterGrayRuleMissingRule 回归用例：启用的灰度部署缺少同名规则时，
+// FilterGrayRule 必须跳过它并回退到 BaseDeployment，而不是解引用 nil 触发 panic。
+// 历史上该场景会 panic，panic 被 wasm 框架 recover 后请求静默回退到基线版本。
+func TestFilterGrayRuleMissingRule(t *testing.T) {
+	baseDeployment := &config.Deployment{Name: "base", Version: "base", BackendVersion: "base-backend"}
+
+	t.Run("deployment without matching rule falls back to base", func(t *testing.T) {
+		grayConfig := &config.GrayConfig{}
+		grayConfig.BaseDeployment = baseDeployment
+		grayConfig.Rules = []*config.GrayRule{
+			{Name: "inner-user", GrayKeyValue: []string{"00000001"}},
+		}
+		grayConfig.GrayDeployments = []*config.Deployment{
+			{Name: "beta-user", Enabled: true, Version: "gray"},
+		}
+		assert.NotPanics(t, func() {
+			deployment := FilterGrayRule(grayConfig, "00000001", "")
+			assert.Same(t, baseDeployment, deployment)
+		})
+	})
+
+	t.Run("empty rules slice falls back to base", func(t *testing.T) {
+		grayConfig := &config.GrayConfig{}
+		grayConfig.BaseDeployment = baseDeployment
+		grayConfig.GrayDeployments = []*config.Deployment{
+			{Name: "beta-user", Enabled: true, Version: "gray"},
+		}
+		assert.NotPanics(t, func() {
+			deployment := FilterGrayRule(grayConfig, "00000001", "")
+			assert.Same(t, baseDeployment, deployment)
+		})
+	})
+
+	t.Run("empty rules slice with cookie tag falls back to base", func(t *testing.T) {
+		grayConfig := &config.GrayConfig{}
+		grayConfig.BaseDeployment = baseDeployment
+		grayConfig.GrayDeployments = []*config.Deployment{
+			{Name: "beta-user", Enabled: true, Version: "gray"},
+		}
+		assert.NotPanics(t, func() {
+			deployment := FilterGrayRule(grayConfig, "", "level=level3")
+			assert.Same(t, baseDeployment, deployment)
+		})
+	})
+
+	t.Run("unmatched deployment is skipped but later matched deployment still wins", func(t *testing.T) {
+		betaDeployment := &config.Deployment{Name: "beta-user", Enabled: true, Version: "gray"}
+		innerDeployment := &config.Deployment{Name: "inner-user", Enabled: true, Version: "gray-inner"}
+		grayConfig := &config.GrayConfig{}
+		grayConfig.BaseDeployment = baseDeployment
+		grayConfig.Rules = []*config.GrayRule{
+			{Name: "inner-user", GrayKeyValue: []string{"00000001"}},
+		}
+		grayConfig.GrayDeployments = []*config.Deployment{betaDeployment, innerDeployment}
+		assert.NotPanics(t, func() {
+			deployment := FilterGrayRule(grayConfig, "00000001", "")
+			assert.Same(t, innerDeployment, deployment)
+		})
+	})
+
+	t.Run("matching rule still selects gray deployment", func(t *testing.T) {
+		grayDeployment := &config.Deployment{Name: "inner-user", Enabled: true, Version: "gray"}
+		grayConfig := &config.GrayConfig{}
+		grayConfig.BaseDeployment = baseDeployment
+		grayConfig.Rules = []*config.GrayRule{
+			{Name: "inner-user", GrayKeyValue: []string{"00000001"}},
+		}
+		grayConfig.GrayDeployments = []*config.Deployment{grayDeployment}
+		assert.NotPanics(t, func() {
+			deployment := FilterGrayRule(grayConfig, "00000001", "")
+			assert.Same(t, grayDeployment, deployment)
+		})
+	})
+
+	t.Run("matching cookie tag still selects gray deployment", func(t *testing.T) {
+		grayDeployment := &config.Deployment{Name: "beta-user", Enabled: true, Version: "gray"}
+		grayConfig := &config.GrayConfig{}
+		grayConfig.BaseDeployment = baseDeployment
+		grayConfig.Rules = []*config.GrayRule{
+			{Name: "beta-user", GrayTagKey: "level", GrayTagValue: []string{"level3", "level5"}},
+		}
+		grayConfig.GrayDeployments = []*config.Deployment{grayDeployment}
+		assert.NotPanics(t, func() {
+			deployment := FilterGrayRule(grayConfig, "", "level=level3")
+			assert.Same(t, grayDeployment, deployment)
+		})
+	})
+
+	t.Run("no gray deployments falls back to base", func(t *testing.T) {
+		grayConfig := &config.GrayConfig{}
+		grayConfig.BaseDeployment = baseDeployment
+		grayConfig.Rules = []*config.GrayRule{
+			{Name: "inner-user", GrayKeyValue: []string{"00000001"}},
+		}
+		assert.NotPanics(t, func() {
+			deployment := FilterGrayRule(grayConfig, "00000001", "")
+			assert.Same(t, baseDeployment, deployment)
+		})
+	})
+}
+
+// noopLog 实现 wasm-go 的 log.Log 接口，供单元测试注入以静默日志。
+// FilterGrayRule 跳过缺少同名规则的部署时会写 warning 日志，而 log 包在测试
+// 环境下 pluginLog 默认为 nil，直接调用会 panic，所以按仓库内其它插件测试的
+// 约定注入一个空实现。
+type noopLog struct{}
+
+func (noopLog) Trace(msg string)                          {}
+func (noopLog) Tracef(format string, args ...interface{}) {}
+func (noopLog) Debug(msg string)                          {}
+func (noopLog) Debugf(format string, args ...interface{}) {}
+func (noopLog) Info(msg string)                           {}
+func (noopLog) Infof(format string, args ...interface{})  {}
+func (noopLog) Warn(msg string)                           {}
+func (noopLog) Warnf(format string, args ...interface{})  {}
+func (noopLog) Error(msg string)                          {}
+func (noopLog) Errorf(format string, args ...interface{}) {}
+func (noopLog) Critical(msg string)                       {}
+func (noopLog) Criticalf(format string, args ...interface{}) {
+}
+func (noopLog) ResetID(pluginID string) {}
+
+func init() {
+	log.SetPluginLog(noopLog{})
 }
