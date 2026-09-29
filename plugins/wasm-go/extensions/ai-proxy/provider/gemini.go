@@ -535,6 +535,18 @@ func (g *geminiProvider) buildGeminiChatRequest(request *chatCompletionRequest) 
 
 	}
 
+	if len(geminiRequest.Contents) == 0 {
+		// Gemini rejects an empty `contents` array, so a request whose turns were
+		// all converted into top-level system instructions (or dropped as
+		// non-portable) still needs one placeholder user turn: the request stays
+		// valid and the system instruction still reaches the model.
+		log.Warnf("[ai-proxy] gemini: no request turn survived conversion; appending a placeholder user turn")
+		geminiRequest.Contents = append(geminiRequest.Contents, geminiChatContent{
+			Role:  roleUser,
+			Parts: []geminiPart{{Text: " "}},
+		})
+	}
+
 	return &geminiRequest
 }
 

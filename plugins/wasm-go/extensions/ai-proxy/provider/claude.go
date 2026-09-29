@@ -648,6 +648,15 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 		}
 
 		if message.IsStringContent() {
+			if message.StringContent() == "" {
+				// Anthropic rejects an empty content block, so a turn whose text is
+				// empty is dropped exactly like a turn whose parts are all
+				// non-portable. Consecutive same-role turns are combined by the API,
+				// and the guard after this loop restores a placeholder user turn if
+				// nothing survives.
+				log.Warnf("[ai-proxy] claude: dropping empty %q message, Anthropic rejects an empty content block", message.Role)
+				continue
+			}
 			claudeMessage.Content = NewStringContent(message.StringContent())
 		} else {
 			chatMessageContents := make([]claudeChatMessageContent, 0)
