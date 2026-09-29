@@ -17,6 +17,8 @@ global:
   onDemandRDS: false
   hostRDSMergeSubset: false
   onlyPushRouteCluster: true
+  ## -- Specify the cluster ID. If not specified, Higress will try to get the cluster ID from ingressClass.
+  clusterId: ""
   # -- IngressClass filters which ingress resources the higress controller watches.
   # The default ingress class is higress.
   # There are some special cases for special ingress class.
