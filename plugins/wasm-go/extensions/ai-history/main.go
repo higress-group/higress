@@ -347,7 +347,11 @@ func processSSEMessage(ctx wrapper.HttpContext, config PluginConfig, sseMessage 
 				ctx.SetContext(AnswerContentContextKey, content)
 			} else {
 				append := TrimQuote(gjson.Get(bodyJson, config.AnswerStreamValueFrom.ResponseBody).Raw)
-				content = tempContentI.(string) + append
+				prevContent, ok := tempContentI.(string)
+				if !ok {
+					log.Errorf("answer content in context has unexpected type %T, reset answer content", tempContentI)
+				}
+				content = prevContent + append
 				ctx.SetContext(AnswerContentContextKey, content)
 			}
 		} else if gjson.Get(bodyJson, "choices.0.delta.content.tool_calls").Exists() {
@@ -386,14 +390,23 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 				ctx.SetContext(AnswerContentContextKey, chunk)
 				return chunk
 			}
-			tempContent := tempContentI.([]byte)
-			tempContent = append(tempContent, chunk...)
-			ctx.SetContext(AnswerContentContextKey, tempContent)
+			if tempContent, ok := tempContentI.([]byte); ok {
+				tempContent = append(tempContent, chunk...)
+				ctx.SetContext(AnswerContentContextKey, tempContent)
+			} else {
+				log.Errorf("answer content in context has unexpected type %T, reset answer content", tempContentI)
+				ctx.SetContext(AnswerContentContextKey, chunk)
+			}
 		} else {
 			var partialMessage []byte
 			partialMessageI := ctx.GetContext(PartialMessageContextKey)
 			if partialMessageI != nil {
-				partialMessage = append(partialMessageI.([]byte), chunk...)
+				if pm, ok := partialMessageI.([]byte); ok {
+					partialMessage = append(pm, chunk...)
+				} else {
+					log.Errorf("partial message in context has unexpected type %T, reset partial message", partialMessageI)
+					partialMessage = chunk
+				}
 			} else {
 				partialMessage = chunk
 			}
@@ -419,7 +432,12 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 		var body []byte
 		tempContentI := ctx.GetContext(AnswerContentContextKey)
 		if tempContentI != nil {
-			body = append(tempContentI.([]byte), chunk...)
+			tempContent, ok := tempContentI.([]byte)
+			if !ok {
+				log.Errorf("answer content in context has unexpected type %T, skip parsing answer value", tempContentI)
+				return chunk
+			}
+			body = append(tempContent, chunk...)
 		} else {
 			body = chunk
 		}
@@ -435,7 +453,12 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 			var lastMessage []byte
 			partialMessageI := ctx.GetContext(PartialMessageContextKey)
 			if partialMessageI != nil {
-				lastMessage = append(partialMessageI.([]byte), chunk...)
+				pm, ok := partialMessageI.([]byte)
+				if !ok {
+					log.Errorf("partial message in context has unexpected type %T, skip parsing last message", partialMessageI)
+					return chunk
+				}
+				lastMessage = append(pm, chunk...)
 			} else {
 				lastMessage = chunk
 			}
@@ -451,7 +474,12 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 			if tempContentI == nil {
 				return chunk
 			}
-			value = tempContentI.(string)
+			if v, ok := tempContentI.(string); ok {
+				value = v
+			} else {
+				log.Errorf("answer content in context has unexpected type %T, skip saving chat history", tempContentI)
+				return chunk
+			}
 		}
 	}
 	saveChatHistory(ctx, config, questionI, value, log)
@@ -459,7 +487,11 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 }
 
 func saveChatHistory(ctx wrapper.HttpContext, config PluginConfig, questionI any, value string, log log.Log) {
-	question := questionI.(string)
+	question, ok := questionI.(string)
+	if !ok {
+		log.Errorf("question in context has unexpected type %T, skip saving chat history", questionI)
+		return
+	}
 	identityKey := ctx.GetStringContext(IdentityKey, "")
 	var chat []ChatHistory
 	chatHistories := ctx.GetStringContext(ChatHistories, "")

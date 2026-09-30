@@ -35,6 +35,9 @@ The configuration fields for each item in `consumers` are as follows:
 - For routes with this configuration enabled, if the path suffix matches `auth_path`, the route will not forward to the original target service but will be used to generate a Token.
 - If `global_credentials` is disabled, please ensure that the routes enabling this plugin do not precisely match routes. If there is another prefix-matching route, it may lead to unexpected behavior.
 - For requests authenticated and authorized, the request header will have an `X-Mse-Consumer` field added to identify the caller's name.
+  The gateway **replaces** this header instead of appending to it: any client-supplied `X-Mse-Consumer` is removed
+  before the consumer name from this authentication is set. Downstream therefore always reads the gateway's own
+  assertion, so a caller cannot forge its identity by sending the header itself.
 
 ### Authorization Configuration (Optional)
 | Name        | Data Type        | Requirement                                    | Default Value | Description                                                                                                                                                         |

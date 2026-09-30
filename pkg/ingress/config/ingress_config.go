@@ -310,7 +310,10 @@ func (m *IngressConfig) List(typ config.GroupVersionKind, namespace string) []co
 	}
 
 	if configsFromGateway := m.listFromGatewayControllers(typ, namespace); configsFromGateway != nil {
-		// Process templates for gateway configs
+		// Process templates for gateway configs. These are merged across namespaces and some of
+		// them are re-stamped with the Higress system namespace, so the namespace of the object
+		// a config was generated from cannot be recovered here. Their references are restricted
+		// during the Gateway API conversion instead, while that namespace is still known.
 		for i := range configsFromGateway {
 			if err := m.templateProcessor.ProcessConfig(&configsFromGateway[i]); err != nil {
 				IngressLog.Errorf("Failed to process template for config %s/%s: %v",
@@ -459,6 +462,17 @@ func (m *IngressConfig) createWrapperConfigs(configs []config.Config) []common.W
 
 	for idx := range configs {
 		rawConfig := configs[idx]
+		// Annotation values are the only tenant-writable strings that reach generated
+		// configs, and those configs are merged across namespaces under the Higress system
+		// namespace, so this is the last point where the owning namespace is still known.
+		// A reference with no namespace is expanded to the Ingress's own namespace and a
+		// reference to any other namespace is replaced with an opaque placeholder.
+		sanitizedAnnotations, refused := m.templateProcessor.RestrictTemplatesToNamespace(rawConfig.Annotations, rawConfig.Namespace)
+		rawConfig.Annotations = sanitizedAnnotations
+		if len(refused) > 0 {
+			IngressLog.Errorf("Ingress %s/%s references secrets outside its own namespace, replacing them with %q: %v",
+				rawConfig.Namespace, rawConfig.Name, util.RefusedReferencePlaceholder, refused)
+		}
 		annotationsConfig := &annotations.Ingress{
 			Meta: annotations.Meta{
 				Namespace:    rawConfig.Namespace,

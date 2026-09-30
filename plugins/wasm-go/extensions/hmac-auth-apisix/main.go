@@ -64,24 +64,32 @@ func init() {
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.HmacAuthConfig) types.Action {
 	var (
-		// 未配置 allow 列表，表示插件在该 domain/route 未生效
 		noAllow            = len(cfg.Allow) == 0
 		globalAuthNoSet    = cfg.GlobalAuth == nil
 		globalAuthSetTrue  = !globalAuthNoSet && *cfg.GlobalAuth
 		globalAuthSetFalse = !globalAuthNoSet && !*cfg.GlobalAuth
-		ruleSet            = cfg.RuleSet
+		// ruleSet 为 true 表示当前请求命中了 domain/route 级规则，即插件在该 domain/route 上被显式启用
+		ruleSet = cfg.RuleSet
 	)
 
 	// 不需要认证而直接放行的情况：
-	// - global_auth == false 且 当前 domain/route 未配置该插件
-	// - global_auth 未设置 且 有至少一个 domain/route 配置该插件 且 当前 domain/route 未配置该插件
-	if globalAuthSetFalse || (globalAuthNoSet && ruleSet) {
-		if noAllow {
-			log.Info("authorization is not required")
-			ctx.DontReadRequestBody()
-			return types.ActionContinue
-		}
+	// - global_auth == false 且 当前 domain/route 未命中任何规则，即插件未在该 domain/route 生效
+	// global_auth 未设置时，未命中规则的请求按全局认证处理（兼容老用户使用习惯）
+	if globalAuthSetFalse && !ruleSet && noAllow {
+		log.Info("authorization is not required")
+		ctx.DontReadRequestBody()
+		return types.ActionContinue
 	}
+
+	// 命中 domain/route 级规则说明插件在该 domain/route 上已生效，此时缺失或为空的 allow 列表
+	// 表示没有任何消费者被授权，必须拒绝请求（fail closed），不能因为“没配 allow”而跳过认证。
+	// global_auth == true 时认证本就全局生效，allow 只是额外的细粒度限制，
+	// 未配置 allow 表示不做额外限制，因此继续走签名校验。
+	if ruleSet && noAllow && !globalAuthSetTrue {
+		log.Warn("no consumer is allowed: the matched domain/route rule has an empty allow list")
+		return sendUnauthorizedResponse("no consumer is allowed")
+	}
+
 	// 提取 HMAC 字段和消费者信息
 	hmacParams, err := retrieveHmacFieldsAndConsumer(cfg)
 	if err != nil {
@@ -96,16 +104,10 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.HmacAuthConfig) ty
 	log.Debugf("HMAC params extracted: keyId=%s, algorithm=%s, signature=%s, headers=%v, consumerName=%s",
 		hmacParams.KeyId, hmacParams.Algorithm, hmacParams.Signature, hmacParams.Headers, hmacParams.ConsumerName)
 
-	if globalAuthSetTrue && !noAllow { // 全局生效，但当前 domain/route 配置了 allow 列表
-		if !contains(cfg.Allow, hmacParams.ConsumerName) {
-			log.Warnf("consumer %q is not allowed", hmacParams.ConsumerName)
-			return sendUnauthorizedResponse("consumer '" + hmacParams.ConsumerName + "' is not allowed")
-		}
-	} else if globalAuthSetFalse || (globalAuthNoSet && ruleSet) { // 非全局生效
-		if !noAllow && !contains(cfg.Allow, hmacParams.ConsumerName) { // 配置了 allow 列表且当前消费者不在 allow 列表中
-			log.Warnf("consumer %q is not allowed", hmacParams.ConsumerName)
-			return sendUnauthorizedResponse("consumer '" + hmacParams.ConsumerName + "' is not allowed")
-		}
+	// 鉴权：配置了 allow 列表时，仅列表中的消费者可以访问
+	if !noAllow && !contains(cfg.Allow, hmacParams.ConsumerName) {
+		log.Warnf("consumer %q is not allowed", hmacParams.ConsumerName)
+		return sendUnauthorizedResponse("consumer '" + hmacParams.ConsumerName + "' is not allowed")
 	}
 
 	// 校验时间偏差
@@ -154,7 +156,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.HmacAuthConfig) ty
 	}
 
 	// 如果有请求体且需要验证请求体，进入 onHttpRequestBody 方法
-	if wrapper.HasRequestBody() && cfg.ValidateRequestBody {
+	if ctx.HasRequestBody() && cfg.ValidateRequestBody {
 		return types.HeaderStopIteration
 	}
 	ctx.DontReadRequestBody()
@@ -387,6 +389,8 @@ func sendUnauthorizedResponse(message string) types.Action {
 }
 
 func setConsumerHeader(name string) {
+	// Replace rather than append: a client-supplied identity must never survive.
+	_ = proxywasm.RemoveHttpRequestHeader(consumerHeader)
 	_ = proxywasm.AddHttpRequestHeader(consumerHeader, name)
 }
 

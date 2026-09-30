@@ -251,6 +251,8 @@ bool PluginRootContext::checkPlugin(
     const OAuthConfigRule& rule,
     const std::optional<std::unordered_set<std::string>>& allow_set,
     const std::string& route_name) {
+  // Drop any client-supplied value so only this gateway's assertion survives.
+  removeRequestHeader("X-Mse-Consumer");
   auto auth_header = getRequestHeader(rule.auth_header_name)->toString();
   bool verified = false;
   std::string token_str;

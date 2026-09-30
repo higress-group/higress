@@ -16,12 +16,13 @@ package main
 
 import (
 	"net/http"
-	"path"
+	"net/url"
 
 	"ext-auth/config"
 	"ext-auth/expr"
 	"ext-auth/util"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/pathutil"
 	"github.com/higress-group/wasm-go/pkg/log"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -75,7 +76,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.ExtAuthConfig) 
 
 	// If withRequestBody is true AND the HTTP request contains a request body,
 	// it will be handled in the onHttpRequestBody phase.
-	if wrapper.HasRequestBody() && config.HttpService.AuthorizationRequest.WithRequestBody {
+	if ctx.HasRequestBody() && config.HttpService.AuthorizationRequest.WithRequestBody {
 		ctx.SetRequestBodyBufferLimit(config.HttpService.AuthorizationRequest.MaxRequestBodyBytes)
 		// The request has a body and requires delaying the header transmission until a cache miss occurs,
 		// at which point the header should be sent.
@@ -121,7 +122,28 @@ func checkExtAuth(ctx wrapper.HttpContext, cfg config.ExtAuthConfig, body []byte
 	requestPath := httpServiceConfig.Path
 	if httpServiceConfig.EndpointMode == config.EndpointModeEnvoy {
 		requestMethod = ctx.Method()
-		requestPath = path.Join(httpServiceConfig.PathPrefix, ctx.Path())
+		// ctx.Path() carries the query string, so it must not be handed to path.Join
+		// directly: dot segments inside a query value would be resolved as path
+		// segments and could move the authorization path out of path_prefix.
+		joinedPath, err := pathutil.SafeJoin(httpServiceConfig.PathPrefix, ctx.Path())
+		if err != nil {
+			log.Errorf("rejecting request path %q for path_prefix %q: %v", ctx.Path(), httpServiceConfig.PathPrefix, err)
+			// failure_mode_allow is deliberately not consulted: it covers an
+			// unreachable authorization service, not a request path that cannot be
+			// resolved against path_prefix at all.
+			_ = sendResponse(http.StatusForbidden, "ext-auth.path_traversal", nil, nil)
+			return pauseAction
+		}
+		// wrapper.HttpCall parses the path before dispatching, so a path url.Parse
+		// rejects surfaces as a call error, which failure_mode_allow treats as an
+		// unavailable service and would let through unauthenticated. pathutil reports
+		// an undecodable escape only when the prefix has something to protect.
+		if _, err := url.Parse(joinedPath); err != nil {
+			log.Errorf("rejecting undispatchable request path %q: %v", joinedPath, err)
+			_ = sendResponse(http.StatusForbidden, "ext-auth.path_traversal", nil, nil)
+			return pauseAction
+		}
+		requestPath = joinedPath
 	}
 
 	// Call ext auth server

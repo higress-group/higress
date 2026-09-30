@@ -7,6 +7,7 @@ on:
       - 'plugins/wasm-go/extensions/**'
       - 'plugins/wasm-go/examples/**'
       - 'plugins/wasm-go/pkg/mcp/**'
+      - 'plugins/wasm-go/pkg/pathutil/**'
       - 'samples/mcp/protocol/2026-07-28/auto.yaml'
       - 'test/e2e/conformance/tests/go-wasm-mcp-2026-07-28.*'
       - '.github/workflows/wasm-plugin-unit-test.yml'
@@ -18,6 +19,7 @@ on:
       - 'plugins/wasm-go/extensions/**'
       - 'plugins/wasm-go/examples/**'
       - 'plugins/wasm-go/pkg/mcp/**'
+      - 'plugins/wasm-go/pkg/pathutil/**'
       - 'samples/mcp/protocol/2026-07-28/auto.yaml'
       - 'test/e2e/conformance/tests/go-wasm-mcp-2026-07-28.*'
       - '.github/workflows/wasm-plugin-unit-test.yml'
@@ -86,6 +88,10 @@ jobs:
             add_plugin "${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
           elif [[ $file =~ ^plugins/wasm-go/pkg/mcp/ || $file =~ ^samples/mcp/protocol/2026-07-28/auto.yaml$ || $file =~ ^test/e2e/conformance/tests/go-wasm-mcp-2026-07-28\. ]]; then
             add_plugin "extensions/mcp-server"
+          elif [[ $file =~ ^plugins/wasm-go/pkg/pathutil/ ]]; then
+            # Library-only module: exercised through the plugins that consume it.
+            add_plugin "extensions/ai-proxy"
+            add_plugin "extensions/ext-auth"
           fi
         done
         

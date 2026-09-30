@@ -225,6 +225,8 @@ bool PluginRootContext::addBasicAuthConfigRule(
 bool PluginRootContext::checkPlugin(
     const BasicAuthConfigRule& rule,
     const std::optional<std::unordered_set<std::string>>& allow_set) {
+  // Drop any client-supplied value so only this gateway's assertion survives.
+  removeRequestHeader("X-Mse-Consumer");
   auto authorization_header = getRequestHeader("authorization");
   auto authorization = authorization_header->view();
   // Check if the Basic auth header starts with "Basic "

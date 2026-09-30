@@ -542,3 +542,183 @@ func TestRestUpstreamBuffersBodyWhenRateLimitEnabled(t *testing.T) {
 		t.Errorf("expected skipRequestBody to be false when buffering is required")
 	}
 }
+
+// minimal BufferInstance mock that records what would be sent to the client
+type testBuffer struct {
+	api.BufferInstance
+	data []byte
+}
+
+func (b *testBuffer) Bytes() []byte  { return b.data }
+func (b *testBuffer) String() string { return string(b.data) }
+func (b *testBuffer) Len() int       { return len(b.data) }
+func (b *testBuffer) Reset()         { b.data = nil }
+func (b *testBuffer) Set(data []byte) error {
+	b.data = append([]byte(nil), data...)
+	return nil
+}
+func (b *testBuffer) SetString(s string) error {
+	b.data = []byte(s)
+	return nil
+}
+
+// feedSSEChunks pushes the given upstream chunks through EncodeData in order and
+// returns the concatenation of what the client received.
+func feedSSEChunks(t *testing.T, f *filter, chunks ...string) string {
+	t.Helper()
+	received := ""
+	for i, chunk := range chunks {
+		buffer := &testBuffer{data: []byte(chunk)}
+		endStream := i == len(chunks)-1
+		if status := f.EncodeData(buffer, endStream); status != api.Continue {
+			t.Fatalf("chunk %d: expected api.Continue, got %v", i, status)
+		}
+		received += buffer.String()
+	}
+	return received
+}
+
+func createSSETestFilter(matchedRule common.MatchRule) *filter {
+	return &filter{needProcess: true, matchedRule: matchedRule}
+}
+
+func createPathRewriteDisabledRule() common.MatchRule {
+	rule := createTestMatchRule()
+	rule.EnablePathRewrite = false
+	rule.PathRewritePrefix = ""
+	return rule
+}
+
+// TestEncodeDataFromSSEUpstream_FragmentedEndpointWithoutPathRewrite verifies
+// that an endpoint message split across two upstream chunks reaches the client
+// in full when path rewriting is disabled. Previously the assembled message was
+// only written back inside the rewrite branch, so the client saw the truncated
+// tail of the message and never learned the endpoint to POST to. See #4651.
+func TestEncodeDataFromSSEUpstream_FragmentedEndpointWithoutPathRewrite(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	f := createSSETestFilter(createPathRewriteDisabledRule())
+	chunks := []string{
+		"event: endpoint\ndata: https://api.example.com/mes",
+		"sions?sessionId=demo\n\n",
+	}
+	want := chunks[0] + chunks[1]
+
+	got := feedSSEChunks(t, f, chunks...)
+	if got != want {
+		t.Errorf("expected client to receive the complete message %q, got %q", want, got)
+	}
+	if f.cachedResponseBody != nil {
+		t.Errorf("expected cachedResponseBody to be cleared, got %q", string(f.cachedResponseBody))
+	}
+	if f.needProcess {
+		t.Errorf("expected needProcess to be false after the endpoint event was handled")
+	}
+}
+
+// TestEncodeDataFromSSEUpstream_FragmentedEndpointWithPathRewrite guards the
+// existing behavior of the enabled-and-matching rewrite path.
+func TestEncodeDataFromSSEUpstream_FragmentedEndpointWithPathRewrite(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	f := createSSETestFilter(createTestMatchRule())
+	chunks := []string{
+		"event: endpoint\ndata: https://api.example.com/api/v1/mes",
+		"sages?sessionId=demo\n\n",
+	}
+	want := "event: endpoint\ndata: /mcp/messages?sessionId=demo\n\n"
+
+	got := feedSSEChunks(t, f, chunks...)
+	if got != want {
+		t.Errorf("expected rewritten message %q, got %q", want, got)
+	}
+	if f.cachedResponseBody != nil {
+		t.Errorf("expected cachedResponseBody to be cleared, got %q", string(f.cachedResponseBody))
+	}
+}
+
+// TestEncodeDataFromSSEUpstream_FragmentedEndpointWithRewritePrefixMismatch
+// verifies that an endpoint URL outside the rewrite prefix is still forwarded
+// verbatim instead of being dropped.
+func TestEncodeDataFromSSEUpstream_FragmentedEndpointWithRewritePrefixMismatch(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	f := createSSETestFilter(createTestMatchRule())
+	chunks := []string{
+		"event: endpoint\ndata: https://api.example.com/other/mes",
+		"sages?sessionId=demo\n\n",
+	}
+	want := chunks[0] + chunks[1]
+
+	got := feedSSEChunks(t, f, chunks...)
+	if got != want {
+		t.Errorf("expected client to receive the complete original message %q, got %q", want, got)
+	}
+	if f.cachedResponseBody != nil {
+		t.Errorf("expected cachedResponseBody to be cleared, got %q", string(f.cachedResponseBody))
+	}
+}
+
+// TestEncodeDataFromSSEUpstream_SingleChunkWithoutPathRewrite verifies that an
+// endpoint message delivered in one chunk passes through untouched.
+func TestEncodeDataFromSSEUpstream_SingleChunkWithoutPathRewrite(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	f := createSSETestFilter(createPathRewriteDisabledRule())
+	want := "event: endpoint\ndata: https://api.example.com/messages?sessionId=demo\n\n"
+
+	got := feedSSEChunks(t, f, want)
+	if got != want {
+		t.Errorf("expected unchanged passthrough %q, got %q", want, got)
+	}
+	if f.cachedResponseBody != nil {
+		t.Errorf("expected cachedResponseBody to stay empty, got %q", string(f.cachedResponseBody))
+	}
+}
+
+// TestEncodeDataFromSSEUpstream_FragmentedMalformedEndpoint verifies that a
+// fragmented message which fails endpoint parsing is still forwarded in full
+// rather than losing the already drained fragment.
+func TestEncodeDataFromSSEUpstream_FragmentedMalformedEndpoint(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	f := createSSETestFilter(createPathRewriteDisabledRule())
+	chunks := []string{
+		"event: endpoint\nnotda",
+		"ta: https://api.example.com/chat\n\n",
+	}
+	want := chunks[0] + chunks[1]
+
+	got := feedSSEChunks(t, f, chunks...)
+	if got != want {
+		t.Errorf("expected client to receive the complete message %q, got %q", want, got)
+	}
+	if f.needProcess {
+		t.Errorf("expected needProcess to be false after the parsing failure")
+	}
+}
+
+// TestEncodeDataFromSSEUpstream_FragmentedNonEndpointEvent verifies that
+// non-endpoint events sharing the same cache are forwarded together with the
+// endpoint message that follows them.
+func TestEncodeDataFromSSEUpstream_FragmentedNonEndpointEvent(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	f := createSSETestFilter(createPathRewriteDisabledRule())
+	chunks := []string{
+		"event: ping\ndata: ali",
+		"ve\n\nevent: endpoint\ndata: https://api.example.com/chat\n\n",
+	}
+	want := chunks[0] + chunks[1]
+
+	got := feedSSEChunks(t, f, chunks...)
+	if got != want {
+		t.Errorf("expected client to receive the complete message %q, got %q", want, got)
+	}
+}
