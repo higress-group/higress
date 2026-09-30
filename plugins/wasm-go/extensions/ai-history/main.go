@@ -231,6 +231,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		path := ctx.Path()
 		if isQueryHistory(path) {
 			cnt := getIntQueryParameter("cnt", path, len(chat)/2) * 2
+			if cnt < 0 {
+				cnt = 0
+			}
 			if cnt > len(chat) {
 				cnt = len(chat)
 			}
@@ -346,8 +349,12 @@ func processSSEMessage(ctx wrapper.HttpContext, config PluginConfig, sseMessage 
 				content = TrimQuote(gjson.Get(bodyJson, config.AnswerStreamValueFrom.ResponseBody).Raw)
 				ctx.SetContext(AnswerContentContextKey, content)
 			} else {
+				tempContent, ok := tempContentI.(string)
+				if !ok {
+					tempContent = ""
+				}
 				append := TrimQuote(gjson.Get(bodyJson, config.AnswerStreamValueFrom.ResponseBody).Raw)
-				content = tempContentI.(string) + append
+				content = tempContent + append
 				ctx.SetContext(AnswerContentContextKey, content)
 			}
 		} else if gjson.Get(bodyJson, "choices.0.delta.content.tool_calls").Exists() {
@@ -451,7 +458,11 @@ func onHttpStreamResponseBody(ctx wrapper.HttpContext, config PluginConfig, chun
 			if tempContentI == nil {
 				return chunk
 			}
-			value = tempContentI.(string)
+			tempContent, ok := tempContentI.(string)
+			if !ok {
+				return chunk
+			}
+			value = tempContent
 		}
 	}
 	saveChatHistory(ctx, config, questionI, value, log)
