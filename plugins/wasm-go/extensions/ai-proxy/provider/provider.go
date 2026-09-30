@@ -9,9 +9,10 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
-
 	"strings"
+	"sync"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/pathutil"
@@ -1058,39 +1059,98 @@ func getMappedModel(model string, modelMapping map[string]string) string {
 	return model
 }
 
+var (
+	modelMappingRegexCacheLock sync.RWMutex
+	modelMappingRegexCache     = make(map[string]*regexp.Regexp)
+)
+
+func getCompiledRegex(pattern string) (*regexp.Regexp, error) {
+	modelMappingRegexCacheLock.RLock()
+	re, ok := modelMappingRegexCache[pattern]
+	modelMappingRegexCacheLock.RUnlock()
+	if ok {
+		return re, nil
+	}
+
+	modelMappingRegexCacheLock.Lock()
+	defer modelMappingRegexCacheLock.Unlock()
+	if re, ok := modelMappingRegexCache[pattern]; ok {
+		return re, nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	modelMappingRegexCache[pattern] = re
+	return re, nil
+}
+
 func doGetMappedModel(model string, modelMapping map[string]string) string {
 	if len(modelMapping) == 0 {
 		return ""
 	}
 
+	// 1. Explicit exact match takes highest precedence
 	if v, ok := modelMapping[model]; ok {
 		log.Debugf("model [%s] is mapped to [%s] explicitly", model, v)
 		return v
 	}
+
+	// 2. Longest matching prefix for wildcard keys (most specific wins)
+	var bestPrefix string
+	var bestPrefixTarget string
+	var foundPrefix bool
 
 	for k, v := range modelMapping {
 		if k == wildcard {
 			continue
 		}
 		if strings.HasSuffix(k, wildcard) {
-			k = strings.TrimSuffix(k, wildcard)
-			if strings.HasPrefix(model, k) {
-				log.Debugf("model [%s] is mapped to [%s] via prefix [%s]", model, v, k)
-				return v
+			prefix := strings.TrimSuffix(k, wildcard)
+			if strings.HasPrefix(model, prefix) {
+				if !foundPrefix || len(prefix) > len(bestPrefix) || (len(prefix) == len(bestPrefix) && prefix < bestPrefix) {
+					bestPrefix = prefix
+					bestPrefixTarget = v
+					foundPrefix = true
+				}
 			}
 		}
+	}
+	if foundPrefix {
+		log.Debugf("model [%s] is mapped to [%s] via prefix [%s]", model, bestPrefixTarget, bestPrefix)
+		return bestPrefixTarget
+	}
 
+	// 3. Regex match in deterministic sorted order (longer pattern first, then lexicographically)
+	var regexKeys []string
+	for k := range modelMapping {
 		if strings.HasPrefix(k, "~") {
-			k = strings.TrimPrefix(k, "~")
-			re := regexp.MustCompile(k)
+			regexKeys = append(regexKeys, k)
+		}
+	}
+	if len(regexKeys) > 0 {
+		sort.Slice(regexKeys, func(i, j int) bool {
+			if len(regexKeys[i]) != len(regexKeys[j]) {
+				return len(regexKeys[i]) > len(regexKeys[j])
+			}
+			return regexKeys[i] < regexKeys[j]
+		})
+		for _, rawKey := range regexKeys {
+			pattern := strings.TrimPrefix(rawKey, "~")
+			re, err := getCompiledRegex(pattern)
+			if err != nil {
+				log.Warnf("failed to compile regex [%s]: %v", pattern, err)
+				continue
+			}
 			if re.MatchString(model) {
-				v = re.ReplaceAllString(model, v)
-				log.Debugf("model [%s] is mapped to [%s] via regex [%s]", model, v, k)
-				return v
+				target := re.ReplaceAllString(model, modelMapping[rawKey])
+				log.Debugf("model [%s] is mapped to [%s] via regex [%s]", model, target, pattern)
+				return target
 			}
 		}
 	}
 
+	// 4. Fallback wildcard match
 	if v, ok := modelMapping[wildcard]; ok {
 		log.Debugf("model [%s] is mapped to [%s] via wildcard", model, v)
 		return v
@@ -1270,7 +1330,7 @@ func (c *ProviderConfig) handleRequestBody(
 		converter := &ClaudeToOpenAIConverter{}
 		body, err = converter.ConvertClaudeRequestToOpenAIWithOptions(body, ClaudeToOpenAIConvertOptions{
 			PreserveMessageReasoningContent: c.supportsMessageReasoningContent(),
-			DisableStreamUsageStats:          c.disableStreamUsageStats,
+			DisableStreamUsageStats:         c.disableStreamUsageStats,
 		})
 		if err != nil {
 			return types.ActionContinue, fmt.Errorf("failed to convert claude request to openai: %v", err)
