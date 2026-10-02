@@ -245,7 +245,7 @@
             {
               "sourcePath": "plugins/wasm-go/extensions/simple-jwt-auth/README.md",
               "targetPath": "README.md",
-              "sha256": "51d6ca11c72db254affe7b43b25ef6cd96dfc4b5aa37fa281d03f1a68a3da566"
+              "sha256": "628b7bc1d6e58ab595ebb1ef1f4fb5a4e99939d90d59bba2d1cdf00f07e7bde7"
             },
             {
               "sourcePath": "plugins/release/console/simple-jwt-auth/README_EN.md",
