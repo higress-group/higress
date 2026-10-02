@@ -23,6 +23,7 @@ proxy_wasm_cc_binary(
         "//common:base64.h",
     ],
     deps = [
+        "@proxy_wasm_cpp_sdk//:proxy_wasm_intrinsics_higress",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
@@ -63,6 +64,7 @@ cc_test(
     copts = ["-DNULL_PLUGIN"],
     deps = [
         ":hmac_auth_lib",
+        "//common:crypto_util",
         "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
         "@proxy_wasm_cpp_host//:lib",

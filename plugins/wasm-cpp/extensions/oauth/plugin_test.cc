@@ -39,11 +39,14 @@ class MockContext : public proxy_wasm::ContextBase {
   MOCK_METHOD(WasmResult, getHeaderMapValue,
               (WasmHeaderMapType /* type */, std::string_view /* jwt */,
                std::string_view* /*result */));
-  MOCK_METHOD(WasmResult, removeHeaderMapValue,
-              (WasmHeaderMapType /* type */, std::string_view /* key */));
   MOCK_METHOD(WasmResult, addHeaderMapValue,
               (WasmHeaderMapType /* type */, std::string_view /* jwt */,
                std::string_view /* value */));
+  MOCK_METHOD(WasmResult, replaceHeaderMapValue,
+              (WasmHeaderMapType /* type */, std::string_view /* key */,
+               std::string_view /* value */));
+  MOCK_METHOD(WasmResult, removeHeaderMapValue,
+              (WasmHeaderMapType /* type */, std::string_view /* key */));
   MOCK_METHOD(WasmResult, sendLocalResponse,
               (uint32_t /* response_code */, std::string_view /* body */,
                Pairs /* additional_headers */, uint32_t /* grpc_status */,
@@ -106,6 +109,22 @@ class OAuthTest : public ::testing::Test {
         .WillByDefault([&](WasmHeaderMapType, std::string_view jwt,
                            std::string_view value) { return WasmResult::Ok; });
 
+    ON_CALL(*mock_context_,
+            replaceHeaderMapValue(WasmHeaderMapType::RequestHeaders,
+                                  testing::_, testing::_))
+        .WillByDefault([&](WasmHeaderMapType, std::string_view key,
+                           std::string_view value) {
+          header_map_[std::string(key)] = value;
+          return WasmResult::Ok;
+        });
+
+    ON_CALL(*mock_context_,
+            removeHeaderMapValue(WasmHeaderMapType::RequestHeaders, testing::_))
+        .WillByDefault([&](WasmHeaderMapType, std::string_view key) {
+          header_map_.erase(std::string(key));
+          return WasmResult::Ok;
+        });
+
     ON_CALL(*mock_context_, getCurrentTimeNanoseconds()).WillByDefault([&]() {
       return current_time_;
     });
@@ -164,6 +183,7 @@ class OAuthTest : public ::testing::Test {
 
   Pairs http_call_headers_;
   std::string http_call_body_;
+  std::map<std::string, std::string> header_map_;
 };
 
 TEST_F(OAuthTest, generateToken) {
@@ -296,6 +316,20 @@ TEST_F(OAuthTest, invalidToken) {
                                                 testing::_, testing::_));
   EXPECT_EQ(context_->onRequestHeaders(0, false),
             FilterHeadersStatus::StopIteration);
+  // 1231423423413 is not a valid base64 encoded string, this situation will be
+  // fixed by the changes in jwt.patch.
+  jwt_header_ =
+      R"(Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6ImFwcGxpY2F0aW9uL2F0K2p3dCJ9.eyJhdWQiOiJkZWZhdWx0IiwiZXhwIjoxNjY1NjczODI5LCJpYXQiOjE2NjU2NzM4MTksImlzcyI6IkhpZ3Jlc3MtR2F0ZXdheSIsImp0aSI6IjEwOTU5ZDFiLThkNjEtNGRlYy1iZWE3LTk0ODEwMzc1YjYzYyIsInNjb3BlIjoidGVzdCIsInN1YiI6ImNvbnN1bWVyMiJ9.1231423423413)";
+  EXPECT_CALL(*mock_context_, sendLocalResponse(401, testing::_, testing::_,
+                                                testing::_, testing::_));
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::StopIteration);
+  jwt_header_ =
+      R"(Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6ImFwcGxpY2F0aW9uL2F0K2p3dCJ9.eyJhdWQiOiJkZWZhdWx0IiwiZXhwIjoxNjY1NjczODI5LCJpYXQiOjE2NjU2NzM4MTksImlzcyI6IkhpZ3Jlc3MtR2F0ZXdheSIsImp0aSI6IjEwOTU5ZDFiLThkNjEtNGRlYy1iZWE3LTk0ODEwMzc1YjYzYyIsInNjb3BlIjoidGVzdCIsInN1YiI6ImNvbnN1bWVyMiJ9.al7eoRdoNQlNx8HCqNesj7woiLOJmJLSqnZ abcd)";
+  EXPECT_CALL(*mock_context_, sendLocalResponse(401, testing::_, testing::_,
+                                                testing::_, testing::_));
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::StopIteration);
 }
 
 TEST_F(OAuthTest, expire) {
@@ -411,6 +445,14 @@ TEST_F(OAuthTest, AuthZ) {
             "allow": [
                 "consumer1"
             ]
+        },
+        {
+            "_match_route_prefix_": [
+                "hello"
+            ],
+            "allow": [
+                "consumer1"
+            ]
         }
     ]
 })";
@@ -440,6 +482,52 @@ TEST_F(OAuthTest, AuthZ) {
   route_name_ = "test1";
   EXPECT_EQ(context_->onRequestHeaders(0, false),
             FilterHeadersStatus::Continue);
+  route_name_ = "hello-world";
+  EXPECT_CALL(*mock_context_, sendLocalResponse(403, testing::_, testing::_,
+                                                testing::_, testing::_));
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::StopIteration);
+  route_name_ = "hell";
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::Continue);
+}
+
+TEST_F(OAuthTest, ClientSuppliedConsumerHeaderIsReplaced) {
+  std::string configuration = R"(
+{
+    "consumers": [
+        {
+            "name": "consumer1",
+            "client_id": "9515b564-0b1d-11ee-9c4c-00163e1250b5",
+            "client_secret": "9e55de56-0b1d-11ee-b8ec-00163e1250b5"
+        }
+    ],
+    "clock_skew_seconds": 3153600000,
+    "global_credentials": true,
+    "_rules_": [
+        {
+            "_match_route_": [
+                "test2"
+            ],
+            "allow": [
+                "consumer1"
+            ]
+        }
+    ]
+})";
+  BufferBase buffer;
+  buffer.set({configuration.data(), configuration.size()});
+  EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
+      .WillOnce([&buffer](WasmBufferType) { return &buffer; });
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+  jwt_header_ =
+      R"(Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6ImFwcGxpY2F0aW9uL2F0K2p3dCJ9.eyJhdWQiOiJ0ZXN0MiIsImNsaWVudF9pZCI6Ijk1MTViNTY0LTBiMWQtMTFlZS05YzRjLTAwMTYzZTEyNTBiNSIsImV4cCI6MTY2NTY3MzgyOSwiaWF0IjoxNjY1NjczODE5LCJpc3MiOiJIaWdyZXNzLUdhdGV3YXkiLCJqdGkiOiIxMDk1OWQxYi04ZDYxLTRkZWMtYmVhNy05NDgxMDM3NWI2M2MiLCJzY29wZSI6InRlc3QiLCJzdWIiOiJjb25zdW1lcjEifQ.LsZ6mlRxlaqWa0IAZgmGVuDgypRbctkTcOyoCxqLrHY)";
+  route_name_ = "test2";
+  header_map_.clear();
+  header_map_.emplace("X-Mse-Consumer", "spoofed-consumer");
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::Continue);
+  EXPECT_EQ(header_map_["X-Mse-Consumer"], "consumer1");
 }
 
 TEST_F(OAuthTest, EmptyConsumer) {

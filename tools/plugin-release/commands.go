@@ -133,8 +133,8 @@ func validateCatalog(root, path string) error {
 		}
 		seenImage[p.Image] = true
 		expectedPrefix := "plugins/wasm-" + p.Implementation + "/extensions/"
-		if p.Implementation != "go" && p.Implementation != "rust" {
-			return fmt.Errorf("%s: implementation must be go or rust", p.LogicalID)
+		if p.Implementation != "go" && p.Implementation != "rust" && p.Implementation != "cpp" {
+			return fmt.Errorf("%s: implementation must be go, rust or cpp", p.LogicalID)
 		}
 		if !strings.HasPrefix(p.SourceDir, expectedPrefix) || strings.Contains(p.SourceDir, "/examples/") || strings.Contains(p.SourceDir, "/example/") {
 			return fmt.Errorf("%s: sourceDir %q is outside the official %s extension root", p.LogicalID, p.SourceDir, p.Implementation)
@@ -233,6 +233,9 @@ func validateCatalog(root, path string) error {
 			}
 		}
 	}
+	// wasm-cpp is intentionally not swept: the C++ extension tree predates C++
+	// catalog classification, so historical fixtures validated at a pinned commit
+	// would report every directory as unclassified.
 	for _, implementation := range []string{"go", "rust"} {
 		rootDir := filepath.Join(root, "plugins", "wasm-"+implementation, "extensions")
 		entries, err := os.ReadDir(rootDir)

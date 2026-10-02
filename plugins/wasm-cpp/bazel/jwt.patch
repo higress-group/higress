@@ -1,0 +1,54 @@
+diff --git a/include/jwt-cpp/base.h b/include/jwt-cpp/base.h
+index 8e6fc31..f467d4a 100644
+--- a/include/jwt-cpp/base.h
++++ b/include/jwt-cpp/base.h
+@@ -182,10 +182,10 @@ namespace jwt {
+ 			inline std::string decode(const std::string& base, const std::array<char, 64>& alphabet,
+ 									  const std::vector<std::string>& fill) {
+ 				const auto pad = count_padding(base, fill);
+-				if (pad.count > 2) throw std::runtime_error("Invalid input: too much fill");
++				if (pad.count > 2) return "";
+ 
+ 				const size_t size = base.size() - pad.length;
+-				if ((size + pad.count) % 4 != 0) throw std::runtime_error("Invalid input: incorrect total size");
++				if ((size + pad.count) % 4 != 0) return "";
+ 
+ 				size_t out_size = size / 4 * 3;
+ 				std::string res;
+diff --git a/include/jwt-cpp/jwt.h b/include/jwt-cpp/jwt.h
+index a51edf9..e855dcf 100644
+--- a/include/jwt-cpp/jwt.h
++++ b/include/jwt-cpp/jwt.h
+@@ -1959,8 +1959,8 @@ namespace jwt {
+ #endif
+ 
+ 		template<typename object_type, typename string_type>
+-		using is_count_signature = typename std::is_integral<decltype(std::declval<const object_type>().count(
+-			std::declval<const string_type>()))>;
++		using is_count_signature = typename std::is_integral<decltype(
++			std::declval<const object_type>().count(std::declval<const string_type>()))>;
+ 
+ 		template<typename object_type, typename string_type, typename = void>
+ 		struct is_subcription_operator_signature : std::false_type {};
+@@ -2270,7 +2270,8 @@ namespace jwt {
+ 			 */
+ 			static typename json_traits::object_type parse_claims(const typename json_traits::string_type& str) {
+ 				typename json_traits::value_type val;
+-				if (!json_traits::parse(val, str)) throw error::invalid_json_exception();
++				typename json_traits::object_type empty_obj;
++				if (!json_traits::parse(val, str)) return empty_obj;
+ 
+ 				return json_traits::as_object(val);
+ 			};
+@@ -2543,9 +2544,9 @@ namespace jwt {
+ 		template<typename Decode>
+ 		decoded_jwt(const typename json_traits::string_type& token, Decode decode) : token(token) {
+ 			auto hdr_end = token.find('.');
+-			if (hdr_end == json_traits::string_type::npos) throw std::invalid_argument("invalid token supplied");
++			if (hdr_end == json_traits::string_type::npos) return;
+ 			auto payload_end = token.find('.', hdr_end + 1);
+-			if (payload_end == json_traits::string_type::npos) throw std::invalid_argument("invalid token supplied");
++			if (payload_end == json_traits::string_type::npos) return;
+ 			header_base64 = token.substr(0, hdr_end);
+ 			payload_base64 = token.substr(hdr_end + 1, payload_end - hdr_end - 1);
+ 			signature_base64 = token.substr(payload_end + 1);

@@ -172,10 +172,11 @@ bool PluginRootContext::parsePluginConfig(const json& configuration,
     LOG_WARN("failed to parse configuration for credentials.");
     return false;
   }
-  if (rule.encoded_credentials.empty() && rule.encrypted_credentials.empty()) {
-    LOG_INFO("at least one credential has to be configured for a rule.");
-    return false;
-  }
+  // if (rule.encoded_credentials.empty() && rule.encrypted_credentials.empty())
+  // {
+  //   LOG_INFO("at least one credential has to be configured for a rule.");
+  //   return false;
+  // }
   it = configuration.find("realm");
   if (it != configuration.end()) {
     auto realm_string = JsonValueAs<std::string>(it.value());
@@ -301,7 +302,7 @@ bool PluginRootContext::checkPlugin(
         return false;
       }
     }
-    addRequestHeader("X-Mse-Consumer", credential_to_name_iter->second);
+    replaceRequestHeader("X-Mse-Consumer", credential_to_name_iter->second);
   }
   return true;
 }
@@ -310,7 +311,8 @@ bool PluginRootContext::onConfigure(size_t size) {
   // Parse configuration JSON string.
   if (size > 0 && !configure(size)) {
     LOG_WARN("configuration has errors initialization will not continue.");
-    return false;
+    setInvalidConfig();
+    return true;
   }
   return true;
 }

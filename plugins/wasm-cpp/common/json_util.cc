@@ -33,7 +33,7 @@ std::optional<JsonObject> JsonParse(std::string_view str) {
 template <>
 std::pair<std::optional<int64_t>, JsonParserResultDetail> JsonValueAs<int64_t>(
     const JsonObject& j) {
-  if (j.is_number()) {
+  if (j.is_number_integer()) {
     return std::make_pair(j.get<int64_t>(), JsonParserResultDetail::OK);
   } else if (j.is_string()) {
     int64_t result = 0;
@@ -50,7 +50,7 @@ std::pair<std::optional<int64_t>, JsonParserResultDetail> JsonValueAs<int64_t>(
 template <>
 std::pair<std::optional<uint64_t>, JsonParserResultDetail>
 JsonValueAs<uint64_t>(const JsonObject& j) {
-  if (j.is_number()) {
+  if (j.is_number_unsigned()) {
     return std::make_pair(j.get<uint64_t>(), JsonParserResultDetail::OK);
   } else if (j.is_string()) {
     uint64_t result = 0;

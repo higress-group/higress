@@ -20,7 +20,10 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "common/http_util.h"
 #include "common/route_rule_matcher.h"
@@ -43,8 +46,12 @@ namespace hmac_auth {
 struct HmacAuthConfigRule {
   std::unordered_map<std::string, std::string> credentials;
   std::unordered_map<std::string, std::string> key_to_name;
+  std::unordered_map<std::string, std::vector<std::string>> key_to_groups;
+  std::vector<RbacRule> rbac_rules;
   int64_t date_nano_offset = -1;
 };
+
+using RequestHeaderPairs = std::vector<std::pair<std::string, std::string>>;
 
 // PluginRootContext is the root context for all streams processed by the
 // thread. It has the same lifetime as the worker thread and acts as target for
@@ -56,12 +63,16 @@ class PluginRootContext : public RootContext,
       : RootContext(id, root_id) {}
   ~PluginRootContext() {}
   bool onConfigure(size_t) override;
-  bool checkPlugin(
-      const std::string& ca_key, const std::string& signature,
-      const std::string& signature_method, const std::string& path,
-      const std::string& date, bool is_timestamp, std::string* sts,
-      const HmacAuthConfigRule&,
-      std::optional<std::reference_wrapper<Wasm::Common::Http::QueryParams>>);
+  bool checkPlugin(const std::string& ca_key, const std::string& signature,
+                   const std::string& signature_method, const std::string& path,
+                   const std::string& date, bool is_timestamp, std::string* sts,
+                   std::string* sts_old,
+                   const RequestHeaderPairs& request_headers,
+                   const HmacAuthConfigRule&, std::string_view raw_form_body);
+  bool checkRbacRule(const HmacAuthConfigRule&);
+  bool checkAuthorization(
+      const std::string& consumer, const HmacAuthConfigRule&,
+      const std::optional<std::unordered_set<std::string>>&);
   bool checkConsumer(const std::string&, const HmacAuthConfigRule&,
                      const std::optional<std::unordered_set<std::string>>&);
   bool configure(size_t);
@@ -88,12 +99,13 @@ class PluginContext : public Context {
   std::string path_;
   std::string date_;
   std::string str_to_sign_;
+  std::string str_to_sign_old_;
+  RequestHeaderPairs request_headers_;
   std::string body_md5_;
   bool is_timestamp_ = false;
   std::optional<std::reference_wrapper<HmacAuthConfigRule>> config_;
   std::optional<std::unordered_set<std::string>> allow_set_;
   bool check_body_params_ = false;
-  size_t body_total_size_ = 0;
 };
 
 #ifdef NULL_PLUGIN

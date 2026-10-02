@@ -36,6 +36,17 @@ http_archive(
 
 load("@proxy_wasm_cpp_sdk//bazel:repositories.bzl", "proxy_wasm_cpp_sdk_repositories")
 
+# Pin protobuf before the SDK repositories load. The SDK declares protobuf
+# 26.1 whose protobuf_deps.bzl lazily registers rules_pkg; on Bazel 6 that
+# lazy registration loses the race with @proxy_wasm_cpp_host analysis, so
+# wasm-cpp unit tests fail with "cannot load '@rules_pkg//:mappings.bzl'".
+# Declaring protobuf 3.18 first makes the SDK's maybe() a no-op.
+http_archive(
+    name = "com_google_protobuf",
+    urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v3.18.0/protobuf-all-3.18.0.tar.gz"],
+    strip_prefix = "protobuf-3.18.0",
+)
+
 proxy_wasm_cpp_sdk_repositories()
 
 load("@proxy_wasm_cpp_sdk//bazel:dependencies.bzl", "proxy_wasm_cpp_sdk_dependencies")

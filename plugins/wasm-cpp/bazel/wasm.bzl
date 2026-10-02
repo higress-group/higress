@@ -6,6 +6,17 @@ load(
     "container_push",
 )
 
+def build_include_content(includes):
+    return """
+load("@rules_cc//cc:defs.bzl", "cc_library")
+cc_library(
+    name = "lib",
+    hdrs = glob(["**"]),
+    includes = {},
+    visibility = ["//visibility:public"],
+)
+""".format(repr(includes))
+
 def wasm_libraries():
     http_archive(
         name = "com_google_absl",
@@ -100,7 +111,23 @@ def wasm_libraries():
         urls = ["https://github.com/google/jwt_verify_lib/archive/26c22c0ce1bc607eec8fa5dd26b707378adc7a88.tar.gz"],
         strip_prefix = "jwt_verify_lib-26c22c0ce1bc607eec8fa5dd26b707378adc7a88"
     )
-    
+
+    http_archive(
+        name = "com_github_thalhammer_jwt_cpp",
+        urls = ["https://github.com/Thalhammer/jwt-cpp/archive/ad08c684a2bf9db413786e800e0d92e65772d9d6.tar.gz"],
+        strip_prefix = "jwt-cpp-ad08c684a2bf9db413786e800e0d92e65772d9d6",
+        build_file_content = build_include_content(includes = ["include"]),
+        patch_args = ["-p1"],
+        patches = ["//bazel:jwt.patch"],
+    )
+
+    http_archive(
+        name = "com_github_mariusbancila_stduuid",
+        urls = ["https://github.com/mariusbancila/stduuid/archive/3afe7193facd5d674de709fccc44d5055e144d7a.tar.gz"],
+        strip_prefix = "stduuid-3afe7193facd5d674de709fccc44d5055e144d7a",
+        build_file_content = build_include_content(includes = ["include", "."]),
+    )
+
     
 def declare_wasm_image_targets(name, wasm_file):
     # Rename to the spec compatible name.

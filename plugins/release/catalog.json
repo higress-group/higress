@@ -51,6 +51,14 @@
     }
   },
   "sharedInputGroups": {
+    "cpp-workspace": [
+      "plugins/wasm-cpp/BUILD",
+      "plugins/wasm-cpp/Dockerfile",
+      "plugins/wasm-cpp/Makefile",
+      "plugins/wasm-cpp/WORKSPACE",
+      "plugins/wasm-cpp/bazel/**",
+      "plugins/wasm-cpp/common/**"
+    ],
     "go-builder": [
       "plugins/wasm-go/Dockerfile",
       "plugins/wasm-go/DockerfileBuilder",
@@ -172,59 +180,134 @@
   },
   "plugins": [
     { "logicalId": "ai-agent", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-agent", "image": "plugins/ai-agent", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-agent/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-agent", "resourceDir": "ai-agent", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-agent", "httpPath": "ai-agent" } } },
+
     { "logicalId": "ai-cache", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-cache", "image": "plugins/ai-cache", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-cache/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-cache", "resourceDir": "ai-cache", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-cache", "httpPath": "ai-cache" } } },
+
     { "logicalId": "ai-context-limit", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-context-limit", "image": "plugins/ai-context-limit", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-context-limit/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-context-limit", "resourceDir": "ai-context-limit", "urlForm": "oci" } } },
+
     { "logicalId": "ai-data-masking", "implementation": "rust", "sourceDir": "plugins/wasm-rust/extensions/ai-data-masking", "image": "plugins/ai-data-masking", "releaseEligible": true, "artifactInputs": ["plugins/wasm-rust/extensions/ai-data-masking/**"], "sharedInputGroups": ["rust-workspace"], "consumers": { "console": { "propertyKey": "ai-data-masking", "resourceDir": "ai-data-masking", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-data-masking", "httpPath": "ai-data-masking" } } },
+
     { "logicalId": "ai-endpoint-picker", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-endpoint-picker", "image": "plugins/ai-endpoint-picker", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-endpoint-picker/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-endpoint-picker", "resourceDir": "ai-endpoint-picker", "urlForm": "oci" } } },
+
     { "logicalId": "ai-history", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-history", "image": "plugins/ai-history", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-history/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-history", "resourceDir": "ai-history", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-history", "httpPath": "ai-history" } } },
+
     { "logicalId": "ai-image-reader", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-image-reader", "image": "plugins/ai-image-reader", "releaseEligible": false, "unmanagedReason": "No reviewed production version/digest baseline exists; onboarding must use the bootstrap workflow", "artifactInputs": ["plugins/wasm-go/extensions/ai-image-reader/**"] },
+
     { "logicalId": "ai-intent", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-intent", "image": "plugins/ai-intent", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-intent/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-intent", "resourceDir": "ai-intent", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-intent", "httpPath": "ai-intent" } } },
+
     { "logicalId": "ai-json-resp", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-json-resp", "image": "plugins/ai-json-resp", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-json-resp/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-json-resp", "resourceDir": "ai-json-resp", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-json-resp", "httpPath": "ai-json-resp" } } },
+
     { "logicalId": "ai-load-balancer", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-load-balancer", "image": "plugins/ai-load-balancer", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-load-balancer/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-load-balancer", "resourceDir": "ai-load-balancer", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-load-balancer", "httpPath": "ai-load-balancer" } } },
+
     { "logicalId": "ai-prompt-decorator", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-prompt-decorator", "image": "plugins/ai-prompt-decorator", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-prompt-decorator/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-prompt-decorator", "resourceDir": "ai-prompt-decorator", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-prompt-decorator", "httpPath": "ai-prompt-decorator" } } },
+
     { "logicalId": "ai-prompt-template", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-prompt-template", "image": "plugins/ai-prompt-template", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-prompt-template/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-prompt-template", "resourceDir": "ai-prompt-template", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-prompt-template", "httpPath": "ai-prompt-template" } } },
+
     { "logicalId": "ai-proxy", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-proxy", "image": "plugins/ai-proxy", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-proxy/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-proxy", "resourceDir": "ai-proxy", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-proxy", "httpPath": "ai-proxy" } } },
+
     { "logicalId": "ai-quota", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-quota", "image": "plugins/ai-quota", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-quota/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-quota", "resourceDir": "ai-quota", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-quota", "httpPath": "ai-quota" } } },
+
     { "logicalId": "ai-rag", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-rag", "image": "plugins/ai-rag", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-rag/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-rag", "resourceDir": "ai-rag", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-rag", "httpPath": "ai-rag" } } },
+
     { "logicalId": "ai-search", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-search", "image": "plugins/ai-search", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-search/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-search", "resourceDir": "ai-search", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-search", "httpPath": "ai-search" } } },
+
     { "logicalId": "ai-security-guard", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-security-guard", "image": "plugins/ai-security-guard", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-security-guard/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-security-guard", "resourceDir": "ai-security-guard", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-security-guard", "httpPath": "ai-security-guard" } } },
+
     { "logicalId": "ai-statistics", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-statistics", "image": "plugins/ai-statistics", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-statistics/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-statistics", "resourceDir": "ai-statistics", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-statistics", "httpPath": "ai-statistics" } } },
+
     { "logicalId": "ai-token-ratelimit", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-token-ratelimit", "image": "plugins/ai-token-ratelimit", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-token-ratelimit/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-token-ratelimit", "resourceDir": "ai-token-ratelimit", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-token-ratelimit", "httpPath": "ai-token-ratelimit" } } },
+
     { "logicalId": "ai-transformer", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ai-transformer", "image": "plugins/ai-transformer", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ai-transformer/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ai-transformer", "resourceDir": "ai-transformer", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ai-transformer", "httpPath": "ai-transformer" } } },
+
     { "logicalId": "api-workflow", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/api-workflow", "image": "plugins/api-workflow", "releaseEligible": false, "unmanagedReason": "No reviewed production version/digest baseline exists; onboarding must use the bootstrap workflow", "artifactInputs": ["plugins/wasm-go/extensions/api-workflow/**"] },
+
+    { "logicalId": "basic-auth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/basic_auth", "image": "plugins/basic-auth", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/basic_auth/**"], "sharedInputGroups": ["cpp-workspace"] },
+
+    { "logicalId": "bot-detect", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/bot_detect", "image": "plugins/bot-detect", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/bot_detect/**"], "sharedInputGroups": ["cpp-workspace"] },
+
     { "logicalId": "cache-control", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/cache-control", "image": "plugins/cache-control", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/cache-control/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "cache-control", "resourceDir": "cache-control", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "cache-control", "httpPath": "cache-control" } } },
+
     { "logicalId": "chatgpt-proxy", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/chatgpt-proxy", "image": "plugins/chatgpt-proxy", "releaseEligible": false, "unmanagedReason": "No reviewed production version/digest baseline exists; onboarding must use the bootstrap workflow", "artifactInputs": ["plugins/wasm-go/extensions/chatgpt-proxy/**"] },
+
     { "logicalId": "cluster-key-rate-limit", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/cluster-key-rate-limit", "image": "plugins/cluster-key-rate-limit", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/cluster-key-rate-limit/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "cluster-key-rate-limit", "resourceDir": "cluster-key-rate-limit", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "cluster-key-rate-limit", "httpPath": "cluster-key-rate-limit" } } },
+
     { "logicalId": "cors", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/cors", "image": "plugins/cors", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/cors/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "cors", "resourceDir": "cors", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "cors", "httpPath": "cors" } } },
+
+    { "logicalId": "custom-response", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/custom_response", "image": "plugins/custom-response", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/custom_response/**"], "sharedInputGroups": ["cpp-workspace"] },
+
     { "logicalId": "de-graphql", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/de-graphql", "image": "plugins/de-graphql", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/de-graphql/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "de-graphql", "resourceDir": "de-graphql", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "de-graphql", "httpPath": "de-graphql" } } },
+
     { "logicalId": "ext-auth", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ext-auth", "image": "plugins/ext-auth", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ext-auth/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ext-auth", "resourceDir": "ext-auth", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ext-auth", "httpPath": "ext-auth" } } },
+
     { "logicalId": "frontend-gray", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/frontend-gray", "image": "plugins/frontend-gray", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/frontend-gray/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "frontend-gray", "resourceDir": "frontend-gray", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "frontend-gray", "httpPath": "frontend-gray" } } },
+
     { "logicalId": "gc-test", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/gc-test", "image": "plugins/gc-test", "releaseEligible": false, "unmanagedReason": "Conformance test-only extension", "artifactInputs": ["plugins/wasm-go/extensions/gc-test/**"] },
+
     { "logicalId": "geo-ip", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/geo-ip", "image": "plugins/geo-ip", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/geo-ip/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "geo-ip", "resourceDir": "geo-ip", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "geo-ip", "httpPath": "geo-ip" } } },
+
     { "logicalId": "gw-error-format", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/gw-error-format", "image": "plugins/gw-error-format", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/gw-error-format/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "gw-error-format", "resourceDir": "gw-error-format", "urlForm": "oci" } } },
+
     { "logicalId": "hello-world", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/hello-world", "image": "plugins/hello-world", "releaseEligible": false, "unmanagedReason": "Demonstration extension is not a production default", "artifactInputs": ["plugins/wasm-go/extensions/hello-world/**"] },
+
+    { "logicalId": "hmac-auth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/hmac_auth", "image": "plugins/hmac-auth", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/hmac_auth/**"], "sharedInputGroups": ["cpp-workspace"] },
+
     { "logicalId": "hmac-auth-apisix", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/hmac-auth-apisix", "image": "plugins/hmac-auth-apisix", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/hmac-auth-apisix/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "hmac-auth-apisix", "resourceDir": "hmac-auth-apisix", "urlForm": "oci" } } },
+
     { "logicalId": "http-call", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/http-call", "image": "plugins/http-call", "releaseEligible": false, "unmanagedReason": "No reviewed production version/digest baseline exists; onboarding must use the bootstrap workflow", "artifactInputs": ["plugins/wasm-go/extensions/http-call/**"] },
+
     { "logicalId": "ip-restriction", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/ip-restriction", "image": "plugins/ip-restriction", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/ip-restriction/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "ip-restriction", "resourceDir": "ip-restriction", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "ip-restriction", "httpPath": "ip-restriction" } } },
+
     { "logicalId": "json-converter", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/jsonrpc-converter", "image": "plugins/jsonrpc-converter", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/jsonrpc-converter/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "json-converter", "resourceDir": "json-converter", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "json-converter", "httpPath": "json-converter", "aliases": ["jsonrpc-converter"] } } },
+
+    { "logicalId": "jwt-auth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/jwt_auth", "image": "plugins/jwt-auth", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/jwt_auth/**"], "sharedInputGroups": ["cpp-workspace"] },
+
+    { "logicalId": "key-auth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/key_auth", "image": "plugins/key-auth", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/key_auth/**"], "sharedInputGroups": ["cpp-workspace"] },
+
+    { "logicalId": "key-rate-limit", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/key_rate_limit", "image": "plugins/key-rate-limit", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/key_rate_limit/**"], "sharedInputGroups": ["cpp-workspace"] },
+
     { "logicalId": "log-request-response", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/log-request-response", "image": "plugins/log-request-response", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/log-request-response/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "log-request-response", "resourceDir": "log-request-response", "urlForm": "oci" } } },
+
     { "logicalId": "mcp-router", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/mcp-router", "image": "plugins/mcp-router", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/mcp-router/**"], "sharedInputGroups": ["go-builder", "go-mcp"], "consumers": { "console": { "propertyKey": "mcp-router", "resourceDir": "mcp-router", "urlForm": "oci" } } },
+
     { "logicalId": "mcp-server", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/mcp-server", "image": "plugins/mcp-server", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/mcp-server/**"], "sharedInputGroups": ["go-builder", "go-mcp"], "consumers": { "console": { "propertyKey": "mcp-server", "resourceDir": "mcp-server", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "mcp-server", "httpPath": "mcp-server" } } },
+
     { "logicalId": "model-mapper", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/model-mapper", "image": "plugins/model-mapper", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/model-mapper/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "model-mapper", "resourceDir": "model-mapper", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "model-mapper", "httpPath": "model-mapper" } } },
+
     { "logicalId": "model-router", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/model-router", "image": "plugins/model-router", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/model-router/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "model-router", "resourceDir": "model-router", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "model-router", "httpPath": "model-router" } } },
+
     { "logicalId": "nginx-rewrite-compatible", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/nginx-rewrite-compatible", "image": "plugins/nginx-rewrite-compatible", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/nginx-rewrite-compatible/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "nginx-rewrite-compatible", "resourceDir": "nginx-rewrite-compatible", "urlForm": "oci" } } },
+
+    { "logicalId": "oauth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/oauth", "image": "plugins/oauth", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/oauth/**"], "sharedInputGroups": ["cpp-workspace"] },
+
     { "logicalId": "oidc", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/oidc", "image": "plugins/oidc", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/oidc/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "oidc", "resourceDir": "oidc", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "oidc", "httpPath": "oidc" } } },
+
     { "logicalId": "opa", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/opa", "image": "plugins/opa", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/opa/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "opa", "resourceDir": "opa", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "opa", "httpPath": "opa" } } },
+
     { "logicalId": "qwen3guard", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/qwen3guard", "image": "plugins/qwen3guard", "releaseEligible": false, "unmanagedReason": "No reviewed production version/digest baseline exists; onboarding must use the bootstrap workflow", "artifactInputs": ["plugins/wasm-go/extensions/qwen3guard/**"] },
+
     { "logicalId": "replay-protection", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/replay-protection", "image": "plugins/replay-protection", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/replay-protection/**"], "sharedInputGroups": ["go-builder"] },
+
+    { "logicalId": "request-block", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/request_block", "image": "plugins/request-block", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/request_block/**"], "sharedInputGroups": ["cpp-workspace"] },
+
     { "logicalId": "request-validation", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/request-validation", "image": "plugins/request-validation", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/request-validation/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "request-validation", "resourceDir": "request-validation", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "request-validation", "httpPath": "request-validation" } } },
+
     { "logicalId": "response-cache", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/response-cache", "image": "plugins/response-cache", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/response-cache/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "response-cache", "resourceDir": "response-cache", "urlForm": "oci" } } },
+
     { "logicalId": "simple-jwt-auth", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/simple-jwt-auth", "image": "plugins/simple-jwt-auth", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/simple-jwt-auth/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "simple-jwt-auth", "resourceDir": "simple-jwt-auth", "urlForm": "oci" } } },
+
+    { "logicalId": "sni-misdirect", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/sni_misdirect", "image": "plugins/sni-misdirect", "releaseEligible": false, "unmanagedReason": "C++ extension is outside the approved Go/Rust release scope and has no reviewed Console marketplace mapping", "artifactInputs": ["plugins/wasm-cpp/extensions/sni_misdirect/**"], "sharedInputGroups": ["cpp-workspace"] },
+
     { "logicalId": "streaming-body-example", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/streaming-body-example", "image": "plugins/streaming-body-example", "releaseEligible": false, "unmanagedReason": "Example/test extension is not a production artifact", "artifactInputs": ["plugins/wasm-go/extensions/streaming-body-example/**"] },
+
     { "logicalId": "test-redis-inject-spin", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/test-redis-inject-spin", "image": "plugins/test-redis-inject-spin", "releaseEligible": false, "unmanagedReason": "Conformance test-only extension", "artifactInputs": ["plugins/wasm-go/extensions/test-redis-inject-spin/**"] },
+
     { "logicalId": "traffic-editor", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/traffic-editor", "image": "plugins/traffic-editor", "releaseEligible": false, "unmanagedReason": "Experimental extension is not in either reviewed production inventory", "artifactInputs": ["plugins/wasm-go/extensions/traffic-editor/**"] },
+
     { "logicalId": "traffic-tag", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/traffic-tag", "image": "plugins/traffic-tag", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/traffic-tag/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "traffic-tag", "resourceDir": "traffic-tag", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "traffic-tag", "httpPath": "traffic-tag" } } },
+
     { "logicalId": "transformer", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/transformer", "image": "plugins/transformer", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/transformer/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "transformer", "resourceDir": "transformer", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "transformer", "httpPath": "transformer" } } },
+
     { "logicalId": "waf", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/waf", "image": "plugins/waf", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/waf/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "waf", "resourceDir": "waf", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "waf", "httpPath": "waf" } } }
+
   ]
 }

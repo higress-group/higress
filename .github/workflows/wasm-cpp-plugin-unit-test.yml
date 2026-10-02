@@ -1,0 +1,91 @@
+name: Wasm Plugin Unit Tests (C++)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'plugins/wasm-cpp/**'
+      - '.github/workflows/wasm-cpp-plugin-unit-test.yml'
+  pull_request:
+    branches: [ "*" ]
+    paths:
+      - 'plugins/wasm-cpp/**'
+      - '.github/workflows/wasm-cpp-plugin-unit-test.yml'
+  workflow_dispatch: ~
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wasm-cpp-unit-test-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bazel-test:
+    name: Bazel Unit Tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # The C++ extensions need the clang/lld toolchain that .bazelrc selects via
+      # --config=clang, so tests run inside the same pinned builder image the
+      # plugin image build uses. The tag is read from the Dockerfile to keep a
+      # single source of truth.
+      - name: Resolve the pinned C++ builder image
+        id: builder
+        run: |
+          set -euo pipefail
+          image=$(sed -n 's/^ARG BUILDER=//p' plugins/wasm-cpp/Dockerfile)
+          # A pull request can edit the Dockerfile, so validate the shape here and
+          # pass the value through the environment rather than interpolating it
+          # into a later run block.
+          if [[ ! "$image" =~ ^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::unexpected BUILDER value in plugins/wasm-cpp/Dockerfile"
+            exit 1
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Bazel disk cache
+        uses: actions/cache@v4
+        with:
+          path: plugins/wasm-cpp/.bazel-cache
+          key: wasm-cpp-bazel-${{ hashFiles('plugins/wasm-cpp/WORKSPACE', 'plugins/wasm-cpp/.bazelversion', 'plugins/wasm-cpp/.bazelrc', 'plugins/wasm-cpp/bazel/**', 'plugins/wasm-cpp/common/**', 'plugins/wasm-cpp/extensions/**/BUILD') }}
+          restore-keys: wasm-cpp-bazel-
+
+      # A single //extensions/... invocation covers every cc_test in the tree, so
+      # no per-plugin matrix is needed. Jobs and RAM are capped to keep the build
+      # inside the runner's resources.
+      - name: Run wasm-cpp Bazel unit tests
+        env:
+          BUILDER_IMAGE: ${{ steps.builder.outputs.image }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}/plugins/wasm-cpp:/workspace" \
+            -w /workspace \
+            "$BUILDER_IMAGE" \
+            bazel test --build_tests_only //extensions/... \
+              --disk_cache=/workspace/.bazel-cache \
+              --test_output=errors \
+              --verbose_failures \
+              --jobs=4 \
+              --local_ram_resources=HOST_RAM*.5
+
+      - name: Summarize tested extensions
+        if: always()
+        run: |
+          set -euo pipefail
+          targets=$(grep -rh --include=BUILD -A1 '^cc_test(' plugins/wasm-cpp/extensions \
+            | sed -n 's/^[[:space:]]*name = "\(.*\)",$/\1/p' | sort)
+          count=$(grep -c . <<<"$targets" || true)
+          {
+            echo "## wasm-cpp Bazel unit tests"
+            echo ""
+            echo "Discovered ${count} cc_test targets under //extensions/...:"
+            echo ""
+            echo '```'
+            printf '%s\n' "$targets"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$targets"

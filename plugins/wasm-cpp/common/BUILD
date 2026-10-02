@@ -85,6 +85,7 @@ cc_library(
     deps = [
         ":common_util",
         ":http_util",
+        ":regex_util",
     ],
 )
 
@@ -98,6 +99,7 @@ cc_library(
     deps = [
         ":common_util",
         ":http_util_nullvm",
+        ":regex_util",
     ],
 )
 
@@ -111,6 +113,17 @@ cc_library(
     deps = [
         ":common_util",
         "@com_googlesource_code_re2//:re2",
+    ],
+)
+
+cc_library(
+    name = "random_util",
+    srcs = [
+        "random.c",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@boringssl//:ssl",
     ],
 )
 

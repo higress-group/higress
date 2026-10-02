@@ -42,6 +42,7 @@ struct Consumer {
   std::optional<std::vector<std::string>> keys;
   std::optional<bool> in_query = std::nullopt;
   std::optional<bool> in_header = std::nullopt;
+  std::optional<std::vector<std::string>> groups;
 
   // std::string debugString() const {
   //   std::string msg;
@@ -62,12 +63,14 @@ struct Consumer {
 
 struct KeyAuthConfigRule {
   std::vector<Consumer> consumers;
+  std::vector<RbacRule> rbac_rules;
   std::unordered_set<std::string> credentials;
   std::unordered_map<std::string, std::string> credential_to_name;
   std::string realm = "MSE Gateway";
   std::vector<std::string> keys;
   bool in_query = true;
   bool in_header = true;
+  bool keep_credential = true;
 
   // std::string debugString(std::string prompt="") const {
   //   std::string msg;
@@ -106,12 +109,18 @@ class PluginRootContext : public RootContext,
   bool onConfigure(size_t) override;
   bool checkPlugin(const KeyAuthConfigRule&,
                    const std::optional<std::unordered_set<std::string>>&);
+  bool checkRbacRule(const KeyAuthConfigRule&);
   bool configure(size_t);
 
  private:
+  struct ExtractedCredential {
+    std::string value;
+    std::optional<std::string> header;
+  };
+
   bool parsePluginConfig(const json&, KeyAuthConfigRule&) override;
-  std::string extractCredential(bool in_header, bool in_query,
-                                const std::string& key) const;
+  ExtractedCredential extractCredential(bool in_header, bool in_query,
+                                        const std::string& key);
 };
 
 // Per-stream context.

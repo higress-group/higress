@@ -26,7 +26,7 @@ description: OAuth2 认证插件配置参考
 | `token_ttl`          | number          | 选填                                        | 7200            | token从签发后多久内有效，单位为秒                                                                                                                                             |
 | `clock_skew_seconds` | number          | 选填                                        | 60              | 校验JWT的exp和iat字段时允许的时钟偏移量，单位为秒                                                                                                                             |
 | `keep_token`         | bool            | 选填                                        | ture            | 转发给后端时是否保留JWT                                                                                                                                                       |
-| `global_auth`        | array of string | 选填(**仅实例级别配置**)                    | -               | 只能在实例级别配置，若配置为true，则全局生效认证机制; 若配置为false，则只对做了配置的域名和路由生效认证机制; 若不配置则仅当没有域名和路由配置时全局 生效（兼容老用户使用习惯） |
+| `global_auth`        | bool | 选填(**仅实例级别配置**)                    | -               | 只能在实例级别配置，若配置为true，则全局生效认证机制; 若配置为false，则只对做了配置的域名和路由生效认证机制; 若不配置则仅当没有域名和路由配置时全局 生效（兼容老用户使用习惯） |
 
 `consumers`中每一项的配置字段说明如下：
 

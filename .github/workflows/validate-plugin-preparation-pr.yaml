@@ -6,6 +6,7 @@ on:
       - 'plugins/release/**'
       - 'plugins/wasm-go/extensions/**'
       - 'plugins/wasm-rust/extensions/**'
+      - 'plugins/wasm-cpp/extensions/**'
 
 permissions:
   contents: read
@@ -97,6 +98,12 @@ jobs:
                 ;;
               rust)
                 make -C plugins/wasm-rust PLUGIN_NAME="$build_name" test build
+                ;;
+              cpp)
+                # The C++ image build runs Bazel inside the pinned builder image,
+                # so no host Bazel toolchain is needed here. Bazel unit tests are
+                # gated separately by the wasm-cpp unit test workflow.
+                make -C plugins/wasm-cpp PLUGIN_NAME="$build_name" build
                 ;;
               *) echo "unsupported planned implementation: $implementation" >&2; return 1 ;;
             esac

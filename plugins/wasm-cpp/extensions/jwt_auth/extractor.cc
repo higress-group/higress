@@ -32,6 +32,10 @@ namespace jwt_auth {
 #endif
 
 namespace {
+
+constexpr std::string_view FallbackFromHeader = "x-higress-fallback-from";
+constexpr std::string_view OriginalAuthHeader = "x-hi-original-auth";
+
 /**
  * Check Claims specified in Provider
  */
@@ -240,11 +244,17 @@ std::vector<JwtLocationConstPtr> ExtractorImpl::extract() const {
   // Check header locations first
   for (const auto& location_it : header_locations_) {
     const auto& location_spec = location_it.second;
-
-    auto header = getRequestHeader(location_spec->header_)->toString();
+    // Check if fallback request
+    std::string header;
+    auto fallback_from = getRequestHeader(FallbackFromHeader)->toString();
+    if (!fallback_from.empty()) {
+      header = getRequestHeader(OriginalAuthHeader)->toString();
+    } else {
+      header = getRequestHeader(location_spec->header_)->toString();
+    }
     if (!header.empty()) {
       const auto pos = header.find(location_spec->value_prefix_);
-      if (pos == std::string::npos) {
+      if (pos != 0) {
         continue;
       }
       auto header_strip =

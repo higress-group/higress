@@ -1,22 +1,8 @@
-/*
- * Copyright (c) 2022 Alibaba Group Holding Ltd.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 #pragma once
 
+#include <cstddef>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -27,9 +13,11 @@
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/str_split.h"
 #include "common/json_util.h"
 #include "http_util.h"
+#include "regex.h"
 
 #ifndef NULL_PLUGIN
 
@@ -57,6 +45,388 @@ using ::Wasm::Common::JsonArrayIterate;
 using ::Wasm::Common::JsonGetField;
 using ::Wasm::Common::JsonObjectIterate;
 using ::Wasm::Common::JsonValueAs;
+using ReMatcher = Wasm::Common::Regex::CompiledGoogleReMatcher;
+using ReMatcherSharedPtr = std::shared_ptr<ReMatcher>;
+
+const std::string ConsumerHeader = "X-Mse-Consumer";
+const std::string ConsumerGroupHeader = "X-Mse-Consumer-Group";
+
+struct RuleConfig {
+  enum RuleType {
+    UNKNOWN,
+    REQUEST_HEADER,
+    ROUTE_NAME,
+    OR_RULES,
+    AND_RULES,
+    NOT_RULE,
+    ANY,
+    CONSUMER,
+    CONSUMER_GROUP,
+  };
+
+  struct Matcher {
+    enum MatchType {
+      EXACT,
+      PREFIX,
+      REGEX,
+      UNKNOWN,
+    };
+
+    MatchType match_type{UNKNOWN};
+    std::string matcher;
+    ReMatcherSharedPtr regex_matcher{};
+
+    bool parse(const json& config) {
+      auto exact_match_it = config.find("exact_match");
+      auto prefix_match_it = config.find("prefix_match");
+      auto safe_regex_match_it = config.find("safe_regex_match");
+      if (exact_match_it != config.end()) {
+        auto exact_match_value =
+            JsonValueAs<std::string>(exact_match_it.value());
+        if (exact_match_value.second !=
+                Wasm::Common::JsonParserResultDetail::OK ||
+            !exact_match_value.first) {
+          LOG_ERROR("failed to parse 'exact_match' field in configuration.\n" +
+                    config.dump());
+          return false;
+        }
+        matcher = exact_match_value.first.value();
+        match_type = EXACT;
+        return true;
+      } else if (prefix_match_it != config.end()) {
+        auto prefix_match_value =
+            JsonValueAs<std::string>(prefix_match_it.value());
+        if (prefix_match_value.second !=
+                Wasm::Common::JsonParserResultDetail::OK ||
+            !prefix_match_value.first) {
+          LOG_ERROR("failed to parse 'prefix_match' field in configuration.\n" +
+                    config.dump());
+          return false;
+        }
+        matcher = prefix_match_value.first.value();
+        match_type = PREFIX;
+        return true;
+      } else if (safe_regex_match_it != config.end()) {
+        auto regex_it = safe_regex_match_it->find("regex");
+        if (regex_it != safe_regex_match_it->end()) {
+          auto regex_value = JsonValueAs<std::string>(regex_it.value());
+          if (regex_value.second != Wasm::Common::JsonParserResultDetail::OK ||
+              !regex_value.first) {
+            LOG_ERROR("failed to parse 'regex' field in configuration.\n" +
+                      config.dump());
+            return false;
+          }
+          auto regex = regex_value.first.value();
+          regex_matcher = std::make_shared<ReMatcher>(regex, false);
+          match_type = REGEX;
+          return true;
+        }
+      }
+      LOG_ERROR("failed to parse matcher configuration.\n" + config.dump());
+      return false;
+    }
+
+    bool match(const std::string& value) const {
+      switch (match_type) {
+        case EXACT:
+          return matcher == value;
+        case PREFIX:
+          return value.find(matcher) == 0;
+        case REGEX:
+          return regex_matcher && regex_matcher->match(value);
+        default:
+          return false;
+      }
+    }
+  };
+
+  struct Action {
+    std::unordered_map<std::string, std::string> add_headers;
+
+    bool parse(const json& config) {
+      auto add_header_it = config.find("add_header");
+      if (add_header_it != config.end()) {
+        for (auto& it : add_header_it->items()) {
+          std::string header_name = it.key();
+          auto header_value = JsonValueAs<std::string>(it.value());
+          if (header_value.second != Wasm::Common::JsonParserResultDetail::OK ||
+              !header_value.first) {
+            LOG_ERROR("failed to parse 'extra_action' configuration.\n" +
+                      config.dump());
+            return false;
+          }
+          add_headers.emplace(header_name, header_value.first.value());
+        }
+      }
+      return true;
+    }
+
+    void execute() const {
+      for (auto& it : add_headers) {
+        replaceRequestHeader(it.first, it.second);
+      }
+    }
+  };
+
+  RuleType rule_type{UNKNOWN};
+  Matcher matcher;
+  std::string header_name;
+  std::string consumer;
+  std::string consumer_group;
+  std::vector<std::shared_ptr<RuleConfig>> and_rules;
+  std::vector<std::shared_ptr<RuleConfig>> or_rules;
+  std::shared_ptr<RuleConfig> not_rule{};
+  Action extra_action;
+  bool any = false;
+
+  bool check() const {
+    bool check_result = false;
+    if (rule_type == ANY) {
+      check_result = any;
+    } else if (rule_type == OR_RULES) {
+      for (const auto& rule : or_rules) {
+        if (rule->check()) {
+          check_result = true;
+          break;
+        }
+      }
+    } else if (rule_type == AND_RULES) {
+      check_result = true;
+      for (const auto& rule : and_rules) {
+        if (!rule->check()) {
+          check_result = false;
+          break;
+        }
+      }
+    } else if (rule_type == NOT_RULE) {
+      check_result = !not_rule->check();
+    } else if (rule_type == REQUEST_HEADER) {
+      auto header_ptr = getRequestHeader(header_name);
+      check_result =
+          header_ptr->size() > 0 && matcher.match(header_ptr->toString());
+    } else if (rule_type == ROUTE_NAME) {
+      std::string route_name;
+      getValue({"route_name"}, &route_name);
+      check_result = matcher.match(route_name);
+    } else if (rule_type == CONSUMER) {
+      auto header_ptr = getRequestHeader(ConsumerHeader);
+      check_result =
+          header_ptr->size() > 0 && consumer == header_ptr->toString();
+    } else if (rule_type == CONSUMER_GROUP) {
+      // consumer_group match (not substring): missing/empty header -> no match;
+      // split on ',', TrimSpace each segment; any segment equals config -> match.
+      auto header_ptr = getRequestHeader(ConsumerGroupHeader);
+      if (header_ptr->size() == 0) {
+        check_result = false;
+      } else {
+        check_result = false;
+        for (absl::string_view part :
+             absl::StrSplit(header_ptr->view(), ',')) {
+          std::string token = std::string(absl::StripAsciiWhitespace(part));
+          if (!token.empty() && token == consumer_group) {
+            check_result = true;
+            break;
+          }
+        }
+      }
+    }
+    if (check_result) {
+      extra_action.execute();
+    }
+    return check_result;
+  }
+
+  bool parse(const json& config) {
+    auto any_it = config.find("any");
+    auto or_rules_it = config.find("or_rules");
+    auto and_rules_it = config.find("and_rules");
+    auto not_rule_it = config.find("not_rule");
+    auto header_it = config.find("header");
+    auto route_it = config.find("route_name");
+    auto consumer_it = config.find("consumer");
+    auto consumer_group_it = config.find("consumer_group");
+    auto extra_action_it = config.find("extra_action");
+    if (extra_action_it != config.end()) {
+      if (!extra_action.parse(extra_action_it.value())) {
+        return false;
+      }
+    }
+    if (any_it != config.end()) {
+      auto any_value = JsonValueAs<bool>(any_it.value());
+      if (any_value.second != Wasm::Common::JsonParserResultDetail::OK ||
+          !any_value.first) {
+        LOG_ERROR("failed to parse 'any' field in configuration.\n" +
+                  config.dump());
+        return false;
+      }
+      any = any_value.first.value();
+      rule_type = ANY;
+      return true;
+    } else if (or_rules_it != config.end()) {
+      if (!JsonArrayIterate(config, "or_rules", [&](const json& rule) -> bool {
+            RuleConfig permission;
+            if (!permission.parse(rule)) {
+              return false;
+            }
+            or_rules.push_back(
+                std::make_shared<RuleConfig>(std::move(permission)));
+            return true;
+          })) {
+        LOG_ERROR("failed to parse or_rules configuration\n" + config.dump());
+        return false;
+      }
+      rule_type = OR_RULES;
+      return true;
+    } else if (and_rules_it != config.end()) {
+      if (!JsonArrayIterate(config, "and_rules", [&](const json& rule) -> bool {
+            RuleConfig permission;
+            if (!permission.parse(rule)) {
+              return false;
+            }
+            and_rules.push_back(
+                std::make_shared<RuleConfig>(std::move(permission)));
+            return true;
+          })) {
+        LOG_ERROR("failed to parse and_rules configuration\n" + config.dump());
+        return false;
+      }
+      rule_type = AND_RULES;
+      return true;
+    } else if (not_rule_it != config.end()) {
+      RuleConfig permission;
+      if (permission.parse(*not_rule_it)) {
+        rule_type = NOT_RULE;
+        not_rule = std::make_shared<RuleConfig>(std::move(permission));
+        return true;
+      } else {
+        LOG_ERROR("failed to parse not_rule configuration\n" + config.dump());
+        return false;
+      }
+    } else if (header_it != config.end()) {
+      const auto& sub_config = header_it.value();
+      auto header_name_it = sub_config.find("name");
+      if (header_name_it == sub_config.end()) {
+        LOG_ERROR("failed to parse 'header.name' configuration.\n" +
+                  sub_config.dump());
+        return false;
+      }
+      auto header_name_value = JsonValueAs<std::string>(header_name_it.value());
+      if (header_name_value.second !=
+              Wasm::Common::JsonParserResultDetail::OK ||
+          !header_name_value.first) {
+        LOG_ERROR("failed to parse 'header.name' configuration.\n" +
+                  sub_config.dump());
+        return false;
+      }
+      header_name = header_name_value.first.value();
+      if (!matcher.parse(sub_config)) {
+        LOG_ERROR("failed to parse 'header.matcher' configuration.\n" +
+                  sub_config.dump());
+        return false;
+      }
+      rule_type = REQUEST_HEADER;
+      return true;
+    } else if (route_it != config.end()) {
+      if (!matcher.parse(route_it.value())) {
+        LOG_ERROR("failed to parse 'route' configuration.\n" + config.dump());
+        return false;
+      }
+      rule_type = ROUTE_NAME;
+      return true;
+    } else if (consumer_it != config.end()) {
+      auto consumer_value = JsonValueAs<std::string>(consumer_it.value());
+      if (consumer_value.second != Wasm::Common::JsonParserResultDetail::OK ||
+          !consumer_value.first) {
+        LOG_ERROR("failed to parse 'consumer' configuration.\n" +
+                  config.dump());
+        return false;
+      }
+      consumer = consumer_value.first.value();
+      rule_type = CONSUMER;
+      return true;
+    } else if (consumer_group_it != config.end()) {
+      auto consumer_group_value =
+          JsonValueAs<std::string>(consumer_group_it.value());
+      if (consumer_group_value.second !=
+              Wasm::Common::JsonParserResultDetail::OK ||
+          !consumer_group_value.first) {
+        LOG_ERROR("failed to parse 'consumer_group' configuration.\n" +
+                  config.dump());
+        return false;
+      }
+      consumer_group = std::string(
+          absl::StripAsciiWhitespace(consumer_group_value.first.value()));
+      rule_type = CONSUMER_GROUP;
+      return true;
+    } else {
+      LOG_ERROR("unknown permission type\n" + config.dump());
+      return false;
+    }
+  }
+};
+
+struct RbacRule {
+  std::vector<RuleConfig> principals;
+  std::vector<RuleConfig> permissions;
+
+  bool check() const {
+    for (const auto& rule : principals) {
+      if (!rule.check()) {
+        LOG_DEBUG("principal check denied.");
+        return false;
+      }
+    }
+    for (const auto& rule : permissions) {
+      if (!rule.check()) {
+        LOG_DEBUG("permission check denied.");
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool parse(const json& config) {
+    auto principals_it = config.find("principals");
+    auto permissions_it = config.find("permissions");
+    if (principals_it == config.end() || permissions_it == config.end()) {
+      LOG_ERROR("no principals or no permissions in rbac rules");
+      return false;
+    }
+    if (!JsonArrayIterate(config, "principals",
+                          [&](const json& principal_rule) -> bool {
+                            RuleConfig principal;
+                            if (!principal.parse(principal_rule)) {
+                              LOG_ERROR(
+                                  "failed to parse 'principals' field in "
+                                  "filter configuration.");
+                              return false;
+                            } else {
+                              principals.push_back(std::move(principal));
+                              return true;
+                            }
+                          })) {
+      LOG_ERROR("failed to parse configuration for permissions");
+      return false;
+    }
+    if (!JsonArrayIterate(config, "permissions",
+                          [&](const json& permission_rule) -> bool {
+                            RuleConfig permission;
+                            if (!permission.parse(permission_rule)) {
+                              LOG_ERROR(
+                                  "failed to parse 'permissions' field in "
+                                  "filter configuration.");
+                              return false;
+                            } else {
+                              permissions.push_back(std::move(permission));
+                              return true;
+                            }
+                          })) {
+      LOG_ERROR("failed to parse configuration for permissions");
+      return false;
+    }
+    return true;
+  }
+};
 
 template <typename PluginConfig>
 class RouteRuleMatcher {
@@ -120,11 +490,10 @@ class RouteRuleMatcher {
     return checkPlugin(config.second.value());
   }
 
-  bool checkAuthRule(
-      const std::function<
-          bool(const PluginConfig&,
-               const std::optional<std::unordered_set<std::string>>& allow_set)>
-          checkPlugin) {
+  bool checkAuthRule(const std::function<bool(
+                         const PluginConfig&,
+                         const std::optional<std::unordered_set<std::string>>&)>
+                         checkPlugin) {
     if (invalid_config_) {
       return true;
     }
@@ -471,9 +840,10 @@ class RouteRuleMatcher {
       // ignore the '_match_route_' or '_match_domain_' field
       auto local_config_size = config.size() - 1;
       auto has_allow = config.find("allow");
-      if (has_allow != config.end()) {
+      auto has_enable_auth = config.find("enable_auth");
+      if (has_allow != config.end() || has_enable_auth != config.end()) {
         local_config_size -= 1;
-        LOG_DEBUG("has allow filed");
+        LOG_DEBUG("has allow or enable_auth field");
         if (!JsonArrayIterate(config, "allow", [&](const json& allow) -> bool {
               auto parse_result = JsonValueAs<std::string>(allow);
               if (parse_result.second !=

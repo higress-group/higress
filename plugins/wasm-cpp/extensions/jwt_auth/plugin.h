@@ -16,12 +16,14 @@
 
 #include <assert.h>
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "common/route_rule_matcher.h"
 #include "extensions/jwt_auth/extractor.h"
+#include "extensions/jwt_auth/jwks_fetcher.h"
 #include "jwt_verify_lib/check_audience.h"
 #include "jwt_verify_lib/jwt.h"
 #include "jwt_verify_lib/status.h"
@@ -45,6 +47,7 @@ namespace jwt_auth {
 
 using ::google::jwt_verify::Status;
 using ::google::jwt_verify::StructUtils;
+
 struct FromHeader {
   std::string header;
   std::string value_prefix;
@@ -60,7 +63,10 @@ using ClaimsMap =
 
 struct Consumer {
   std::string name;
-  google::jwt_verify::JwksPtr jwks;
+  std::optional<std::vector<std::string>> groups;
+  std::optional<RemoteJwks> remote_jwks = std::nullopt;
+  mutable JwksPtr jwks;
+  mutable uint64_t jwks_expire_at = 0;
   ClaimsMap allowd_claims;
   std::vector<FromHeader> from_headers = {{"Authorization", "Bearer "}};
   std::vector<std::string> from_params = {"access_token"};
@@ -72,7 +78,8 @@ struct Consumer {
 };
 
 struct JwtAuthConfigRule {
-  std::vector<Consumer> consumers;
+  mutable std::vector<Consumer> consumers;
+  std::vector<RbacRule> rbac_rules;
   std::vector<std::string> enable_headers;
 };
 
@@ -86,15 +93,30 @@ class PluginRootContext : public RootContext,
       : RootContext(id, root_id) {}
   ~PluginRootContext() {}
   bool onConfigure(size_t) override;
+  void onTick() override;
   bool checkPlugin(const JwtAuthConfigRule&,
                    const std::optional<std::unordered_set<std::string>>&);
+  bool checkAuthorization(
+      const std::string& consumer, const JwtAuthConfigRule&,
+      const std::optional<std::unordered_set<std::string>>&);
+  bool checkRbacRule(const JwtAuthConfigRule&);
   bool configure(size_t);
+  bool fetchAllConsumerJwks(std::vector<Consumer>& consumers,
+                            uint32_t http_ctx_id,
+                            std::function<bool()> post_func);
+  void updateRemoteJwksCache();
 
  private:
   bool parsePluginConfig(const json&, JwtAuthConfigRule&) override;
   Status consumerVerify(const Consumer&, uint64_t,
                         std::vector<JwtLocationConstPtr>&);
   std::string extractCredential(const JwtAuthConfigRule&);
+
+  JwksFetcher jwks_fetcher_;
+  uint64_t cache_update_period_ = UINT64_MAX;
+  bool on_tick_triggered_ = false;
+  std::unordered_map<std::string /*remoteJwks cacheKey*/, RemoteJwks>
+      all_remote_jwks_;
 };
 
 // Per-stream context.
@@ -102,11 +124,14 @@ class PluginContext : public Context {
  public:
   explicit PluginContext(uint32_t id, RootContext* root) : Context(id, root) {}
   FilterHeadersStatus onRequestHeaders(uint32_t, bool) override;
+  void onDone() override { is_done_ = true; }
+  bool isDone() { return is_done_; }
 
  private:
   inline PluginRootContext* rootContext() {
     return dynamic_cast<PluginRootContext*>(this->root());
   }
+  bool is_done_ = false;
 };
 
 #ifdef NULL_PLUGIN

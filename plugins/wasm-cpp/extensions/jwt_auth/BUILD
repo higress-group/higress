@@ -15,13 +15,14 @@
 load("@proxy_wasm_cpp_sdk//bazel:defs.bzl", "proxy_wasm_cc_binary")
 load("//bazel:wasm.bzl", "declare_wasm_image_targets")
 
-wasm_cc_binary(
+proxy_wasm_cc_binary(
     name = "jwt_auth.wasm",
     srcs = [
         "plugin.cc",
         "plugin.h",
         "extractor.cc",
         "extractor.h",
+        "jwks_fetcher.h",
         "//common:base64.h",
     ],
     deps = [
@@ -46,6 +47,7 @@ cc_library(
     hdrs = [
         "plugin.h",
         "extractor.h",
+        "jwks_fetcher.h",
     ],
     copts = ["-DNULL_PLUGIN"],
     deps = [

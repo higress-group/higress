@@ -17,6 +17,7 @@
 #include <array>
 
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "common/http_util.h"
 #include "common/json_util.h"
@@ -51,7 +52,16 @@ void deniedInvalidCredentials(const std::string& realm) {
 
 void deniedUnauthorizedConsumer(const std::string& realm) {
   sendLocalResponse(403, "Request denied by Key Auth check. Unauthorized consumer", "",
-                    {{"WWW-Authenticate", absl::StrCat("Key realm=", realm)}});
+                    {{"WWW-Authenticate", absl::StrCat("Basic realm=", realm)}});
+}
+
+void replaceConsumerGroupHeader(
+    const std::optional<std::vector<std::string>>& groups) {
+  if (!groups.has_value() || groups->empty()) {
+    replaceRequestHeader(ConsumerGroupHeader, "");
+    return;
+  }
+  replaceRequestHeader(ConsumerGroupHeader, absl::StrJoin(*groups, ","));
 }
 
 }  // namespace
@@ -101,7 +111,6 @@ bool PluginRootContext::parsePluginConfig(const json& configuration,
     if (it != configuration.end()) {
       auto realm_string = JsonValueAs<std::string>(it.value());
       if (realm_string.second != Wasm::Common::JsonParserResultDetail::OK) {
-        LOG_WARN("failed to parse 'realm' field in filter configuration.");
         return false;
       }
       rule.realm = realm_string.first.value();
@@ -243,10 +252,28 @@ bool PluginRootContext::parsePluginConfig(const json& configuration,
               c.in_header = in_header.first;
             }
           }
+          item = consumer.find("group");
+          if (item != consumer.end()) {
+            std::vector<std::string> gs;
+            if (!JsonArrayIterate(
+                    consumer, "group", [&](const json& g_json) -> bool {
+                      auto g = JsonValueAs<std::string>(g_json);
+                      if (g.second != Wasm::Common::JsonParserResultDetail::OK ||
+                          !g.first) {
+                        return false;
+                      }
+                      gs.push_back(g.first.value());
+                      return true;
+                    })) {
+              LOG_WARN("failed to parse 'group' for consumer: " + c.name);
+              return false;
+            }
+            c.groups = std::move(gs);
+          }
           rule.consumers.push_back(std::move(c));
           return true;
         })) {
-      LOG_WARN("failed to parse configuration for credentials.");
+      LOG_ERROR("failed to parse configuration for consumers.");
       return false;
     }
     if (need_global_keys) {
@@ -288,41 +315,33 @@ bool PluginRootContext::parsePluginConfig(const json& configuration,
     }
     // LOG_DEBUG(rule.debugString("parse phase, consumers branch"));
   }
-  return true;
-}
-
-// Helper: mask a credential for debug logging, showing only the first 3
-// characters so raw API keys are not leaked into logs.
-static std::string maskCredential(const std::string& credential) {
-  if (credential.size() <= 3) {
-    return "***";
-  }
-  return credential.substr(0, 3) + "***";
-}
-
-// Helper: check allow_set and return true if allowed, false if denied
-static bool checkAllowSet(
-    const std::optional<std::unordered_set<std::string>>& allow_set,
-    const std::string& consumer_name, const std::string& realm) {
-  if (allow_set) {
-    if (allow_set->empty()) {
-      LOG_DEBUG("allow set is empty, nobody is allowed");
-      deniedUnauthorizedConsumer(realm);
+  auto keep_credential_it = configuration.find("keep_credential");
+  if (keep_credential_it != configuration.end()) {
+    auto keep_credential = JsonValueAs<bool>(keep_credential_it.value());
+    if (keep_credential.second != Wasm::Common::JsonParserResultDetail::OK ||
+        !keep_credential.first) {
+      LOG_WARN(
+          "failed to parse 'keep_credential' field in filter configuration.");
       return false;
     }
-    if (allow_set->find(consumer_name) == allow_set->end()) {
-      deniedUnauthorizedConsumer(realm);
-      LOG_DEBUG("unauthorized consumer: " + consumer_name);
+    rule.keep_credential = keep_credential.first.value();
+  }
+  if (configuration.find("rbac_rules") != configuration.end()) {
+    if (!JsonArrayIterate(configuration, "rbac_rules", [&](const json& rbac_rule_config) -> bool {
+      RbacRule rbac_rule;
+      if (!rbac_rule.parse(rbac_rule_config)) {
+        LOG_ERROR("failed to parse 'rbac_rules' field in filter configuration.");
+        return false;
+      } else {
+        rule.rbac_rules.push_back(std::move(rbac_rule));
+        return true;
+      }
+    })) {
+      LOG_ERROR("failed to parse configuration for rbac_rules");
       return false;
     }
   }
   return true;
-}
-
-// Helper: check if a consumer has per-consumer key configuration
-static bool hasPerConsumerKeyConfig(const Consumer& consumer) {
-  return consumer.keys.has_value() || consumer.in_header.has_value() ||
-         consumer.in_query.has_value();
 }
 
 bool PluginRootContext::checkPlugin(
@@ -333,7 +352,8 @@ bool PluginRootContext::checkPlugin(
   removeRequestHeader("X-Mse-Consumer");
   if (rule.consumers.empty()) {
     for (const auto& key : rule.keys) {
-      auto credential = extractCredential(rule.in_header, rule.in_query, key);
+      auto extracted = extractCredential(rule.in_header, rule.in_query, key);
+      const auto& credential = extracted.value;
       if (credential.empty()) {
         LOG_DEBUG("empty credential for key: " + key);
         continue;
@@ -341,150 +361,106 @@ bool PluginRootContext::checkPlugin(
 
       auto auth_credential_iter = rule.credentials.find(credential);
       if (auth_credential_iter == rule.credentials.end()) {
-        LOG_DEBUG("api key not found: " + maskCredential(credential));
+        LOG_DEBUG("api key not found: " + credential);
         continue;
       }
 
+      replaceConsumerGroupHeader(std::nullopt);
       auto credential_to_name_iter = rule.credential_to_name.find(credential);
       if (credential_to_name_iter != rule.credential_to_name.end()) {
-        addRequestHeader("X-Mse-Consumer", credential_to_name_iter->second);
-        if (!checkAllowSet(allow_set, credential_to_name_iter->second,
-                           rule.realm)) {
-          return false;
+        if (allow_set && !allow_set->empty()) {
+          if (allow_set->find(credential_to_name_iter->second) ==
+              allow_set->end()) {
+            deniedUnauthorizedConsumer(rule.realm);
+            LOG_DEBUG("unauthorized consumer: " + credential_to_name_iter->second);
+            return false;
+          }
         }
+        replaceRequestHeader("X-Mse-Consumer", credential_to_name_iter->second);
+      }
+      if (!rule.keep_credential && extracted.header.has_value()) {
+        removeRequestHeader(extracted.header.value());
       }
       return true;
     }
   } else {
-    // Collect consumers that have per-consumer key configuration
-    std::vector<const Consumer*> perConsumerKeyConsumers;
     for (const auto& consumer : rule.consumers) {
-      if (hasPerConsumerKeyConfig(consumer)) {
-        perConsumerKeyConsumers.push_back(&consumer);
-      }
-    }
-
-    // Fast path: no per-consumer key consumers, use O(1) credential_to_name
-    // lookup
-    if (perConsumerKeyConsumers.empty()) {
-      for (const auto& key : rule.keys) {
-        auto credential = extractCredential(rule.in_header, rule.in_query, key);
-        if (credential.empty()) {
-          LOG_DEBUG("empty credential for key: " + key);
-          continue;
-        }
-
-        auto iter = rule.credential_to_name.find(credential);
-        if (iter == rule.credential_to_name.end()) {
-          LOG_DEBUG("api key not found: " + maskCredential(credential));
-          continue;
-        }
-
-        addRequestHeader("X-Mse-Consumer", iter->second);
-        if (!checkAllowSet(allow_set, iter->second, rule.realm)) {
-          return false;
-        }
-        return true;
-      }
-      LOG_DEBUG("No valid credentials were found (fast path).");
-      deniedInvalidCredentials(rule.realm);
-      return false;
-    }
-
-    // Build a set of per-consumer key consumer names for quick lookup
-    std::unordered_set<std::string> perConsumerNames;
-    for (const auto* consumer : perConsumerKeyConsumers) {
-      perConsumerNames.insert(consumer->name);
-    }
-
-    // Try O(1) fast path first for consumers without per-consumer keys
-    for (const auto& key : rule.keys) {
-      auto credential = extractCredential(rule.in_header, rule.in_query, key);
-      if (credential.empty()) {
-        LOG_DEBUG("empty credential for key: " + key);
-        continue;
-      }
-
-      auto iter = rule.credential_to_name.find(credential);
-      if (iter == rule.credential_to_name.end()) {
-        LOG_DEBUG("api key not found: " + maskCredential(credential));
-        continue;
-      }
-
-      // Skip if this credential belongs to a per-consumer key consumer
-      if (perConsumerNames.count(iter->second) > 0) {
-        continue;
-      }
-
-      addRequestHeader("X-Mse-Consumer", iter->second);
-      if (!checkAllowSet(allow_set, iter->second, rule.realm)) {
-        return false;
-      }
-      return true;
-    }
-
-    // Slow path: check per-consumer key consumers with cached credentials
-    std::unordered_map<std::string, std::string> credentialCache;
-    for (const auto* consumer : perConsumerKeyConsumers) {
       std::vector<std::string> keys_to_check =
-          consumer->keys.value_or(rule.keys);
-      bool in_query = consumer->in_query.value_or(rule.in_query);
-      bool in_header = consumer->in_header.value_or(rule.in_header);
+          consumer.keys.value_or(rule.keys);
+      bool in_query = consumer.in_query.value_or(rule.in_query);
+      bool in_header = consumer.in_header.value_or(rule.in_header);
 
       for (const auto& key : keys_to_check) {
-        // Cache key includes extraction source to avoid cross-contamination
-        // between consumers with different in_header/in_query settings
-        std::string cache_key = absl::StrCat(
-            key, ":", in_header ? "h" : "", in_query ? "q" : "");
-        if (credentialCache.find(cache_key) == credentialCache.end()) {
-          credentialCache[cache_key] =
-              extractCredential(in_header, in_query, key);
-        }
-        const auto& credential = credentialCache[cache_key];
+        auto extracted = extractCredential(in_header, in_query, key);
+        const auto& credential = extracted.value;
         if (credential.empty()) {
           LOG_DEBUG("empty credential for key: " + key);
           continue;
         }
 
-        if (consumer->credentials.find(credential) ==
-            consumer->credentials.end()) {
-          LOG_DEBUG("credential " + maskCredential(credential) +
-                    " does not match the consumer " + consumer->name);
+        if (consumer.credentials.find(credential) == consumer.credentials.end()) {
+          LOG_DEBUG("credential " + credential + " does not match the consumer " + consumer.name);
           continue;
         }
 
-        auto iter = rule.credential_to_name.find(credential);
-        if (iter == rule.credential_to_name.end()) {
-          LOG_DEBUG("api key not found: " + maskCredential(credential));
+        auto auth_credential_iter = rule.credentials.find(credential);
+        if (auth_credential_iter == rule.credentials.end()) {
+          LOG_DEBUG("api key not found: " + credential);
           continue;
         }
 
-        addRequestHeader("X-Mse-Consumer", iter->second);
-        if (!checkAllowSet(allow_set, iter->second, rule.realm)) {
-          return false;
+        auto credential_to_name_iter = rule.credential_to_name.find(credential);
+        if (credential_to_name_iter != rule.credential_to_name.end()) {
+          replaceRequestHeader("X-Mse-Consumer", credential_to_name_iter->second);
+          replaceConsumerGroupHeader(consumer.groups);
+          LOG_DEBUG("consumer is " + credential_to_name_iter->second);
+          if (!rule.rbac_rules.empty()) {
+            if (!checkRbacRule(rule)) {
+              LOG_DEBUG("checkRbacRule denied");
+              deniedUnauthorizedConsumer(rule.realm);
+              return false;
+            }
+          } else if (allow_set) {
+            if (allow_set->empty()) {
+              LOG_DEBUG("allow set is empty, nobody is allowed");
+              deniedUnauthorizedConsumer(rule.realm);
+              return false;
+            } else if (allow_set->find(credential_to_name_iter->second) == allow_set->end()) {
+              deniedUnauthorizedConsumer(rule.realm);
+              LOG_DEBUG("unauthorized consumer: " + credential_to_name_iter->second);
+              return false;
+            }
+          }
+        }
+        if (!rule.keep_credential && extracted.header.has_value()) {
+          removeRequestHeader(extracted.header.value());
         }
         return true;
       }
     }
-
-    LOG_DEBUG("No valid credentials were found (slow path, after checking "
-              "per-consumer key consumers).");
-    deniedInvalidCredentials(rule.realm);
-    return false;
   }
 
-  LOG_DEBUG("No valid credentials were found (no consumers configured, after "
-            "checking all keys).");
+  LOG_DEBUG("No valid credentials were found after checking all consumers.");
   deniedInvalidCredentials(rule.realm);
   return false;
 }
 
-std::string PluginRootContext::extractCredential(bool in_header, bool in_query,
-                                                 const std::string& key) const {
+bool PluginRootContext::checkRbacRule(const KeyAuthConfigRule& rule) {
+  for (const auto& rbac_rule : rule.rbac_rules) {
+    if (rbac_rule.check()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
+PluginRootContext::ExtractedCredential PluginRootContext::extractCredential(
+    bool in_header, bool in_query, const std::string& key) {
   if (in_header) {
     auto header = getRequestHeader(key);
     if (header->size() != 0) {
-      return header->toString();
+      return {header->toString(), key};
     }
   }
   if (in_query) {
@@ -493,10 +469,10 @@ std::string PluginRootContext::extractCredential(bool in_header, bool in_query,
     auto params = Wasm::Common::Http::parseAndDecodeQueryString(path);
     auto it = params.find(key);
     if (it != params.end()) {
-      return it->second;
+      return {it->second, std::nullopt};
     }
   }
-  return "";
+  return {"", std::nullopt};
 }
 
 bool PluginRootContext::onConfigure(size_t size) {

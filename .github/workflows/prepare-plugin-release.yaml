@@ -65,7 +65,7 @@ jobs:
           while IFS=$'\t' read -r registry image source_dir; do
             [[ "$registry" =~ ^[a-z0-9][a-z0-9.-]*(\:[0-9]+)?$ ]]
             [[ "$image" =~ ^plugins/[a-z0-9][a-z0-9._-]*$ ]]
-            [[ "$source_dir" =~ ^plugins/wasm-(go|rust)/extensions/[a-z0-9][a-z0-9._-]*$ ]]
+            [[ "$source_dir" =~ ^plugins/wasm-(go|rust|cpp)/extensions/[a-z0-9][a-z0-9._-]*$ ]]
             version="$(tr -d '\r\n' < "$source_dir/VERSION")"
             [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
             prerelease="${version#*-}"
@@ -250,6 +250,12 @@ jobs:
                 ;;
               rust)
                 make -C plugins/wasm-rust PLUGIN_NAME="$build_name" test build
+                ;;
+              cpp)
+                # The C++ image build runs Bazel inside the pinned builder image,
+                # so no host Bazel toolchain is needed here. Bazel unit tests are
+                # gated separately by the wasm-cpp unit test workflow.
+                make -C plugins/wasm-cpp PLUGIN_NAME="$build_name" build
                 ;;
               *) echo "unsupported planned implementation: $implementation" >&2; return 1 ;;
             esac
@@ -555,7 +561,7 @@ jobs:
           branch="release/plugin-snapshot-$GATEWAY_VERSION"
           git config user.name "higress-release-bot"; git config user.email "release-bot@higress.io"
           git checkout -B "$branch"
-          git add plugins/wasm-go/extensions plugins/wasm-rust/extensions plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence
+          git add plugins/wasm-go/extensions plugins/wasm-rust/extensions plugins/wasm-cpp/extensions plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence
           git commit -s -m "chore: prepare plugin snapshot $GATEWAY_VERSION" || true
           git push --force-with-lease origin "$branch"
           # BEGIN preparation-pr-contract

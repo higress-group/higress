@@ -1,7 +1,9 @@
 PLUGIN_NAME ?= key_auth
 BUILD_TIME := $(shell date "+%Y%m%d-%H%M%S")
 COMMIT_ID := $(shell git rev-parse --short HEAD 2>/dev/null)
-IMAGE_TAG = $(if $(strip $(PLUGIN_VERSION)),${PLUGIN_VERSION},${BUILD_TIME}-${COMMIT_ID})
+VERSION_FILE := $(wildcard extensions/${PLUGIN_NAME}/VERSION)
+FILE_VERSION := $(if ${VERSION_FILE},$(strip $(shell cat ${VERSION_FILE} 2>/dev/null | tr -d '[:space:]')))
+IMAGE_TAG = $(if $(strip $(PLUGIN_VERSION)),${PLUGIN_VERSION},$(if ${FILE_VERSION},${FILE_VERSION},${BUILD_TIME}-${COMMIT_ID}))
 IMG ?= ${REGISTRY}${PLUGIN_NAME}:${IMAGE_TAG}
 
 .PHONY: build

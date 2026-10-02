@@ -268,6 +268,17 @@ bool PluginRootContext::checkPlugin(
       goto failed;
     }
     auto start = pos + BearerPrefix.size();
+    while (start < auth_header.size() && auth_header[start] == ' ') {
+      start++;
+    }
+    // If a JWT token string contains spaces, for example 'xxx.xxx.xxx abc',
+    // this will cause the jwt-cpp library to throw an exception. However, we
+    // are unable to handle this situation within the library itself, so we
+    // perform the validation here.
+    if (auth_header.find(' ', start) != std::string::npos) {
+      LOG_DEBUG("jwt token string have too much spaces");
+      goto failed;
+    }
     token_str =
         std::string{auth_header.c_str() + start, auth_header.size() - start};
     auto token = jwt::decode(token_str);
@@ -321,7 +332,7 @@ bool PluginRootContext::checkPlugin(
     if (!rule.keep_token) {
       removeRequestHeader(rule.auth_header_name);
     }
-    addRequestHeader("X-Mse-Consumer", consumer.name);
+    replaceRequestHeader("X-Mse-Consumer", consumer.name);
     return true;
   }
 failed:

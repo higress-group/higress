@@ -38,11 +38,14 @@ class MockContext : public proxy_wasm::ContextBase {
   MOCK_METHOD(WasmResult, getHeaderMapValue,
               (WasmHeaderMapType /* type */, std::string_view /* key */,
                std::string_view* /*result */));
-  MOCK_METHOD(WasmResult, removeHeaderMapValue,
-              (WasmHeaderMapType /* type */, std::string_view /* key */));
   MOCK_METHOD(WasmResult, addHeaderMapValue,
               (WasmHeaderMapType /* type */, std::string_view /* key */,
                std::string_view /* value */));
+  MOCK_METHOD(WasmResult, replaceHeaderMapValue,
+              (WasmHeaderMapType /* type */, std::string_view /* key */,
+               std::string_view /* value */));
+  MOCK_METHOD(WasmResult, removeHeaderMapValue,
+              (WasmHeaderMapType /* type */, std::string_view /* key */));
   MOCK_METHOD(WasmResult, sendLocalResponse,
               (uint32_t /* response_code */, std::string_view /* body */,
                Pairs /* additional_headers */, uint32_t /* grpc_status */,
@@ -93,6 +96,22 @@ class BasicAuthTest : public ::testing::Test {
         .WillByDefault([&](WasmHeaderMapType, std::string_view key,
                            std::string_view value) { return WasmResult::Ok; });
 
+    ON_CALL(*mock_context_,
+            replaceHeaderMapValue(WasmHeaderMapType::RequestHeaders,
+                                  testing::_, testing::_))
+        .WillByDefault([&](WasmHeaderMapType, std::string_view key,
+                           std::string_view value) {
+          header_map_[std::string(key)] = value;
+          return WasmResult::Ok;
+        });
+
+    ON_CALL(*mock_context_,
+            removeHeaderMapValue(WasmHeaderMapType::RequestHeaders, testing::_))
+        .WillByDefault([&](WasmHeaderMapType, std::string_view key) {
+          header_map_.erase(std::string(key));
+          return WasmResult::Ok;
+        });
+
     ON_CALL(*mock_context_, getProperty(testing::_, testing::_))
         .WillByDefault([&](std::string_view path, std::string* result) {
           *result = route_name_;
@@ -116,6 +135,7 @@ class BasicAuthTest : public ::testing::Test {
   std::string cred_;
   std::string route_name_;
   std::string authorization_header_;
+  std::map<std::string, std::string> header_map_;
 };
 
 TEST_F(BasicAuthTest, OnConfigureSuccess) {
@@ -214,6 +234,10 @@ TEST_F(BasicAuthTest, OnConfigureNoRules) {
 }
 
 TEST_F(BasicAuthTest, OnConfigureOnlyRules) {
+  // Rules carry their own credentials/consumers next to a match key, so the
+  // matcher keeps a non-zero local config size and parses the rule
+  // (route_rule_matcher.h:872). Domain patterns are not validated, so
+  // "test.com.*" is accepted as a prefix match (route_rule_matcher.h:1046).
   // without consumer
   {
     std::string configuration = R"(
@@ -266,6 +290,10 @@ TEST_F(BasicAuthTest, OnConfigureOnlyRules) {
 }
 
 TEST_F(BasicAuthTest, OnConfigureEmptyRules) {
+  // Each rule holds only its credential material, so the matcher's
+  // `config.size() - 1` local config size drops to zero, parsePluginConfig is
+  // skipped, and the rule is rejected for missing every match key
+  // (route_rule_matcher.h:903). Both sub-cases fail configuration.
   // without consumer
   {
     std::string configuration = R"(
@@ -309,6 +337,10 @@ TEST_F(BasicAuthTest, OnConfigureEmptyRules) {
 }
 
 TEST_F(BasicAuthTest, OnConfigureDuplicateRules) {
+  // Carrying several match keys in one rule is not a duplicate error: the
+  // matcher only requires at least one (route_rule_matcher.h:903) and resolves
+  // the overlap by category precedence, route winning over domain
+  // (route_rule_matcher.h:910). Both sub-cases configure successfully.
   // without consumer
   {
     std::string configuration = R"(
@@ -327,7 +359,7 @@ TEST_F(BasicAuthTest, OnConfigureDuplicateRules) {
 
     EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
         .WillOnce([&buffer](WasmBufferType) { return &buffer; });
-    EXPECT_FALSE(root_context_->configure(configuration.size()));
+    EXPECT_TRUE(root_context_->configure(configuration.size()));
   }
 
   // with consumer
@@ -351,7 +383,7 @@ TEST_F(BasicAuthTest, OnConfigureDuplicateRules) {
 
     EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
         .WillOnce([&buffer](WasmBufferType) { return &buffer; });
-    EXPECT_FALSE(root_context_->configure(configuration.size()));
+    EXPECT_TRUE(root_context_->configure(configuration.size()));
   }
 }
 
@@ -373,7 +405,7 @@ TEST_F(BasicAuthTest, OnConfigureNoCredentials) {
 
     EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
         .WillOnce([&buffer](WasmBufferType) { return &buffer; });
-    EXPECT_FALSE(root_context_->configure(configuration.size()));
+    EXPECT_TRUE(root_context_->configure(configuration.size()));
   }
 
   // with consumer
@@ -393,7 +425,7 @@ TEST_F(BasicAuthTest, OnConfigureNoCredentials) {
 
     EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
         .WillOnce([&buffer](WasmBufferType) { return &buffer; });
-    EXPECT_FALSE(root_context_->configure(configuration.size()));
+    EXPECT_TRUE(root_context_->configure(configuration.size()));
   }
 }
 
@@ -533,6 +565,37 @@ TEST_F(BasicAuthTest, RuleAllow) {
             FilterHeadersStatus::Continue);
 }
 
+TEST_F(BasicAuthTest, EmptyConsumer) {
+  std::string configuration = R"(
+{
+  "consumers" : [],
+  "_rules_" : [
+    {
+      "_match_route_" : ["test"], 
+      "allow" : []
+    }
+  ]
+})";
+
+  BufferBase buffer;
+  buffer.set({configuration.data(), configuration.size()});
+
+  EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
+      .WillOnce([&buffer](WasmBufferType) { return &buffer; });
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  route_name_ = "test";
+  cred_ = "ok:test";
+  authorization_header_ = "Basic " + Base64::encode(cred_.data(), cred_.size());
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::StopIteration);
+
+  route_name_ = "config";
+  authorization_header_ = "Basic " + Base64::encode(cred_.data(), cred_.size());
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::Continue);
+}
+
 TEST_F(BasicAuthTest, RuleWithConsumerAllow) {
   std::string configuration = R"(
 {
@@ -584,6 +647,65 @@ TEST_F(BasicAuthTest, RuleWithConsumerAllow) {
   authorization_header_ = "Basic " + Base64::encode(cred_.data(), cred_.size());
   EXPECT_EQ(context_->onRequestHeaders(0, false),
             FilterHeadersStatus::Continue);
+}
+
+TEST_F(BasicAuthTest, ClientSuppliedConsumerHeaderIsReplaced) {
+  std::string configuration = R"(
+{
+  "consumers" : [
+    {"credential" : "ok:test", "name" : "consumer_ok"}
+  ],
+  "_rules_" : [
+    {
+      "_match_route_" : ["test"],
+      "allow" : [ "consumer_ok"]
+    }
+  ]
+})";
+
+  BufferBase buffer;
+  buffer.set({configuration.data(), configuration.size()});
+
+  EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
+      .WillOnce([&buffer](WasmBufferType) { return &buffer; });
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  route_name_ = "test";
+  cred_ = "ok:test";
+  authorization_header_ = "Basic " + Base64::encode(cred_.data(), cred_.size());
+  header_map_.clear();
+  header_map_.emplace("X-Mse-Consumer", "spoofed-consumer");
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::Continue);
+  EXPECT_EQ(header_map_["X-Mse-Consumer"], "consumer_ok");
+}
+
+TEST_F(BasicAuthTest, ClientSuppliedConsumerHeaderRemovedWithoutName) {
+  std::string configuration = R"(
+{
+  "credentials": ["ok:test"],
+  "_rules_" : [
+    {
+      "_match_route_" : ["test"]
+    }
+  ]
+})";
+
+  BufferBase buffer;
+  buffer.set({configuration.data(), configuration.size()});
+
+  EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
+      .WillOnce([&buffer](WasmBufferType) { return &buffer; });
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  route_name_ = "test";
+  cred_ = "ok:test";
+  authorization_header_ = "Basic " + Base64::encode(cred_.data(), cred_.size());
+  header_map_.clear();
+  header_map_.emplace("X-Mse-Consumer", "spoofed-consumer");
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::Continue);
+  EXPECT_EQ(header_map_.find("X-Mse-Consumer"), header_map_.end());
 }
 
 TEST_F(BasicAuthTest, GlobalAuthRuleWithDomainPort) {
