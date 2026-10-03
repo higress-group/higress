@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -757,6 +758,52 @@ func TestProviderConfig_SetDefaultCapabilities(t *testing.T) {
 
 		assert.Equal(t, "/custom/chat/completions", config.capabilities[string(ApiNameChatCompletion)])
 	})
+}
+
+func TestProviderConfig_FromJsonCapabilities(t *testing.T) {
+	configuredCapabilities := map[string]string{
+		string(ApiNameCompletion):                           "/custom/completions",
+		string(ApiNameModels):                               "/custom/models",
+		string(ApiNameFiles):                                "/custom/files",
+		string(ApiNameRetrieveFile):                         "/custom/files/{file_id}",
+		string(ApiNameRetrieveFileContent):                  "/custom/files/{file_id}/content",
+		string(ApiNameBatches):                              "/custom/batches",
+		string(ApiNameRetrieveBatch):                        "/custom/batches/{batch_id}",
+		string(ApiNameCancelBatch):                          "/custom/batches/{batch_id}/cancel",
+		string(ApiNameFineTuningJobs):                       "/custom/fine_tuning/jobs",
+		string(ApiNameRetrieveFineTuningJob):                "/custom/fine_tuning/jobs/{fine_tuning_job_id}",
+		string(ApiNameFineTuningJobEvents):                  "/custom/fine_tuning/jobs/{fine_tuning_job_id}/events",
+		string(ApiNameFineTuningJobCheckpoints):             "/custom/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints",
+		string(ApiNameCancelFineTuningJob):                  "/custom/fine_tuning/jobs/{fine_tuning_job_id}/cancel",
+		string(ApiNameResumeFineTuningJob):                  "/custom/fine_tuning/jobs/{fine_tuning_job_id}/resume",
+		string(ApiNamePauseFineTuningJob):                   "/custom/fine_tuning/jobs/{fine_tuning_job_id}/pause",
+		string(ApiNameFineTuningCheckpointPermissions):      "/custom/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions",
+		string(ApiNameDeleteFineTuningCheckpointPermission): "/custom/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions/{permission_id}",
+		string(ApiNameQwenAsyncAIGC):                        "/custom/qwen/services/aigc",
+		string(ApiNameQwenAsyncTask):                        "/custom/qwen/tasks/{task_id}",
+		string(ApiNameAnthropicMessages):                    "/custom/anthropic/messages",
+		string(ApiNameAnthropicCountTokens):                 "/custom/anthropic/messages/count_tokens",
+		string(ApiNameGeminiGenerateContent):                "/custom/gemini/{model}:generateContent",
+		string(ApiNameVertexRaw):                            "/custom/vertex/raw",
+	}
+	configuredCapabilities["unknown/v1/not-supported"] = "/custom/unknown"
+
+	rawConfig, err := json.Marshal(map[string]any{
+		"type":         "openai",
+		"capabilities": configuredCapabilities,
+	})
+	assert.NoError(t, err)
+
+	var config ProviderConfig
+	config.FromJson(gjson.ParseBytes(rawConfig))
+
+	for capability, path := range configuredCapabilities {
+		if capability == "unknown/v1/not-supported" {
+			assert.NotContains(t, config.capabilities, capability)
+			continue
+		}
+		assert.Equal(t, path, config.capabilities[capability])
+	}
 }
 
 func TestCreateProvider(t *testing.T) {
