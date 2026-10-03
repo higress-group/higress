@@ -56,16 +56,20 @@ func commandVerifyPulledPlugin(args []string) error {
 	sourceCreated := fs.String("source-created", "", "expected RFC3339 source commit time")
 	version := fs.String("version", "", "expected stable plugin version")
 	inputHash := fs.String("input-hash", "", "expected plugin input hash")
+	provenance := fs.String("provenance", "candidate", "artifact provenance: candidate (pipeline-built) or public (legacy artifact re-baselined by reviewed evidence)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *manifestPath == "" || *configPath == "" || *wasmPath == "" {
 		return errors.New("--manifest, --config, and --wasm are required")
 	}
-	return verifyPulledPlugin(*manifestPath, *configPath, *wasmPath, *digest, *sourceCommit, *sourceCreated, *version, *inputHash)
+	if *provenance != "candidate" && *provenance != "public" {
+		return errors.New(`--provenance must be "candidate" or "public"`)
+	}
+	return verifyPulledPlugin(*manifestPath, *configPath, *wasmPath, *digest, *sourceCommit, *sourceCreated, *version, *inputHash, *provenance)
 }
 
-func verifyPulledPlugin(manifestPath, configPath, wasmPath, expectedDigest, expectedSource, expectedCreated, expectedVersion, expectedInputHash string) error {
+func verifyPulledPlugin(manifestPath, configPath, wasmPath, expectedDigest, expectedSource, expectedCreated, expectedVersion, expectedInputHash, provenance string) error {
 	if !digestPattern.MatchString(expectedDigest) {
 		return errors.New("--digest must be a lowercase sha256 digest")
 	}
@@ -109,12 +113,28 @@ func verifyPulledPlugin(manifestPath, configPath, wasmPath, expectedDigest, expe
 	if manifest.Config.MediaType != unknownConfigMediaType || manifest.Config.Digest != emptyObjectDigest || manifest.Config.Size != 2 || len(manifest.Config.Annotations) != 0 {
 		return errors.New("pulled manifest OCI config descriptor must identify the canonical empty JSON object")
 	}
-	if len(manifest.Annotations) != 4 ||
-		manifest.Annotations["org.opencontainers.image.created"] != expectedCreated ||
-		manifest.Annotations["org.opencontainers.image.revision"] != expectedSource ||
-		manifest.Annotations["org.opencontainers.image.version"] != expectedVersion ||
+	if len(manifest.Annotations) != 4 {
+		return errors.New("pulled manifest must carry exactly the four provenance annotations")
+	}
+	if manifest.Annotations["org.opencontainers.image.version"] != expectedVersion ||
 		manifest.Annotations["io.higress.plugin.input-hash"] != expectedInputHash {
-		return errors.New("pulled manifest annotations do not match the deterministic source creation time, revision, version, and input hash")
+		return errors.New("pulled manifest annotations do not match the expected version and input hash")
+	}
+	// A candidate artifact is produced by the pipeline after the unified
+	// layout landed, so its created/revision annotations are deterministic
+	// functions of the freeze commit. A public artifact was re-baselined from
+	// a legacy out-of-band push whose annotations predate that contract; its
+	// provenance is the reviewed snapshot evidence, so only well-formedness
+	// is checked here, mirroring verify-snapshot's public-entry exemption.
+	if provenance == "candidate" {
+		if manifest.Annotations["org.opencontainers.image.created"] != expectedCreated ||
+			manifest.Annotations["org.opencontainers.image.revision"] != expectedSource {
+			return errors.New("pulled manifest annotations do not match the deterministic source creation time and revision")
+		}
+	} else if _, err := time.Parse(time.RFC3339, manifest.Annotations["org.opencontainers.image.created"]); err != nil {
+		return errors.New("pulled manifest created annotation is not an RFC3339 timestamp")
+	} else if !commitPattern.MatchString(manifest.Annotations["org.opencontainers.image.revision"]) {
+		return errors.New("pulled manifest revision annotation is not a full lowercase Git commit")
 	}
 	if len(manifest.Layers) != 2 {
 		return fmt.Errorf("pulled manifest must contain exactly two layers, got %d", len(manifest.Layers))

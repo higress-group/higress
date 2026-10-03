@@ -23,7 +23,7 @@ const (
 
 func TestVerifyPulledPluginAcceptsStrictTwoLayerProxyWasm(t *testing.T) {
 	manifest, config, wasm, digest := writePulledPluginFixture(t)
-	if err := verifyPulledPlugin(manifest, config, wasm, digest, pulledSource, pulledCreated, pulledVer, pulledInput); err != nil {
+	if err := verifyPulledPlugin(manifest, config, wasm, digest, pulledSource, pulledCreated, pulledVer, pulledInput, "candidate"); err != nil {
 		t.Fatalf("valid pulled plugin was rejected: %v", err)
 	}
 }
@@ -37,8 +37,59 @@ func TestVerifyPulledPluginAcceptsUnknownArtifactType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyPulledPlugin(manifest, config, wasm, digestBytes(data), pulledSource, pulledCreated, pulledVer, pulledInput); err != nil {
+	if err := verifyPulledPlugin(manifest, config, wasm, digestBytes(data), pulledSource, pulledCreated, pulledVer, pulledInput, "candidate"); err != nil {
 		t.Fatalf("pulled plugin with the canonical empty-config artifactType was rejected: %v", err)
+	}
+}
+
+func TestVerifyPulledPluginAcceptsPublicProvenanceLegacyAnnotations(t *testing.T) {
+	manifest, config, wasm, _ := writePulledPluginFixture(t)
+	// A legacy out-of-band push records its own build revision and created
+	// time, which predate the snapshot freeze commit; public provenance must
+	// accept them while still enforcing version and input-hash equality.
+	mutatePulledManifest(t, manifest, func(m map[string]any) {
+		annotations := m["annotations"].(map[string]any)
+		annotations["org.opencontainers.image.revision"] = strings.Repeat("b", 40)
+		annotations["org.opencontainers.image.created"] = "2026-09-03T02:12:35Z"
+	})
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSource := strings.Repeat("c", 40)
+	otherCreated := "2026-10-02T13:52:00+08:00"
+	if err := verifyPulledPlugin(manifest, config, wasm, digestBytes(data), otherSource, otherCreated, pulledVer, pulledInput, "public"); err != nil {
+		t.Fatalf("public pulled plugin with legacy annotations was rejected: %v", err)
+	}
+	// The same artifact under candidate provenance must fail the
+	// deterministic created/revision equality.
+	if err := verifyPulledPlugin(manifest, config, wasm, digestBytes(data), otherSource, otherCreated, pulledVer, pulledInput, "candidate"); err == nil {
+		t.Fatal("candidate provenance accepted legacy created/revision annotations")
+	}
+}
+
+func TestVerifyPulledPluginRejectsMalformedPublicAnnotations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  string
+		val  string
+	}{
+		{name: "public-revision-not-a-commit", key: "org.opencontainers.image.revision", val: "not-a-commit"},
+		{name: "public-created-not-rfc3339", key: "org.opencontainers.image.created", val: "yesterday"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest, config, wasm, _ := writePulledPluginFixture(t)
+			mutatePulledManifest(t, manifest, func(m map[string]any) {
+				m["annotations"].(map[string]any)[tc.key] = tc.val
+			})
+			data, err := os.ReadFile(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyPulledPlugin(manifest, config, wasm, digestBytes(data), pulledSource, pulledCreated, pulledVer, pulledInput, "public"); err == nil {
+				t.Fatalf("public pulled plugin with malformed %s was accepted", tc.key)
+			}
+		})
 	}
 }
 
@@ -74,7 +125,16 @@ func TestVerifyPulledPluginRejectsBadManifestBlobsAndWasm(t *testing.T) {
 					manifest["annotations"].(map[string]any)["org.opencontainers.image.version"] = "9.9.9"
 				})
 			},
-			want: "manifest annotations",
+			want: "version and input hash",
+		},
+		{
+			name: "candidate-revision-mismatch",
+			mutate: func(t *testing.T, manifestPath, _, _ string) {
+				mutatePulledManifest(t, manifestPath, func(manifest map[string]any) {
+					manifest["annotations"].(map[string]any)["org.opencontainers.image.revision"] = strings.Repeat("b", 40)
+				})
+			},
+			want: "deterministic source creation time and revision",
 		},
 		{
 			name: "unexpected-manifest-annotation",
@@ -83,7 +143,7 @@ func TestVerifyPulledPluginRejectsBadManifestBlobsAndWasm(t *testing.T) {
 					manifest["annotations"].(map[string]any)["unexpected"] = "value"
 				})
 			},
-			want: "manifest annotations",
+			want: "four provenance annotations",
 		},
 		{
 			name: "oci-v1.1-unknown-artifact-type",
@@ -225,7 +285,7 @@ func TestVerifyPulledPluginRejectsBadManifestBlobsAndWasm(t *testing.T) {
 				t.Fatal(err)
 			}
 			digest := digestBytes(manifestBytes)
-			err = verifyPulledPlugin(manifest, config, wasm, digest, pulledSource, pulledCreated, pulledVer, pulledInput)
+			err = verifyPulledPlugin(manifest, config, wasm, digest, pulledSource, pulledCreated, pulledVer, pulledInput, "candidate")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("invalid pulled artifact was accepted or returned the wrong error: %v", err)
 			}
