@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 const (
 	ociImageManifestMediaType = "application/vnd.oci.image.manifest.v1+json"
 	unknownConfigMediaType    = "application/vnd.unknown.config.v1+json"
+	ociEmptyConfigMediaType   = "application/vnd.oci.empty.v1+json"
 	unknownArtifactMediaType  = "application/vnd.unknown.artifact.v1"
 	emptyObjectDigest         = "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
 	wasmConfigMediaType       = "application/vnd.module.wasm.config.v1+json"
@@ -34,6 +36,7 @@ type pulledDescriptor struct {
 	MediaType   string            `json:"mediaType"`
 	Digest      string            `json:"digest"`
 	Size        int64             `json:"size"`
+	Data        string            `json:"data"`
 	Annotations map[string]string `json:"annotations"`
 }
 
@@ -110,8 +113,19 @@ func verifyPulledPlugin(manifestPath, configPath, wasmPath, expectedDigest, expe
 	if manifest.ArtifactType != "" && manifest.ArtifactType != unknownArtifactMediaType {
 		return fmt.Errorf("pulled manifest artifactType %q is not the canonical empty-config artifact type", manifest.ArtifactType)
 	}
-	if manifest.Config.MediaType != unknownConfigMediaType || manifest.Config.Digest != emptyObjectDigest || manifest.Config.Size != 2 || len(manifest.Config.Annotations) != 0 {
+	// The empty config is published in two legitimate OCI encodings: the
+	// pipeline's descriptor-only form (vnd.unknown.config.v1+json) and the
+	// ORAS artifactType-push form (vnd.oci.empty.v1+json with the inline
+	// base64 "{}"). Both are pinned to the empty JSON object's digest and
+	// size, and any inline data is checked against that digest below.
+	if manifest.Config.MediaType != unknownConfigMediaType && manifest.Config.MediaType != ociEmptyConfigMediaType {
 		return errors.New("pulled manifest OCI config descriptor must identify the canonical empty JSON object")
+	}
+	if manifest.Config.Digest != emptyObjectDigest || manifest.Config.Size != 2 || len(manifest.Config.Annotations) != 0 {
+		return errors.New("pulled manifest OCI config descriptor must identify the canonical empty JSON object")
+	}
+	if err := verifyInlineData("config descriptor", manifest.Config.Data, manifest.Config.Digest, manifest.Config.Size); err != nil {
+		return err
 	}
 	if len(manifest.Annotations) != 4 {
 		return errors.New("pulled manifest must carry exactly the four provenance annotations")
@@ -205,6 +219,28 @@ func verifyPulledLayer(name string, data []byte, descriptor pulledDescriptor) er
 	sum := sha256.Sum256(data)
 	if got := "sha256:" + hex.EncodeToString(sum[:]); got != descriptor.Digest {
 		return fmt.Errorf("%s digest %s does not match layer descriptor digest %s", name, got, descriptor.Digest)
+	}
+	return verifyInlineData(name, descriptor.Data, descriptor.Digest, descriptor.Size)
+}
+
+// verifyInlineData checks a descriptor's optional embedded base64 payload
+// against the same digest and size the pulled blob was verified with: a
+// registry client may consume the inline data instead of pulling the blob, so
+// it must never disagree with the descriptor it travels in.
+func verifyInlineData(name string, encoded string, digest string, size int64) error {
+	if encoded == "" {
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("%s inline data is not valid base64", name)
+	}
+	if int64(len(decoded)) != size {
+		return fmt.Errorf("%s inline data size %d does not match descriptor size %d", name, len(decoded), size)
+	}
+	sum := sha256.Sum256(decoded)
+	if got := "sha256:" + hex.EncodeToString(sum[:]); got != digest {
+		return fmt.Errorf("%s inline data digest %s does not match descriptor digest %s", name, got, digest)
 	}
 	return nil
 }

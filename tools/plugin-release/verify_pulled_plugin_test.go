@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -39,6 +40,90 @@ func TestVerifyPulledPluginAcceptsUnknownArtifactType(t *testing.T) {
 	}
 	if err := verifyPulledPlugin(manifest, config, wasm, digestBytes(data), pulledSource, pulledCreated, pulledVer, pulledInput, "candidate"); err != nil {
 		t.Fatalf("pulled plugin with the canonical empty-config artifactType was rejected: %v", err)
+	}
+}
+
+func TestVerifyPulledPluginAcceptsOCIEmptyConfigInlineData(t *testing.T) {
+	manifest, config, wasm, _ := writePulledPluginFixture(t)
+	// The ORAS artifactType-push form of the empty config: media type
+	// vnd.oci.empty.v1+json with the inline base64 "{}", mirroring the live
+	// manifests republished out-of-band on 2026-09-03.
+	mutatePulledManifest(t, manifest, func(m map[string]any) {
+		m["artifactType"] = unknownArtifactMediaType
+		configDescriptor := m["config"].(map[string]any)
+		configDescriptor["mediaType"] = ociEmptyConfigMediaType
+		configDescriptor["data"] = "e30="
+	})
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPulledPlugin(manifest, config, wasm, digestBytes(data), pulledSource, pulledCreated, pulledVer, pulledInput, "candidate"); err != nil {
+		t.Fatalf("pulled plugin with the OCI empty-config inline data form was rejected: %v", err)
+	}
+}
+
+func TestVerifyPulledPluginRejectsMalformedInlineData(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(t *testing.T, manifestPath, _, wasmPath string)
+		want   string
+	}{
+		{
+			name: "config-inline-data-not-base64",
+			mutate: func(t *testing.T, manifestPath, _, _ string) {
+				mutatePulledManifest(t, manifestPath, func(manifest map[string]any) {
+					manifest["config"].(map[string]any)["data"] = "not*base64"
+				})
+			},
+			want: "not valid base64",
+		},
+		{
+			name: "config-inline-data-size-mismatch",
+			mutate: func(t *testing.T, manifestPath, _, _ string) {
+				mutatePulledManifest(t, manifestPath, func(manifest map[string]any) {
+					manifest["config"].(map[string]any)["data"] = "e30x"
+				})
+			},
+			want: "inline data size",
+		},
+		{
+			name: "config-inline-data-digest-mismatch",
+			mutate: func(t *testing.T, manifestPath, _, _ string) {
+				mutatePulledManifest(t, manifestPath, func(manifest map[string]any) {
+					manifest["config"].(map[string]any)["data"] = base64.StdEncoding.EncodeToString([]byte(`{ `))
+				})
+			},
+			want: "inline data digest",
+		},
+		{
+			name: "wasm-layer-inline-data-digest-mismatch",
+			mutate: func(t *testing.T, manifestPath, _, wasmPath string) {
+				wasm, err := os.ReadFile(wasmPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				corrupted := append([]byte(nil), wasm...)
+				corrupted[len(corrupted)-1] ^= 0x01
+				mutatePulledManifest(t, manifestPath, func(manifest map[string]any) {
+					manifest["layers"].([]any)[1].(map[string]any)["data"] = base64.StdEncoding.EncodeToString(corrupted)
+				})
+			},
+			want: "inline data digest",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest, config, wasm, _ := writePulledPluginFixture(t)
+			tc.mutate(t, manifest, config, wasm)
+			data, err := os.ReadFile(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = verifyPulledPlugin(manifest, config, wasm, digestBytes(data), pulledSource, pulledCreated, pulledVer, pulledInput, "candidate")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("malformed inline data was accepted or returned the wrong error: %v", err)
+			}
+		})
 	}
 }
 
