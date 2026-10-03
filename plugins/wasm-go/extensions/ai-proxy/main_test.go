@@ -1,13 +1,670 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/provider"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/test"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	wasmtest "github.com/higress-group/wasm-go/pkg/test"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestApiKeyAffinityPausesRequestUntilRedisBindingIsLoaded(t *testing.T) {
+	config, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "openai",
+			"apiTokens": []string{"sk-a", "sk-b"},
+			"apiKeyAffinity": map[string]interface{}{
+				"enabled": true,
+				"redis": map[string]interface{}{
+					"serviceName": "redis.dns",
+				},
+			},
+		},
+	})
+	host, status := wasmtest.NewTestHost(config)
+	defer host.Reset()
+	require.Equal(t, types.OnPluginStartStatusOK, status)
+
+	action := host.CallOnHttpRequestHeaders([][2]string{
+		{":authority", "example.com"},
+		{":path", "/v1/chat/completions"},
+		{":method", "POST"},
+		{"content-type", "application/json"},
+		{"x-mse-consumer", "consumer-a"},
+	})
+
+	require.Equal(t, types.ActionPause, action)
+	require.Len(t, host.GetRedisCalloutAttributes(), 1)
+}
+
+// TestApiKeyAffinityRewritesRequestTargetBeforeRedisReturns verifies that affinity lookup does not delay target rewriting.
+func TestApiKeyAffinityRewritesRequestTargetBeforeRedisReturns(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		wantPath string
+	}{
+		{name: "anthropic messages", path: "/v1/messages?beta=true", wantPath: "/coding/v1/messages?beta=true"},
+		{name: "openai chat completions", path: "/v1/chat/completions", wantPath: "/coding/v1/chat/completions"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config, _ := json.Marshal(map[string]interface{}{
+				"provider": map[string]interface{}{
+					"type":          "vllm",
+					"vllmCustomUrl": "https://api.kimi.com/coding/v1",
+					"apiTokens":     []string{"sk-a", "sk-b"},
+					"apiKeyAffinity": map[string]interface{}{
+						"enabled": true,
+						"redis":   map[string]interface{}{"serviceName": "redis.dns"},
+					},
+				},
+			})
+			host, status := wasmtest.NewTestHost(config)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "gateway.example.com"},
+				{":path", tt.path},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+				{"x-mse-consumer", "consumer-a"},
+			})
+
+			require.Equal(t, types.ActionPause, action)
+			require.Len(t, host.GetRedisCalloutAttributes(), 1)
+			path, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), ":path")
+			require.True(t, ok)
+			require.Equal(t, tt.wantPath, path)
+			authority, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), ":authority")
+			require.True(t, ok)
+			require.Equal(t, "api.kimi.com", authority)
+
+			initialAuth, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+			require.True(t, ok)
+			boundToken := "sk-a"
+			if initialAuth == "Bearer sk-a" {
+				boundToken = "sk-b"
+			}
+			host.CallOnRedisCall(0, wasmtest.CreateRedisRespString(apiKeyAffinityTestBinding(t, boundToken, 9_999_999_999)))
+
+			updatedAuth, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+			require.True(t, ok)
+			require.Equal(t, "Bearer "+boundToken, updatedAuth)
+			updatedPath, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), ":path")
+			require.True(t, ok)
+			require.Equal(t, tt.wantPath, updatedPath)
+			updatedAuthority, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), ":authority")
+			require.True(t, ok)
+			require.Equal(t, "api.kimi.com", updatedAuthority)
+		})
+	}
+}
+
+func TestApiKeyAffinityPreservesOriginalTargetWhenRedisChangesKlingKey(t *testing.T) {
+	config, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "kling",
+			"apiTokens": []string{"sk-a", "sk-b"},
+			"apiKeyAffinity": map[string]interface{}{
+				"enabled": true,
+				"redis":   map[string]interface{}{"serviceName": "redis.dns"},
+			},
+		},
+	})
+	host, status := wasmtest.NewTestHost(config)
+	defer host.Reset()
+	require.Equal(t, types.OnPluginStartStatusOK, status)
+
+	action := host.CallOnHttpRequestHeaders([][2]string{
+		{":authority", "gateway.example.com"},
+		{":path", "/v1/videos/kling-i2v-task-123?with_status=true"},
+		{":method", "GET"},
+		{"x-mse-consumer", "consumer-a"},
+	})
+	require.Equal(t, types.ActionPause, action)
+
+	initialAuth, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+	require.True(t, ok)
+	boundToken := "sk-a"
+	if initialAuth == "Bearer sk-a" {
+		boundToken = "sk-b"
+	}
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespString(apiKeyAffinityTestBinding(t, boundToken, 9_999_999_999)))
+
+	path, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), ":path")
+	require.True(t, ok)
+	require.Equal(t, "/v1/videos/image2video/task-123?with_status=true", path)
+	updatedAuth, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+	require.True(t, ok)
+	require.Equal(t, "Bearer "+boundToken, updatedAuth)
+}
+
+func TestApiKeyAffinityUsesRedisBoundTokenBeforeSendingHeaders(t *testing.T) {
+	config, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "openai",
+			"apiTokens": []string{"sk-a", "sk-b"},
+			"apiKeyAffinity": map[string]interface{}{
+				"enabled": true,
+				"redis":   map[string]interface{}{"serviceName": "redis.dns"},
+			},
+		},
+	})
+	host, status := wasmtest.NewTestHost(config)
+	defer host.Reset()
+	require.Equal(t, types.OnPluginStartStatusOK, status)
+
+	action := host.CallOnHttpRequestHeaders([][2]string{
+		{":authority", "example.com"},
+		{":path", "/v1/chat/completions"},
+		{":method", "POST"},
+		{"content-type", "application/json"},
+		{"x-mse-consumer", "consumer-a"},
+	})
+	require.Equal(t, types.ActionPause, action)
+
+	binding := map[string]interface{}{
+		"tokenFingerprint": apiKeyAffinityTestFingerprint("sk-a"),
+		"renewAfter":       9_999_999_999,
+	}
+	bindingBytes, _ := json.Marshal(binding)
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespString(string(bindingBytes)))
+
+	auth, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+	require.True(t, ok)
+	require.Contains(t, auth, "sk-a")
+}
+
+func apiKeyAffinityTestFingerprint(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestApiKeyAffinityPersistsBindingAfterAny2xxResponse(t *testing.T) {
+	host := newApiKeyAffinityTestHost(t)
+	defer host.Reset()
+	startApiKeyAffinityRequest(t, host)
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+
+	_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+	host.CallOnHttpResponseHeaders([][2]string{{":status", "201"}})
+
+	callouts := host.GetRedisCalloutAttributes()
+	require.Len(t, callouts, 1)
+	query := string(callouts[0].Query)
+	require.Contains(t, strings.ToLower(query), "set")
+	require.Contains(t, strings.ToLower(query), "ex")
+	require.NotContains(t, query, "consumer-a")
+	require.NotContains(t, query, "sk-a")
+	require.NotContains(t, query, "sk-b")
+}
+
+func TestApiKeyAffinityKeepsLegacySuccessRulesWithoutConsumer(t *testing.T) {
+	config, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "openai",
+			"apiTokens": []string{"sk-a", "sk-b"},
+			"retryOnFailure": map[string]interface{}{
+				"enabled":       true,
+				"maxRetries":    1,
+				"retryOnStatus": []string{"201"},
+			},
+			"apiKeyAffinity": map[string]interface{}{
+				"enabled": true,
+				"redis":   map[string]interface{}{"serviceName": "redis.dns"},
+			},
+		},
+	})
+	host, pluginStatus := wasmtest.NewTestHost(config)
+	defer host.Reset()
+	require.Equal(t, types.OnPluginStartStatusOK, pluginStatus)
+
+	host.CallOnHttpRequestHeaders([][2]string{
+		{":authority", "example.com"},
+		{":path", "/v1/chat/completions"},
+		{":method", "POST"},
+		{"content-type", "application/json"},
+	})
+	host.CallOnHttpRequestBody([]byte(`{"model":"test","messages":[],"stream":false}`))
+	_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+
+	action := host.CallOnHttpResponseHeaders([][2]string{{":status", "201"}})
+	require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+}
+
+func TestApiKeyAffinityOnlyRenewsBindingInsideRenewalWindow(t *testing.T) {
+	t.Run("before renewal window", func(t *testing.T) {
+		host := newApiKeyAffinityTestHost(t)
+		defer host.Reset()
+		startApiKeyAffinityRequest(t, host)
+		binding := apiKeyAffinityTestBinding(t, "sk-a", 9_999_999_999)
+		host.CallOnRedisCall(0, wasmtest.CreateRedisRespString(binding))
+
+		_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+		host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}})
+
+		require.Empty(t, host.GetRedisCalloutAttributes())
+	})
+
+	t.Run("inside renewal window", func(t *testing.T) {
+		host := newApiKeyAffinityTestHost(t)
+		defer host.Reset()
+		startApiKeyAffinityRequest(t, host)
+		binding := apiKeyAffinityTestBinding(t, "sk-a", 1)
+		host.CallOnRedisCall(0, wasmtest.CreateRedisRespString(binding))
+
+		_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+		host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}})
+
+		require.Len(t, host.GetRedisCalloutAttributes(), 1)
+	})
+}
+
+func newApiKeyAffinityTestHost(t *testing.T) wasmtest.TestHost {
+	return newApiKeyAffinityTestHostWithTokens(t, []string{"sk-a", "sk-b"})
+}
+
+func newApiKeyAffinityTestHostWithTokens(t *testing.T, tokens []string) wasmtest.TestHost {
+	t.Helper()
+	config, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "openai",
+			"apiTokens": tokens,
+			"apiKeyAffinity": map[string]interface{}{
+				"enabled": true,
+				"redis":   map[string]interface{}{"serviceName": "redis.dns"},
+			},
+		},
+	})
+	host, status := wasmtest.NewTestHost(config)
+	require.Equal(t, types.OnPluginStartStatusOK, status)
+	return host
+}
+
+func startApiKeyAffinityRequest(t *testing.T, host wasmtest.TestHost) {
+	startApiKeyAffinityRequestWithHeaders(t, host, nil)
+}
+
+func startApiKeyAffinityRequestWithHeaders(t *testing.T, host wasmtest.TestHost, extraHeaders [][2]string) {
+	t.Helper()
+	headers := [][2]string{
+		{":authority", "example.com"},
+		{":path", "/v1/chat/completions"},
+		{":method", "POST"},
+		{"content-type", "application/json"},
+		{"x-mse-consumer", "consumer-a"},
+	}
+	headers = append(headers, extraHeaders...)
+	host.CallOnHttpRequestHeaders(headers)
+	require.Len(t, host.GetRedisCalloutAttributes(), 1)
+}
+
+func apiKeyAffinityTestBinding(t *testing.T, token string, renewAfter int64) string {
+	t.Helper()
+	bindingBytes, err := json.Marshal(map[string]interface{}{
+		"tokenFingerprint": apiKeyAffinityTestFingerprint(token),
+		"renewAfter":       renewAfter,
+	})
+	require.NoError(t, err)
+	return string(bindingBytes)
+}
+
+func TestApiKeyAffinityMarksRetryableFailureForInternalRedirect(t *testing.T) {
+	for _, status := range []string{"401", "402", "403", "429"} {
+		t.Run(status, func(t *testing.T) {
+			host := newApiKeyAffinityTestHost(t)
+			defer host.Reset()
+			startApiKeyAffinityRequest(t, host)
+			host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+
+			_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+			host.CallOnHttpResponseHeaders([][2]string{{":status", status}})
+
+			responseStatus, ok := wasmtest.GetHeaderValue(host.GetResponseHeaders(), ":status")
+			require.True(t, ok)
+			require.Equal(t, "299", responseStatus)
+			retryMarker, ok := wasmtest.GetHeaderValue(host.GetResponseHeaders(), "x-higress-ai-proxy-key-retry")
+			require.True(t, ok)
+			require.Equal(t, "1", retryMarker)
+
+			retryCount, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "x-higress-ai-proxy-key-retry-count")
+			require.True(t, ok)
+			require.Equal(t, "1", retryCount)
+			failedTokens, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "x-higress-ai-proxy-failed-key-fingerprints")
+			require.True(t, ok)
+			require.NotEmpty(t, failedTokens)
+			startedAt, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "x-higress-ai-proxy-key-retry-started-at")
+			require.True(t, ok)
+			require.NotEmpty(t, startedAt)
+		})
+	}
+}
+
+func TestApiKeyAffinityDoesNotRedirectUnconfiguredFailureStatus(t *testing.T) {
+	host := newApiKeyAffinityTestHost(t)
+	defer host.Reset()
+	startApiKeyAffinityRequest(t, host)
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+
+	_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+	host.CallOnHttpResponseHeaders([][2]string{
+		{":status", "500"},
+		{"x-higress-ai-proxy-key-retry", "1"},
+	})
+
+	responseStatus, ok := wasmtest.GetHeaderValue(host.GetResponseHeaders(), ":status")
+	require.True(t, ok)
+	require.Equal(t, "500", responseStatus)
+	_, hasMarker := wasmtest.GetHeaderValue(host.GetResponseHeaders(), "x-higress-ai-proxy-key-retry")
+	require.False(t, hasMarker, "upstream must not be able to forge the internal retry marker")
+}
+
+func TestApiKeyAffinityStopsRetryAtConfiguredLimits(t *testing.T) {
+	t.Run("maximum retry count", func(t *testing.T) {
+		host := newApiKeyAffinityTestHost(t)
+		defer host.Reset()
+		startApiKeyAffinityRequestWithHeaders(t, host, [][2]string{
+			{"x-higress-fallback-from", "ai-proxy-key-affinity"},
+			{"x-higress-ai-proxy-key-retry-count", "3"},
+			{"x-higress-ai-proxy-key-retry-started-at", "9999999999999"},
+			{"x-higress-ai-proxy-failed-key-fingerprints", apiKeyAffinityTestFingerprint("sk-a")},
+		})
+		host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+		assertApiKeyAffinityFailureNotRedirected(t, host, "403")
+	})
+
+	t.Run("shared timeout from first failure", func(t *testing.T) {
+		host := newApiKeyAffinityTestHost(t)
+		defer host.Reset()
+		startApiKeyAffinityRequestWithHeaders(t, host, [][2]string{
+			{"x-higress-fallback-from", "ai-proxy-key-affinity"},
+			{"x-higress-ai-proxy-key-retry-count", "1"},
+			{"x-higress-ai-proxy-key-retry-started-at", "1"},
+			{"x-higress-ai-proxy-failed-key-fingerprints", apiKeyAffinityTestFingerprint("sk-a")},
+		})
+		host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+		assertApiKeyAffinityFailureNotRedirected(t, host, "403")
+	})
+
+	t.Run("no remaining token", func(t *testing.T) {
+		host := newApiKeyAffinityTestHostWithTokens(t, []string{"sk-only"})
+		defer host.Reset()
+		startApiKeyAffinityRequest(t, host)
+		host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+		assertApiKeyAffinityFailureNotRedirected(t, host, "403")
+	})
+}
+
+func TestApiKeyAffinityReentryExcludesPreviouslyFailedToken(t *testing.T) {
+	firstHost := newApiKeyAffinityTestHost(t)
+	startApiKeyAffinityRequest(t, firstHost)
+	firstHost.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+	firstAuth, ok := wasmtest.GetHeaderValue(firstHost.GetRequestHeaders(), "Authorization")
+	require.True(t, ok)
+	firstToken := strings.TrimPrefix(firstAuth, "Bearer ")
+	_ = firstHost.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+	firstHost.CallOnHttpResponseHeaders([][2]string{{":status", "403"}})
+	failed, _ := wasmtest.GetHeaderValue(firstHost.GetRequestHeaders(), "x-higress-ai-proxy-failed-key-fingerprints")
+	retryCount, _ := wasmtest.GetHeaderValue(firstHost.GetRequestHeaders(), "x-higress-ai-proxy-key-retry-count")
+	startedAt, _ := wasmtest.GetHeaderValue(firstHost.GetRequestHeaders(), "x-higress-ai-proxy-key-retry-started-at")
+	firstHost.Reset()
+
+	secondHost := newApiKeyAffinityTestHost(t)
+	defer secondHost.Reset()
+	startApiKeyAffinityRequestWithHeaders(t, secondHost, [][2]string{
+		{"x-higress-fallback-from", "ai-proxy-key-affinity"},
+		{"x-higress-ai-proxy-key-retry-count", retryCount},
+		{"x-higress-ai-proxy-key-retry-started-at", startedAt},
+		{"x-higress-ai-proxy-failed-key-fingerprints", failed},
+	})
+	secondHost.CallOnRedisCall(0, wasmtest.CreateRedisRespString(apiKeyAffinityTestBinding(t, firstToken, 9_999_999_999)))
+	secondAuth, ok := wasmtest.GetHeaderValue(secondHost.GetRequestHeaders(), "Authorization")
+	require.True(t, ok)
+	require.NotEqual(t, firstAuth, secondAuth)
+}
+
+func TestApiKeyAffinityReentryLimitsUpstreamToRemainingRetryBudget(t *testing.T) {
+	host := newApiKeyAffinityTestHost(t)
+	defer host.Reset()
+	startedAt := time.Now().Add(-5 * time.Second).UnixMilli()
+
+	startApiKeyAffinityRequestWithHeaders(t, host, [][2]string{
+		{"x-higress-fallback-from", "ai-proxy-key-affinity"},
+		{"x-higress-ai-proxy-key-retry-count", "1"},
+		{"x-higress-ai-proxy-key-retry-started-at", strconv.FormatInt(startedAt, 10)},
+		{"x-higress-ai-proxy-failed-key-fingerprints", apiKeyAffinityTestFingerprint("sk-a")},
+	})
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+
+	timeoutValue, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "x-envoy-upstream-rq-timeout-ms")
+	require.True(t, ok)
+	timeoutMillis, err := strconv.ParseInt(timeoutValue, 10, 64)
+	require.NoError(t, err)
+	require.InDelta(t, 25_000, timeoutMillis, 2_000)
+}
+
+func TestApiKeyAffinityReentryIncludesRedisLookupInRetryBudget(t *testing.T) {
+	host := newApiKeyAffinityTestHost(t)
+	defer host.Reset()
+	startedAt := time.Now().Add(-5 * time.Second).UnixMilli()
+
+	startApiKeyAffinityRequestWithHeaders(t, host, [][2]string{
+		{"x-higress-fallback-from", "ai-proxy-key-affinity"},
+		{"x-higress-ai-proxy-key-retry-count", "1"},
+		{"x-higress-ai-proxy-key-retry-started-at", strconv.FormatInt(startedAt, 10)},
+		{"x-higress-ai-proxy-failed-key-fingerprints", apiKeyAffinityTestFingerprint("sk-a")},
+	})
+	beforeValue, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "x-envoy-upstream-rq-timeout-ms")
+	require.True(t, ok)
+	beforeMillis, err := strconv.ParseInt(beforeValue, 10, 64)
+	require.NoError(t, err)
+
+	time.Sleep(20 * time.Millisecond)
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+
+	afterValue, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "x-envoy-upstream-rq-timeout-ms")
+	require.True(t, ok)
+	afterMillis, err := strconv.ParseInt(afterValue, 10, 64)
+	require.NoError(t, err)
+	require.Less(t, afterMillis, beforeMillis)
+}
+
+func TestApiKeyAffinityReentryNeverExpandsConfiguredRetryBudget(t *testing.T) {
+	host := newApiKeyAffinityTestHost(t)
+	defer host.Reset()
+	futureStartedAt := time.Now().Add(5 * time.Second).UnixMilli()
+
+	startApiKeyAffinityRequestWithHeaders(t, host, [][2]string{
+		{"x-higress-fallback-from", "ai-proxy-key-affinity"},
+		{"x-higress-ai-proxy-key-retry-count", "1"},
+		{"x-higress-ai-proxy-key-retry-started-at", strconv.FormatInt(futureStartedAt, 10)},
+		{"x-higress-ai-proxy-failed-key-fingerprints", apiKeyAffinityTestFingerprint("sk-a")},
+	})
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+
+	timeoutValue, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "x-envoy-upstream-rq-timeout-ms")
+	require.True(t, ok)
+	timeoutMillis, err := strconv.ParseInt(timeoutValue, 10, 64)
+	require.NoError(t, err)
+	require.LessOrEqual(t, timeoutMillis, int64(30_000))
+}
+
+func TestApiKeyAffinityReentryPreservesShorterUpstreamTimeout(t *testing.T) {
+	host := newApiKeyAffinityTestHost(t)
+	defer host.Reset()
+	startedAt := time.Now().Add(-5 * time.Second).UnixMilli()
+
+	startApiKeyAffinityRequestWithHeaders(t, host, [][2]string{
+		{"x-higress-fallback-from", "ai-proxy-key-affinity"},
+		{"x-higress-ai-proxy-key-retry-count", "1"},
+		{"x-higress-ai-proxy-key-retry-started-at", strconv.FormatInt(startedAt, 10)},
+		{"x-higress-ai-proxy-failed-key-fingerprints", apiKeyAffinityTestFingerprint("sk-a")},
+		{"x-envoy-upstream-rq-timeout-ms", "5000"},
+	})
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+
+	timeoutValue, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "x-envoy-upstream-rq-timeout-ms")
+	require.True(t, ok)
+	require.Equal(t, "5000", timeoutValue)
+}
+
+func TestApiKeyAffinityRebindsToSuccessfulReplacementToken(t *testing.T) {
+	host := newApiKeyAffinityTestHost(t)
+	defer host.Reset()
+	startApiKeyAffinityRequestWithHeaders(t, host, [][2]string{
+		{"x-higress-fallback-from", "ai-proxy-key-affinity"},
+		{"x-higress-ai-proxy-key-retry-count", "1"},
+		{"x-higress-ai-proxy-key-retry-started-at", "9999999999999"},
+		{"x-higress-ai-proxy-failed-key-fingerprints", apiKeyAffinityTestFingerprint("sk-a")},
+	})
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespString(apiKeyAffinityTestBinding(t, "sk-a", 9_999_999_999)))
+
+	auth, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+	require.True(t, ok)
+	require.Equal(t, "Bearer sk-b", auth)
+
+	_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+	host.CallOnHttpResponseHeaders([][2]string{{":status", "200"}})
+
+	callouts := host.GetRedisCalloutAttributes()
+	require.Len(t, callouts, 1)
+	query := string(callouts[0].Query)
+	require.Contains(t, query, apiKeyAffinityTestFingerprint("sk-b"))
+	require.NotContains(t, query, apiKeyAffinityTestFingerprint("sk-a"))
+}
+
+func TestApiKeyAffinityRedisFailureContinuesAndWritesAiLog(t *testing.T) {
+	host := newApiKeyAffinityTestHost(t)
+	defer host.Reset()
+	startApiKeyAffinityRequest(t, host)
+	host.CallOnRedisCall(1, nil)
+
+	_, hasAuth := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+	require.True(t, hasAuth)
+	aiLog, err := host.GetProperty([]string{"ai_log"})
+	require.NoError(t, err)
+	require.Contains(t, string(aiLog), "redis_degraded")
+}
+
+func TestApiKeyAffinityDoesNotBypassFailoverAvailability(t *testing.T) {
+	config, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "openai",
+			"apiTokens": []string{"sk-a", "sk-b"},
+			"failover": map[string]interface{}{
+				"enabled":          true,
+				"failureThreshold": 1,
+				"cooldownDuration": 60_000,
+				"failoverOnStatus": []string{"429"},
+			},
+			"apiKeyAffinity": map[string]interface{}{
+				"enabled": true,
+				"redis":   map[string]interface{}{"serviceName": "redis.dns"},
+			},
+		},
+	})
+	host, pluginStatus := wasmtest.NewTestHost(config)
+	defer host.Reset()
+	require.Equal(t, types.OnPluginStartStatusOK, pluginStatus)
+
+	startApiKeyAffinityRequest(t, host)
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespString(apiKeyAffinityTestBinding(t, "sk-a", 9_999_999_999)))
+	firstAuth, _ := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+	require.Contains(t, firstAuth, "sk-a")
+	_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+	host.CallOnHttpResponseHeaders([][2]string{{":status", "429"}})
+	host.CompleteHttp()
+
+	startApiKeyAffinityRequest(t, host)
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespString(apiKeyAffinityTestBinding(t, "sk-a", 9_999_999_999)))
+	secondAuth, _ := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+	require.Contains(t, secondAuth, "sk-b")
+}
+
+func TestApiKeyAffinityDoesNotRetryUnavailableFailoverPool(t *testing.T) {
+	config, _ := json.Marshal(map[string]interface{}{
+		"provider": map[string]interface{}{
+			"type":      "openai",
+			"apiTokens": []string{"sk-a", "sk-b"},
+			"failover": map[string]interface{}{
+				"enabled":          true,
+				"failureThreshold": 1,
+				"cooldownDuration": 60_000,
+				"failoverOnStatus": []string{"429"},
+			},
+			"apiKeyAffinity": map[string]interface{}{
+				"enabled": true,
+				"redis":   map[string]interface{}{"serviceName": "redis.dns"},
+			},
+		},
+	})
+	host, pluginStatus := wasmtest.NewTestHost(config)
+	defer host.Reset()
+	require.Equal(t, types.OnPluginStartStatusOK, pluginStatus)
+
+	// Mark both keys unavailable through failover.
+	for _, boundToken := range []string{"sk-a", "sk-b"} {
+		startApiKeyAffinityRequest(t, host)
+		host.CallOnRedisCall(0, wasmtest.CreateRedisRespString(apiKeyAffinityTestBinding(t, boundToken, 9_999_999_999)))
+		_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+		host.CallOnHttpResponseHeaders([][2]string{{":status", "429"}})
+		host.CompleteHttp()
+	}
+
+	// Preserve failover's first fallback when all keys are unavailable, but do not retry another suspended key.
+	startApiKeyAffinityRequest(t, host)
+	host.CallOnRedisCall(0, wasmtest.CreateRedisRespNull())
+	_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+	host.CallOnHttpResponseHeaders([][2]string{{":status", "403"}})
+
+	_, hasMarker := wasmtest.GetHeaderValue(host.GetResponseHeaders(), "x-higress-ai-proxy-key-retry")
+	require.False(t, hasMarker)
+	host.CompleteHttp()
+
+	// Stop locally if the available pool is emptied between preparation and internal re-entry.
+	action := host.CallOnHttpRequestHeaders([][2]string{
+		{":authority", "example.com"},
+		{":path", "/v1/chat/completions"},
+		{":method", "POST"},
+		{"content-type", "application/json"},
+		{"x-mse-consumer", "consumer-a"},
+		{"x-higress-fallback-from", "ai-proxy-key-affinity"},
+		{"x-higress-ai-proxy-key-retry-count", "1"},
+		{"x-higress-ai-proxy-key-retry-started-at", "9999999999999"},
+		{"x-higress-ai-proxy-failed-key-fingerprints", apiKeyAffinityTestFingerprint("sk-a")},
+	})
+	require.Equal(t, types.ActionPause, action)
+	require.Empty(t, host.GetRedisCalloutAttributes())
+	localResponse := host.GetLocalResponse()
+	require.NotNil(t, localResponse)
+	require.Equal(t, uint32(503), localResponse.StatusCode)
+	authHeader, _ := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
+	require.NotContains(t, authHeader, "sk-a")
+	require.NotContains(t, authHeader, "sk-b")
+}
+
+func assertApiKeyAffinityFailureNotRedirected(t *testing.T, host wasmtest.TestHost, status string) {
+	t.Helper()
+	_ = host.SetProperty([]string{"response", "code_details"}, []byte("via_upstream"))
+	host.CallOnHttpResponseHeaders([][2]string{{":status", status}})
+	actualStatus, ok := wasmtest.GetHeaderValue(host.GetResponseHeaders(), ":status")
+	require.True(t, ok)
+	require.Equal(t, status, actualStatus)
+	_, hasMarker := wasmtest.GetHeaderValue(host.GetResponseHeaders(), "x-higress-ai-proxy-key-retry")
+	require.False(t, hasMarker)
+}
 
 func Test_getApiName(t *testing.T) {
 	tests := []struct {
@@ -76,6 +733,45 @@ func Test_getApiName(t *testing.T) {
 			}
 		})
 	}
+}
+
+type originalApiNameTestProvider struct {
+	providerType string
+	apiName      provider.ApiName
+}
+
+func (p originalApiNameTestProvider) GetProviderType() string { return p.providerType }
+func (p originalApiNameTestProvider) GetApiName(string) provider.ApiName {
+	return p.apiName
+}
+
+func TestResolveOriginalProtocolApiNameKeepsStandardPathDetection(t *testing.T) {
+	claudeProvider := originalApiNameTestProvider{
+		providerType: "claude",
+		apiName:      provider.ApiNameChatCompletion,
+	}
+
+	require.Equal(
+		t,
+		provider.ApiNameAnthropicMessages,
+		resolveOriginalProtocolApiName(provider.ApiNameAnthropicMessages, "/v1/messages", claudeProvider),
+	)
+	require.Equal(
+		t,
+		provider.ApiNameChatCompletion,
+		resolveOriginalProtocolApiName("", "/provider-specific-path", claudeProvider),
+	)
+
+	// Non-Claude providers must retain their path semantics, including specialized APIs such as Vertex Raw.
+	vertexProvider := originalApiNameTestProvider{
+		providerType: "vertex",
+		apiName:      provider.ApiNameVertexRaw,
+	}
+	require.Equal(
+		t,
+		provider.ApiNameVertexRaw,
+		resolveOriginalProtocolApiName(provider.ApiNameChatCompletion, "/v1/projects/p/locations/l/models/m:generateContent", vertexProvider),
+	)
 }
 
 func Test_isSupportedRequestContentType(t *testing.T) {

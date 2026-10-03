@@ -181,11 +181,8 @@ func initContext(ctx wrapper.HttpContext) {
 	//             re-authentication after Authorization has been replaced with
 	//             the upstream apiToken.
 	//
-	// SAFETY DEPENDENCY: this signal is reliable only when external callers
-	// cannot supply x-higress-fallback-from. For cascaded deployments where an
-	// upstream gateway may itself be in an internal_redirect chain when forwarding
-	// to this gateway, list x-higress-fallback-from (and x-hi-original-auth) in
-	// the HCM internal_only_headers as defense-in-depth.
+	// Cascaded gateways must not forward this internal marker to another gateway;
+	// otherwise the downstream gateway cannot distinguish it from its own re-entry.
 	fallbackFrom, _ := proxywasm.GetHttpRequestHeader(util.HeaderHigressFallbackFrom)
 	if fallbackFrom == "" {
 		_ = proxywasm.RemoveHttpRequestHeader(util.HeaderOriginalAuth)
@@ -243,9 +240,7 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 	apiName := getApiName(path.Path)
 	providerConfig := pluginConfig.GetProviderConfig()
 	if providerConfig.IsOriginal() {
-		if handler, ok := activeProvider.(provider.ApiNameHandler); ok {
-			apiName = handler.GetApiName(path.Path)
-		}
+		apiName = resolveOriginalProtocolApiName(apiName, path.Path, activeProvider)
 	} else {
 		// Only perform protocol conversion for non-original protocols.
 		// Auto-detect protocol based on request path and handle conversion if needed
@@ -278,6 +273,7 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 	}
 
 	ctx.SetContext(provider.CtxKeyApiName, apiName)
+	providerConfig.InitializeApiKeyAffinityRequest(ctx)
 
 	// Always remove the Accept-Encoding header to prevent the LLM from sending compressed responses,
 	// allowing plugins to inspect or modify the response correctly
@@ -296,11 +292,64 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 		return types.ActionPause
 	}
 
-	if handler, ok := activeProvider.(provider.RequestHeadersHandler); ok {
-		// Set the apiToken for the current request.
-		providerConfig.SetApiTokenInUse(ctx)
-		// Set available apiTokens of current request in the context, will be used in the retryOnFailure
+	if _, ok := activeProvider.(provider.RequestHeadersHandler); ok {
 		providerConfig.SetAvailableApiTokens(ctx)
+		consumer := providerConfig.GetApiKeyAffinityConsumer()
+		if providerConfig.ApiKeyAffinityEnabled() && consumer != "" {
+			// Preserve the existing synchronous path, host, and provisional key rewrites before the Redis lookup.
+			originalHost := ctx.Host()
+			originalPath := ctx.Path()
+			initialAction := processRequestHeaders(ctx, pluginConfig, activeProvider, apiName)
+			initialToken := providerConfig.GetApiTokenInUse(ctx)
+			if initialToken == "" && providerConfig.IsApiKeyAffinityRetryRequest(ctx) {
+				return initialAction
+			}
+			err := providerConfig.LoadApiKeyAffinity(ctx, consumer, func() {
+				selectedToken := providerConfig.SetApiTokenInUse(ctx)
+				if selectedToken != initialToken {
+					// Restore the original target before applying provider logic with the Redis-selected key.
+					_ = proxywasm.ReplaceHttpRequestHeader(util.HeaderAuthority, originalHost)
+					_ = proxywasm.ReplaceHttpRequestHeader(util.HeaderPath, originalPath)
+					processRequestHeaders(ctx, pluginConfig, activeProvider, apiName)
+				}
+				_ = proxywasm.ResumeHttpRequest()
+			})
+			if err == nil {
+				return types.ActionPause
+			}
+			return initialAction
+		}
+		return processRequestHeaders(ctx, pluginConfig, activeProvider, apiName)
+	}
+
+	return types.ActionContinue
+}
+
+// resolveOriginalProtocolApiName recognizes native Claude Messages without changing other provider path semantics.
+func resolveOriginalProtocolApiName(detected provider.ApiName, path string, activeProvider provider.Provider) provider.ApiName {
+	if detected == provider.ApiNameAnthropicMessages && activeProvider.GetProviderType() == "claude" {
+		return detected
+	}
+	if handler, ok := activeProvider.(provider.ApiNameHandler); ok {
+		return handler.GetApiName(path)
+	}
+	return detected
+}
+
+// processRequestHeaders applies provider header handling for both the initial request and a Redis-selected key.
+func processRequestHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginConfig, activeProvider provider.Provider, apiName provider.ApiName) types.Action {
+	providerConfig := pluginConfig.GetProviderConfig()
+	defer func() {
+		saveContextsToHeaders(ctx)
+	}()
+
+	if handler, ok := activeProvider.(provider.RequestHeadersHandler); ok {
+		// Set the apiToken for the current request after affinity lookup completes.
+		apiToken := providerConfig.SetApiTokenInUse(ctx)
+		if apiToken == "" && providerConfig.IsApiKeyAffinityRetryRequest(ctx) {
+			_ = proxywasm.SendHttpResponseWithDetail(503, "ai-proxy.api_key_affinity_no_available_key", util.CreateHeaders(util.HeaderContentType, util.MimeTypeTextPlain), []byte("no available API key for affinity retry"), -1)
+			return types.ActionPause
+		}
 
 		// save the original request host and path in case they are needed for apiToken health check and retry
 		ctx.SetContext(provider.CtxRequestHost, ctx.Host())
@@ -312,6 +361,8 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 			return types.ActionContinue
 		}
 
+		_, hasRequestBodyHandler := activeProvider.(provider.RequestBodyHandler)
+		hasRequestBody := ctx.HasRequestBody()
 		if hasRequestBody && hasRequestBodyHandler {
 			_ = proxywasm.RemoveHttpRequestHeader(headerContentLength)
 			ctx.SetRequestBodyBufferLimit(defaultMaxBodyBytes)
@@ -416,17 +467,31 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginCo
 	}
 
 	log.Debugf("[onHttpResponseHeaders] provider=%s", activeProvider.GetProviderType())
+	// The custom_response rule is global, so strip an upstream marker that could trigger an internal retry.
+	_ = proxywasm.RemoveHttpResponseHeader(util.HeaderApiKeyAffinityRetry)
 
 	providerConfig := pluginConfig.GetProviderConfig()
 	apiTokenInUse := providerConfig.GetApiTokenInUse(ctx)
 	apiTokens := providerConfig.GetAvailableApiToken(ctx)
 
 	status, err := proxywasm.GetHttpResponseHeader(":status")
-	if err != nil || status != "200" {
+	statusCode, parseErr := strconv.Atoi(status)
+	requestSucceeded := err == nil && status == "200"
+	if providerConfig.IsApiKeyAffinityRequest(ctx) {
+		// Treat all 2xx responses as successful only when this request is using consumer affinity.
+		requestSucceeded = err == nil && parseErr == nil && statusCode >= 200 && statusCode < 300
+	}
+	if !requestSucceeded {
 		if err != nil {
 			log.Errorf("unable to load :status header from response: %v", err)
+		} else if parseErr != nil {
+			log.Errorf("unable to parse :status header from response: %v", parseErr)
 		}
 		action := providerConfig.OnRequestFailed(activeProvider, ctx, apiTokenInUse, apiTokens, status)
+		if providerConfig.ApiKeyAffinityRetryPrepared(ctx) {
+			ctx.DontReadResponseBody()
+			return action
+		}
 		if action == types.ActionContinue &&
 			providerConfig.GetLogUpstreamErrorResponseBody() &&
 			shouldLogUpstreamErrorResponse(status) {
@@ -442,6 +507,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, pluginConfig config.PluginCo
 	// Reset ctxApiTokenRequestFailureCount if the request is successful,
 	// the apiToken is removed only when the number of consecutive request failures exceeds the threshold.
 	providerConfig.ResetApiTokenRequestFailureCount(apiTokenInUse)
+	providerConfig.PersistApiKeyAffinity(ctx, apiTokenInUse)
 
 	headers := util.GetResponseHeaders()
 	if handler, ok := activeProvider.(provider.TransformResponseHeadersHandler); ok {
