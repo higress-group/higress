@@ -53,6 +53,12 @@ func Test_getApiName(t *testing.T) {
 		{"openai fine tuning checkpoint permissions", "/v1/fine_tuning/checkpoints/checkpointid/permissions", provider.ApiNameFineTuningCheckpointPermissions},
 		{"openai delete fine tuning checkpoint permission", "/v1/fine_tuning/checkpoints/checkpointid/permissions/permissionid", provider.ApiNameDeleteFineTuningCheckpointPermission},
 		{"openai responses", "/v1/responses", provider.ApiNameResponses},
+		{"openai retrieve response", "/v1/responses/resp_123", provider.ApiNameRetrieveResponse},
+		{"openai cancel response", "/v1/responses/resp_123/cancel", provider.ApiNameCancelResponse},
+		{"openai compact response", "/v1/responses/compact", provider.ApiNameCompactResponse},
+		{"openai list response input items", "/v1/responses/resp_123/input_items", provider.ApiNameListResponseInputItems},
+		{"openai response input tokens", "/v1/responses/input_tokens", provider.ApiNameResponseInputTokens},
+		{"openai retrieve response with prefix", "/gateway/openai/v1/responses/resp_123", provider.ApiNameRetrieveResponse},
 		// Anthropic
 		{"anthropic count_tokens", "/v1/messages/count_tokens", provider.ApiNameAnthropicCountTokens},
 		{"anthropic messages", "/v1/messages", provider.ApiNameAnthropicMessages},
