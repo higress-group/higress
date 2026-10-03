@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -88,19 +89,11 @@ func parseConfig(json gjson.Result, c *pluginConfig, log log.Log) error {
 		return err
 	}
 	setString(json, "deny_message", "denyMessage", &c.denyMessage)
-	timeout, timeoutSet := getPositiveInt(json, "timeout_ms", "timeoutMs")
-	if timeoutSet {
-		if timeout <= 0 {
-			return errors.New("timeout_ms must be greater than 0")
-		}
-		c.timeoutMS = uint32(timeout)
+	if err := setUint32Field(json, "timeout_ms", "timeoutMs", &c.timeoutMS); err != nil {
+		return err
 	}
-	maxBodyBytes, maxBodyBytesSet := getPositiveInt(json, "max_body_bytes", "maxBodyBytes")
-	if maxBodyBytesSet {
-		if maxBodyBytes <= 0 {
-			return errors.New("max_body_bytes must be greater than 0")
-		}
-		c.maxBodyBytes = uint32(maxBodyBytes)
+	if err := setUint32Field(json, "max_body_bytes", "maxBodyBytes", &c.maxBodyBytes); err != nil {
+		return err
 	}
 	if riskLevelBar := strings.TrimSpace(json.Get("risk_level_bar").String()); riskLevelBar != "" {
 		normalized, ok := normalizeRiskLevelBar(riskLevelBar)
@@ -254,6 +247,27 @@ func getPositiveInt(json gjson.Result, snakeKey string, camelKey string) (int, b
 		return int(value.Int()), true
 	}
 	return 0, false
+}
+
+// setUint32Field 读取 uint32 字段（snake_case 优先，camelCase 兼容），未提供时不改动
+// 默认值；显式提供的值必须在 1..math.MaxUint32 内，在窄化为 uint32 前完成范围检查，
+// 避免超出范围的值窄化成错误的小值（issue #4357）。
+func setUint32Field(json gjson.Result, snakeKey string, camelKey string, target *uint32) error {
+	var value int64
+	exists := false
+	if v := json.Get(snakeKey); v.Exists() {
+		value, exists = v.Int(), true
+	} else if v := json.Get(camelKey); v.Exists() {
+		value, exists = v.Int(), true
+	}
+	if !exists {
+		return nil
+	}
+	if value <= 0 || value > math.MaxUint32 {
+		return fmt.Errorf("%s must be between 1 and %d", snakeKey, int64(math.MaxUint32))
+	}
+	*target = uint32(value)
+	return nil
 }
 
 func normalizeRiskLevelBar(value string) (string, bool) {
