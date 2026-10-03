@@ -1207,6 +1207,96 @@ data: [DONE]
 					},
 				},
 			},
+
+			{
+				Meta: http.AssertionMeta{
+					TestCaseName:  "baidu original protocol: embeddings request",
+					CompareTarget: http.CompareTargetResponse,
+				},
+				Request: http.AssertionRequest{
+					ActualRequest: http.Request{
+						Host:        "original.qianfan.baidubce.com",
+						Path:        "/v2/embeddings",
+						Method:      "POST",
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"model":"gpt-3","input":["你好，你是谁？"]}`),
+					},
+				},
+				Response: http.AssertionResponse{
+					ExpectedResponse: http.Response{
+						StatusCode:  200,
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"object":"list","data":[{"object":"embedding","embedding":[0.1,0.2,0.3,0.4],"index":0}],"model":"gpt-3","usage":{"prompt_tokens":7,"total_tokens":7}}`),
+					},
+				},
+			},
+			{
+				Meta: http.AssertionMeta{
+					TestCaseName:  "hunyuan original protocol: embeddings request",
+					CompareTarget: http.CompareTargetResponse,
+				},
+				Request: http.AssertionRequest{
+					ActualRequest: http.Request{
+						Host:        "original.hunyuan-apigw.tencentcloudapi.com",
+						Path:        "/v1/embeddings",
+						Method:      "POST",
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"model":"gpt-3","input":["你好，你是谁？"]}`),
+					},
+				},
+				Response: http.AssertionResponse{
+					ExpectedResponse: http.Response{
+						StatusCode:  200,
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"object":"list","data":[{"object":"embedding","embedding":[0.1,0.2,0.3,0.4],"index":0}],"model":"gpt-3","usage":{"prompt_tokens":7,"total_tokens":7}}`),
+					},
+				},
+			},
+			{
+				Meta: http.AssertionMeta{
+					TestCaseName:  "groq original protocol: responses request",
+					CompareTarget: http.CompareTargetResponse,
+				},
+				Request: http.AssertionRequest{
+					ActualRequest: http.Request{
+						Host:        "original.api.groq.com",
+						Path:        "/openai/v1/responses",
+						Method:      "POST",
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"model":"gpt-3","input":"你好，你是谁？"}`),
+					},
+				},
+				Response: http.AssertionResponse{
+					ExpectedResponse: http.Response{
+						StatusCode:  200,
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"id":"resp_123","object":"response","created_at":10,"status":"completed","model":"gpt-3","output":[{"type":"message","id":"msg_123","status":"completed","role":"assistant","content":[{"type":"output_text","text":"你好，你是谁？","annotations":[]}]}],"usage":{"input_tokens":7,"output_tokens":7,"total_tokens":14}}`),
+					},
+				},
+			},
+			{
+				Meta: http.AssertionMeta{
+					TestCaseName:  "cohere original protocol: rerank request",
+					CompareTarget: http.CompareTargetResponse,
+				},
+				Request: http.AssertionRequest{
+					ActualRequest: http.Request{
+						Host:        "original.api.cohere.com",
+						Path:        "/v1/rerank",
+						Method:      "POST",
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"model":"gpt-3","query":"你好，你是谁？","documents":["a","b"],"top_n":2}`),
+					},
+				},
+				Response: http.AssertionResponse{
+					ExpectedResponse: http.Response{
+						StatusCode:  200,
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"id":"rerank-llm-mock","results":[{"index":0,"relevance_score":1},{"index":1,"relevance_score":0.9}],"document_count":2,"model":"gpt-3"}`),
+					},
+				},
+			},
+
 		}
 		t.Run("WasmPlugins ai-proxy", func(t *testing.T) {
 			for _, testcase := range testcases {
