@@ -89,10 +89,6 @@ func (s *StandaloneComponent) Upgrade() error {
 	if err := s.agent.Upgrade(); err != nil {
 		return err
 	}
-	// Set Higress version
-	if version, err := s.agent.Version(); err != nil {
-		s.profile.HigressVersion = version
-	}
 	return nil
 }
 
