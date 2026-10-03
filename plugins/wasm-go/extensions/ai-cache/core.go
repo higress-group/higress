@@ -237,6 +237,12 @@ func uploadEmbeddingAndAnswer(ctx wrapper.HttpContext, c config.PluginConfig, ke
 		return
 	}
 
+	// Check if the cached value is empty, skip uploading embedding if so
+	if strings.TrimSpace(value) == "" {
+		log.Warnf("[%s] [uploadEmbeddingAndAnswer] cached value for key %s is empty, skip uploading embedding", PLUGIN_NAME, key)
+		return
+	}
+
 	// Attempt to upload answer embedding first
 	if ansEmbUploader, ok := activeVectorProvider.(vector.AnswerAndEmbeddingUploader); ok {
 		log.Infof("[%s] uploading answer embedding for key: %s", PLUGIN_NAME, key)
