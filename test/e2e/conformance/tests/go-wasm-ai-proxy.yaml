@@ -391,6 +391,25 @@ spec:
                 port:
                   number: 3000
 ---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-deepl
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api-free.deepl.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
 apiVersion: extensions.higress.io/v1alpha1
 kind: WasmPlugin
 metadata:
@@ -607,4 +626,12 @@ spec:
           type: openai
       ingress:
         - higress-conformance-ai-backend/wasmplugin-ai-proxy-openai
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          targetLang: EN
+          type: deepl
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-deepl
   url: file:///opt/plugins/wasm-go/extensions/ai-proxy/plugin.wasm
