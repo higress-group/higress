@@ -24,6 +24,7 @@ import (
 const (
 	ociImageManifestMediaType = "application/vnd.oci.image.manifest.v1+json"
 	unknownConfigMediaType    = "application/vnd.unknown.config.v1+json"
+	unknownArtifactMediaType  = "application/vnd.unknown.artifact.v1"
 	emptyObjectDigest         = "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
 	wasmConfigMediaType       = "application/vnd.module.wasm.config.v1+json"
 	wasmContentMediaType      = "application/vnd.module.wasm.content.layer.v1+wasm"
@@ -39,6 +40,7 @@ type pulledDescriptor struct {
 type pulledPluginManifest struct {
 	SchemaVersion int                `json:"schemaVersion"`
 	MediaType     string             `json:"mediaType"`
+	ArtifactType  string             `json:"artifactType"`
 	Config        pulledDescriptor   `json:"config"`
 	Layers        []pulledDescriptor `json:"layers"`
 	Annotations   map[string]string  `json:"annotations"`
@@ -100,6 +102,9 @@ func verifyPulledPlugin(manifestPath, configPath, wasmPath, expectedDigest, expe
 	}
 	if manifest.SchemaVersion != 2 || manifest.MediaType != ociImageManifestMediaType {
 		return errors.New("pulled manifest must be a canonical OCI v1.0 schema 2 image manifest")
+	}
+	if manifest.ArtifactType != "" && manifest.ArtifactType != unknownArtifactMediaType {
+		return fmt.Errorf("pulled manifest artifactType %q is not the canonical empty-config artifact type", manifest.ArtifactType)
 	}
 	if manifest.Config.MediaType != unknownConfigMediaType || manifest.Config.Digest != emptyObjectDigest || manifest.Config.Size != 2 || len(manifest.Config.Annotations) != 0 {
 		return errors.New("pulled manifest OCI config descriptor must identify the canonical empty JSON object")

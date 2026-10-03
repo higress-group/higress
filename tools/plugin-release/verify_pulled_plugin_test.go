@@ -28,6 +28,20 @@ func TestVerifyPulledPluginAcceptsStrictTwoLayerProxyWasm(t *testing.T) {
 	}
 }
 
+func TestVerifyPulledPluginAcceptsUnknownArtifactType(t *testing.T) {
+	manifest, config, wasm, _ := writePulledPluginFixture(t)
+	mutatePulledManifest(t, manifest, func(m map[string]any) {
+		m["artifactType"] = "application/vnd.unknown.artifact.v1"
+	})
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPulledPlugin(manifest, config, wasm, digestBytes(data), pulledSource, pulledCreated, pulledVer, pulledInput); err != nil {
+		t.Fatalf("pulled plugin with the canonical empty-config artifactType was rejected: %v", err)
+	}
+}
+
 func TestVerifyPulledPluginRejectsBadManifestBlobsAndWasm(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -72,13 +86,13 @@ func TestVerifyPulledPluginRejectsBadManifestBlobsAndWasm(t *testing.T) {
 			want: "manifest annotations",
 		},
 		{
-			name: "oci-v1.1-artifact-type",
+			name: "oci-v1.1-unknown-artifact-type",
 			mutate: func(t *testing.T, manifestPath, _, _ string) {
 				mutatePulledManifest(t, manifestPath, func(manifest map[string]any) {
-					manifest["artifactType"] = "application/vnd.unknown.artifact.v1"
+					manifest["artifactType"] = "application/vnd.example.not-allowed+json"
 				})
 			},
-			want: "canonical OCI v1.0",
+			want: "artifactType",
 		},
 		{
 			name: "noncanonical-oci-config",
