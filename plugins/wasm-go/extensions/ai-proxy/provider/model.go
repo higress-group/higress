@@ -348,7 +348,7 @@ func isContentEmpty(content any) bool {
 type chatMessageContent struct {
 	CacheControl map[string]interface{}      `json:"cache_control,omitempty"`
 	Type         string                      `json:"type,omitempty"`
-	Text         string                      `json:"text"`
+	Text         string                      `json:"text,omitempty"`
 	ImageUrl     *chatMessageContentImageUrl `json:"image_url,omitempty"`
 	File         *chatMessageContentFile     `json:"file,omitempty"`
 	InputAudio   *chatMessageContentAudio    `json:"input_audio,omitempty"`
