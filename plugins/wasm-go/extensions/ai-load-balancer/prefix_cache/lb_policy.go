@@ -187,6 +187,9 @@ func NewPrefixCacheLoadBalancer(json gjson.Result) (PrefixCacheLoadBalancer, err
 }
 
 func (lb PrefixCacheLoadBalancer) HandleHttpRequestHeaders(ctx wrapper.HttpContext) types.Action {
+	if !ctx.HasRequestBody() {
+		return types.ActionContinue
+	}
 	// If return types.ActionContinue, SetUpstreamOverrideHost will not take effect
 	return types.HeaderStopIteration
 }
@@ -289,9 +292,7 @@ func (lb PrefixCacheLoadBalancer) HandleHttpStreamDone(ctx wrapper.HttpContext) 
 		routeName, _ := ctx.GetContext("routeName").(string)
 		clusterName, _ := ctx.GetContext("clusterName").(string)
 		host_selected, _ := ctx.GetContext("host_selected").(string)
-		if host_selected == "" {
-			log.Errorf("get host_selected failed")
-		} else {
+		if host_selected != "" {
 			lb.redisClient.HIncrBy(fmt.Sprintf(RedisKeyFormat, routeName, clusterName), host_selected, -1, nil)
 		}
 	}
