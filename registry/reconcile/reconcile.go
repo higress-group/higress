@@ -261,6 +261,7 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 			direct.WithPort(registry.Port),
 			direct.WithProtocol(registry.Protocol),
 			direct.WithSNI(registry.Sni),
+			direct.WithEcdhCurves(registry.EcdhCurves),
 			direct.WithProxyName(registry.ProxyName),
 		)
 	case string(Eureka):

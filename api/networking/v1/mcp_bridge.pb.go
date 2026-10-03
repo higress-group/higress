@@ -119,25 +119,34 @@ type RegistryConfig struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Type                   string                `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
-	Name                   string                `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Domain                 string                `protobuf:"bytes,3,opt,name=domain,proto3" json:"domain,omitempty"`
-	Port                   uint32                `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`
-	NacosAddressServer     string                `protobuf:"bytes,5,opt,name=nacosAddressServer,proto3" json:"nacosAddressServer,omitempty"`
-	NacosAccessKey         string                `protobuf:"bytes,6,opt,name=nacosAccessKey,proto3" json:"nacosAccessKey,omitempty"`
-	NacosSecretKey         string                `protobuf:"bytes,7,opt,name=nacosSecretKey,proto3" json:"nacosSecretKey,omitempty"`
-	NacosNamespaceId       string                `protobuf:"bytes,8,opt,name=nacosNamespaceId,proto3" json:"nacosNamespaceId,omitempty"`
-	NacosNamespace         string                `protobuf:"bytes,9,opt,name=nacosNamespace,proto3" json:"nacosNamespace,omitempty"`
-	NacosGroups            []string              `protobuf:"bytes,10,rep,name=nacosGroups,proto3" json:"nacosGroups,omitempty"`
-	NacosRefreshInterval   int64                 `protobuf:"varint,11,opt,name=nacosRefreshInterval,proto3" json:"nacosRefreshInterval,omitempty"`
-	ConsulNamespace        string                `protobuf:"bytes,12,opt,name=consulNamespace,proto3" json:"consulNamespace,omitempty"`
-	ZkServicesPath         []string              `protobuf:"bytes,13,rep,name=zkServicesPath,proto3" json:"zkServicesPath,omitempty"`
-	ConsulDatacenter       string                `protobuf:"bytes,14,opt,name=consulDatacenter,proto3" json:"consulDatacenter,omitempty"`
-	ConsulServiceTag       string                `protobuf:"bytes,15,opt,name=consulServiceTag,proto3" json:"consulServiceTag,omitempty"`
-	ConsulRefreshInterval  int64                 `protobuf:"varint,16,opt,name=consulRefreshInterval,proto3" json:"consulRefreshInterval,omitempty"`
-	AuthSecretName         string                `protobuf:"bytes,17,opt,name=authSecretName,proto3" json:"authSecretName,omitempty"`
-	Protocol               string                `protobuf:"bytes,18,opt,name=protocol,proto3" json:"protocol,omitempty"`
-	Sni                    string                `protobuf:"bytes,19,opt,name=sni,proto3" json:"sni,omitempty"`
+	Type                  string   `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Name                  string   `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Domain                string   `protobuf:"bytes,3,opt,name=domain,proto3" json:"domain,omitempty"`
+	Port                  uint32   `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`
+	NacosAddressServer    string   `protobuf:"bytes,5,opt,name=nacosAddressServer,proto3" json:"nacosAddressServer,omitempty"`
+	NacosAccessKey        string   `protobuf:"bytes,6,opt,name=nacosAccessKey,proto3" json:"nacosAccessKey,omitempty"`
+	NacosSecretKey        string   `protobuf:"bytes,7,opt,name=nacosSecretKey,proto3" json:"nacosSecretKey,omitempty"`
+	NacosNamespaceId      string   `protobuf:"bytes,8,opt,name=nacosNamespaceId,proto3" json:"nacosNamespaceId,omitempty"`
+	NacosNamespace        string   `protobuf:"bytes,9,opt,name=nacosNamespace,proto3" json:"nacosNamespace,omitempty"`
+	NacosGroups           []string `protobuf:"bytes,10,rep,name=nacosGroups,proto3" json:"nacosGroups,omitempty"`
+	NacosRefreshInterval  int64    `protobuf:"varint,11,opt,name=nacosRefreshInterval,proto3" json:"nacosRefreshInterval,omitempty"`
+	ConsulNamespace       string   `protobuf:"bytes,12,opt,name=consulNamespace,proto3" json:"consulNamespace,omitempty"`
+	ZkServicesPath        []string `protobuf:"bytes,13,rep,name=zkServicesPath,proto3" json:"zkServicesPath,omitempty"`
+	ConsulDatacenter      string   `protobuf:"bytes,14,opt,name=consulDatacenter,proto3" json:"consulDatacenter,omitempty"`
+	ConsulServiceTag      string   `protobuf:"bytes,15,opt,name=consulServiceTag,proto3" json:"consulServiceTag,omitempty"`
+	ConsulRefreshInterval int64    `protobuf:"varint,16,opt,name=consulRefreshInterval,proto3" json:"consulRefreshInterval,omitempty"`
+	AuthSecretName        string   `protobuf:"bytes,17,opt,name=authSecretName,proto3" json:"authSecretName,omitempty"`
+	Protocol              string   `protobuf:"bytes,18,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Sni                   string   `protobuf:"bytes,19,opt,name=sni,proto3" json:"sni,omitempty"`
+	// ECDH curves offered in the TLS handshake with the upstream when this registry is bound to a
+	// proxy server. When it is empty, Envoy uses the defaults of its linked TLS library, e.g. X25519
+	// and P-256 for non-FIPS BoringSSL builds. An upstream that only presents a certificate on
+	// another curve (P-384 for instance) is then rejected during a TLS 1.2 handshake, because the
+	// curve of the certificate is not listed in the client's supported_groups
+	// (RFC 8422, section 5.1.1).
+	// Note that X25519 is not FIPS approved: on a gateway built for FIPS 140-2, list P-256 and/or
+	// P-384 only.
+	EcdhCurves             []string              `protobuf:"bytes,29,rep,name=ecdhCurves,proto3" json:"ecdhCurves,omitempty"`
 	McpServerExportDomains []string              `protobuf:"bytes,20,rep,name=mcpServerExportDomains,proto3" json:"mcpServerExportDomains,omitempty"`
 	McpServerBaseUrl       string                `protobuf:"bytes,21,opt,name=mcpServerBaseUrl,proto3" json:"mcpServerBaseUrl,omitempty"`
 	EnableMCPServer        *wrappers.BoolValue   `protobuf:"bytes,22,opt,name=enableMCPServer,proto3" json:"enableMCPServer,omitempty"`
@@ -313,6 +322,13 @@ func (x *RegistryConfig) GetSni() string {
 		return x.Sni
 	}
 	return ""
+}
+
+func (x *RegistryConfig) GetEcdhCurves() []string {
+	if x != nil {
+		return x.EcdhCurves
+	}
+	return nil
 }
 
 func (x *RegistryConfig) GetMcpServerExportDomains() []string {
@@ -643,7 +659,7 @@ var file_networking_v1_mcp_bridge_proto_rawDesc = []byte{
 	0x72, 0x6f, 0x78, 0x69, 0x65, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x22, 0x2e, 0x68,
 	0x69, 0x67, 0x72, 0x65, 0x73, 0x73, 0x2e, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x69, 0x6e,
 	0x67, 0x2e, 0x76, 0x31, 0x2e, 0x50, 0x72, 0x6f, 0x78, 0x79, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67,
-	0x52, 0x07, 0x70, 0x72, 0x6f, 0x78, 0x69, 0x65, 0x73, 0x22, 0xd9, 0x0b, 0x0a, 0x0e, 0x52, 0x65,
+	0x52, 0x07, 0x70, 0x72, 0x6f, 0x78, 0x69, 0x65, 0x73, 0x22, 0xf9, 0x0b, 0x0a, 0x0e, 0x52, 0x65,
 	0x67, 0x69, 0x73, 0x74, 0x72, 0x79, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x12, 0x17, 0x0a, 0x04,
 	0x74, 0x79, 0x70, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x42, 0x03, 0xe0, 0x41, 0x02, 0x52,
 	0x04, 0x74, 0x79, 0x70, 0x65, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02, 0x20,
@@ -689,6 +705,8 @@ var file_networking_v1_mcp_bridge_proto_rawDesc = []byte{
 	0x65, 0x12, 0x1a, 0x0a, 0x08, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x63, 0x6f, 0x6c, 0x18, 0x12, 0x20,
 	0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x63, 0x6f, 0x6c, 0x12, 0x10, 0x0a,
 	0x03, 0x73, 0x6e, 0x69, 0x18, 0x13, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x73, 0x6e, 0x69, 0x12,
+	0x1e, 0x0a, 0x0a, 0x65, 0x63, 0x64, 0x68, 0x43, 0x75, 0x72, 0x76, 0x65, 0x73, 0x18, 0x1d, 0x20,
+	0x03, 0x28, 0x09, 0x52, 0x0a, 0x65, 0x63, 0x64, 0x68, 0x43, 0x75, 0x72, 0x76, 0x65, 0x73, 0x12,
 	0x36, 0x0a, 0x16, 0x6d, 0x63, 0x70, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x45, 0x78, 0x70, 0x6f,
 	0x72, 0x74, 0x44, 0x6f, 0x6d, 0x61, 0x69, 0x6e, 0x73, 0x18, 0x14, 0x20, 0x03, 0x28, 0x09, 0x52,
 	0x16, 0x6d, 0x63, 0x70, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x45, 0x78, 0x70, 0x6f, 0x72, 0x74,

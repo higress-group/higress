@@ -217,6 +217,9 @@ type ServiceProxyConfig struct {
 	ProxyName        string
 	UpstreamProtocol common.Protocol
 	UpstreamSni      string
+	// UpstreamEcdhCurves lists the ECDH curves advertised towards the upstream. It is empty by
+	// default, in which case the TLS context is left to Envoy and its linked TLS library.
+	UpstreamEcdhCurves []string
 }
 
 type ServiceWrapper struct {
