@@ -126,6 +126,11 @@ repository source alone.
    must fail before mutation on a conflicting digest, and it skips every entry
    the migration preflight excluded. Before any `latest` write, it fetches and
    pulls every non-blocked public artifact remotely by its snapshot digest. The
+   `latest` phase builds the release tool from the dispatch commit on `main`
+   (which must descend from `source_commit`, mirroring the emergency channel)
+   and then pins its working tree back to `source_commit`, so a tool fix merged
+   after preparation takes effect without re-preparing while every snapshot,
+   catalog, and history read stays anchored to the preparation commit. The
    local gate verifies the OCI schema and two-layer order, provenance,
    descriptor sizes and digests, canonical empty JSON config, and complete Wasm
    validity. It also requires exported memory, exact `(i32,i32)->i32`

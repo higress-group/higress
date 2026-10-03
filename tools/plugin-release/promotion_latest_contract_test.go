@@ -39,6 +39,33 @@ type latestContractResult struct {
 	journal map[string]any
 }
 
+func TestPromotionLatestBuildsToolFromDispatchCommitBeforePinningSource(t *testing.T) {
+	promote := mustWorkflow(t, "promote-plugin-release.yaml")
+	for _, required := range []string{
+		"ref: ${{ github.sha }}",
+		`test "$WORKFLOW_REF" = refs/heads/main`,
+		`git merge-base --is-ancestor "$SOURCE_COMMIT" "$WORKFLOW_SHA"`,
+		"go build -p 1 -o /tmp/plugin-release .",
+		`git checkout -q "$SOURCE_COMMIT"`,
+	} {
+		if !strings.Contains(promote, required) {
+			t.Fatalf("promote workflow latest job lacks %q", required)
+		}
+	}
+	buildTool := strings.Index(promote, "go build -p 1 -o /tmp/plugin-release .")
+	pinSource := strings.Index(promote, `git checkout -q "$SOURCE_COMMIT"`)
+	if buildTool < 0 || pinSource < 0 || buildTool > pinSource {
+		t.Fatal("the latest job must build the release tool from the dispatch commit before pinning the tree to source_commit")
+	}
+	// The workflow file comes from the dispatch commit, so a contract-local
+	// build would compile preparation-time tool code and reintroduce the
+	// workflow/tool version skew this layout prevents.
+	latestContract := workflowShellContract(t, "promote-plugin-release.yaml", "promotion-latest-contract")
+	if strings.Contains(latestContract, "go build") {
+		t.Fatal("the latest contract must not build its own tool: the contract runs with the tree already pinned to source_commit")
+	}
+}
+
 func TestPromotionLatestContractAllowsOnlyEvidenceBoundBootstrapReplacement(t *testing.T) {
 	legacy := latestContractPlugin{
 		ID: "legacy", Version: "2.0.1", Digest: testDigest("desired"),
@@ -452,6 +479,14 @@ exit 2
 		t.Fatalf("promotion workflow has %d descriptor contracts, want 2", len(descriptorContracts))
 	}
 	latestContract := workflowShellContract(t, "promote-plugin-release.yaml", "promotion-latest-contract")
+	// The workflow builds the release tool from its dispatch commit before
+	// the contract runs; the contract consumes /tmp/plugin-release without
+	// building it, so mirror that prelude build here.
+	build := exec.Command("go", "build", "-o", "/tmp/plugin-release", ".")
+	build.Dir = toolDir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build plugin-release tool: %v\n%s", err, out)
+	}
 	script := "set -euo pipefail\n" + descriptorContracts[1] + "\n" + latestContract
 	snapshotSHA := sha256.Sum256([]byte(root))
 	snapshotSHAHex := hex.EncodeToString(snapshotSHA[:])
