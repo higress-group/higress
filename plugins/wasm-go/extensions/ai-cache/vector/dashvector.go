@@ -152,10 +152,15 @@ func (d *DvProvider) QueryEmbedding(
 }
 
 func getStringValue(fields map[string]interface{}, key string) string {
-	if val, ok := fields[key]; ok {
-		return val.(string)
+	val, ok := fields[key]
+	if !ok {
+		return ""
 	}
-	return ""
+	str, ok := val.(string)
+	if !ok {
+		return ""
+	}
+	return str
 }
 
 func (d *DvProvider) ParseQueryResponse(responseBody []byte, ctx wrapper.HttpContext, log log.Log) ([]QueryResult, error) {
