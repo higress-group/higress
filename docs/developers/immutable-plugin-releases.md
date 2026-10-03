@@ -144,7 +144,11 @@ repository source alone.
    gate and still waits for the protected `plugin-release-production`
    environment approval. An existing `latest` already serving the desired
    digest is accepted before reading legacy version annotations and is never
-   rewritten.
+   rewritten. A same-version `latest` serving different bytes fails closed for
+   pipeline-built candidates, but a public-provenance entry — whose digest was
+   reviewed from the live version tag and re-verified by the version phase and
+   pull gate this run — repairs the alias to the snapshot digest and journals
+   the displaced version and digest as legacy out-of-band drift.
 6. Build `higress/plugin-server:<gateway-version>` from the exact approved
    plugin-server commit and snapshot. Its dry run checks out and tests that
    exact plugin-server source, binds the gateway version/path/plan/previous

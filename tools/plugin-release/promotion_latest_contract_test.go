@@ -30,6 +30,9 @@ type latestContractPlugin struct {
 	Blocked               bool
 	BlockedExistingDigest string
 	PullManifestMode      string
+	// Provenance sets the snapshot entry's provenanceMode; empty leaves the
+	// entry without the field, which the workflow resolves to candidate.
+	Provenance string
 }
 
 type latestContractResult struct {
@@ -203,6 +206,40 @@ func TestPromotionLatestContractKeepsAnnotatedMonotonicityAndConflicts(t *testin
 	}
 }
 
+func TestPromotionLatestContractRepairsStaleSameVersionPublicLatest(t *testing.T) {
+	// A public entry's digest was recorded from the live version tag at
+	// prepare time; an out-of-band push can leave the latest alias on an
+	// earlier manifest of the same version and identical content. The
+	// promotion replaces the alias with the snapshot digest and journals
+	// the displaced version and digest instead of failing closed.
+	stale := testDigest("stale-latest-manifest")
+	result := runPromotionLatestContract(t, false, []latestContractPlugin{
+		{ID: "public", Version: "1.0.0", Digest: testDigest("desired"),
+			CurrentDigest: stale, CurrentVersion: "1.0.0", Provenance: "public"},
+		{ID: "candidate", Version: "1.0.0", Digest: testDigest("candidate-desired"),
+			CurrentDigest: testDigest("candidate-current"), CurrentVersion: "1.0.0"},
+	})
+	if result.err == nil || !strings.Contains(result.output, "latest alias conflict") {
+		t.Fatalf("candidate same-version conflict stopped failing: err=%v\n%s", result.err, result.output)
+	}
+	assertNoLatestMutation(t, result.log)
+
+	result = runPromotionLatestContract(t, false, []latestContractPlugin{
+		{ID: "public", Version: "1.0.0", Digest: testDigest("desired"),
+			CurrentDigest: stale, CurrentVersion: "1.0.0", Provenance: "public"},
+	})
+	if result.err != nil {
+		t.Fatalf("stale same-version public latest was not repaired: %v\n%s", result.err, result.output)
+	}
+	if !strings.Contains(result.log, "cp registry.example.invalid/plugins/public@") {
+		t.Fatalf("repaired public latest was not copied:\n%s", result.log)
+	}
+	entry := latestJournalEntries(t, result.journal)[0]
+	if entry["preflight"] != "replace-public" || entry["oldVersion"] != "1.0.0" || entry["oldDigest"] != stale {
+		t.Fatalf("public repair did not journal the displaced alias: %#v", entry)
+	}
+}
+
 func TestPromotionLatestContractCreatesAbsentAndSkipsIdentical(t *testing.T) {
 	desired := testDigest("desired")
 	result := runPromotionLatestContract(t, false, []latestContractPlugin{
@@ -347,6 +384,9 @@ func runPromotionLatestContractFixture(t *testing.T, bootstrap, corruptEvidenceS
 		snapshotEntry := map[string]any{
 			"logicalId": plugin.ID, "ociRef": ref, "digest": plugin.Digest, "version": plugin.Version,
 			"sourceCommit": sourceCommit, "inputHash": inputHash,
+		}
+		if plugin.Provenance != "" {
+			snapshotEntry["provenanceMode"] = plugin.Provenance
 		}
 		if plugin.Blocked {
 			snapshotEntry["migration"] = map[string]any{

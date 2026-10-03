@@ -526,9 +526,23 @@ jobs:
                 else
                   /tmp/plugin-release semver-compare --current "$old" --candidate "$version"
                   if [ "$old" = "$version" ]; then
-                    echo "latest alias conflict: $latest serves $old at $old_digest, snapshot requires $digest" >&2; exit 1
+                    # Same version, different bytes. A pipeline-built candidate
+                    # is this pipeline's own output, so a divergent same-version
+                    # latest means content was overwritten out of band: fail
+                    # closed. A public entry's digest was recorded from the live
+                    # version tag at prepare time and re-verified by this run's
+                    # version phase and pull gate, so a stale same-version
+                    # latest is legacy drift (an out-of-band push that moved the
+                    # version tag later than the alias) to repair; the displaced
+                    # version and digest are journaled below.
+                    if [ "$provenance" = "public" ]; then
+                      state=replace-public
+                    else
+                      echo "latest alias conflict: $latest serves $old at $old_digest, snapshot requires $digest" >&2; exit 1
+                    fi
+                  else
+                    state=replace
                   fi
-                  state=replace
                 fi
               fi
             else
