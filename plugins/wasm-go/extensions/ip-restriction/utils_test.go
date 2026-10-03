@@ -135,3 +135,15 @@ func Test_parseIP(t *testing.T) {
 		})
 	}
 }
+
+func TestParseIPMalformedHeaderDoesNotPanic(t *testing.T) {
+	// X-Forwarded-For is attacker controlled when ip_source_type is "header".
+	for _, source := range []string{"]", "]:80", "]:80, 127.0.0.1", "[::1]"} {
+		t.Run(source, func(t *testing.T) {
+			got := parseIP(source, true)
+			if source == "[::1]" && got != "::1" {
+				t.Errorf("parseIP(%q, true) = %q, want %q", source, got, "::1")
+			}
+		})
+	}
+}
