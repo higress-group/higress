@@ -394,10 +394,13 @@ func (w *watcher) generateServiceEntry(host string, services []model.SubscribeSe
 		// Calculate weight from Nacos instance
 		// Nacos weight is float64, need to convert to uint32 for Istio
 		// Use math.Round to preserve fractional weights (e.g., 0.5, 1.5)
-		// If weight is 0 or negative, use default weight 1
+		// If weight is 0 or negative, or rounds to 0, use default weight 1
 		weight := uint32(1)
 		if service.Weight > 0 {
 			weight = uint32(math.Round(service.Weight))
+		}
+		if weight == 0 {
+			weight = 1
 		}
 		endpoint := v1alpha3.WorkloadEntry{
 			Address: service.Ip,
