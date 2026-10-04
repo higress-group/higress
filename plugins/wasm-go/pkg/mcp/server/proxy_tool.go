@@ -1173,7 +1173,7 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools *map[string
 			// Create a tool instance and call it
 			toolConfig, exists := server.GetToolConfig(toolName)
 			if !exists {
-				log.Warnf("tool not found: %s, will not use tool specifiy security config", toolName)
+				log.Warnf("tool not found: %s, will not use tool specify security config", toolName)
 			}
 
 			log.Debugf("Tool call [%s] on proxy server [%s]", toolName, server.Name)
