@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "gatewayVersion": "2.2.5",
-  "sourceCommit": "2fa9619cfd56618a2332f1f3780e86791fd67b9f",
+  "sourceCommit": "22975c83b858ee392e4dd912b8f47dd4dcc1128f",
   "previousRelease": "2.2.5",
   "catalogSha256": "7416a58e5e30f6e43b66f27a8989d43ff0a2c9daed3fd7de5ee7d2dd224eedb0",
-  "planId": "sha256:89998a3a07b4239840e6eba9093515c1696075249348d6e60756f8f0851a2f6e",
+  "planId": "sha256:dcb6cec7a22c7b10dd1943fd8cabaa864782413e9bf407c1019c42e8770cddfe",
   "provenanceMode": "mixed",
   "plugins": [
     {
@@ -1416,6 +1416,51 @@
               }
             ]
           }
+        }
+      }
+    },
+    {
+      "logicalId": "mcp-server",
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/mcp-server",
+      "image": "plugins/mcp-server",
+      "version": "2.0.3",
+      "ociRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-server:2.0.3",
+      "digest": "sha256:9848a9b11fa253dc2f1b458acda652aa7dd7ee8dc6de31a25ab2a5bb6585a77b",
+      "inputHash": "sha256:57298df8ee04dbe2a25cb1e639a1010e6dac26c8610c9828a601ebed8ecf8730",
+      "sourceCommit": "22975c83b858ee392e4dd912b8f47dd4dcc1128f",
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/mcp-server:dcb6cec7a22c7b10dd1943fd8cabaa864782413e9bf407c1019c42e8770cddfe57298df8ee04dbe2a25cb1e639a1010e6dac26c8610c9828a601ebed8ecf8730@sha256:9848a9b11fa253dc2f1b458acda652aa7dd7ee8dc6de31a25ab2a5bb6585a77b",
+      "provenanceMode": "candidate",
+      "consumers": {
+        "console": {
+          "propertyKey": "mcp-server",
+          "resourceDir": "mcp-server",
+          "urlForm": "oci",
+          "marketplace": {
+            "repository": "higress-group/higress-console",
+            "sourceCommit": "36aa9c67fb0057164dab9b1fe687b38fe5b8a022",
+            "files": [
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/mcp-server/spec.yaml",
+                "targetPath": "spec.yaml",
+                "sha256": "7a4bc50af6572203626bee097850aae770e71098fbac3c90f79f30067b887cfe"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/mcp-server/README.md",
+                "targetPath": "README.md",
+                "sha256": "9b5226a877d174ec3e735050e189d6ff669f16f95ca6d490f945095ac6d440c7"
+              },
+              {
+                "sourcePath": "backend/sdk/src/main/resources/plugins/mcp-server/README_EN.md",
+                "targetPath": "README_EN.md",
+                "sha256": "33c89610906161e2f525aa824ca3c0212bdb225519efb4eb9c1d3fc55599062b"
+              }
+            ]
+          }
+        },
+        "pluginServer": {
+          "inventoryKey": "mcp-server",
+          "httpPath": "mcp-server"
         }
       }
     },

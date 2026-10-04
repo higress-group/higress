@@ -1,18 +1,25 @@
 {
   "schemaVersion": 1,
   "gatewayVersion": "2.2.5",
-  "sourceCommit": "2fa9619cfd56618a2332f1f3780e86791fd67b9f",
-  "baseCommit": "44951e69694003d73c92a59a9e5bcf236e7c1b2c",
+  "sourceCommit": "22975c83b858ee392e4dd912b8f47dd4dcc1128f",
+  "baseCommit": "2fa9619cfd56618a2332f1f3780e86791fd67b9f",
   "previousRelease": "2.2.5",
   "catalogSha256": "7416a58e5e30f6e43b66f27a8989d43ff0a2c9daed3fd7de5ee7d2dd224eedb0",
-  "planId": "sha256:89998a3a07b4239840e6eba9093515c1696075249348d6e60756f8f0851a2f6e",
-  "plugins": [],
-  "deferred": [
+  "planId": "sha256:dcb6cec7a22c7b10dd1943fd8cabaa864782413e9bf407c1019c42e8770cddfe",
+  "plugins": [
     {
       "logicalId": "mcp-server",
-      "version": "2.0.3-alpha",
-      "reason": "alpha-prerelease"
-    },
+      "implementation": "go",
+      "sourceDir": "plugins/wasm-go/extensions/mcp-server",
+      "image": "plugins/mcp-server",
+      "version": "2.0.3",
+      "inputHash": "sha256:57298df8ee04dbe2a25cb1e639a1010e6dac26c8610c9828a601ebed8ecf8730",
+      "changedPaths": [
+        "plugins/wasm-go/extensions/mcp-server/VERSION"
+      ]
+    }
+  ],
+  "deferred": [
     {
       "logicalId": "replay-protection",
       "version": "1.0.0-alpha",

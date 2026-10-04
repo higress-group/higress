@@ -1,3 +1,10 @@
 {
-  "plugins": {}
+  "plugins": {
+    "mcp-server": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/mcp-server:dcb6cec7a22c7b10dd1943fd8cabaa864782413e9bf407c1019c42e8770cddfe57298df8ee04dbe2a25cb1e639a1010e6dac26c8610c9828a601ebed8ecf8730@sha256:9848a9b11fa253dc2f1b458acda652aa7dd7ee8dc6de31a25ab2a5bb6585a77b",
+      "digest": "sha256:9848a9b11fa253dc2f1b458acda652aa7dd7ee8dc6de31a25ab2a5bb6585a77b",
+      "sourceCommit": "22975c83b858ee392e4dd912b8f47dd4dcc1128f",
+      "inputHash": "sha256:57298df8ee04dbe2a25cb1e639a1010e6dac26c8610c9828a601ebed8ecf8730"
+    }
+  }
 }
