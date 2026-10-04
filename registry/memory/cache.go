@@ -37,6 +37,7 @@ import (
 )
 
 type Cache interface {
+	ForRegistry(registryType, registryName string) Cache
 	UpdateServiceWrapper(service string, data *ingress.ServiceWrapper)
 	DeleteServiceWrapper(service string)
 	UpdateProxyWrapper(name string, data *ingress.ProxyWrapper)
@@ -81,6 +82,26 @@ type store struct {
 
 	pw                    map[string]*ingress.ProxyWrapper
 	deferredDeleteProxies map[string]struct{}
+}
+
+// ForRegistry restricts service deletions to the last publisher of a host.
+// Registries can share host names, but the cache stores only one current value.
+func (s *store) ForRegistry(registryType, registryName string) Cache {
+	return &registryCache{store: s, registryType: registryType, registryName: registryName}
+}
+
+type registryCache struct {
+	*store
+	registryType string
+	registryName string
+}
+
+func (s *registryCache) DeleteServiceWrapper(service string) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if data, exist := s.sew[service]; exist && data.RegistryType == s.registryType && data.RegistryName == s.registryName {
+		s.deleteServiceWrapper(service, data)
+	}
 }
 
 func (s *store) GetAllConfigs(kind config.GroupVersionKind) map[string]*config.Config {
@@ -221,9 +242,14 @@ func (s *store) DeleteServiceWrapper(service string) {
 	defer s.mux.Unlock()
 
 	if data, exist := s.sew[service]; exist {
-		s.toBeDeleted = append(s.toBeDeleted, data)
-		s.deferredDeleteServices[service] = struct{}{}
+		s.deleteServiceWrapper(service, data)
 	}
+}
+
+// The caller holds mux.
+func (s *store) deleteServiceWrapper(service string, data *ingress.ServiceWrapper) {
+	s.toBeDeleted = append(s.toBeDeleted, data)
+	s.deferredDeleteServices[service] = struct{}{}
 }
 
 func (s *store) UpdateProxyWrapper(name string, data *ingress.ProxyWrapper) {
