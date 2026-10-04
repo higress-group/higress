@@ -45,11 +45,15 @@ const (
 	DefaultReadyTimeout = time.Second * 60
 )
 
+var errInitWatchers = errors.New("ReconcileRegistries failed, Init Watchers failed")
+
 type Reconciler struct {
 	memory.Cache
 	registries    map[string]*apiv1.RegistryConfig
 	proxies       map[string]*apiv1.ProxyConfig
 	watchers      map[string]Watcher
+	watcherReady  map[string]<-chan struct{}
+	readyTimeout  time.Duration
 	serviceUpdate func()
 	client        kube.Client
 	namespace     string
@@ -62,6 +66,8 @@ func NewReconciler(serviceUpdate func(), client kube.Client, namespace, clusterI
 		registries:    make(map[string]*apiv1.RegistryConfig),
 		proxies:       make(map[string]*apiv1.ProxyConfig),
 		watchers:      make(map[string]Watcher),
+		watcherReady:  make(map[string]<-chan struct{}),
+		readyTimeout:  DefaultReadyTimeout,
 		serviceUpdate: serviceUpdate,
 		client:        client,
 		namespace:     namespace,
@@ -91,18 +97,21 @@ func (r *Reconciler) Reconcile(mcpbridge *v1.McpBridge) error {
 		proxies = mcpbridge.Spec.Proxies
 	}
 
-	if err := r.reconcileRegistries(registries); err != nil {
-		return err
+	registryErr := r.reconcileRegistries(registries)
+	if registryErr != nil && !errors.Is(registryErr, errInitWatchers) {
+		return registryErr
 	}
+	// Failed replacements have already stopped the previous watchers. Finish
+	// successful siblings and deferred deletions before returning their error.
 	if err := r.reconcileProxies(proxies); err != nil {
-		return err
+		return errors.Join(registryErr, err)
 	}
 
 	if r.Cache.PurgeStaleItems() {
 		// Something stale are purged. We need to notify the service update handler
 		r.serviceUpdate()
 	}
-	return nil
+	return registryErr
 }
 
 func (r *Reconciler) reconcileRegistries(registries []*apiv1.RegistryConfig) error {
@@ -110,7 +119,6 @@ func (r *Reconciler) reconcileRegistries(registries []*apiv1.RegistryConfig) err
 	for _, registry := range registries {
 		newRegistries[path.Join(registry.Type, registry.Name)] = registry
 	}
-	var wg sync.WaitGroup
 	toBeCreated := make(map[string]*apiv1.RegistryConfig)
 	toBeUpdated := make(map[string]*apiv1.RegistryConfig)
 	toBeDeleted := make(map[string]*apiv1.RegistryConfig)
@@ -137,12 +145,14 @@ func (r *Reconciler) reconcileRegistries(registries []*apiv1.RegistryConfig) err
 		r.watchers[k].Stop()
 		delete(r.registries, k)
 		delete(r.watchers, k)
+		delete(r.watcherReady, k)
 	}
 	for k, v := range toBeUpdated {
 		r.watchers[k].Stop()
 		delete(r.registries, k)
 		delete(r.watchers, k)
-		watcher, err := r.generateWatcherFromRegistryConfig(v, &wg)
+		delete(r.watcherReady, k)
+		watcher, ready, err := r.generateWatcherFromRegistryConfig(v)
 		if err != nil {
 			errHappened = true
 			log.Errorf("ReconcileRegistries failed, err:%v", err)
@@ -151,10 +161,11 @@ func (r *Reconciler) reconcileRegistries(registries []*apiv1.RegistryConfig) err
 
 		go watcher.Run()
 		r.watchers[k] = watcher
+		r.watcherReady[k] = ready
 		r.registries[k] = v
 	}
 	for k, v := range toBeCreated {
-		watcher, err := r.generateWatcherFromRegistryConfig(v, &wg)
+		watcher, ready, err := r.generateWatcherFromRegistryConfig(v)
 		if err != nil {
 			errHappened = true
 			log.Errorf("ReconcileRegistries failed, err:%v", err)
@@ -163,39 +174,41 @@ func (r *Reconciler) reconcileRegistries(registries []*apiv1.RegistryConfig) err
 
 		go watcher.Run()
 		r.watchers[k] = watcher
+		r.watcherReady[k] = ready
 		r.registries[k] = v
 	}
-	if errHappened {
-		return errors.New("ReconcileRegistries failed, Init Watchers failed")
+	// Include watchers retained after an earlier timeout. A retry with unchanged
+	// configuration must not purge their old data before initial publication.
+	readyTimer := time.NewTimer(r.readyTimeout)
+	defer readyTimer.Stop()
+	for _, ready := range r.watcherReady {
+		select {
+		case <-ready:
+		case <-readyTimer.C:
+			return errors.New("ReoncileRegistries failed, waiting for ready timeout")
+		}
 	}
-	ready := make(chan struct{})
-	readyTimer := time.NewTimer(DefaultReadyTimeout)
-	go func() {
-		wg.Wait()
-		ready <- struct{}{}
-	}()
-	select {
-	case <-ready:
-	case <-readyTimer.C:
-		return errors.New("ReoncileRegistries failed, waiting for ready timeout")
+	if errHappened {
+		return errInitWatchers
 	}
 	log.Infof("Registries is reconciled")
 	return nil
 }
 
-func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryConfig, wg *sync.WaitGroup) (Watcher, error) {
+func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryConfig) (Watcher, <-chan struct{}, error) {
 	var watcher Watcher
 	var err error
 
 	authOption, err := r.getAuthOption(registry)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	cache := r.Cache.ForRegistry(registry.Type, registry.Name)
 	switch registry.Type {
 	case string(Nacos):
 		watcher, err = nacos.NewWatcher(
-			r.Cache,
+			cache,
 			nacos.WithType(registry.Type),
 			nacos.WithName(registry.Name),
 			nacos.WithDomain(registry.Domain),
@@ -210,7 +223,7 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 		)
 	case string(Nacos2), string(Nacos3):
 		watcher, err = nacosv2.NewWatcher(
-			r.Cache,
+			cache,
 			nacosv2.WithType(registry.Type),
 			nacosv2.WithName(registry.Name),
 			nacosv2.WithNacosAddressServer(registry.NacosAddressServer),
@@ -233,7 +246,7 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 		)
 	case string(Zookeeper):
 		watcher, err = zookeeper.NewWatcher(
-			r.Cache,
+			cache,
 			zookeeper.WithType(registry.Type),
 			zookeeper.WithName(registry.Name),
 			zookeeper.WithDomain(registry.Domain),
@@ -242,7 +255,7 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 		)
 	case string(Consul):
 		watcher, err = consul.NewWatcher(
-			r.Cache,
+			cache,
 			consul.WithType(registry.Type),
 			consul.WithName(registry.Name),
 			consul.WithDomain(registry.Domain),
@@ -254,7 +267,7 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 		)
 	case string(Static), string(DNS):
 		watcher, err = direct.NewWatcher(
-			r.Cache,
+			cache,
 			direct.WithType(registry.Type),
 			direct.WithName(registry.Name),
 			direct.WithDomain(registry.Domain),
@@ -265,7 +278,7 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 		)
 	case string(Eureka):
 		watcher, err = eureka.NewWatcher(
-			r.Cache,
+			cache,
 			eureka.WithName(registry.Name),
 			eureka.WithDomain(registry.Domain),
 			eureka.WithType(registry.Type),
@@ -273,18 +286,18 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 			eureka.WithVport(registry.Vport),
 		)
 	default:
-		return nil, errors.New("unsupported registry type:" + registry.Type)
+		return nil, nil, errors.New("unsupported registry type:" + registry.Type)
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	wg.Add(1)
+	readyCh := make(chan struct{})
 	var once sync.Once
 	watcher.ReadyHandler(func(ready bool) {
 		once.Do(func() {
-			wg.Done()
+			defer close(readyCh)
 			if ready {
 				log.Infof("Registry Watcher is ready, type:%s, name:%s", registry.Type, registry.Name)
 			}
@@ -292,7 +305,7 @@ func (r *Reconciler) generateWatcherFromRegistryConfig(registry *apiv1.RegistryC
 	})
 	watcher.AppendServiceUpdateHandler(r.serviceUpdate)
 
-	return watcher, nil
+	return watcher, readyCh, nil
 }
 
 func (r *Reconciler) getAuthOption(registry *apiv1.RegistryConfig) (AuthOption, error) {
