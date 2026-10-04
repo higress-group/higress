@@ -12,6 +12,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
+	"github.com/higress-group/wasm-go/pkg/log"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/frontend-gray/config"
 
@@ -333,6 +334,15 @@ func FilterGrayRule(grayConfig *config.GrayConfig, grayKeyValue string, cookie s
 
 	for _, deployment := range grayConfig.GrayDeployments {
 		grayRule := GetRule(grayConfig.Rules, deployment.Name)
+		// 灰度部署缺少同名规则时 GetRule 返回 nil，必须判空后跳过，
+		// 否则下一行 grayRule.GrayKeyValue 会解引用空指针触发 panic；
+		// panic 被 wasm 框架 recover 后请求会静默回退到基线版本，
+		// 灰度与注入都不会生效，问题隐蔽且难以排查。
+		// 跳过该部署等价于它没有白名单，不影响其它配置了规则的部署继续灰度。
+		if grayRule == nil {
+			log.Warnf("gray deployment %q has no matching rule, skip it", deployment.Name)
+			continue
+		}
 		// 首先：先校验用户名单ID
 		if grayRule.GrayKeyValue != nil && len(grayRule.GrayKeyValue) > 0 && grayKeyValue != "" {
 			if ContainsValue(grayRule.GrayKeyValue, grayKeyValue) {
