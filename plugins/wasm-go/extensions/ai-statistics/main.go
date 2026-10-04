@@ -749,6 +749,10 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config AIStatisticsConfig) ty
 	return types.ActionContinue
 }
 
+// regGeminiModelFromPath extracts the model from a Gemini generateContent
+// request path. Compiled once: this runs on every Gemini request.
+var regGeminiModelFromPath = regexp.MustCompile(`^.*/(?P<api_version>[^/]+)/models/(?P<model>[^:]+):\w+Content$`)
+
 func onHttpRequestBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body []byte) types.Action {
 	// Check if processing should be skipped
 	if ctx.GetBoolContext(SkipProcessing, false) {
@@ -779,8 +783,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body 
 			pathOnly = pathOnly[:i]
 		}
 		if strings.Contains(pathOnly, "generateContent") || strings.Contains(pathOnly, "streamGenerateContent") { // Google Gemini GenerateContent
-			reg := regexp.MustCompile(`^.*/(?P<api_version>[^/]+)/models/(?P<model>[^:]+):\w+Content$`)
-			matches := reg.FindStringSubmatch(pathOnly)
+			matches := regGeminiModelFromPath.FindStringSubmatch(pathOnly)
 			if len(matches) == 3 {
 				requestModel = matches[2]
 			}
