@@ -119,9 +119,12 @@ repository source alone.
    mutating registry state. The version-tag phase requests no environment
    approval: it fails closed unless `source_commit` descends from the
    code-freeze commit the snapshot records, is reachable from `main`, and
-   belongs to exactly one merged preparation PR from
-   `release/plugin-snapshot-<gateway-version>` carrying the
-   `release/<gateway-version>` label. A production publisher may create a
+   belongs to exactly one merged preparation PR carrying the
+   `release/<gateway-version>` label. The PR's author identity, branch name,
+   title, and review chain are not re-verified by promotion: landing the merge
+   already required branch-protection review, and the `latest` phase's
+   protected `plugin-release-production` environment approval remains the
+   human gate with the largest blast radius. A production publisher may create a
    missing public version tag or accept an identical existing digest only. It
    must fail before mutation on a conflicting digest, and it skips every entry
    the migration preflight excluded. Before any `latest` write, it fetches and
