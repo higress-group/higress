@@ -28,6 +28,7 @@ type DockerInstaller struct {
 	profile      *helm.Profile
 	writer       io.Writer
 	profileStore ProfileStore
+	upgradeFunc  func() error
 }
 
 func (d *DockerInstaller) Install() error {
@@ -67,11 +68,55 @@ func (d *DockerInstaller) UnInstall() error {
 func (d *DockerInstaller) Upgrade() error {
 	fmt.Fprintf(d.writer, "\n⌛️ Processing upgrade... \n\n")
 
-	if err := d.standalone.Upgrade(); err != nil {
+	upgrade := d.standalone.Upgrade
+	if d.upgradeFunc != nil {
+		upgrade = d.upgradeFunc
+	}
+	if err := upgrade(); err != nil {
+		return err
+	}
+
+	if err := d.syncStoredVersion(); err != nil {
 		return err
 	}
 
 	fmt.Fprintf(d.writer, "\n🎊 Install All Resources Complete!\n")
+	return nil
+}
+
+func (d *DockerInstaller) syncStoredVersion() error {
+	version, err := d.standalone.agent.strictVersion()
+	if err != nil {
+		return err
+	}
+
+	profiles, err := d.profileStore.List()
+	if err != nil {
+		return fmt.Errorf("list stored profiles: %w", err)
+	}
+
+	var storedProfile *helm.Profile
+	for _, profileContext := range profiles {
+		if profileContext == nil || profileContext.Profile == nil || profileContext.Install != helm.InstallLocalDocker {
+			continue
+		}
+		if storedProfile != nil {
+			return errors.New("multiple stored local-docker profiles found")
+		}
+		storedProfile = profileContext.Profile
+	}
+	if storedProfile == nil {
+		return errors.New("stored local-docker profile not found")
+	}
+
+	updatedProfile := *storedProfile
+	updatedProfile.HigressVersion = version
+	if _, err := d.profileStore.Save(&updatedProfile); err != nil {
+		return fmt.Errorf("save stored local-docker profile: %w", err)
+	}
+	if d.profile != nil {
+		d.profile.HigressVersion = version
+	}
 	return nil
 }
 
