@@ -259,7 +259,7 @@ func (lb PrefixCacheLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpContext,
 		hostSelected := response.String()
 		if err := proxywasm.SetUpstreamOverrideHost([]byte(hostSelected)); err != nil {
 			ctx.SetContext("error", true)
-			log.Errorf("override upstream host failed, fallback to default lb policy, error informations: %+v", err)
+			log.Errorf("override upstream host failed, fallback to default lb policy, error information: %+v", err)
 		}
 		log.Debugf("host_selected: %s", hostSelected)
 		ctx.SetContext("host_selected", hostSelected)
