@@ -134,7 +134,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config Config, log log.Log) t
 		return types.ActionContinue
 	}
 
-	// covert to schema
+	// convert to schema
 	schema := make(map[string]interface{})
 	for _, header := range headers {
 		schema[header[0]] = header[1]
@@ -169,7 +169,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte, log 
 		return types.ActionContinue
 	}
 
-	// covert to schema
+	// convert to schema
 	schema := make(map[string]interface{})
 	err := json.Unmarshal(body, &schema)
 	if err != nil {
