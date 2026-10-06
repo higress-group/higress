@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strings"
 	_ "time/tzdata"
@@ -106,19 +107,33 @@ type RestTool struct {
 	isDirectResponseTool bool
 }
 
-// parseIP
-func parseIP(source string, fromHeader bool) string {
+// ParseIP extracts the address from a socket address ("10.0.0.1:8080",
+// "[2001:db8::1]:443") or from an X-Forwarded-For value (fromHeader=true).
+// Input reaching it through a request header is attacker-controlled, so every
+// branch must tolerate arbitrary bytes without panicking.
+func ParseIP(source string, fromHeader bool) string {
 	if fromHeader {
 		source = strings.Split(source, ",")[0]
 	}
-	source = strings.Trim(source, " ")
-	if strings.Contains(source, ".") {
-		// parse ipv4
-		return strings.Split(source, ":")[0]
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return ""
 	}
-	//parse ipv6
-	if strings.Contains(source, "]") {
-		return strings.Split(source, "]")[0][1:]
+	// "[addr]:port" is the only unambiguous way to carry a literal IPv6 with a
+	// port. Keying off "contains ]" and dropping the first byte instead breaks
+	// both "]..." and the IPv4-mapped "[::ffff:1.2.3.4]:80".
+	if strings.HasPrefix(source, "[") {
+		if end := strings.IndexByte(source, ']'); end > 1 {
+			return source[1:end]
+		}
+		return source
+	}
+	// Unbracketed: strip a trailing ":port" only when what precedes it parses
+	// as an address, so a bare IPv6 such as "::ffff:1.2.3.4" survives intact.
+	if i := strings.IndexByte(source, ':'); i > 0 && strings.Contains(source[:i], ".") {
+		if addr, err := netip.ParseAddr(source[:i]); err == nil {
+			return addr.String()
+		}
 	}
 	return source
 }
@@ -130,7 +145,7 @@ func templateFuncs() template.FuncMap {
 		"getSocketIP": func() string {
 			bs, _ := proxywasm.GetProperty([]string{"source", "address"})
 			if len(bs) > 0 {
-				return parseIP(string(bs), false)
+				return ParseIP(string(bs), false)
 			}
 			return ""
 		},
@@ -138,12 +153,12 @@ func templateFuncs() template.FuncMap {
 		"getRealIP": func() string {
 			ipStr, _ := proxywasm.GetHttpRequestHeader("x-forwarded-for")
 			if ipStr != "" {
-				return parseIP(ipStr, true)
+				return ParseIP(ipStr, true)
 			}
 			// Fallback to socket IP if header is not available
 			bs, _ := proxywasm.GetProperty([]string{"source", "address"})
 			if len(bs) > 0 {
-				return parseIP(string(bs), false)
+				return ParseIP(string(bs), false)
 			}
 			return ""
 		},

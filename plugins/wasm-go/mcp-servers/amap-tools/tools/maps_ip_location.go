@@ -66,7 +66,7 @@ func (t IPLocationRequest) Call(ctx server.HttpContext, s server.Server) error {
 			ipStr, _ = proxywasm.GetHttpRequestHeader("x-forwarded-for")
 			fromHeader = true
 		}
-		t.IP = parseIP(ipStr, fromHeader)
+		t.IP = server.ParseIP(ipStr, fromHeader)
 	}
 	url := fmt.Sprintf("https://restapi.amap.com/v3/ip?ip=%s&key=%s&source=ts_mcp", url.QueryEscape(t.IP), serverConfig.ApiKey)
 	return ctx.RouteCall(http.MethodGet, url,
@@ -77,22 +77,4 @@ func (t IPLocationRequest) Call(ctx server.HttpContext, s server.Server) error {
 			}
 			utils.SendMCPToolTextResult(ctx, string(responseBody))
 		})
-}
-
-// parseIP 解析IP
-func parseIP(source string, fromHeader bool) string {
-
-	if fromHeader {
-		source = strings.Split(source, ",")[0]
-	}
-	source = strings.Trim(source, " ")
-	if strings.Contains(source, ".") {
-		// parse ipv4
-		return strings.Split(source, ":")[0]
-	}
-	//parse ipv6
-	if strings.Contains(source, "]") {
-		return strings.Split(source, "]")[0][1:]
-	}
-	return source
 }

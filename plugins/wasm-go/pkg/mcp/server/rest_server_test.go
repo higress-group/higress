@@ -942,13 +942,58 @@ func TestParseIP(t *testing.T) {
 		{"ipv6 bracketed no port", "[2001:db8::1]", false, "2001:db8::1"},
 		{"ipv6 bare passes through", "2001:db8::1", false, "2001:db8::1"},
 		{"empty string", "", false, ""},
+		// An IPv4-mapped literal still contains dots, so the old "contains .
+		// means IPv4" branch truncated "[::ffff:1.2.3.4]:80" to "[" and
+		// "::ffff:1.2.3.4" to "".
+		{"ipv4-mapped ipv6 bracketed with port", "[::ffff:1.2.3.4]:80", false, "::ffff:1.2.3.4"},
+		{"ipv4-mapped ipv6 bare", "::ffff:1.2.3.4", false, "::ffff:1.2.3.4"},
+		// Zone identifiers survive untouched, as before.
+		{"ipv6 zone id bracketed with port", "[fe80::1%eth0]:8080", false, "fe80::1%eth0"},
+		// Malformed ports are still stripped from an IPv4 prefix, as before.
+		{"ipv4 empty port", "1.2.3.4:", false, "1.2.3.4"},
+		{"ipv4 out of range port", "1.2.3.4:99999", false, "1.2.3.4"},
+		// Regression: the old code evaluated Split(source,"]")[0][1:] whenever
+		// the value contained "]", so a header starting with "]" sliced the
+		// empty string and panicked with "slice bounds out of range [1:0]".
+		{"header is only a closing bracket", "]", true, "]"},
+		{"header starts with closing bracket", "]-evil", true, "]-evil"},
+		{"header closing bracket then list", "] , x", true, "]"},
+		// Regression: the old code stripped the first byte unconditionally, so
+		// " ::1]" became ":1" rather than being recognised as malformed.
+		{"closing bracket without opening", " ::1]", false, "::1]"},
+		{"only opening and closing bracket", "[]", false, "[]"},
+		{"unclosed bracket", "[::1", false, "[::1"},
+		{"unopened bracket", "::1]", false, "::1]"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := parseIP(c.source, c.fromHeader)
+			got := ParseIP(c.source, c.fromHeader)
 			assert.Equal(t, c.want, got)
 		})
 	}
+}
+
+// TestParseIPNeverPanics pins the invariant the type assertions above only
+// cover case by case: arbitrary header content must not be able to abort the
+// wasm VM. x-forwarded-for reaches ParseIP unfiltered via getRealIP.
+func TestParseIPNeverPanics(t *testing.T) {
+	alphabet := []byte("0123456789abcdefABCDEF:.[] ,%-_ \x00\xff")
+	var build func(prefix []byte, depth int)
+	build = func(prefix []byte, depth int) {
+		if depth == 0 {
+			s := string(prefix)
+			for _, fromHeader := range []bool{false, true} {
+				require.NotPanics(t, func() {
+					ParseIP(s, fromHeader)
+				}, "ParseIP(%q, %v) panicked", s, fromHeader)
+			}
+			return
+		}
+		for _, b := range alphabet {
+			build(append(prefix, b), depth-1)
+		}
+	}
+	build(nil, 3)
 }
 
 // ---------------------------------------------------------------------------
@@ -1059,12 +1104,12 @@ func TestParseTemplates_HeaderWithEmptyKeySkipped(t *testing.T) {
 
 func TestParseTemplates_PopulatesArgPositions(t *testing.T) {
 	tool := RestTool{
-		RequestTemplate: RestToolRequestTemplate{URL: "http://x", Method: "GET"},
+		RequestTemplate:  RestToolRequestTemplate{URL: "http://x", Method: "GET"},
 		ResponseTemplate: RestToolResponseTemplate{Body: "{{.}}"},
 		Args: []RestToolArg{
-			{Name: "q", Position: "QUERY"},  // lower-cased in argPositions
+			{Name: "q", Position: "QUERY"}, // lower-cased in argPositions
 			{Name: "h", Position: "Header"},
-			{Name: "noPos"},                   // no position → not stored
+			{Name: "noPos"}, // no position → not stored
 		},
 	}
 	require := assert.New(t)
