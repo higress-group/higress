@@ -112,6 +112,10 @@ go.test.coverage: prebuild
 go.test.hgctl: prebuild
 	cd hgctl && go test ./... -count=1
 
+.PHONY: go.test.plugin-release
+go.test.plugin-release:
+	cd tools/plugin-release && go test ./... -count=1
+
 .PHONY: build
 build: prebuild $(OUT)
 	GOPROXY="$(GOPROXY)" GOOS=$(GOOS_LOCAL) GOARCH=$(GOARCH_LOCAL) LDFLAGS=$(RELEASE_LDFLAGS) tools/hack/gobuild.sh $(OUT)/ $(HIGRESS_BINARIES)
@@ -188,7 +192,7 @@ docker-buildx-push: clean-env docker.higress-buildx
 export PARENT_GIT_TAG:=$(shell cat VERSION)
 export PARENT_GIT_REVISION:=$(TAG)
 
-export ENVOY_PACKAGE_URL_PATTERN?=https://github.com/higress-group/proxy/releases/download/v2.2.4-test-envoy-1.36.10/envoy-symbol-ARCH.tar.gz
+export ENVOY_PACKAGE_URL_PATTERN?=https://github.com/higress-group/proxy/releases/download/v2.2.5/envoy-symbol-ARCH.tar.gz
 
 build-envoy: prebuild
 	./tools/hack/build-envoy.sh
@@ -246,7 +250,7 @@ install: pre-install
 	helm install higress helm/higress -n higress-system --create-namespace --set 'global.local=true'
 
 HIGRESS_LATEST_IMAGE_TAG ?= latest
-ENVOY_LATEST_IMAGE_TAG ?= 6fad1fa9aca8bc8a055a4c65d66a125c791cff10
+ENVOY_LATEST_IMAGE_TAG ?= 49b0ec03e77386b875fc6772ec4e79b088e4a634
 ISTIO_LATEST_IMAGE_TAG ?= 3498bc95bdea417fe0ce3f3017b0015cda907908
 TEST_ISTIO_IMAGE_TAG ?= $(ISTIO_LATEST_IMAGE_TAG)
 
