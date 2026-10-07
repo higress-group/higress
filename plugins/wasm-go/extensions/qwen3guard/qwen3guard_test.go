@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -115,6 +116,70 @@ func TestParseConfigValidation(t *testing.T) {
 			require.Error(t, parseConfig(gjson.Parse(tt.raw), &config, nil))
 		})
 	}
+}
+
+// 回归：timeout_ms / max_body_bytes 超出 uint32 范围时必须在 parseConfig 阶段
+// 报错，而不是窄化成错误的小值（issue #4357）
+func TestParseConfigNumericLimits(t *testing.T) {
+	base := `{"serviceSource":"k8s","serviceName":"qwen3guard","servicePort":8000`
+
+	t.Run("accepts timeout_ms at uint32 maximum", func(t *testing.T) {
+		var config pluginConfig
+		require.NoError(t, parseConfig(gjson.Parse(base+`,"timeout_ms":4294967295}`), &config, nil))
+		require.Equal(t, uint32(math.MaxUint32), config.timeoutMS)
+	})
+
+	t.Run("accepts maxBodyBytes at uint32 maximum", func(t *testing.T) {
+		var config pluginConfig
+		require.NoError(t, parseConfig(gjson.Parse(base+`,"maxBodyBytes":4294967295}`), &config, nil))
+		require.Equal(t, uint32(math.MaxUint32), config.maxBodyBytes)
+	})
+
+	t.Run("rejects timeout_ms above uint32 range", func(t *testing.T) {
+		var config pluginConfig
+		err := parseConfig(gjson.Parse(base+`,"timeout_ms":4294967395}`), &config, nil)
+		require.ErrorContains(t, err, "timeout_ms")
+	})
+
+	t.Run("rejects timeoutMs above uint32 range", func(t *testing.T) {
+		var config pluginConfig
+		err := parseConfig(gjson.Parse(base+`,"timeoutMs":4294967395}`), &config, nil)
+		require.ErrorContains(t, err, "timeout_ms")
+	})
+
+	t.Run("rejects max_body_bytes above uint32 range", func(t *testing.T) {
+		var config pluginConfig
+		err := parseConfig(gjson.Parse(base+`,"max_body_bytes":4294967395}`), &config, nil)
+		require.ErrorContains(t, err, "max_body_bytes")
+	})
+
+	t.Run("rejects maxBodyBytes above uint32 range", func(t *testing.T) {
+		var config pluginConfig
+		err := parseConfig(gjson.Parse(base+`,"maxBodyBytes":4294967395}`), &config, nil)
+		require.ErrorContains(t, err, "max_body_bytes")
+	})
+
+	t.Run("rejects negative and zero timeout_ms", func(t *testing.T) {
+		for _, raw := range []string{
+			base + `,"timeout_ms":-1}`,
+			base + `,"timeout_ms":0}`,
+			base + `,"timeoutMs":-1}`,
+		} {
+			var config pluginConfig
+			require.ErrorContains(t, parseConfig(gjson.Parse(raw), &config, nil), "timeout_ms")
+		}
+	})
+
+	t.Run("rejects negative and zero max_body_bytes", func(t *testing.T) {
+		for _, raw := range []string{
+			base + `,"max_body_bytes":-1}`,
+			base + `,"max_body_bytes":0}`,
+			base + `,"maxBodyBytes":-1}`,
+		} {
+			var config pluginConfig
+			require.ErrorContains(t, parseConfig(gjson.Parse(raw), &config, nil), "max_body_bytes")
+		}
+	})
 }
 
 func TestBuildModerationBodies(t *testing.T) {
