@@ -79,13 +79,13 @@ var RustWasmPluginsAiDataMasking = suite.ConformanceTest{
 			"ok.openai.com",
 			true,
 			[]byte("{\"messages\":[{\"role\":\"user\",\"content\":\"fuck\"}]}"),
-			[]byte("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"提问或回答中包含敏感词，已被屏蔽\"}}],\"usage\":{}}"),
+			[]byte("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"finish_reason\":\"deny\",\"content\":\"提问或回答中包含敏感词，已被屏蔽\"}}],\"usage\":{}}"),
 		))
 		testcases = append(testcases, gen_assertion(
 			"ok.openai.com",
 			true,
 			[]byte("{\"messages\":[{\"role\":\"user\",\"content\":\"costom_word1\"}]}"),
-			[]byte("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"提问或回答中包含敏感词，已被屏蔽\"}}],\"usage\":{}}"),
+			[]byte("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"finish_reason\":\"deny\",\"content\":\"提问或回答中包含敏感词，已被屏蔽\"}}],\"usage\":{}}"),
 		))
 		testcases = append(testcases, gen_assertion(
 			"ok.openai.com",
@@ -98,13 +98,13 @@ var RustWasmPluginsAiDataMasking = suite.ConformanceTest{
 			"system_deny.openai.com",
 			true,
 			[]byte("{\"messages\":[{\"role\":\"user\",\"content\":\"test\"}]}"),
-			[]byte("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"提问或回答中包含敏感词，已被屏蔽\"}}],\"usage\":{}}"),
+			[]byte("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"finish_reason\":\"deny\",\"content\":\"提问或回答中包含敏感词，已被屏蔽\"}}],\"usage\":{}}"),
 		))
 		testcases = append(testcases, gen_assertion(
 			"costom_word1.openai.com",
 			true,
 			[]byte("{\"messages\":[{\"role\":\"user\",\"content\":\"test\"}]}"),
-			[]byte("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"提问或回答中包含敏感词，已被屏蔽\"}}],\"usage\":{}}"),
+			[]byte("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"finish_reason\":\"deny\",\"content\":\"提问或回答中包含敏感词，已被屏蔽\"}}],\"usage\":{}}"),
 		))
 		testcases = append(testcases, gen_assertion(
 			"costom_word.openai.com",
