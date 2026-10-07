@@ -566,8 +566,23 @@ func modifyApiTokenRequestCount(key, apiToken string, op string) {
 }
 
 func (c *ProviderConfig) initApiTokens() error {
-	_, cas, _ := getApiTokens(c.failover.ctxApiTokens)
-	return setApiTokens(c.failover.ctxApiTokens, c.apiTokens, cas)
+	for attempt := 1; attempt <= casMaxRetries; attempt++ {
+		_, cas, err := getApiTokens(c.failover.ctxApiTokens)
+		if err != nil {
+			log.Errorf("Failed to get %s: %v", c.failover.ctxApiTokens, err)
+			continue
+		}
+		if err := setApiTokens(c.failover.ctxApiTokens, c.apiTokens, cas); err == nil {
+			if attempt > 1 {
+				log.Infof("Successfully initialized %s after %d attempts", c.failover.ctxApiTokens, attempt)
+			}
+			return nil
+		} else if !errors.Is(err, types.ErrorStatusCasMismatch) {
+			return err
+		}
+		log.Errorf("CAS mismatch when setting %s, retrying...", c.failover.ctxApiTokens)
+	}
+	return errors.New("failed to init apiTokens after max retries")
 }
 
 func getApiTokenUnavailableSince(key string) (map[string]int64, uint32, error) {
