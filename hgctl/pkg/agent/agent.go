@@ -109,7 +109,7 @@ func handleAddAgent(writer io.Writer, arg AgentAddArg) error {
 
 		if arg.asProduct {
 			if err := publishAPIToHimarket(arg.typ, arg.name, arg.HimarketAdminAuthArg); err != nil {
-				fmt.Println("failed to publish it to himarket, please do it mannually")
+				fmt.Println("failed to publish it to himarket, please do it manually")
 				return err
 			}
 			fmt.Printf("Agent %s is published to Himarket successfully\n", arg.name)
