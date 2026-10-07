@@ -95,6 +95,76 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 		require.Contains(t, string(result), `"parallel_tool_calls":false`)
 	})
 
+	t.Run("merge_top_level_system_with_inline_system_message", func(t *testing.T) {
+		// Regression test for gpustack/gpustack#5934: Claude Code sends a system-role
+		// message inside the messages array on top of the top-level system field. The
+		// naive conversion produced [system, user, system], and strict OpenAI backends
+		// (e.g. vLLM) reject it with "System message must be at the beginning.".
+		// The converter must merge both system messages into a single leading one.
+		claudeRequest := `{
+			"model": "qwen3.6-35b-a3b",
+			"max_tokens": 1000,
+			"system": "You are Claude Code.",
+			"messages": [
+				{"role": "user", "content": "hello"},
+				{"role": "system", "content": "Available agent types for the Agent tool: ..."}
+			]
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		// Exactly one system message, and it must be the first message.
+		require.Len(t, openaiRequest.Messages, 2)
+		assert.Equal(t, roleSystem, openaiRequest.Messages[0].Role)
+		assert.Equal(t, "user", openaiRequest.Messages[1].Role)
+		for i, msg := range openaiRequest.Messages {
+			if i != 0 {
+				assert.NotEqual(t, roleSystem, msg.Role, "no system message allowed after index 0")
+			}
+		}
+
+		// Merged system content should contain both the top-level and inline system text,
+		// in order, as a content-block array.
+		systemContentArray, ok := openaiRequest.Messages[0].Content.([]interface{})
+		require.True(t, ok, "merged system content should be a block array")
+		require.Len(t, systemContentArray, 2)
+		firstBlock := systemContentArray[0].(map[string]interface{})
+		secondBlock := systemContentArray[1].(map[string]interface{})
+		assert.Equal(t, "You are Claude Code.", firstBlock["text"])
+		assert.Equal(t, "Available agent types for the Agent tool: ...", secondBlock["text"])
+	})
+
+	t.Run("move_inline_system_message_to_front_without_top_level_system", func(t *testing.T) {
+		// A system-role message inside messages with no top-level system field must
+		// still be relocated to the beginning so the request is accepted.
+		claudeRequest := `{
+			"model": "qwen3.6-35b-a3b",
+			"max_tokens": 1000,
+			"messages": [
+				{"role": "user", "content": "hello"},
+				{"role": "system", "content": "You are a helpful assistant."}
+			]
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Len(t, openaiRequest.Messages, 2)
+		assert.Equal(t, roleSystem, openaiRequest.Messages[0].Role)
+		// Single system message keeps its original (string) content untouched.
+		assert.Equal(t, "You are a helpful assistant.", openaiRequest.Messages[0].Content)
+		assert.Equal(t, "user", openaiRequest.Messages[1].Role)
+	})
+
 	t.Run("convert_multiple_text_content_blocks", func(t *testing.T) {
 		// Test case: multiple text content blocks should remain as separate array elements with cache control support
 		// Both system and user messages should handle array content format
