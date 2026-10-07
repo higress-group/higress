@@ -251,10 +251,11 @@ func (sew *ServiceWrapper) GetCreateTime() time.Time {
 }
 
 type ProxyWrapper struct {
-	ProxyName    string
-	ListenerPort uint32
-	EnvoyFilter  *networking.EnvoyFilter
-	createTime   time.Time
+	ProxyName      string
+	ListenerPort   uint32
+	ConnectTimeout uint32
+	EnvoyFilter    *networking.EnvoyFilter
+	createTime     time.Time
 }
 
 func (pw *ProxyWrapper) DeepCopy() *ProxyWrapper {
