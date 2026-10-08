@@ -40,7 +40,7 @@ var GoWasmMcpProxyRoutingCompatibility = suite.ConformanceTest{
 				assertion := conformancehttp.Assertion{
 					Meta:     conformancehttp.AssertionMeta{TestCaseName: strategy, CompareTarget: conformancehttp.CompareTargetResponse},
 					Request:  conformancehttp.AssertionRequest{ActualRequest: conformancehttp.Request{Host: "mcp-routing-" + strategy + ".example.com", Path: "/mcp", Method: "POST", Headers: headers, ContentType: conformancehttp.ContentTypeApplicationJson, Body: []byte(`{"jsonrpc":"2.0","id":"routing","method":"tools/call","params":{` + params + `}}`)}},
-					Response: conformancehttp.AssertionResponse{ExpectedResponse: conformancehttp.Response{StatusCode: 200, Body: []byte(`{"jsonrpc":"2.0","id":"routing","result":` + result + `}`)}},
+					Response: conformancehttp.AssertionResponse{ExpectedResponse: conformancehttp.Response{StatusCode: 200, ContentType: conformancehttp.ContentTypeApplicationJson, Body: []byte(`{"jsonrpc":"2.0","id":"routing","result":` + result + `}`)}},
 				}
 				conformancehttp.MakeRequestAndExpectEventuallyConsistentResponse(t, suite.RoundTripper, suite.TimeoutConfig, suite.GatewayAddress, assertion)
 			})
