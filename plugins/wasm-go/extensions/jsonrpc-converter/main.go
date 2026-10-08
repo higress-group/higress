@@ -6,11 +6,11 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
-	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
-	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 )
@@ -155,12 +155,21 @@ func printHeaders(stage ProcessStage, s string) {
 
 // truncates a string to a maximum length of 4000 characters.
 func truncateString(s string, config any) string {
-	length := config.(McpConverterConfig).MaxHeaderLength
-	if len(s) <= length {
+	cfg, ok := config.(McpConverterConfig)
+	if !ok {
 		return s
 	}
-	prefix := s[:length/2]
-	suffix := s[len(s)-length/2:]
+	length := cfg.MaxHeaderLength
+	if length <= 0 {
+		length = DefaultMaxHeaderLength
+	}
+	runes := []rune(s)
+	if len(runes) <= length {
+		return s
+	}
+	half := length / 2
+	prefix := string(runes[:half])
+	suffix := string(runes[len(runes)-half:])
 
 	return fmt.Sprintf("%s...(truncated)...%s", prefix, suffix)
 }

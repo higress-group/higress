@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
@@ -22,6 +23,7 @@ func TestTruncateString(t *testing.T) {
 		{"Truncated String", "Higress Is an AI-Native API Gateway", 20, "Higress Is...(truncated)...PI Gateway"},
 		{"Empty String", "", 10, ""},
 		{"Single Char", "A", 10, "A"},
+		{"UTF8 Chinese Truncated", "你好世界人工智能网关测试文本", 10, "你好世界人...(truncated)...关测试文本"},
 	}
 
 	for _, tt := range tests {
@@ -31,8 +33,12 @@ func TestTruncateString(t *testing.T) {
 			if result != tt.expected {
 				t.Errorf("truncateString(%q, %d) = %q; want %q", tt.input, tt.maxLen, result, tt.expected)
 			}
+			require.True(t, utf8.ValidString(result), "result must be valid UTF-8")
 		})
 	}
+
+	// Test fallback on invalid config type
+	require.Equal(t, "hello world", truncateString("hello world", "invalid-config"))
 }
 
 // TestIsPreRequestStage tests the isPreRequestStage function
