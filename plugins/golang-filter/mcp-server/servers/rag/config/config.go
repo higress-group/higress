@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Config represents the main configuration structure for the MCP server
 type Config struct {
@@ -45,7 +48,7 @@ type EmbeddingConfig struct {
 
 // VectorDBConfig defines configuration for vector databases
 type VectorDBConfig struct {
-	Provider   string        `json:"provider" yaml:"provider"` // Available options: milvus, qdrant, chroma
+	Provider   string        `json:"provider" yaml:"provider"` // milvus, qdrant
 	Host       string        `json:"host,omitempty" yaml:"host,omitempty"`
 	Port       int           `json:"port,omitempty" yaml:"port,omitempty"`
 	Database   string        `json:"database,omitempty" yaml:"database,omitempty"`
@@ -120,23 +123,11 @@ func (i IndexConfig) ParamsString(key string) (string, error) {
 }
 
 func (i IndexConfig) ParamsInt64(key string) (int64, error) {
-	if mVal, ok := i.Params[key].(int64); ok {
-		return mVal, nil
-	}
-	if mVal, ok := i.Params[key].(int); ok {
-		return int64(mVal), nil
-	}
-	return 0, fmt.Errorf("params %s not found", key)
+	return coerceInt64Param(i.Params, key)
 }
 
 func (i IndexConfig) ParamsFloat64(key string) (float64, error) {
-	if mVal, ok := i.Params[key].(float64); ok {
-		return mVal, nil
-	}
-	if mVal, ok := i.Params[key].(float32); ok {
-		return float64(mVal), nil
-	}
-	return 0, fmt.Errorf("params %s not found", key)
+	return coerceFloat64Param(i.Params, key)
 }
 
 func (i IndexConfig) ParamsBool(key string) (bool, error) {
@@ -162,17 +153,59 @@ func (i SearchConfig) ParamsString(key string) (string, error) {
 }
 
 func (i SearchConfig) ParamsInt64(key string) (int64, error) {
-	if mVal, ok := i.Params[key].(int64); ok {
-		return mVal, nil
+	return coerceInt64Param(i.Params, key)
+}
+
+func coerceInt64Param(params map[string]interface{}, key string) (int64, error) {
+	if params == nil {
+		return 0, fmt.Errorf("params %s not found", key)
 	}
-	return 0, fmt.Errorf("params %s not found", key)
+	switch mVal := params[key].(type) {
+	case int64:
+		return mVal, nil
+	case int:
+		return int64(mVal), nil
+	case float64:
+		return int64(mVal), nil
+	case float32:
+		return int64(mVal), nil
+	case json.Number:
+		i, err := mVal.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("params %s not found", key)
+		}
+		return i, nil
+	default:
+		return 0, fmt.Errorf("params %s not found", key)
+	}
 }
 
 func (i SearchConfig) ParamsFloat64(key string) (float64, error) {
-	if mVal, ok := i.Params[key].(float64); ok {
-		return mVal, nil
+	return coerceFloat64Param(i.Params, key)
+}
+
+func coerceFloat64Param(params map[string]interface{}, key string) (float64, error) {
+	if params == nil {
+		return 0, fmt.Errorf("params %s not found", key)
 	}
-	return 0, fmt.Errorf("params %s not found", key)
+	switch mVal := params[key].(type) {
+	case float64:
+		return mVal, nil
+	case float32:
+		return float64(mVal), nil
+	case int:
+		return float64(mVal), nil
+	case int64:
+		return float64(mVal), nil
+	case json.Number:
+		f, err := mVal.Float64()
+		if err != nil {
+			return 0, fmt.Errorf("params %s not found", key)
+		}
+		return f, nil
+	default:
+		return 0, fmt.Errorf("params %s not found", key)
+	}
 }
 
 func (i SearchConfig) ParamsBool(key string) (bool, error) {
