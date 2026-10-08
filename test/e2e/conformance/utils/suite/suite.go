@@ -15,7 +15,6 @@ package suite
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/alibaba/higress/v2/test/e2e/conformance/utils/config"
@@ -23,6 +22,12 @@ import (
 	"github.com/alibaba/higress/v2/test/e2e/conformance/utils/roundtripper"
 	"istio.io/istio/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"context"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const (
@@ -153,6 +158,8 @@ func New(s Options) *ConformanceTestSuite {
 // Setup ensures the base resources required for conformance tests are installed
 // in the cluster. It also ensures that all relevant resources are ready.
 func (suite *ConformanceTestSuite) Setup(t *testing.T) {
+	suite.removeStaleWasmPlugins(t)
+
 	t.Logf("📦 Test Setup: Ensuring IngressClass has been accepted")
 
 	suite.Applier.IngressClass = suite.IngressClassName
@@ -270,4 +277,41 @@ func (test *ConformanceTest) Run(t *testing.T, suite *ConformanceTestSuite) {
 	}
 
 	test.Test(t, suite)
+}
+
+// removeStaleWasmPlugins deletes WasmPlugin CRs in the higress-system
+// namespace that reference local plugin files (file:///opt/plugins/...).
+// An interrupted test run leaves such CRs behind, and the wasm files they
+// reference are rebuilt on demand, so a later run may not have them on disk.
+// A listener containing a wasm filter whose file is missing is rejected by
+// Envoy ("Invalid path"), which makes every route on the gateway fail with
+// 500/NFCF — including routes with no plugin attached (#4857). Removing the
+// stale CRs before applying the test manifests keeps a fresh run healthy.
+func (suite *ConformanceTestSuite) removeStaleWasmPlugins(t *testing.T) {
+	ctx := context.Background()
+
+	pluginList := &unstructured.UnstructuredList{}
+	pluginList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "extensions.higress.io", Version: "v1alpha1", Kind: "WasmPluginList",
+	})
+	if err := suite.Client.List(ctx, pluginList, client.InNamespace("higress-system")); err != nil {
+		t.Logf("⚠️ Test Setup: failed to list WasmPlugins, skipping stale cleanup: %v", err)
+		return
+	}
+
+	for i := range pluginList.Items {
+		item := pluginList.Items[i]
+		spec, ok := item.Object["spec"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		url, _ := spec["url"].(string)
+		if !strings.HasPrefix(url, "file:///opt/plugins/") {
+			continue
+		}
+		t.Logf("🧹 Test Setup: deleting stale WasmPlugin %s (url: %s)", item.GetName(), url)
+		if err := suite.Client.Delete(ctx, &item); err != nil {
+			t.Logf("⚠️ Test Setup: failed to delete stale WasmPlugin %s: %v", item.GetName(), err)
+		}
+	}
 }
