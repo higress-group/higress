@@ -30,11 +30,11 @@ def fixture():
         config = {"stat_prefix": name, "route_config": {"name": name, "virtual_hosts": [{"name": "all", "domains": ["*"], "routes": routes}]},
                   "access_log": [{"name": "envoy.access_loggers.stdout", "typed_config": typed("access_loggers.stream.v3.StdoutAccessLog")}],
                   "http_filters": [
-                      {"name": "envoy.filters.http.lua", "typed_config": typed("filters.http.lua.v3.Lua", inline_code='function envoy_on_request(h) h:headers():add("x-before", "present") end')},
+                      {"name": "envoy.filters.http.lua", "typed_config": typed("filters.http.lua.v3.Lua", clear_route_cache=False, inline_code='function envoy_on_request(h) h:headers():add("x-before", "present") end')},
                       {"name": "envoy.filters.http.wasm", "typed_config": typed("filters.http.wasm.v3.Wasm", config={"name": name, "root_id": name,
                        "vm_config": {"vm_id": name, "runtime": "envoy.wasm.runtime.v8", "code": {"local": {"filename": "/evidence/plugin.wasm"}}},
                        "configuration": {"@type": "type.googleapis.com/google.protobuf.StringValue", "value": json.dumps({"server": server})}})},
-                      {"name": "envoy.filters.http.lua", "typed_config": typed("filters.http.lua.v3.Lua", inline_code='function envoy_on_request(h) h:headers():add("x-after", "present"); if h:headers():get("x-block") == "yes" then h:respond({[":status"]="403"}, "blocked by later filter") end end')},
+                      {"name": "envoy.filters.http.lua", "typed_config": typed("filters.http.lua.v3.Lua", clear_route_cache=False, inline_code='function envoy_on_request(h) h:headers():add("x-after", "present"); if h:headers():get("x-block") == "yes" then h:respond({[":status"]="403"}, "blocked by later filter") end end')},
                       {"name": "envoy.filters.http.router", "typed_config": typed("filters.http.router.v3.Router")}]}
         listeners.append({"name": name, "address": {"socket_address": {"address": "0.0.0.0", "port_value": port}}, "filter_chains": [{"filters": [{"name": "envoy.filters.network.http_connection_manager", "typed_config": typed("filters.network.http_connection_manager.v3.HttpConnectionManager", **config)}]}]})
     clusters = []

@@ -84,7 +84,12 @@ def run():
         key = profile + "-blocked"
         response = request(port, key, modern, extra={"x-block": "yes"})
         rows = ledger(key)
-        check(key + ":V2-rejection", (response["status"] == 403 and not any(r["operation"] == "tools/call" for r in rows)) == COMPAT, response)
+        # The old oracle wraps the later filter's 403 as a JSON-RPC error at
+        # HTTP 200. Compatibility checks enforcement; current profiles retain
+        # their newer HTTP authorization mapping independently.
+        rejected = "error" in response["json"] and not any(r["operation"] == "tools/call" for r in rows)
+        check(key + ":V2-rejection", rejected == COMPAT, response)
+        if VARIANT == "candidate": check(key + ":V8-rejection-status", response["status"] == 403, response)
         for scenario, path, success in [("slow", "/entry/mcp", COMPAT), ("timeout", "/entry/timeout", not COMPAT), ("retry", "/entry/retry", COMPAT), ("retry", "/entry/mcp", False)]:
             key = profile + "-" + scenario + "-" + path.rsplit("/", 1)[-1]
             response = request(port, key, modern, scenario=scenario, path=path)
