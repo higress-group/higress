@@ -356,3 +356,47 @@ func TestOnHttpRequestHeaders_NoClientConsumerHeaderAddsExactlyOne(t *testing.T)
 		require.True(t, test.HasHeaderWithValue(headers, "X-Mse-Consumer", "consumer1"))
 	})
 }
+
+// TestOnHttpRequestHeaders_PasswordWithColons verifies that passwords containing
+// colons (RFC 7617) can be configured and authenticate successfully.
+func TestOnHttpRequestHeaders_PasswordWithColons(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		cfg := mustConfig(t, map[string]interface{}{
+			"global_auth": true,
+			"consumers": []map[string]interface{}{
+				{"name": "colon-user", "credential": "user:pass:with:colons"},
+			},
+		})
+		host, status := test.NewTestHost(cfg)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+			basicAuthHeader("user", "pass:with:colons"),
+		})
+		require.Equal(t, types.ActionContinue, action)
+		require.Nil(t, host.GetLocalResponse())
+
+		headers := host.GetRequestHeaders()
+		require.True(t, test.HasHeaderWithValue(headers, "X-Mse-Consumer", "colon-user"))
+	})
+}
+
+// TestParseGlobalConfig_RejectsDuplicateUsername verifies that two consumers sharing
+// the same username are rejected at configuration parse time.
+func TestParseGlobalConfig_RejectsDuplicateUsername(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		cfg := mustConfig(t, map[string]interface{}{
+			"consumers": []map[string]interface{}{
+				{"name": "consumer1", "credential": "admin:pass1"},
+				{"name": "consumer2", "credential": "admin:pass2"},
+			},
+		})
+		host, status := test.NewTestHost(cfg)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusFailed, status)
+	})
+}
