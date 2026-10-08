@@ -33,6 +33,9 @@ type claudeTool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description,omitempty"`
 	InputSchema map[string]interface{} `json:"input_schema,omitempty"`
+	// Strict is Claude's counterpart of OpenAI's `strict` tool flag: the tool
+	// input is validated against the schema before the tool runs.
+	Strict bool `json:"strict,omitempty"`
 }
 
 type claudeToolChoice struct {
@@ -458,6 +461,11 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 		Stream:        origRequest.Stream,
 		Temperature:   origRequest.Temperature,
 		TopP:          origRequest.TopP,
+		// Always initialize messages so the field serializes as [] instead of null.
+		// A request whose turns all converted into `system` (a lone `developer`
+		// message, for example) receives a placeholder user turn below, so neither
+		// null nor an empty array ever reaches the wire.
+		Messages: make([]claudeChatMessage, 0, len(origRequest.Messages)),
 		// ServiceTier:   origRequest.ServiceTier,
 	}
 	if claudeRequest.MaxTokens == 0 {
@@ -640,6 +648,15 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 		}
 
 		if message.IsStringContent() {
+			if message.StringContent() == "" {
+				// Anthropic rejects an empty content block, so a turn whose text is
+				// empty is dropped exactly like a turn whose parts are all
+				// non-portable. Consecutive same-role turns are combined by the API,
+				// and the guard after this loop restores a placeholder user turn if
+				// nothing survives.
+				log.Warnf("[ai-proxy] claude: dropping empty %q message, Anthropic rejects an empty content block", message.Role)
+				continue
+			}
 			claudeMessage.Content = NewStringContent(message.StringContent())
 		} else {
 			chatMessageContents := make([]claudeChatMessageContent, 0)
@@ -675,21 +692,45 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 						})
 					}
 				case contentTypeFile:
-					chatMessageContents = append(chatMessageContents, claudeChatMessageContent{
-						Type: "file",
-						Source: &claudeChatMessageContentSource{
-							Type:   "url",
-							FileId: messageContent.File.FileId,
-						},
-					})
+					// OpenAI `file` parts carry either inline bytes or a provider-scoped
+					// id. The id used to be forwarded as {"type":"url"} without a url
+					// (valid on neither side) and inline bytes were dropped entirely.
+					documentBlock, ok := claudeDocumentBlockFromFile(messageContent.File)
+					if !ok {
+						continue
+					}
+					chatMessageContents = append(chatMessageContents, documentBlock)
+				case contentTypeInputAudio:
+					log.Warnf("[ai-proxy] claude: dropping %s part, Claude messages cannot carry audio input", contentTypeInputAudio)
+					continue
 				default:
 					log.Errorf("Unsupported content type: %s", messageContent.Type)
 					continue
 				}
 			}
+			if len(chatMessageContents) == 0 {
+				// Anthropic rejects both an empty content array and an empty string
+				// content block, so a turn with nothing portable is dropped instead
+				// of being sent in an invalid shape. The API combines consecutive
+				// same-role messages, so dropping a turn keeps the request valid.
+				log.Warnf("[ai-proxy] claude: dropping message with role %q, no content is portable to Claude", message.Role)
+				continue
+			}
 			claudeMessage.Content = NewArrayContent(chatMessageContents)
 		}
 		claudeRequest.Messages = append(claudeRequest.Messages, claudeMessage)
+	}
+
+	if len(claudeRequest.Messages) == 0 {
+		// Every turn was converted into top-level `system` content (for example
+		// a lone `developer` message). Anthropic rejects both null and empty
+		// `messages` arrays, so append one placeholder user turn: the request
+		// stays valid and the system/developer content still reaches the model.
+		log.Warnf("[ai-proxy] claude: no request turn survived conversion; appending a placeholder user message")
+		claudeRequest.Messages = append(claudeRequest.Messages, claudeChatMessage{
+			Role:    roleUser,
+			Content: NewStringContent(" "),
+		})
 	}
 
 	// In Claude Code mode, add default system prompt if not present
@@ -708,13 +749,26 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 		}
 	}
 
-	for _, tool := range origRequest.Tools {
-		claudeTool := claudeTool{
-			Name:        tool.Function.Name,
-			Description: tool.Function.Description,
-			InputSchema: tool.Function.Parameters,
+	// OpenAI's `tool_choice.allowed_tools` has no Claude counterpart: Claude only
+	// picks tools by name. Narrow the declared tools to the caller-approved subset
+	// so the model cannot call a tool that the caller ruled out, and translate the
+	// subset's mode below together with the rest of the tool choice.
+	allowedTools := make(map[string]bool)
+	for _, name := range origRequest.getAllowedToolNames() {
+		allowedTools[name] = true
+	}
+	for _, t := range origRequest.Tools {
+		if len(allowedTools) > 0 && !allowedTools[t.Function.Name] {
+			log.Warnf("[ai-proxy] claude: dropping tool %q, it is not listed in tool_choice.allowed_tools", t.Function.Name)
+			continue
 		}
-		claudeRequest.Tools = append(claudeRequest.Tools, claudeTool)
+		claudeRequest.Tools = append(claudeRequest.Tools, claudeTool{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			InputSchema: t.Function.Parameters,
+			// Carry OpenAI's strict flag so tool arguments stay schema-validated.
+			Strict: t.Function.Strict,
+		})
 	}
 
 	if origRequest.ToolChoice != nil {
@@ -725,7 +779,22 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 		hasThinking := hasActiveClaudeThinking(claudeRequest.Thinking)
 
 		choiceType := origRequest.getToolChoiceType()
-		if tc := origRequest.getToolChoiceObject(); !hasThinking && tc != nil && tc.Type == "function" && tc.Function.Name != "" {
+		if choiceType == "allowed_tools" {
+			// The allow-list itself is encoded in the narrowed tool list above, so
+			// only the mode has to be carried over; the bare allowed_tools type is
+			// not a valid Claude tool_choice.
+			mode := "auto"
+			if tc := origRequest.getToolChoiceObject(); tc != nil && tc.AllowedTools != nil && tc.AllowedTools.Mode == "required" {
+				mode = "any"
+			}
+			if hasThinking && mode == "any" {
+				mode = "auto"
+			}
+			claudeRequest.ToolChoice = &claudeToolChoice{
+				Type:                   mode,
+				DisableParallelToolUse: !parallelToolCalls,
+			}
+		} else if tc := origRequest.getToolChoiceObject(); !hasThinking && tc != nil && tc.Type == "function" && tc.Function.Name != "" {
 			claudeRequest.ToolChoice = &claudeToolChoice{
 				Name:                   tc.Function.Name,
 				Type:                   "tool",
@@ -751,6 +820,47 @@ func (c *claudeProvider) buildClaudeTextGenRequest(origRequest *chatCompletionRe
 	}
 
 	return &claudeRequest
+}
+
+// claudeDocumentBlockFromFile converts an OpenAI `file` content part into the
+// Claude block that carries the same payload: inline bytes become a `document`
+// block with a base64 source, and an OpenAI file id is forwarded as an Anthropic
+// Files-API `file` source. It returns false when the part cannot be represented,
+// so callers notice the dropped content instead of sending an empty turn.
+func claudeDocumentBlockFromFile(file *chatMessageContentFile) (claudeChatMessageContent, bool) {
+	if file == nil {
+		return claudeChatMessageContent{}, false
+	}
+	if file.FileData != "" {
+		mediaType, data, _ := filePartMediaType(file)
+		if mediaType == "" {
+			log.Warnf("[ai-proxy] claude: cannot tell the media type of file part %q, send file_data as a data URL (data:<media type>;base64,<data>) or set file_name", file.FileName)
+		} else {
+			return claudeChatMessageContent{
+				Type: "document",
+				Source: &claudeChatMessageContentSource{
+					Type:      "base64",
+					MediaType: mediaType,
+					Data:      data,
+				},
+			}, true
+		}
+	}
+	if file.FileId != "" {
+		// A Claude file source is declared with type "file"; the previous
+		// {"type":"url","file_id":...} shape is valid on neither side.
+		return claudeChatMessageContent{
+			Type: "document",
+			Source: &claudeChatMessageContentSource{
+				Type:   "file",
+				FileId: file.FileId,
+			},
+		}, true
+	}
+	if file.FileData == "" {
+		log.Warnf("[ai-proxy] claude: dropping file part, neither file_data nor file_id is set")
+	}
+	return claudeChatMessageContent{}, false
 }
 
 func (c *claudeProvider) responseClaude2OpenAI(ctx wrapper.HttpContext, origResponse *claudeTextGenResponse) *chatCompletionResponse {
