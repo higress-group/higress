@@ -942,6 +942,9 @@ func TestParseIP(t *testing.T) {
 		{"ipv6 bracketed no port", "[2001:db8::1]", false, "2001:db8::1"},
 		{"ipv6 bare passes through", "2001:db8::1", false, "2001:db8::1"},
 		{"empty string", "", false, ""},
+		{"xff closing bracket only", "]", true, ""},
+		{"xff closing bracket prefix", "]-evil", true, ""},
+		{"ipv6 mapped with port", "[::ffff:198.51.100.9]:8080", true, "::ffff:198.51.100.9"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
