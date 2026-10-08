@@ -6,6 +6,7 @@ import (
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -280,6 +281,36 @@ func TestConditionSetMultiStage2(t *testing.T) {
 		require.Equal(t, types.ActionContinue, actionResp)
 		newHeaders := host.GetResponseHeaders()
 		require.True(t, compareHeaders([][2]string{{"x-c", "bbb"}, {"content-type", "application/json"}}, newHeaders))
+	})
+}
+
+type mockContext struct {
+	wrapper.HttpContext
+	ctx map[string]interface{}
+}
+
+func (m *mockContext) GetContext(key string) interface{} {
+	if m.ctx == nil {
+		return nil
+	}
+	return m.ctx[key]
+}
+
+func (m *mockContext) Path() string {
+	return "/test"
+}
+
+func TestOnHttpResponseHeadersNilContext(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost([]byte(`{}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		ctx := &mockContext{}
+		require.NotPanics(t, func() {
+			action := onHttpResponseHeaders(ctx, PluginConfig{})
+			require.Equal(t, types.ActionContinue, action)
+		})
 	})
 }
 func compareHeaders(headers1, headers2 [][2]string) bool {
