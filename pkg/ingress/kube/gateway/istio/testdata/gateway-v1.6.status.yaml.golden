@@ -179,9 +179,9 @@ status:
       status: "False"
       type: Conflicted
     - lastTransitionTime: fake
-      message: No errors found
-      reason: Programmed
-      status: "True"
+      message: protocol "INVALID" is unsupported
+      reason: Invalid
+      status: "False"
       type: Programmed
     - lastTransitionTime: fake
       message: No errors found
@@ -224,9 +224,9 @@ status:
       status: "False"
       type: Conflicted
     - lastTransitionTime: fake
-      message: No errors found
-      reason: Programmed
-      status: "True"
+      message: protocol "INVALID" is unsupported
+      reason: Invalid
+      status: "False"
       type: Programmed
     - lastTransitionTime: fake
       message: No errors found
