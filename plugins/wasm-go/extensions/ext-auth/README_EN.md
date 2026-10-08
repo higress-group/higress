@@ -97,7 +97,7 @@ Configuration fields for each item of `HeaderMapping` type in `mapped_upstream_h
 | Name | Data Type | Required | Default Value | Description |
 | --- | --- | --- | --- | --- |
 | `source` | string | Yes | - | Where the value is extracted from: `status_code`, `header`, or `body_json`, with the same meaning as in `Condition` |
-| `key` | string | Required when `source` is `header` or `body_json` | - | For `header`, the response-header name (case-insensitive); for `body_json`, a gjson path; ignored for `status_code` |
+| `key` | string | Required when `source` is `header` or `body_json` | - | For `header`, the response-header name (case-insensitive); for `body_json`, a gjson path, including nested and array-index paths such as `data.uid` and `friends.0.first`; ignored for `status_code` |
 | `to_header` | string | Yes | - | The request-header name used when forwarding to the upstream |
 
 `HeaderMapping` forwarding semantics:

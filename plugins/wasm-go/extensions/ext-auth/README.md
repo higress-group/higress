@@ -96,7 +96,7 @@ description: Ext 认证插件实现了调用外部授权服务进行认证鉴权
 | 名称        | 数据类型 | 必填 | 默认值 | 描述                                                         |
 |-------------|----------|------|--------|--------------------------------------------------------------|
 | `source`    | string   | 是   | -      | 取值来源，可选 `status_code`、`header`、`body_json`，含义同 `Condition` |
-| `key`       | string   | `source` 为 `header` 或 `body_json` 时必填 | -      | `header` 时为响应头名称（忽略大小写）；`body_json` 时为 gjson 路径；`status_code` 时忽略 |
+| `key`       | string   | `source` 为 `header` 或 `body_json` 时必填 | -      | `header` 时为响应头名称（忽略大小写）；`body_json` 时为 gjson 路径，支持嵌套与数组下标，例如 `data.uid`、`friends.0.first`；`status_code` 时忽略 |
 | `to_header` | string   | 是   | -      | 透传到上游请求时使用的请求头名称                             |
 
 `HeaderMapping` 透传语义：
