@@ -185,7 +185,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config RequestBlockConfig, lo
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config RequestBlockConfig, body []byte, log log.Log) types.Action {
-	log.Infof("My request-block body: %s\n", string(body))
+	log.Debugf("request-block: body: %s", string(body))
 	bodyStr := string(body)
 
 	if !config.caseSensitive {
