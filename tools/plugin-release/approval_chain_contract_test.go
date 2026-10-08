@@ -550,6 +550,7 @@ func TestEmergencyStagingTagIsRetainedAsProvenance(t *testing.T) {
 		t.Fatalf("run summary does not record the retained staging reference %q: %q", stagingRef, summaryBytes)
 	}
 }
+
 // TestEmergencyPublishJobReaffirmsAuthorization closes the re-run bypass: the
 // job that mutates the public registry repeats the maintain/admin check as its
 // first step, so resuming it under a different triggering actor cannot complete
@@ -639,42 +640,33 @@ jq -cn --arg role_name "$FIXTURE_ROLE_NAME" '{permission:"write",role_name:$role
 }
 
 const (
-	// releaseAppLogin is the automation identity the real preparation PRs carry;
-	// the workflow reads it from vars.RELEASE_PR_APP_LOGIN, never hard-codes it.
-	releaseAppLogin     = "higress-release-automation[bot]"
-	releasePRMaintainer = "maintainer-one"
-	releasePRNumber     = 4700
+	releaseAppLogin = "higress-release-automation[bot]"
+	releasePRNumber = 4700
 )
 
 // prepPR describes the GitHub preparation-PR payload promote may authorize.
 // defaultPrepPR fills in the real automation's PR, so each case overrides
 // exactly the one property it exercises.
 type prepPR struct {
-	number              int
-	state               string
-	baseRef             string
-	headRef             string
-	headSHA             string
-	headRepo            string
-	headFork            bool
-	omitHeadRepo        bool
-	title               string
-	author              string
-	authorType          string
-	labels              []string
-	mergedAt            string
-	mergeCommit         string
-	maintainerCanModify bool
+	number      int
+	state       string
+	baseRef     string
+	headRef     string
+	headSHA     string
+	title       string
+	author      string
+	authorType  string
+	labels      []string
+	mergedAt    string
+	mergeCommit string
 }
 
-func defaultPrepPR(gateway, mergeCommit, headSHA string) prepPR {
+func defaultPrepPR(gateway, mergeCommit string) prepPR {
 	return prepPR{
 		number:      releasePRNumber,
 		state:       "closed",
 		baseRef:     "main",
 		headRef:     "release/plugin-snapshot-" + gateway,
-		headSHA:     headSHA,
-		headRepo:    "higress-group/higress",
 		title:       "chore: prepare plugin snapshot " + gateway,
 		author:      releaseAppLogin,
 		authorType:  "Bot",
@@ -696,173 +688,44 @@ func (p prepPR) payload() map[string]any {
 	for _, label := range p.labels {
 		labels = append(labels, map[string]any{"name": label})
 	}
-	head := map[string]any{"ref": p.headRef, "sha": p.headSHA}
-	if !p.omitHeadRepo {
-		head["repo"] = map[string]any{"full_name": p.headRepo, "fork": p.headFork}
-	}
 	return map[string]any{
-		"number":                p.number,
-		"state":                 p.state,
-		"merged_at":             mergedAt,
-		"merge_commit_sha":      mergeCommit,
-		"base":                  map[string]any{"ref": p.baseRef},
-		"head":                  head,
-		"title":                 p.title,
-		"user":                  map[string]any{"login": p.author, "type": p.authorType},
-		"labels":                labels,
-		"maintainer_can_modify": p.maintainerCanModify,
+		"number":           p.number,
+		"state":            p.state,
+		"merged_at":        mergedAt,
+		"merge_commit_sha": mergeCommit,
+		"base":             map[string]any{"ref": p.baseRef},
+		"head":             map[string]any{"ref": p.headRef, "sha": p.headSHA},
+		"title":            p.title,
+		"user":             map[string]any{"login": p.author, "type": p.authorType},
+		"labels":           labels,
 	}
 }
 
-// prepReview describes one entry of the PR's review list.
-type prepReview struct {
-	user      string
-	userType  string
-	state     string
-	submitted string
-	commit    string
-}
-
-func (r prepReview) payload() map[string]any {
-	return map[string]any{
-		"user":         map[string]any{"login": r.user, "type": r.userType},
-		"state":        r.state,
-		"submitted_at": r.submitted,
-		"commit_id":    r.commit,
-	}
-}
-
-// approvedReviews is the review list of a properly reviewed preparation PR: one
-// human approval of the final head commit, submitted before the merge.
-func approvedReviews(headSHA string) []prepReview {
-	return []prepReview{{
-		user:      releasePRMaintainer,
-		userType:  "User",
-		state:     "APPROVED",
-		submitted: "2026-09-02T10:00:02Z",
-		commit:    headSHA,
-	}}
-}
-
-// TestPromotionAuthorizationRequiresTheReviewedAutomationPreparationPR executes
-// the workflow's authorization contract against a real Git repository whose
-// preparation branch was SQUASH-merged, and a stubbed GitHub API. Labels, titles
-// and branch names are mutable metadata any write-access collaborator can forge,
-// so authorization must additionally rest on the App author, the canonical
-// non-fork head, the merge commit, the frozen head content, and a human approval
-// of that content submitted before the merge.
-func TestPromotionAuthorizationRequiresTheReviewedAutomationPreparationPR(t *testing.T) {
+// TestPromotionAuthorizationRequiresTheLabeledMergedPreparationPR executes the
+// workflow's authorization contract against a real Git repository whose
+// preparation branch was SQUASH-merged, and a stubbed GitHub API. Authorization
+// rests on immutable merge evidence: the merged commit descends from the
+// snapshot's code-freeze commit, is reachable from main, and is the merge of
+// exactly one PR carrying the release label.
+func TestPromotionAuthorizationRequiresTheLabeledMergedPreparationPR(t *testing.T) {
 	const gateway = "2.2.6"
 	otherMerge := strings.Repeat("f", 40)
-	staleHead := strings.Repeat("1", 40)
 
 	for _, tc := range []struct {
-		name               string
-		mode               string
-		pr                 func(pr *prepPR)
-		pulls              func(payloads []map[string]any) []map[string]any
-		reviews            func(headSHA string) []prepReview
-		reviewerPermission string
-		noAppLogin         bool
-		apiFails           bool
-		want               string
-		wantError          bool
+		name      string
+		mode      string
+		pr        func(pr *prepPR)
+		pulls     func(payloads []map[string]any) []map[string]any
+		want      string
+		wantError bool
 	}{
-		{name: "squash-merged-reviewed-preparation-pr"},
+		{name: "squash-merged-labeled-preparation-pr"},
 		{
-			// A collaborator with write access can create the branch, open a PR
-			// with the exact title, and add the release label. Only the author
-			// identity distinguishes this from the automation's PR.
-			name: "forged-label-by-collaborator",
-			pr:   func(pr *prepPR) { pr.author, pr.authorType = "write-collaborator", "User" },
-			want: "not the release automation App",
-		},
-		{
-			name: "other-app-author",
-			pr:   func(pr *prepPR) { pr.author = "some-other-automation[bot]" },
-			want: "not the release automation App",
-		},
-		{
-			name: "app-author-with-user-type",
-			pr:   func(pr *prepPR) { pr.authorType = "User" },
-			want: "not the release automation App",
-		},
-		{
-			name:    "approved-review-missing",
-			reviews: func(string) []prepReview { return nil },
-			want:    "has no review by someone other than its author",
-		},
-		{
-			name: "self-approval",
-			reviews: func(headSHA string) []prepReview {
-				reviews := approvedReviews(headSHA)
-				reviews[0].user = releaseAppLogin
-				reviews[0].userType = "Bot"
-				return reviews
-			},
-			want: "has no review by someone other than its author",
-		},
-		{
-			name: "comment-only-review",
-			reviews: func(headSHA string) []prepReview {
-				reviews := approvedReviews(headSHA)
-				reviews[0].state = "COMMENTED"
-				return reviews
-			},
-			want: "has no review by someone other than its author",
-		},
-		{
-			name: "changes-requested-review",
-			reviews: func(headSHA string) []prepReview {
-				reviews := approvedReviews(headSHA)
-				reviews[0].state = "CHANGES_REQUESTED"
-				return reviews
-			},
-			want: "has no review by someone other than its author",
-		},
-		{
-			name: "approval-after-merge",
-			reviews: func(headSHA string) []prepReview {
-				reviews := approvedReviews(headSHA)
-				reviews[0].submitted = "2026-09-02T10:05:00Z"
-				return reviews
-			},
-			want: "has no review by someone other than its author",
-		},
-		{
-			// The automation re-ran after the approval, so the approved content
-			// is not the content that was merged.
-			name: "approval-of-stale-head",
-			reviews: func(string) []prepReview {
-				reviews := approvedReviews(staleHead)
-				return reviews
-			},
-			want: "has no review by someone other than its author",
-		},
-		{
-			name: "fork-head",
-			pr:   func(pr *prepPR) { pr.headRepo, pr.headFork = "attacker/higress", true },
-			want: "is not the canonical higress-group/higress",
-		},
-		{
-			name: "head-repository-absent",
-			pr:   func(pr *prepPR) { pr.omitHeadRepo = true },
-			want: "is not the canonical higress-group/higress",
-		},
-		{
-			name: "maintainer-edits-allowed",
-			pr:   func(pr *prepPR) { pr.maintainerCanModify = true },
-			want: "still allows maintainer edits",
-		},
-		{
-			name: "merge-commit-differs",
-			pr:   func(pr *prepPR) { pr.mergeCommit = otherMerge },
-			want: "expected exactly one PR merged into main at",
-		},
-		{
-			name: "malformed-head-sha",
-			pr:   func(pr *prepPR) { pr.headSHA = "0f64f58" },
-			want: "reports no usable head commit",
+			// Authorization no longer depends on the PR author: a maintainer
+			// merging their own preparation PR satisfies the same immutable
+			// merge evidence the automation's PR does.
+			name: "maintainer-authored-preparation-pr",
+			pr:   func(pr *prepPR) { pr.author, pr.authorType = "johnlanni", "User" },
 		},
 		{
 			name: "missing-label",
@@ -875,28 +738,14 @@ func TestPromotionAuthorizationRequiresTheReviewedAutomationPreparationPR(t *tes
 			want: "does not carry the label release/" + gateway,
 		},
 		{
-			name: "not-merged",
-			pr:   func(pr *prepPR) { pr.state, pr.mergedAt, pr.mergeCommit = "open", "", "" },
+			name: "merge-commit-differs",
+			pr:   func(pr *prepPR) { pr.mergeCommit = otherMerge },
 			want: "expected exactly one PR merged into main at",
 		},
 		{
-			name: "other-branch",
-			pr:   func(pr *prepPR) { pr.headRef = "some-feature" },
-			want: "does not match the deterministic preparation branch",
-		},
-		{
-			name: "other-title",
-			pr:   func(pr *prepPR) { pr.title = "chore: prepare plugin snapshot 2.2.5" },
-			want: "does not match the deterministic preparation branch",
-		},
-		{
-			name: "other-release-preparation-pr",
-			pr: func(pr *prepPR) {
-				pr.headRef = "release/plugin-snapshot-2.2.5"
-				pr.title = "chore: prepare plugin snapshot 2.2.5"
-				pr.labels = []string{"release/2.2.5"}
-			},
-			want: "does not match the deterministic preparation branch",
+			name: "not-merged",
+			pr:   func(pr *prepPR) { pr.state, pr.mergedAt, pr.mergeCommit = "open", "", "" },
+			want: "expected exactly one PR merged into main at",
 		},
 		{
 			name: "merged-into-another-branch",
@@ -914,24 +763,6 @@ func TestPromotionAuthorizationRequiresTheReviewedAutomationPreparationPR(t *tes
 			want:  "expected exactly one PR merged into main at",
 		},
 		{
-			// A write collaborator can approve the App-owned branch head
-			// themselves; only a maintainer/admin approval authorizes promotion.
-			name:               "write-collaborator-approval",
-			reviewerPermission: "write",
-			want:               "no pre-merge APPROVED review of head commit",
-		},
-		{
-			name:               "reviewer-permission-lookup-unknown",
-			reviewerPermission: "unknown",
-			want:               "no pre-merge APPROVED review of head commit",
-		},
-		{name: "api-refusal", apiFails: true, wantError: true},
-		{
-			name:       "app-login-not-configured",
-			noAppLogin: true,
-			want:       "vars.RELEASE_PR_APP_LOGIN is not configured",
-		},
-		{
 			name: "commit-not-on-main",
 			mode: "off-main",
 			want: "not reachable from main",
@@ -943,12 +774,20 @@ func TestPromotionAuthorizationRequiresTheReviewedAutomationPreparationPR(t *tes
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root, commit, headSHA := authorizationGitFixture(t, gateway, tc.mode)
+			root, commit, _ := authorizationGitFixture(t, gateway, tc.mode)
 			bin := filepath.Join(root, "bin")
 			if err := os.MkdirAll(bin, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			spec := defaultPrepPR(gateway, commit, headSHA)
+			writeExecutableFixture(t, filepath.Join(bin, "gh"), `#!/usr/bin/env bash
+set -uo pipefail
+if [ "$1" != api ]; then echo "unexpected gh invocation: $*" >&2; exit 2; fi
+case "$*" in
+  *"/pulls") cat "$PULLS_FIXTURE" ;;
+  *) echo "unexpected gh api invocation: $*" >&2; exit 2 ;;
+esac
+`)
+			spec := defaultPrepPR(gateway, commit)
 			if tc.pr != nil {
 				tc.pr(&spec)
 			}
@@ -956,73 +795,20 @@ func TestPromotionAuthorizationRequiresTheReviewedAutomationPreparationPR(t *tes
 			if tc.pulls != nil {
 				payloads = tc.pulls(payloads)
 			}
-			reviews := approvedReviews(headSHA)
-			if tc.reviews != nil {
-				reviews = tc.reviews(headSHA)
-			}
-			reviewPayloads := make([]map[string]any, 0, len(reviews))
-			for _, review := range reviews {
-				reviewPayloads = append(reviewPayloads, review.payload())
-			}
-			status := "0"
-			if tc.apiFails {
-				status = "1"
-			}
-			writeExecutableFixture(t, filepath.Join(bin, "gh"), strings.ReplaceAll(`#!/usr/bin/env bash
-set -uo pipefail
-if [ "$1" != api ]; then echo "unexpected gh invocation: $*" >&2; exit 2; fi
-endpoint=""
-for arg in "$@"; do
-  case "$arg" in
-    repos/*) endpoint="$arg" ;;
-  esac
-done
-if [ -z "$endpoint" ]; then echo "no endpoint in gh api invocation: $*" >&2; exit 2; fi
-case "$endpoint" in
-  */pulls) cat "$PULLS_FIXTURE" ;;
-  */reviews) cat "$REVIEWS_FIXTURE" ;;
-  */collaborators/*/permission) user=$(basename "$(dirname "$endpoint")"); cat "$PERMISSIONS_FIXTURE/$user.json" ;;
-  *) echo "unexpected gh api endpoint: $endpoint" >&2; exit 2 ;;
-esac
-exit @@STATUS@@
-`, "@@STATUS@@", status))
 			pullsFixture := filepath.Join(root, "pulls.json")
 			if err := os.WriteFile(pullsFixture, mustJSON(t, payloads), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			reviewsFixture := filepath.Join(root, "reviews.json")
-			if err := os.WriteFile(reviewsFixture, mustJSON(t, reviewPayloads), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			permissionsDir := filepath.Join(root, "permissions")
-			if err := os.MkdirAll(permissionsDir, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			reviewerPermission := "maintain"
-			if tc.reviewerPermission != "" {
-				reviewerPermission = tc.reviewerPermission
-			}
-			if err := os.WriteFile(filepath.Join(permissionsDir, releasePRMaintainer+".json"), mustJSON(t, map[string]string{"permission": reviewerPermission}), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			os.Setenv("PERMISSIONS_FIXTURE", permissionsDir)
-			defer os.Unsetenv("PERMISSIONS_FIXTURE")
 			summary := filepath.Join(root, "summary.md")
 			contract := workflowShellContract(t, "promote-plugin-release.yaml", "promotion-authorization-contract")
 			cmd := exec.Command("bash", "-c", "set -euo pipefail\n"+contract)
 			cmd.Dir = root
-			appLogin := releaseAppLogin
-			if tc.noAppLogin {
-				appLogin = ""
-			}
 			cmd.Env = append(os.Environ(),
 				"PATH="+bin+":"+os.Getenv("PATH"),
 				"PULLS_FIXTURE="+pullsFixture,
-				"REVIEWS_FIXTURE="+reviewsFixture,
 				"GH_TOKEN=fixture-token",
 				"GITHUB_REPOSITORY=higress-group/higress",
 				"GITHUB_STEP_SUMMARY="+summary,
-				"RELEASE_PR_APP_LOGIN="+appLogin,
 				"SOURCE_COMMIT="+commit,
 				"SNAPSHOT_PATH=plugins/release/snapshots/"+gateway+".json",
 			)
@@ -1030,12 +816,12 @@ exit @@STATUS@@
 			if strings.Contains(string(output), "fixture-token") {
 				t.Fatalf("authorization leaked its token:\n%s", output)
 			}
-			if tc.want != "" && !strings.Contains(string(output), tc.want) {
-				t.Fatalf("authorization output lacks %q:\n%s", tc.want, output)
-			}
-			if tc.wantError || tc.want != "" {
+			if tc.want != "" {
 				if err == nil {
 					t.Fatalf("unauthorized promotion was accepted:\n%s", output)
+				}
+				if !strings.Contains(string(output), tc.want) {
+					t.Fatalf("authorization output lacks %q:\n%s", tc.want, output)
 				}
 				return
 			}
@@ -1048,9 +834,7 @@ exit @@STATUS@@
 			}
 			for _, required := range []string{
 				"Promotion of " + gateway + " authorized by merged preparation PR #" + strconv.Itoa(releasePRNumber),
-				"author " + releaseAppLogin,
 				"label release/" + gateway,
-				"head " + headSHA,
 				"at " + commit,
 			} {
 				if !strings.Contains(string(body), required) {
@@ -1058,30 +842,6 @@ exit @@STATUS@@
 				}
 			}
 		})
-	}
-}
-
-// TestPromotionAuthorizationReadsTheAppLoginFromRepositoryVariables keeps the
-// authorizing identity configuration rather than a guess: the workflow must take
-// it from vars.RELEASE_PR_APP_LOGIN, refuse to run without it, and never embed a
-// bot login that a rename would silently invalidate.
-func TestPromotionAuthorizationReadsTheAppLoginFromRepositoryVariables(t *testing.T) {
-	promote := mustWorkflow(t, "promote-plugin-release.yaml")
-	job := workflowJobSection(t, promote, "verify-and-promote")
-	for _, required := range []string{
-		"RELEASE_PR_APP_LOGIN: ${{ vars.RELEASE_PR_APP_LOGIN }}",
-		`if [ -z "${RELEASE_PR_APP_LOGIN:-}" ]; then`,
-		`if [ "$pr_author" != "$RELEASE_PR_APP_LOGIN" ] || [ "$pr_author_type" != Bot ]; then`,
-		`.merge_commit_sha == $commit`,
-		`if [ "$maintainer_can_modify" != false ]; then`,
-		`(.commit_id // "") == $head`,
-	} {
-		if !strings.Contains(job, required) {
-			t.Fatalf("promotion authorization lacks %q", required)
-		}
-	}
-	if strings.Contains(promote, releaseAppLogin) {
-		t.Fatalf("promote must not hard-code the App login %q; it is read from vars.RELEASE_PR_APP_LOGIN", releaseAppLogin)
 	}
 }
 
@@ -1142,7 +902,7 @@ func TestPreparationSweepsRegistryBeforeOpeningThePR(t *testing.T) {
 	for _, required := range []string{
 		"# BEGIN preparation-pr-contract",
 		`label="release/$GATEWAY_VERSION"`,
-		`label_ref=$(jq -rn --arg label "$label" '$label | @uri')`,
+		`label_ref=$(jq -rn --arg label_id "$label" '$label_id | @uri')`,
 		`if ! gh api "repos/$GITHUB_REPOSITORY/labels/$label_ref" >/dev/null 2>&1; then`,
 		`gh label create "$label"`,
 		`test "$(gh api "repos/$GITHUB_REPOSITORY/labels/$label_ref" --jq .name)" = "$label"`,

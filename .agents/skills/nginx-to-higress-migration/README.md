@@ -414,7 +414,7 @@ EOF
 ### 1. Analyze Your Current Setup
 ```bash
 # Clone this skill
-git clone https://github.com/alibaba/higress.git
+git clone https://github.com/higress-group/higress.git
 cd higress/.claude/skills/nginx-to-higress-migration
 
 # Check for snippet usage (complex mode indicator)

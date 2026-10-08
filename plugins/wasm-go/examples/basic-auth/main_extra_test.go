@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -284,5 +285,74 @@ func TestOnHttpRequestHeaders_GlobalAuthTrue_BadCredentialFormat(t *testing.T) {
 		resp := host.GetLocalResponse()
 		require.NotNil(t, resp)
 		require.Equal(t, uint32(http.StatusUnauthorized), resp.StatusCode)
+	})
+}
+
+// === X-Mse-Consumer replace semantics ====================================
+//
+// The authenticated consumer published in X-Mse-Consumer must REPLACE anything
+// the caller sent rather than be appended to it: downstream readers take the
+// first value for the header, so an appended client-supplied copy would be
+// trusted as the caller's identity.
+
+// countConsumerHeaders counts entries for name case-insensitively, so an
+// accidentally duplicated header is caught rather than silently tolerated.
+func countConsumerHeaders(headers [][2]string, name string) int {
+	n := 0
+	for _, h := range headers {
+		if strings.EqualFold(h[0], name) {
+			n++
+		}
+	}
+	return n
+}
+
+// A caller that sends its own X-Mse-Consumer alongside valid credentials must
+// end up with exactly one header, holding the gateway's assertion.
+func TestOnHttpRequestHeaders_ClientSuppliedConsumerHeaderIsReplaced(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(ruleConfig(t, true, []string{"consumer1"}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+		require.NoError(t, host.SetRouteName("route-a"))
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+			basicAuthHeader("admin", "123456"),
+			{"X-Mse-Consumer", "spoofed-admin"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+		require.Nil(t, host.GetLocalResponse())
+
+		headers := host.GetRequestHeaders()
+		require.Equal(t, 1, countConsumerHeaders(headers, "X-Mse-Consumer"),
+			"exactly one X-Mse-Consumer may reach downstream")
+		require.True(t, test.HasHeaderWithValue(headers, "X-Mse-Consumer", "consumer1"),
+			"the surviving value must be the authenticated consumer, not the spoofed one")
+	})
+}
+
+// With no client-supplied header, authentication still publishes exactly one.
+func TestOnHttpRequestHeaders_NoClientConsumerHeaderAddsExactlyOne(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(ruleConfig(t, true, []string{"consumer1"}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+		require.NoError(t, host.SetRouteName("route-a"))
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+			basicAuthHeader("admin", "123456"),
+		})
+		require.Equal(t, types.ActionContinue, action)
+		require.Nil(t, host.GetLocalResponse())
+
+		headers := host.GetRequestHeaders()
+		require.Equal(t, 1, countConsumerHeaders(headers, "X-Mse-Consumer"))
+		require.True(t, test.HasHeaderWithValue(headers, "X-Mse-Consumer", "consumer1"))
 	})
 }

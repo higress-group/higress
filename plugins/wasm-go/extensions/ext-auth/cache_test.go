@@ -452,6 +452,80 @@ var cacheKeyFieldsHeaderConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：缓存开启 + 认证服务 URL 不可派发 + failure_mode_allow。
+// forward_auth 模式不做 path 校验，所以非法 path 会一路走到 Client.Call 才失败，
+// 这正是「缓存已派发并暂停请求、回源调用又派发失败」这个组合状态的构造方式。
+var cacheDispatchErrorConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"http_service": map[string]interface{}{
+			"endpoint_mode": "forward_auth",
+			"endpoint": map[string]interface{}{
+				"service_name":   "ext-auth.backend.svc.cluster.local",
+				"service_port":   8090,
+				"path":           "%zz",
+				"request_method": "POST",
+			},
+			"timeout": 1000,
+		},
+		"failure_mode_allow":            true,
+		"failure_mode_allow_header_add": true,
+		"status_on_error":               500,
+		"cache": map[string]interface{}{
+			"enabled": true,
+			"ttl":     60,
+			"redis": map[string]interface{}{
+				"service_name": "redis.static",
+				"service_port": 6379,
+			},
+		},
+	})
+	return data
+}()
+
+// TestCacheMissAuthDispatchErrorResumesPausedRequest 钉住缓存路径与 failure_mode_allow
+// 派发失败处理的组合：缓存 GET 派发成功后请求已被暂停，此时未命中回调里的回源调用如果
+// 也派发失败，必须恢复这个已暂停的请求。派发失败本身没有暂停任何请求，所以顶层路径
+// 传 requestPaused=false 以避免重复转发；嵌套的缓存未命中路径必须传 true，否则请求
+// 永久停在暂停态。
+func TestCacheMissAuthDispatchErrorResumesPausedRequest(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(cacheDispatchErrorConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/users"},
+			{":method", "POST"},
+			{"authorization", "Bearer token123"},
+		})
+		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+		// 消费前快照：缓存门开着时应先派发一次 redis GET
+		require.Len(t, host.GetRedisCalloutAttributes(), 1)
+
+		// 未命中 -> 回调里回源认证服务，而请求此刻已处于暂停态
+		host.CallOnRedisCall(0, test.CreateRedisRespNull())
+
+		require.Empty(t, host.GetHttpCalloutAttributes(),
+			"undispatchable auth URL should fail before producing a callout")
+
+		// 关键断言：已暂停的请求必须被恢复
+		require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+
+		requestHeaders := map[string]string{}
+		for _, h := range host.GetRequestHeaders() {
+			requestHeaders[strings.ToLower(h[0])] = h[1]
+		}
+		require.Equal(t, "true", requestHeaders[HeaderFailureModeAllow])
+
+		// 已消费的 callout 会被框架移除，所以此处为空即证明派发失败后没有写回缓存
+		require.Empty(t, host.GetRedisCalloutAttributes())
+
+		host.CompleteHttp()
+	})
+}
+
 // TestSplitPathAndQuery 验证按第一个 '?' 切分，路径部分保持原样不被重新编码。
 func TestSplitPathAndQuery(t *testing.T) {
 	path, query := splitPathAndQuery("/users?userId=1&trace=x")

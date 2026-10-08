@@ -176,6 +176,18 @@ def proxy(name, strategy=None, target="backend-primary", auth=False):
     return {"server": server, "tools": TOOLS}
 
 
+def auto_proxy(name="proxy-auto", auth=None):
+    config = proxy(name, "auto", auth=auth == "fixed")
+    config["server"]["mcpServerURL"] = "http://backend-primary:8080/auto/mcp"
+    config["server"]["autoDetection"] = {"probeTimeoutMs": 5000}
+    config["server"]["timeout"] = 10000
+    if auth == "passthrough":
+        config["server"]["passthroughAuthHeader"] = True
+        config["server"]["securitySchemes"] = [{"id": "AutoToolAuth", "type": "http", "scheme": "bearer", "defaultCredential": "auto-tool"}]
+        config["tools"] = deepcopy(TOOLS) + [{"name": "proxy_override", "requestTemplate": {"security": {"id": "AutoToolAuth"}}}]
+    return config
+
+
 LISTENERS = [
     (10000, "registered-amap", "backend-primary", {"server": {"name": "amap-tools", "config": {"apiKey": "runtime-key"}}}),
     (10001, "runtime-rest", "backend-primary", {
@@ -199,6 +211,9 @@ LISTENERS = [
     (10006, "proxy-auth-modern", "backend-primary", proxy("proxy-auth-modern", "modern", auth=True)),
     (10007, "proxy-secondary-modern", "backend-secondary", proxy("proxy-secondary-modern", "modern", target="backend-secondary")),
     (10008, "schema-compatibility", "backend-primary", SCHEMA_COMPATIBILITY),
+    (10009, "proxy-auto", "backend-primary", auto_proxy()),
+    (10010, "proxy-auto-fixed", "backend-primary", auto_proxy("proxy-auto-fixed", "fixed")),
+    (10011, "proxy-auto-passthrough", "backend-primary", auto_proxy("proxy-auto-passthrough", "passthrough")),
 ]
 
 
@@ -325,17 +340,30 @@ static_resources:
     main_config += "".join(listener_yaml(*entry) for entry in LISTENERS)
     main_config += "  clusters:\n" + cluster_yaml("backend-primary") + cluster_yaml("backend-secondary")
     (OUT / "envoy.yaml").write_text(main_config)
+    explicit_baseline = """admin:
+  address:
+    socket_address: {address: 0.0.0.0, port_value: 9901}
+static_resources:
+  listeners:
+"""
+    explicit_baseline += "".join(listener_yaml(*entry, wasm_file="auto-baseline-plugin.wasm") for entry in LISTENERS if entry[0] < 10009)
+    explicit_baseline += "  clusters:\n" + cluster_yaml("backend-primary") + cluster_yaml("backend-secondary")
+    (OUT / "envoy-auto-explicit-baseline.yaml").write_text(explicit_baseline)
 
-    auto = proxy("proxy-auto-rejected", "auto")
+
+    auto = proxy("proxy-unknown-rejected", "unknown")
     auto_config = '''admin:
   address:
     socket_address: {address: 0.0.0.0, port_value: 9911}
 static_resources:
   listeners:
 '''
-    auto_config += listener_yaml(11000, "proxy-auto-rejected", "backend-primary", auto)
+    auto_config += listener_yaml(11000, "proxy-unknown-rejected", "backend-primary", auto)
     auto_config += "  clusters:\n" + cluster_yaml("backend-primary")
     (OUT / "envoy-auto.yaml").write_text(auto_config)
+    (OUT / "envoy-auto-baseline.yaml").write_text(single_listener_config(
+        9912, 11001, "proxy-auto-baseline", auto_proxy(), "auto-baseline-plugin.wasm",
+    ))
 
     (OUT / "envoy-baseline.yaml").write_text(single_listener_config(
         9931, 13008, "schema-compatibility-baseline", SCHEMA_COMPATIBILITY, "baseline-plugin.wasm",

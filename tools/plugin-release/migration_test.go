@@ -221,7 +221,7 @@ func TestMigrationPreflightFailsClosedOnUncalibratedProbe(t *testing.T) {
 		contains string
 	}{
 		{name: "digest-mismatch", control: ociManifest{Digest: "sha256:" + strings.Repeat("2", 64)}, contains: "probe is not trustworthy"},
-		{name: "control-absent", err: notFoundError(f.controlRef), contains: "cannot calibrate"},
+		{name: "control-absent", err: notFoundError(f.controlRef), contains: "no calibratable control tag"},
 		{name: "control-unauthorized", err: &migrationProbeError{message: "unauthorized: authentication required"}, contains: "authorization failure is never absence"},
 		{name: "control-unclassified", err: &migrationProbeError{message: "dial tcp: connection refused"}, contains: "cannot calibrate"},
 	} {
@@ -316,7 +316,7 @@ func TestMigrationControlTagSkipsExcludedEntries(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ref, digest, err := migrationControlTag(tc.previous)
+			candidates, err := migrationControlTags(tc.previous)
 			if tc.contains != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.contains) {
 					t.Fatalf("control tag selection did not fail closed: %v", err)
@@ -326,11 +326,25 @@ func TestMigrationControlTagSkipsExcludedEntries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if ref != tc.wantRef || digest != tc.wantDigest {
-				t.Fatalf("control tag = %s @ %s, want %s @ %s", ref, digest, tc.wantRef, tc.wantDigest)
+			if len(candidates) == 0 || candidates[0].ref != tc.wantRef || candidates[0].digest != tc.wantDigest {
+				t.Fatalf("control tag = %+v, want %s @ %s", candidates, tc.wantRef, tc.wantDigest)
 			}
 		})
 	}
+
+	// A prepared-but-not-promoted previous snapshot has no pipeline tag
+	// published: the candidate list still carries the adopted public entries
+	// behind the unpublished candidate ones, so the resolver can fall back.
+	t.Run("unpublished-candidate-before-adopted-public", func(t *testing.T) {
+		previous := previousPath("control-unpublished-fallback", entry("built", "5", "candidate", false), entry("adopted", "4", "public", false))
+		candidates, err := migrationControlTags(previous)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(candidates) != 2 || candidates[0].ref != "registry.example/plugins/built:1.0.0" || candidates[1].ref != "registry.example/plugins/adopted:1.0.0" {
+			t.Fatalf("candidates = %+v, want built then adopted", candidates)
+		}
+	})
 
 	// The sweep must calibrate against the surviving control and never probe an
 	// excluded entry's tag, while still classifying a real conflict.
@@ -732,5 +746,54 @@ func TestVerifySnapshotToleratesMigrationExclusion(t *testing.T) {
 				t.Fatalf("verification accepted an inconsistent migration binding: %v", err)
 			}
 		})
+	}
+}
+
+// TestMigrationPreflightCalibratesThroughUnpublishedCandidate proves a
+// re-preparation whose previous snapshot was never promoted can still
+// calibrate: the pipeline-published candidate tag 404s (it was never copied to
+// the public registry) and the probe falls back to the next published
+// candidate, whose digest it must reproduce.
+func TestMigrationPreflightCalibratesThroughUnpublishedCandidate(t *testing.T) {
+	f := newMigrationFixture(t)
+	adoptedDigest := "sha256:" + strings.Repeat("9", 64)
+	adoptedRef := "registry.example/plugins/other:1.9.9"
+	previous := Snapshot{SchemaVersion: snapshotSchemaVersion, GatewayVersion: "2.0.0", SourceCommit: f.sourceCommit,
+		CatalogSHA256: f.planValue.CatalogSHA256, PlanID: f.planValue.PlanID, ProvenanceMode: "mixed", Plugins: []SnapshotEntry{
+			{LogicalID: "demo", Implementation: "go", SourceDir: "plugins/wasm-go/extensions/demo", Image: "plugins/demo", Version: "1.0.0",
+				OCIRef: f.controlRef, Digest: f.controlDigest, InputHash: f.demoInputHash, SourceCommit: f.sourceCommit,
+				CandidateRef: "registry.example/candidates/demo@" + f.controlDigest, ProvenanceMode: "candidate"},
+			{LogicalID: "other", Implementation: "go", SourceDir: "plugins/wasm-go/extensions/other", Image: "plugins/other", Version: "1.9.9",
+				OCIRef: adoptedRef, Digest: adoptedDigest, InputHash: f.otherHash, SourceCommit: f.sourceCommit, ProvenanceMode: "public"},
+		}}
+	previousPath := filepath.Join(f.root, "previous-unpublished.json")
+	if err := writeCanonical(previousPath, previous); err != nil {
+		t.Fatal(err)
+	}
+	var probed []string
+	withManifestResolver(t, func(ref string) (ociManifest, error) {
+		probed = append(probed, ref)
+		if ref == f.controlRef {
+			return ociManifest{}, notFoundError(ref)
+		}
+		if ref == adoptedRef {
+			return ociManifest{Digest: adoptedDigest}, nil
+		}
+		// Planned public tags: demo:1.0.1 and other:2.0.0 are unpublished in
+		// this re-preparation, so the sweep must classify them as absent.
+		if ref == f.demoRef || ref == f.otherRef {
+			return ociManifest{}, notFoundError(ref)
+		}
+		return ociManifest{}, &migrationProbeError{message: "unexpected probe: " + ref}
+	})
+	report, err := migrationPreflight(f.catalog, f.plan, previousPath, f.evidence)
+	if err != nil {
+		t.Fatalf("preflight must calibrate through the unpublished candidate tag: %v", err)
+	}
+	if report.ControlRef != adoptedRef || report.ControlDigest != adoptedDigest {
+		t.Fatalf("control = %s @ %s, want %s @ %s", report.ControlRef, report.ControlDigest, adoptedRef, adoptedDigest)
+	}
+	if len(probed) != 4 || probed[0] != f.controlRef || probed[1] != adoptedRef {
+		t.Fatalf("probe order = %v, want candidate 404, adopted public, then planned tags", probed)
 	}
 }

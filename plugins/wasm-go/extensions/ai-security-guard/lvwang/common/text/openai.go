@@ -60,7 +60,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 		if statusCode != 200 || gjson.GetBytes(responseBody, "Code").Int() != 200 {
 			startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
 			cfg.MarkGuardrailResponseError(ctx, currentSubmissionIndex, responseBody, startTime)
-			if ctx.GetContext("end_of_stream_received").(bool) {
+			if ctx.GetBoolContext("end_of_stream_received", false) {
 				proxywasm.ResumeHttpResponse()
 			}
 			ctx.SetContext("during_call", false)
@@ -72,7 +72,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 			log.Error("failed to unmarshal aliyun content security response at response phase")
 			startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
 			cfg.MarkGuardrailResponseError(ctx, currentSubmissionIndex, responseBody, startTime)
-			if ctx.GetContext("end_of_stream_received").(bool) {
+			if ctx.GetBoolContext("end_of_stream_received", false) {
 				proxywasm.ResumeHttpResponse()
 			}
 			ctx.SetContext("during_call", false)
@@ -88,7 +88,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 				// (counter / safecheck_response_rt / safecheck_status / log / risk_detected).
 				cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultError)
 				log.Errorf("failed to build deny response body: %v", err)
-				endStream := ctx.GetContext("end_of_stream_received").(bool) && ctx.BufferQueueSize() == 0
+				endStream := ctx.GetBoolContext("end_of_stream_received", false) && ctx.BufferQueueSize() == 0
 				proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endStream)
 				bufferQueue = [][]byte{}
 				config.IncrementCounter("ai_sec_response_deny_buildfail", 1)
@@ -123,7 +123,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 		}
 		cfg.CompleteGuardrailSubmissionEvent(ctx, currentSubmissionIndex, responseBody, cfg.GuardrailResultPass)
 		cfg.WriteGuardrailLog(ctx)
-		endStream := ctx.GetContext("end_of_stream_received").(bool) && ctx.BufferQueueSize() == 0
+		endStream := ctx.GetBoolContext("end_of_stream_received", false) && ctx.BufferQueueSize() == 0
 		proxywasm.InjectEncodedDataToFilterChain(bytes.Join(bufferQueue, []byte("")), endStream)
 		bufferQueue = [][]byte{}
 		if !endStream {
@@ -132,10 +132,10 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 		}
 	}
 	singleCall = func() {
-		if ctx.GetContext("during_call").(bool) {
+		if ctx.GetBoolContext("during_call", false) {
 			return
 		}
-		if ctx.BufferQueueSize() >= config.BufferLimit || ctx.GetContext("end_of_stream_received").(bool) {
+		if ctx.BufferQueueSize() >= config.BufferLimit || ctx.GetBoolContext("end_of_stream_received", false) {
 			var buffer string
 			for ctx.BufferQueueSize() > 0 {
 				front := ctx.PopBuffer()
@@ -165,13 +165,13 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 				log.Errorf("failed call the safe check service: %v", err)
 				startTime, _ := ctx.GetContext(responseStartTimeCtxKey).(int64)
 				cfg.MarkGuardrailResponseError(ctx, currentSubmissionIndex, nil, startTime)
-				if ctx.GetContext("end_of_stream_received").(bool) {
+				if ctx.GetBoolContext("end_of_stream_received", false) {
 					proxywasm.ResumeHttpResponse()
 				}
 			}
 		}
 	}
-	if !ctx.GetContext("risk_detected").(bool) {
+	if !ctx.GetBoolContext("risk_detected", false) {
 		unifiedChunk := wrapper.UnifySSEChunk(data)
 		hasTrailingSeparator := bytes.HasSuffix(unifiedChunk, []byte("\n\n"))
 		trimmedChunk := bytes.TrimSpace(unifiedChunk)
@@ -197,7 +197,7 @@ func HandleTextGenerationStreamingResponseBody(ctx wrapper.HttpContext, config c
 		// 	ctx.PushBuffer([]byte(string(chunk) + "\n\n"))
 		// }
 		ctx.SetContext("end_of_stream_received", endOfStream)
-		if !ctx.GetContext("during_call").(bool) {
+		if !ctx.GetBoolContext("during_call", false) {
 			singleCall()
 		}
 	} else if endOfStream {

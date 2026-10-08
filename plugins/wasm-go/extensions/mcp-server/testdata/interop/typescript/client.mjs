@@ -20,7 +20,7 @@ if (!root) {
   throw new Error('MCP_INTEROP_ROOT is required');
 }
 
-for (const path of ['direct', 'proxy-modern', 'proxy-legacy']) {
+for (const path of ['direct', 'proxy-modern', 'proxy-legacy', 'proxy-auto-modern', 'proxy-auto-legacy', 'proxy-auto-switch', 'proxy-auto-error']) {
   const client = new Client(
     { name: 'higress-typescript-interop', version: '1.0.0' },
     { versionNegotiation: { mode: { pin: protocolVersion } } },
@@ -38,6 +38,20 @@ for (const path of ['direct', 'proxy-modern', 'proxy-legacy']) {
       throw new Error('server/discover result did not advertise the pinned version');
     }
 
+    if (path === 'proxy-auto-error') {
+      let probeError;
+      try { await client.callTool({ name: 'get_weather', arguments: { location: 'New York' } }); }
+      catch (error) { probeError = error; }
+      if (probeError?.code !== -32020) {
+        throw new Error(`auto probe: got ${probeError}, want JSON-RPC HeaderMismatch (-32020)`);
+      }
+      console.log(`typescript-client 2.0.0: ${path} stopped before business`);
+      continue;
+    }
+    if (path.startsWith('proxy-auto-')) {
+      const direct = await client.callTool({ name: 'get_weather', arguments: { location: 'New York' } });
+      if (!direct.content?.length) throw new Error('call before list returned no content');
+    }
     const listed = await client.listTools();
     if (listed.tools.length !== 1 || listed.tools[0].name !== 'get_weather') {
       throw new Error(`unexpected tools/list result: ${JSON.stringify(listed)}`);

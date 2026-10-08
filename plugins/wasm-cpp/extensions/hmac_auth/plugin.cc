@@ -320,6 +320,8 @@ bool PluginRootContext::checkPlugin(
     const HmacAuthConfigRule& rule,
     std::optional<std::reference_wrapper<Wasm::Common::Http::QueryParams>>
         body_params) {
+  // Drop any client-supplied value so only this gateway's assertion survives.
+  removeRequestHeader("X-Mse-Consumer");
   if (ca_key.empty()) {
     LOG_DEBUG("empty key");
     deniedInvalidCaKey();

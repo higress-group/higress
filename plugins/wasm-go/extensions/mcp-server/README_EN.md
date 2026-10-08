@@ -52,13 +52,16 @@ Accept: application/json, text/event-stream
 
 ### Proxy profile matrix
 
-`protocolStrategy` describes only the upstream profile and is explicit in this milestone:
+`protocolStrategy` selects the upstream behavior; omitted, empty and explicit `legacy` retain existing behavior:
 
 | Downstream | Upstream | Current status |
 | --- | --- | --- |
 | modern | registered / REST / composed | Supported |
 | modern | `protocolStrategy: modern` | Supported as one stateless request per exchange |
 | modern | `protocolStrategy: legacy` | Supported with an isolated legacy handshake inside one downstream exchange |
+| modern | `auto` + `http` | Discover before each forwarded Tool request, then modern or one legacy handshake |
+| legacy | `auto` + `http` | Existing legacy path, no modern probe |
+| Any supported downstream | `auto` + `sse` | Existing legacy SSE path; no transport or URL guessing |
 | legacy | legacy upstream | Existing behavior retained |
 | legacy | modern-only upstream | Unsupported and deferred |
 
@@ -66,13 +69,47 @@ Outbound headers are rebuilt for every RPC. `Authorization` is generated or forw
 
 ### Migration and defaults
 
-An existing `mcp-proxy` without `protocolStrategy` continues to default to `legacy`; its legacy downstream-to-legacy upstream initialize/session/transport path is unchanged. Set `modern` explicitly only after confirming that the upstream supports `2026-07-28`. This milestone does not auto-detect, fall back, or retry another profile, and runtime session IDs must not be placed in configuration or test evidence.
+Existing configurations need no migration and still default to `legacy`. A known modern upstream can use explicit `modern` to avoid discovery overhead. Enable `auto` explicitly for request-scoped detection; it does not change the downstream protocol. Before rolling back to an older plugin that rejects auto, switch the configuration to `legacy` and confirm it is effective, then roll back the image. Never put runtime session IDs in configuration or test credentials.
+
+### Opt-in auto detection
+
+```yaml
+server:
+  name: upstream-tools
+  type: mcp-proxy
+  transport: http
+  protocolStrategy: auto
+  mcpServerURL: https://mcp.example.com/mcp
+  timeout: 5000
+  autoDetection:
+    probeTimeoutMs: 1000
+```
+
+`autoDetection.probeTimeoutMs` is consumed only by `auto + http`. It defaults to 1000 ms and must be a positive uint32 integer. The probe uses the smaller of this value and the effective timeout. This section alone does not enable auto. The existing timeout still applies per callout, so total request latency may exceed it.
+
+Each forwarded tools/list or tools/call completes existing authorization checks and prepares effective upstream credentials once before discovering. Modern success makes 2 calls: discover → Tool RPC. Legacy success makes 4: discover → initialize → initialized → Tool RPC. There is no cache, cross-request session reuse or coalescing, and a tool call does not require a prior list. Downstream discover remains local to the gateway.
+
+| Probe outcome | Action |
+| --- | --- |
+| Valid discovery supports 2026-07-28 and Tools | Modern |
+| -32022 explicitly advertises compatible 2025-06-18 / 2025-03-26 | Prefer 2025-06-18 and complete one HTTP legacy handshake |
+| HTTP 200 matching-ID -32601 without modern evidence; ordinary 400/404/405 without a modern error | Try one 2025-03-26 initialize |
+| Modern errors, valid HTTP 404 -32601, 401/403/429, 5xx, network failure or timeout | Stop without downgrade; retain applicable authentication challenges and Retry-After |
+| Wrong ID, malformed JSON/SSE, batch, trailing JSON, or probe body over 1 MiB | Stop; parsing failure never guesses legacy |
+
+The auto handshake validates version, Tools capability, serverInfo and the initialized acknowledgement. A session belongs only to that request. Business errors, disconnects or version changes never trigger replay. Modern requestState/inputResponses cannot be silently converted to legacy; cursor errors never restart pagination.
+
+Credentials must permit discover. Fixed, tool-level and passthrough authentication apply to every phase of the same request. Explicit Cookie authentication can use `apiKey` with `in: header, name: Cookie`; the existing `in: cookie` setting is unsupported. Probes carry no Mcp-Name/Mcp-Param headers; auto forwards applicable parameter headers only on actual modern tools/call requests.
+
+Upstream pool instances must have consistent protocol capabilities because probe and business calls may reach different instances. JSON/SSE is parsed after the complete callout response, without live progress or subscriptions. The 1 MiB probe guard prevents copying oversized bodies into Wasm; it does not bound all Envoy receive buffers or Tool results. Cancellation suppresses later phases and callbacks but cannot retract a submitted hostcall. Retry policies in other layers are outside this plugin's single-dispatch guarantee. The final RPC retains the existing forwarding path; [#4597](https://github.com/higress-group/higress/issues/4597) is independent.
+
+See the separate [auto.yaml example](../../../../samples/mcp/protocol/2026-07-28/auto.yaml).
 
 ### Explicitly deferred scope
 
 | Level | Capabilities outside this milestone |
 | --- | --- |
-| Deferred P1 | `protocolStrategy: auto`, the `2025-11-25` profile, full JSON Schema 2020-12 and output validation, large tools pagination/cursors, and the legacy downstream-to-modern-only bridge |
+| Deferred P1 | The `2025-11-25` profile, full JSON Schema 2020-12 and output validation, large tools pagination/cursors, and the legacy downstream-to-modern-only bridge |
 | Deferred P2 | MRTR / generation of `input_required`, subscriptions/listen and `tools.listChanged`, and generic state/requestState TTL, persistence, and recovery |
 | Separate Proposal | Complete OAuth resource server/client behavior, Tasks, MCP Apps, Resources, Prompts, Completion, and protocol synchronization for the independent native `plugins/golang-filter/mcp-server` |
 

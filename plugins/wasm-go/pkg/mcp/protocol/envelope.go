@@ -21,6 +21,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const maxJSONDepth = 64
@@ -215,4 +216,16 @@ func validateJSONValue(decoder *json.Decoder, depth int) error {
 		return errors.New("unexpected JSON delimiter")
 	}
 	return nil
+}
+
+// DecodeSingleJSONObject validates response framing without converting opaque
+// values to float64. It shares the request decoder's duplicate/depth bounds.
+func DecodeSingleJSONObject(body []byte) (JSONObject, error) {
+	if !utf8.Valid(body) {
+		return nil, errors.New("invalid JSON UTF-8")
+	}
+	if err := validateUniqueJSON(body); err != nil {
+		return nil, err
+	}
+	return decodeJSONObject(body)
 }

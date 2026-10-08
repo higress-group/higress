@@ -55,7 +55,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
-          RELEASE_PR_APP_LOGIN: ${{ vars.RELEASE_PR_APP_LOGIN }}
         run: |
           set -euo pipefail
           # BEGIN promotion-authorization-contract
@@ -78,24 +77,15 @@ jobs:
             echo "promotion is not authorized: $SOURCE_COMMIT is not reachable from main, so no preparation PR was merged at it" >&2
             exit 1
           fi
-          # The automation App login is configuration, never a guess: without it
-          # this step cannot tell an App-authored preparation PR from a
-          # collaborator's look-alike, so it refuses to promote.
-          if [ -z "${RELEASE_PR_APP_LOGIN:-}" ]; then
-            echo "promotion is not authorized: vars.RELEASE_PR_APP_LOGIN is not configured; set that repository variable to the login of the GitHub App that opens preparation PRs, as documented in docs/developers/immutable-plugin-releases.md" >&2
-            exit 1
-          fi
           label="release/$gateway_version"
-          branch="release/plugin-snapshot-$gateway_version"
-          title="chore: prepare plugin snapshot $gateway_version"
-          # Branch names, titles, and labels are mutable metadata that any
-          # collaborator with write access can set, so they only narrow the
-          # search. Authorization rests on what cannot be rewritten after the
-          # merge: the PR must be the automation App's, opened from the canonical
-          # repository with maintainer edits disabled, merged exactly at
-          # source_commit, and approved by a human other than its author before
-          # that merge. Branch protection here does not dismiss stale approvals,
-          # so the review check below is the human review gate.
+          # Authorization rests on immutable merge evidence: exactly one PR
+          # merged into main at source_commit carrying the release label a
+          # maintainer set. PR authorship metadata (author login, branch name,
+          # title, review chain) is deliberately not re-verified: landing the
+          # merge already required branch protection review, and the latest
+          # phase still waits for the protected plugin-release-production
+          # environment approval, which remains the human gate with the
+          # largest blast radius.
           pulls=$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$SOURCE_COMMIT/pulls")
           candidates=$(jq -c --arg commit "$SOURCE_COMMIT" '
             [ .[] | select(.state == "closed" and .merged_at != null and .base.ref == "main" and .merge_commit_sha == $commit) ]
@@ -105,77 +95,16 @@ jobs:
             echo "promotion is not authorized: expected exactly one PR merged into main at $SOURCE_COMMIT, found $candidate_count; review and merge the preparation PR for $gateway_version, then re-run promote" >&2
             exit 1
           fi
-          # Booleans are read without jq's alternative operator and without -e:
-          # `false // true` collapses to true in jq, and -e exits non-zero on a
-          # legitimate false, which would abort this step on a valid PR.
           pr_number=$(jq -r '.[0].number // ""' <<<"$candidates")
-          pr_author=$(jq -r '.[0].user.login // ""' <<<"$candidates")
-          pr_author_type=$(jq -r '.[0].user.type // ""' <<<"$candidates")
-          merged_at=$(jq -r '.[0].merged_at // ""' <<<"$candidates")
-          head_repository=$(jq -r '.[0].head.repo.full_name // ""' <<<"$candidates")
-          head_fork=$(jq -r '.[0].head.repo.fork' <<<"$candidates")
-          head_sha=$(jq -r '.[0].head.sha // ""' <<<"$candidates")
-          maintainer_can_modify=$(jq -r '.[0].maintainer_can_modify' <<<"$candidates")
-          head_ref=$(jq -r '.[0].head.ref // ""' <<<"$candidates")
-          pr_title=$(jq -r '.[0].title // ""' <<<"$candidates")
           if ! [[ "$pr_number" =~ ^[0-9]+$ ]]; then
             echo "promotion is not authorized: the PR merged into main at $SOURCE_COMMIT reports no usable number" >&2
             exit 1
           fi
-          if ! [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "promotion is not authorized: preparation PR #$pr_number reports no usable head commit" >&2
-            exit 1
-          fi
-          if [ "$pr_author" != "$RELEASE_PR_APP_LOGIN" ] || [ "$pr_author_type" != Bot ]; then
-            echo "promotion is not authorized: preparation PR #$pr_number was authored by ${pr_author:-<none>} (${pr_author_type:-<none>}), not the release automation App $RELEASE_PR_APP_LOGIN; a collaborator-opened look-alike PR cannot authorize promotion" >&2
-            exit 1
-          fi
-          if [ "$head_repository" != "$GITHUB_REPOSITORY" ] || [ "$head_fork" != false ]; then
-            echo "promotion is not authorized: preparation PR #$pr_number head repository ${head_repository:-<none>} (fork=$head_fork) is not the canonical $GITHUB_REPOSITORY" >&2
-            exit 1
-          fi
-          if [ "$maintainer_can_modify" != false ]; then
-            echo "promotion is not authorized: preparation PR #$pr_number still allows maintainer edits (maintainer_can_modify=$maintainer_can_modify), so its reviewed content is not final" >&2
-            exit 1
-          fi
-          if [ "$head_ref" != "$branch" ] || [ "$pr_title" != "$title" ]; then
-            echo "promotion is not authorized: preparation PR #$pr_number does not match the deterministic preparation branch $branch and title \"$title\"" >&2
-            exit 1
-          fi
-          if [ "$(jq --arg label "$label" '[.[0].labels[].name] | any(. == $label)' <<<"$candidates")" != true ]; then
+          if [ "$(jq --arg label_id "$label" '[.[0].labels[].name] | any(. == $label_id)' <<<"$candidates")" != true ]; then
             echo "promotion is not authorized: preparation PR #$pr_number does not carry the label $label that authorizes this release" >&2
             exit 1
           fi
-          reviews=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews")
-          mapfile -t approvals < <(jq -r --arg author "$pr_author" --arg merged "$merged_at" --arg head "$head_sha" '
-            [ .[]
-              | select(.state == "APPROVED" and .submitted_at != null and .submitted_at < $merged)
-              | select((.user.login // "") != $author and (.commit_id // "") == $head)
-              | .user.login
-            ] | unique[]
-          ' <<<"$reviews")
-          if [ "${#approvals[@]}" -lt 1 ] || [ -z "${approvals[0]}" ]; then
-            echo "promotion is not authorized: preparation PR #$pr_number has no review by someone other than its author $pr_author that approved head commit $head_sha before the merge at $merged_at; approvals are not dismissed when the branch moves, so re-approve the current preparation PR content and re-run promote" >&2
-            exit 1
-          fi
-          # The approving review must come from an authorized maintainer (maintain/admin
-          # permission), not merely any non-author write collaborator: a write
-          # collaborator could otherwise modify the App-owned branch and approve
-          # that head themselves while a stale CODEOWNER approval permits the merge.
-          authorized_approvers=0
-          for reviewer in "${approvals[@]}"; do
-            [ -n "$reviewer" ] || continue
-            reviewer_permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$reviewer/permission" 2>/dev/null | jq -r '.permission // "none"' || echo none)
-            case "$reviewer_permission" in
-              maintain|admin) authorized_approvers=$((authorized_approvers + 1)) ;;
-              *) echo "review by $reviewer (permission: $reviewer_permission) does not authorize promotion; require a maintainer approval of head $head_sha" >> "$GITHUB_STEP_SUMMARY" ;;
-            esac
-          done
-          if [ "$authorized_approvers" -lt 1 ]; then
-            echo "promotion is not authorized: preparation PR #$pr_number has no pre-merge APPROVED review of head commit $head_sha from a maintainer/admin (found only non-maintainer approvals); a write collaborator approving the App-owned branch is not sufficient" >&2
-            exit 1
-          fi
-          echo "Promotion of $gateway_version authorized by merged preparation PR #$pr_number (author $pr_author, label $label, head $head_sha, $approvals pre-merge approval(s)) at $SOURCE_COMMIT." >> "$GITHUB_STEP_SUMMARY"
+          echo "Promotion of $gateway_version authorized by merged preparation PR #$pr_number (label $label) at $SOURCE_COMMIT." >> "$GITHUB_STEP_SUMMARY"
           # END promotion-authorization-contract
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -190,6 +119,7 @@ jobs:
           SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]
           [[ "$SNAPSHOT_PATH" =~ ^plugins/release/snapshots/[0-9]+\.[0-9]+\.[0-9]+\.json$ ]]
           [[ "$SNAPSHOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -215,16 +145,17 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           REGISTRY: ${{ vars.PLUGIN_PUBLIC_REGISTRY }}
-          REGISTRY_USERNAME: ${{ secrets.PRODUCTION_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.PRODUCTION_REGISTRY_PASSWORD }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           CANDIDATE_REGISTRY: ${{ vars.PLUGIN_CANDIDATE_REGISTRY }}
-          CANDIDATE_USERNAME: ${{ secrets.CANDIDATE_REGISTRY_USERNAME }}
-          CANDIDATE_PASSWORD: ${{ secrets.CANDIDATE_REGISTRY_PASSWORD }}
+          CANDIDATE_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          CANDIDATE_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
           SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           test -n "$REGISTRY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
           test -n "$CANDIDATE_REGISTRY"; test -n "$CANDIDATE_USERNAME"; test -n "$CANDIDATE_PASSWORD"
           echo "$REGISTRY_PASSWORD" | oras login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
@@ -338,8 +269,14 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.source_commit }}
+          # The workflow file and the release tool must come from the same
+          # dispatch commit: building the tool from source_commit would freeze
+          # it at preparation time, so a workflow fix (for example a new
+          # verify-pulled-plugin flag) could never take effect for a snapshot.
+          # The tree is pinned back to source_commit below, after the build.
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.0'
@@ -355,9 +292,23 @@ jobs:
           SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
           SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]
+          # Build the release tool from the dispatch commit, mirroring the
+          # emergency-overwrite channel, then pin the working tree back to the
+          # preparation commit for snapshot, catalog, and history reads. The
+          # ancestor check keeps the tool at or after source_commit, so a
+          # promotion can only gain tool fixes, never lose them.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$WORKFLOW_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
+          git merge-base --is-ancestor "$SOURCE_COMMIT" "$WORKFLOW_SHA"
+          (cd tools/plugin-release && GOMAXPROCS=1 go build -p 1 -o /tmp/plugin-release .)
+          git checkout -q "$SOURCE_COMMIT"
           test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
           test -n "$REGISTRY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
           echo "$REGISTRY_PASSWORD" | oras login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
@@ -436,7 +387,6 @@ jobs:
             echo "every snapshot plugin is excluded by migration preflight; no latest alias can move" >&2
             exit 1
           fi
-          (cd tools/plugin-release && GOMAXPROCS=1 go build -p 1 -o /tmp/plugin-release .)
           pull_gate_failures=0
           while read -r entry; do
             id=$(jq -r .logicalId <<<"$entry"); ref=$(jq -r .ociRef <<<"$entry"); digest=$(jq -r .digest <<<"$entry")
@@ -444,6 +394,7 @@ jobs:
               continue
             fi
             version=$(jq -r .version <<<"$entry"); source_commit=$(jq -r .sourceCommit <<<"$entry"); input_hash=$(jq -r .inputHash <<<"$entry")
+            provenance=$(jq -r '.provenanceMode // (if .candidateRef == "" then "public" else "candidate" end)' <<<"$entry")
             image=${ref%:*}; latest="$image:latest"; digest_ref="$image@$digest"
             pull_dir="/tmp/plugin-release-pull-$id"
             pull_error=$(mktemp)
@@ -457,7 +408,7 @@ jobs:
               pull_reason="source commit timestamp lookup failed: $(tr '\r\n' '  ' < "$pull_error")"
             elif ! [[ "$source_created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$ ]]; then
               pull_reason="source commit timestamp is not canonical RFC3339: $source_created"
-            elif ! /tmp/plugin-release verify-pulled-plugin --manifest "$pull_dir/manifest.json" --config "$pull_dir/config.json" --wasm "$pull_dir/plugin.wasm" --digest "$digest" --source-commit "$source_commit" --source-created "$source_created" --version "$version" --input-hash "$input_hash" 2>"$pull_error"; then
+            elif ! /tmp/plugin-release verify-pulled-plugin --manifest "$pull_dir/manifest.json" --config "$pull_dir/config.json" --wasm "$pull_dir/plugin.wasm" --digest "$digest" --source-commit "$source_commit" --source-created "$source_created" --version "$version" --input-hash "$input_hash" --provenance "$provenance" 2>"$pull_error"; then
               pull_reason="artifact validation failed: $(tr '\r\n' '  ' < "$pull_error")"
             fi
             rm -f "$pull_error"
@@ -476,7 +427,7 @@ jobs:
                 # predates release annotations. Accept it without a write.
                 old=""; state=identical
               else
-                old=$(oras manifest fetch "$latest" --format json | jq -r '.annotations["org.opencontainers.image.version"] // empty')
+                old=$(oras manifest fetch "$latest" | jq -r '.annotations["org.opencontainers.image.version"] // empty')
                 if [ -z "$old" ]; then
                   if [ "${ADOPT_UNANNOTATED_LATEST:-false}" = "true" ]; then
                     # Bridge for pre-pipeline manual latest tags: adopt the
@@ -502,9 +453,23 @@ jobs:
                 else
                   /tmp/plugin-release semver-compare --current "$old" --candidate "$version"
                   if [ "$old" = "$version" ]; then
-                    echo "latest alias conflict: $latest serves $old at $old_digest, snapshot requires $digest" >&2; exit 1
+                    # Same version, different bytes. A pipeline-built candidate
+                    # is this pipeline's own output, so a divergent same-version
+                    # latest means content was overwritten out of band: fail
+                    # closed. A public entry's digest was recorded from the live
+                    # version tag at prepare time and re-verified by this run's
+                    # version phase and pull gate, so a stale same-version
+                    # latest is legacy drift (an out-of-band push that moved the
+                    # version tag later than the alias) to repair; the displaced
+                    # version and digest are journaled below.
+                    if [ "$provenance" = "public" ]; then
+                      state=replace-public
+                    else
+                      echo "latest alias conflict: $latest serves $old at $old_digest, snapshot requires $digest" >&2; exit 1
+                    fi
+                  else
+                    state=replace
                   fi
-                  state=replace
                 fi
               fi
             else

@@ -16,11 +16,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,6 +67,104 @@ var defaultPathSuffixesConfig = func() json.RawMessage {
 	})
 	return data
 }()
+
+type redisDecrement struct {
+	key   string
+	delta int
+}
+
+type recordingRedisClient struct {
+	wrapper.RedisClient
+	decrements []redisDecrement
+	err        error
+}
+
+func (c *recordingRedisClient) DecrBy(key string, delta int, _ wrapper.RedisResponseCallback) error {
+	c.decrements = append(c.decrements, redisDecrement{key: key, delta: delta})
+	return c.err
+}
+
+type recordingHTTPContext struct {
+	wrapper.HttpContext
+	context        map[string]interface{}
+	userAttributes map[string]interface{}
+	bufferedBody   bool
+	skippedBody    bool
+}
+
+func newRecordingHTTPContext(chatMode ChatMode, consumer string) *recordingHTTPContext {
+	ctx := &recordingHTTPContext{
+		context:        map[string]interface{}{"chatMode": chatMode},
+		userAttributes: map[string]interface{}{},
+	}
+	if consumer != "" {
+		ctx.context["consumer"] = consumer
+	}
+	return ctx
+}
+
+func (c *recordingHTTPContext) SetContext(key string, value interface{}) {
+	c.context[key] = value
+}
+
+func (c *recordingHTTPContext) GetContext(key string) interface{} {
+	return c.context[key]
+}
+
+func (c *recordingHTTPContext) SetUserAttribute(key string, value interface{}) {
+	c.userAttributes[key] = value
+}
+
+func (c *recordingHTTPContext) GetUserAttribute(key string) interface{} {
+	return c.userAttributes[key]
+}
+
+func (c *recordingHTTPContext) GetBoolContext(key string, defaultValue bool) bool {
+	value, ok := c.context[key].(bool)
+	if !ok {
+		return defaultValue
+	}
+	return value
+}
+
+func (c *recordingHTTPContext) GetStringContext(key, defaultValue string) string {
+	value, ok := c.context[key].(string)
+	if !ok {
+		return defaultValue
+	}
+	return value
+}
+
+func (c *recordingHTTPContext) GetByteSliceContext(key string, defaultValue []byte) []byte {
+	value, ok := c.context[key].([]byte)
+	if !ok {
+		return defaultValue
+	}
+	return value
+}
+
+func (c *recordingHTTPContext) BufferResponseBody() {
+	c.bufferedBody = true
+}
+
+func (c *recordingHTTPContext) DontReadResponseBody() {
+	c.skippedBody = true
+}
+
+func allowCompletionRequest(t *testing.T, host test.TestHost) {
+	t.Helper()
+
+	action := host.CallOnHttpRequestHeaders([][2]string{
+		{":authority", "example.com"},
+		{":path", "/v1/chat/completions"},
+		{":method", "POST"},
+		{"x-mse-consumer", "consumer1"},
+	})
+	require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+	host.CallOnRedisCall(0, test.CreateRedisResp(1000))
+	require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+}
 
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
@@ -235,70 +335,178 @@ func TestOnHttpRequestBody(t *testing.T) {
 	})
 }
 
-func TestOnHttpStreamingResponseBody(t *testing.T) {
+func TestOnHttpResponseBody(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		// 测试聊天完成模式的流式响应体处理
-		t.Run("chat completion mode", func(t *testing.T) {
+		t.Run("chunked non-streaming response is buffered before decrement", func(t *testing.T) {
 			host, status := test.NewTestHost(basicConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
-			// 先设置请求头
-			host.CallOnHttpRequestHeaders([][2]string{
-				{":authority", "example.com"},
-				{":path", "/v1/chat/completions"},
-				{":method", "POST"},
-				{"x-mse-consumer", "consumer1"},
+			allowCompletionRequest(t, host)
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
 			})
-
-			// 测试流式响应体处理
-			data := []byte(`{"choices": [{"delta": {"content": "Hello"}}]}`)
-			action := host.CallOnHttpStreamingResponseBody(data, false)
-
 			require.Equal(t, types.ActionContinue, action)
-			result := host.GetResponseBody()
-			// 非结束流应该返回原始数据
-			require.Equal(t, data, result)
 
-			// 测试结束流
-			action = host.CallOnHttpStreamingResponseBody(data, true)
-
+			firstChunk := []byte(`{"model":"gpt-4","choices":[],"usage":{"prompt_tokens":10,`)
+			lastChunk := []byte(`"completion_tokens":15,"total_tokens":25}}`)
+			action = host.CallOnHttpStreamingResponseBody(firstChunk, false)
+			require.Equal(t, types.ActionPause, action)
+			action = host.CallOnHttpStreamingResponseBody(lastChunk, true)
 			require.Equal(t, types.ActionContinue, action)
-			result = host.GetResponseBody()
-			// 结束流应该返回原始数据
-			require.Equal(t, data, result)
+			expectedBody := append(append([]byte{}, firstChunk...), lastChunk...)
+			require.Equal(t, expectedBody, host.GetResponseBody())
 
-			// 模拟Redis调用响应（减少配额）
-			resp := test.CreateRedisRespArray([]interface{}{30})
-			host.CallOnRedisCall(0, resp)
+			// Consume the pending response from the quota-decrement Redis callout.
+			host.CallOnRedisCall(0, test.CreateRedisResp(975))
 
 			host.CompleteHttp()
 		})
+	})
+}
 
-		// 测试非聊天完成模式的流式响应体处理
-		t.Run("non-chat completion mode", func(t *testing.T) {
+func TestOnHttpStreamingResponseBody(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("streaming response decrements only after end of stream", func(t *testing.T) {
 			host, status := test.NewTestHost(basicConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
-			// 先设置请求头
-			host.CallOnHttpRequestHeaders([][2]string{
+			allowCompletionRequest(t, host)
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "Text/Event-Stream; charset=utf-8"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			contentChunk := []byte("data: {\"model\":\"gpt-4\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+			usageChunk := []byte("data: {\"model\":\"gpt-4\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":15,\"total_tokens\":25}}\n\n")
+			doneChunk := []byte("data: [DONE]\n\n")
+
+			action = host.CallOnHttpStreamingResponseBody(contentChunk, false)
+			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, contentChunk, host.GetResponseBody())
+			action = host.CallOnHttpStreamingResponseBody(usageChunk, false)
+			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, usageChunk, host.GetResponseBody())
+			action = host.CallOnHttpStreamingResponseBody(doneChunk, true)
+			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, doneChunk, host.GetResponseBody())
+
+			host.CallOnRedisCall(0, test.CreateRedisResp(975))
+			host.CompleteHttp()
+		})
+
+		t.Run("non-completion response body remains unchanged", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/other/path"},
 				{":method", "GET"},
 				{"x-mse-consumer", "consumer1"},
 			})
-
-			// 测试流式响应体处理
-			data := []byte("response data")
-			action := host.CallOnHttpStreamingResponseBody(data, false)
-
-			// 非聊天完成模式应该返回原始数据
 			require.Equal(t, types.ActionContinue, action)
-			result := host.GetResponseBody()
-			require.Equal(t, data, result)
+			action = host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			data := []byte("response data")
+			action = host.CallOnHttpStreamingResponseBody(data, false)
+			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, data, host.GetResponseBody())
+			host.CompleteHttp()
 		})
 	})
+}
+
+func TestProcessResponseUsage(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		body := []byte(`{"model":"gpt-4","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":15,"total_tokens":25}}`)
+
+		t.Run("dispatches one decrement for repeated callbacks", func(t *testing.T) {
+			redisClient := &recordingRedisClient{}
+			ctx := newRecordingHTTPContext(ChatModeCompletion, "consumer1")
+			config := QuotaConfig{RedisKeyPrefix: "chat_quota:", redisClient: redisClient}
+
+			processResponseUsage(ctx, config, body, true)
+			processResponseUsage(ctx, config, body, true)
+
+			require.Equal(t, []redisDecrement{{key: "chat_quota:consumer1", delta: 25}}, redisClient.decrements)
+			require.Equal(t, true, ctx.GetContext(ctxKeyQuotaDeducted))
+		})
+
+		t.Run("streaming usage waits for end of stream", func(t *testing.T) {
+			redisClient := &recordingRedisClient{}
+			ctx := newRecordingHTTPContext(ChatModeCompletion, "consumer1")
+			config := QuotaConfig{RedisKeyPrefix: "chat_quota:", redisClient: redisClient}
+
+			processResponseUsage(ctx, config, body, false)
+			require.Empty(t, redisClient.decrements)
+			processResponseUsage(ctx, config, []byte("data: [DONE]\n\n"), true)
+
+			require.Equal(t, []redisDecrement{{key: "chat_quota:consumer1", delta: 25}}, redisClient.decrements)
+		})
+
+		t.Run("synchronous dispatch failure can retry", func(t *testing.T) {
+			redisClient := &recordingRedisClient{err: errors.New("dispatch failed")}
+			ctx := newRecordingHTTPContext(ChatModeCompletion, "consumer1")
+			config := QuotaConfig{RedisKeyPrefix: "chat_quota:", redisClient: redisClient}
+
+			processResponseUsage(ctx, config, body, true)
+			require.Equal(t, []redisDecrement{{key: "chat_quota:consumer1", delta: 25}}, redisClient.decrements)
+			require.Equal(t, false, ctx.GetContext(ctxKeyQuotaDeducted))
+
+			redisClient.err = nil
+			processResponseUsage(ctx, config, body, true)
+			require.Equal(t, []redisDecrement{
+				{key: "chat_quota:consumer1", delta: 25},
+				{key: "chat_quota:consumer1", delta: 25},
+			}, redisClient.decrements)
+			require.Equal(t, true, ctx.GetContext(ctxKeyQuotaDeducted))
+		})
+
+		t.Run("does not decrement without usage", func(t *testing.T) {
+			redisClient := &recordingRedisClient{}
+			ctx := newRecordingHTTPContext(ChatModeCompletion, "consumer1")
+			config := QuotaConfig{RedisKeyPrefix: "chat_quota:", redisClient: redisClient}
+
+			processResponseUsage(ctx, config, []byte(`{"choices":[]}`), true)
+
+			require.Empty(t, redisClient.decrements)
+			require.Nil(t, ctx.GetContext(ctxKeyQuotaDeducted))
+		})
+
+		t.Run("does not decrement without consumer", func(t *testing.T) {
+			redisClient := &recordingRedisClient{}
+			ctx := newRecordingHTTPContext(ChatModeCompletion, "")
+			config := QuotaConfig{RedisKeyPrefix: "chat_quota:", redisClient: redisClient}
+
+			processResponseUsage(ctx, config, body, true)
+
+			require.Empty(t, redisClient.decrements)
+			require.Nil(t, ctx.GetContext(ctxKeyQuotaDeducted))
+		})
+	})
+}
+
+func TestOnHttpResponseHeadersSkipsNonCompletionBody(t *testing.T) {
+	ctx := newRecordingHTTPContext(ChatModeNone, "consumer1")
+
+	action := onHttpResponseHeaders(ctx, QuotaConfig{})
+
+	require.Equal(t, types.ActionContinue, action)
+	require.True(t, ctx.skippedBody)
+	require.False(t, ctx.bufferedBody)
 }
 
 func TestGetOperationMode(t *testing.T) {

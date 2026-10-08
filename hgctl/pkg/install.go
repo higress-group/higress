@@ -54,6 +54,14 @@ type InstallArgs struct {
 	ManifestsPath string
 	// Devel if set true when version is latest, it will get latest version, otherwise it will get latest stable version
 	Devel bool
+	// FromHelm recovers current upgrade state from an existing Higress Helm release.
+	FromHelm bool
+	// HelmRelease selects the Helm release name for --from-helm.
+	HelmRelease string
+	// HelmNamespace selects the Helm release namespace for --from-helm.
+	HelmNamespace string
+	// Yes approves non-interactive recovered Helm mutation after validation.
+	Yes bool
 }
 
 func (a *InstallArgs) String() string {

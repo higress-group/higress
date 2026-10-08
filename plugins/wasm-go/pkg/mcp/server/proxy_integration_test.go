@@ -80,7 +80,7 @@ func assertNoProxyLeakHeaders(t *testing.T, headers [][2]string) {
 }
 
 func TestModernProxyDiscoveryAdvertisesImplementedToolsCapability(t *testing.T) {
-	for _, strategy := range []ProtocolStrategy{ProtocolStrategyModern, ProtocolStrategyLegacy} {
+	for _, strategy := range []ProtocolStrategy{ProtocolStrategyModern, ProtocolStrategyLegacy, ProtocolStrategyAuto} {
 		t.Run(string(strategy), func(t *testing.T) {
 			host := newProxyBridgeHost(t, strategy)
 			headers := [][2]string{

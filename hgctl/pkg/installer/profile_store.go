@@ -17,6 +17,7 @@ package installer
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -134,6 +136,42 @@ func NewFileDirProfileStore(profilesPath string) (ProfileStore, error) {
 	return profileStore, nil
 }
 
+func StrictFileProfileCollisions(profilesPath, namespace string) ([]*ProfileContext, error) {
+	profileContexts := make([]*ProfileContext, 0)
+	dir, err := os.ReadDir(profilesPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return profileContexts, nil
+		}
+		return nil, err
+	}
+	for _, file := range dir {
+		if !strings.HasSuffix(file.Name(), ".yaml") || file.IsDir() {
+			continue
+		}
+		fileName := filepath.Join(profilesPath, file.Name())
+		content, err := os.ReadFile(fileName)
+		if err != nil {
+			return nil, fmt.Errorf("read profile file %s: %w", fileName, err)
+		}
+		profile, err := unmarshalProfileStrict(content)
+		if err != nil {
+			return nil, fmt.Errorf("parse profile file %s: %w", fileName, err)
+		}
+		if profileTargetsNamespace(profile, namespace) {
+			profileContexts = append(profileContexts, &ProfileContext{
+				Profile:        profile,
+				Namespace:      profile.Global.Namespace,
+				Install:        profile.Global.Install,
+				HigressVersion: profile.HigressVersion,
+				SourceType:     "file",
+				PathOrName:     fileName,
+			})
+		}
+	}
+	return profileContexts, nil
+}
+
 type ConfigmapProfileStore struct {
 	kubeCli kubernetes.CLIClient
 }
@@ -164,7 +202,7 @@ func (c *ConfigmapProfileStore) Save(profile *helm.Profile) (string, error) {
 
 func (c *ConfigmapProfileStore) List() ([]*ProfileContext, error) {
 	profileContexts := make([]*ProfileContext, 0)
-	configmapList, err := c.listConfigmaps(ProfileConfigmapName, "", 100)
+	configmapList, err := c.listConfigmaps(ProfileConfigmapName, "", 100, "")
 	if err != nil {
 		return profileContexts, err
 	}
@@ -202,13 +240,54 @@ func (c *ConfigmapProfileStore) Delete(profile *helm.Profile) (string, error) {
 	return name, nil
 }
 
-func (c *ConfigmapProfileStore) listConfigmaps(name string, namespace string, size int64) (*corev1.ConfigMapList, error) {
+func (c *ConfigmapProfileStore) StrictCollisions(namespace string) ([]*ProfileContext, error) {
+	profileContexts := make([]*ProfileContext, 0)
+	continueToken := ""
+	for {
+		configmapList, err := c.listConfigmaps(ProfileConfigmapName, "", 100, continueToken)
+		if err != nil {
+			return nil, err
+		}
+		for _, configmap := range configmapList.Items {
+			data, ok := configmap.Data[ProfileConfigmapKey]
+			if !ok {
+				continue
+			}
+			profile, err := unmarshalProfileStrict([]byte(data))
+			if err != nil {
+				return nil, fmt.Errorf("parse profile configmap %s/%s: %w", configmap.Namespace, configmap.Name, err)
+			}
+			if profileTargetsNamespace(profile, namespace) {
+				profileContexts = append(profileContexts, &ProfileContext{
+					Profile:        profile,
+					Namespace:      profile.Global.Namespace,
+					Install:        profile.Global.Install,
+					HigressVersion: profile.HigressVersion,
+					SourceType:     "configmap",
+					PathOrName:     fmt.Sprintf("%s/%s", profile.Global.Namespace, configmap.Name),
+				})
+			}
+		}
+		continueToken = configmapList.Continue
+		if continueToken == "" {
+			break
+		}
+	}
+	return profileContexts, nil
+}
+
+func (c *ConfigmapProfileStore) listConfigmaps(name string, namespace string, size int64, continueToken string) (*corev1.ConfigMapList, error) {
 	var result *corev1.ConfigMapList
 	var err error
+	opts := metav1.ListOptions{
+		Limit:         size,
+		Continue:      continueToken,
+		FieldSelector: fmt.Sprintf("metadata.name=%s", name),
+	}
 	if len(namespace) == 0 {
-		result, err = c.kubeCli.KubernetesInterface().CoreV1().ConfigMaps("").List(context.Background(), metav1.ListOptions{Limit: size, FieldSelector: fmt.Sprintf("metadata.name=%s", name)})
+		result, err = c.kubeCli.KubernetesInterface().CoreV1().ConfigMaps("").List(context.Background(), opts)
 	} else {
-		result, err = c.kubeCli.KubernetesInterface().CoreV1().ConfigMaps(namespace).List(context.Background(), metav1.ListOptions{Limit: size, FieldSelector: fmt.Sprintf("metadata.name=%s", name)})
+		result, err = c.kubeCli.KubernetesInterface().CoreV1().ConfigMaps(namespace).List(context.Background(), opts)
 	}
 	if err != nil {
 		return nil, err
@@ -244,4 +323,39 @@ func NewConfigmapProfileStore(kubeCli kubernetes.CLIClient) (ProfileStore, error
 		kubeCli: kubeCli,
 	}
 	return profileStore, nil
+}
+
+func unmarshalProfileStrict(content []byte) (*helm.Profile, error) {
+	profile := &helm.Profile{}
+	if err := yaml.Unmarshal(content, profile); err != nil {
+		return nil, stderrors.New("invalid profile yaml")
+	}
+	if err := validateProfileCollisionIdentity(profile); err != nil {
+		return nil, err
+	}
+	return profile, nil
+}
+
+func validateProfileCollisionIdentity(profile *helm.Profile) error {
+	if profile == nil {
+		return stderrors.New("invalid profile identity")
+	}
+	switch profile.Global.Install {
+	case helm.InstallK8s, helm.InstallLocalK8s:
+		if strings.TrimSpace(profile.Global.Namespace) == "" {
+			return stderrors.New("invalid profile identity")
+		}
+	case helm.InstallLocalDocker:
+	default:
+		return stderrors.New("invalid profile identity")
+	}
+	return nil
+}
+
+func profileTargetsNamespace(profile *helm.Profile, namespace string) bool {
+	if profile == nil {
+		return false
+	}
+	return (profile.Global.Install == helm.InstallK8s || profile.Global.Install == helm.InstallLocalK8s) &&
+		profile.Global.Namespace == namespace
 }

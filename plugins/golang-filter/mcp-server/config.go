@@ -159,8 +159,14 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 }
 
 func (p *Parser) Merge(parent interface{}, child interface{}) interface{} {
-	parentConfig := parent.(*config)
-	childConfig := child.(*config)
+	parentConfig, ok := parent.(*config)
+	if !ok || parentConfig == nil {
+		return child
+	}
+	childConfig, ok := child.(*config)
+	if !ok || childConfig == nil {
+		return parentConfig
+	}
 
 	newConfig := *parentConfig
 	if childConfig.servers != nil {

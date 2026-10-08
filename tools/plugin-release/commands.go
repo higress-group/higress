@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 var (
@@ -480,7 +481,10 @@ func buildPlan(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersi
 	plugins := append([]Plugin(nil), c.Plugins...)
 	sort.Slice(plugins, func(i, j int) bool { return plugins[i].LogicalID < plugins[j].LogicalID })
 	plan := Plan{SchemaVersion: planSchemaVersion, GatewayVersion: gatewayVersion, SourceCommit: target, BaseCommit: base,
-		PreviousRelease: previous.GatewayVersion, CatalogSHA256: sha256Hex(catalogData)}
+		PreviousRelease: previous.GatewayVersion, CatalogSHA256: sha256Hex(catalogData),
+		// Empty plans must serialize as [] rather than null: workflow jq
+		// iteration over .plugins[] fails on null.
+		Plugins: []PlanEntry{}, Deferred: []DeferredPlugin{}}
 	for _, p := range plugins {
 		if !p.ReleaseEligible {
 			continue
@@ -509,7 +513,22 @@ func buildPlan(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersi
 		}
 		prev, hasPrevious := previousEntries[p.LogicalID]
 		_, hasOverride := overrides[p.LogicalID]
-		affected := base == "" || len(changed) > 0 || hasOverride
+		// A VERSION-only change whose tree value exactly restates the version
+		// the previous snapshot already recorded is that preparation's own
+		// bookkeeping edit, not a release signal: a managed snapshot's
+		// sourceCommit is its freeze point, which always predates the VERSION
+		// edits its preparation PR applies, so a re-preparation against an
+		// unpromoted previous snapshot would otherwise re-bump every plugin.
+		// A hand-edited VERSION (differing from the recorded version) and
+		// bootstrap-public baselines keep the historical behavior.
+		restatePrevious := hasPrevious && previous.ProvenanceMode != "bootstrap-public" && current == prev.Version
+		affected := base == "" || hasOverride
+		for _, path := range changed {
+			if restatePrevious && path == p.SourceDir+"/VERSION" {
+				continue
+			}
+			affected = true
+		}
 		if previous.ProvenanceMode == "bootstrap-public" && hasPrevious {
 			previousVersion, parseErr := parseSemver(prev.Version)
 			if parseErr != nil {
@@ -1198,10 +1217,28 @@ func runORAS(args ...string) ([]byte, string, error) {
 	return output, stderr.String(), err
 }
 
+// transientORASTransportPattern matches transport-level ORAS failures
+// (connection resets and timeouts seen between GitHub runners and ACR).
+// Registry responses such as 404 absence evidence or authorization refusals
+// are semantic and must reach callers unchanged, so they are never retried.
+var transientORASTransportPattern = regexp.MustCompile(`connection reset by peer|connection refused|context deadline exceeded|i/o timeout|Client\.Timeout exceeded|broken pipe|unexpected EOF|no route to host|network is unreachable|TLS handshake timeout|proxyconnect`)
+
 func runORASManifestFetch(operation string, args ...string) ([]byte, error) {
-	output, stderr, err := orasRunner(args...)
-	if err == nil {
-		return output, nil
+	const attempts = 4
+	var output []byte
+	var stderr string
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			time.Sleep(2 * time.Duration(attempt-1) * time.Second)
+		}
+		output, stderr, err = orasRunner(args...)
+		if err == nil {
+			return output, nil
+		}
+		if attempt == attempts || !transientORASTransportPattern.MatchString(stderr+"\n"+err.Error()) {
+			break
+		}
 	}
 	if detail := sanitizeCommandStderr(stderr); detail != "" {
 		return nil, fmt.Errorf("%s failed: %w: %s", operation, err, detail)
@@ -1308,8 +1345,14 @@ func validateConsoleRecovery(root, catalogPath, manifestPath string) error {
 			return fmt.Errorf("%s: recovery artifact identity differs from unchanged 2.2.4 snapshot", id)
 		}
 		plugin, ok := catalogByID[id]
+		if !ok {
+			// A plugin de-listed after the recovery window keeps its recorded
+			// mapping as immutable history; the catalog can no longer
+			// corroborate it, but the snapshot bindings above still hold.
+			continue
+		}
 		expectedConsumers := catalogConsumers(catalog, plugin)
-		if !ok || expectedConsumers.Console == nil || !reflect.DeepEqual(entry.Console, *expectedConsumers.Console) {
+		if expectedConsumers.Console == nil || !reflect.DeepEqual(entry.Console, *expectedConsumers.Console) {
 			return fmt.Errorf("%s: recovery Console mapping differs from reviewed catalog", id)
 		}
 	}

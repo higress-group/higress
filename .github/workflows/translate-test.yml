@@ -22,7 +22,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Skip translation for clearly English pull requests
+        id: translation-needed
+        env:
+          EVENT_PATH: ${{ github.event_path }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          with open(os.environ['EVENT_PATH'], encoding='utf-8') as event_file:
+              event = json.load(event_file)
+          pull_request = event.get('pull_request') if os.environ['EVENT_NAME'] == 'pull_request_target' else None
+          title = str(pull_request.get('title') or '') if pull_request else ''
+          body = str(pull_request.get('body') or '') if pull_request else ''
+          words = re.findall(r'[a-z]+', body.lower())
+          title_words = set(re.findall(r'[a-z]+', title.lower()))
+          english_words = {
+              'the', 'and', 'from', 'with', 'that', 'this', 'should',
+              'will', 'have', 'are', 'for', 'not', 'only', 'until',
+          }
+          clearly_english = (
+              title.isascii() and body.isascii() and len(words) >= 100
+              and bool(title_words & english_words)
+              and sum(word in english_words for word in words) >= len(words) * 0.07
+          )
+          needed = not pull_request or not clearly_english
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'needed={str(needed).lower()}\n')
+          PY
       - uses: lizheming/github-translate-action@main
+        if: steps.translation-needed.outputs.needed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

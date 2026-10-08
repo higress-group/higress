@@ -337,7 +337,7 @@ func (h *DeployHandler) HandleAgentRun() error {
 
 // Set Serverless's Access Key in s.yaml, details see: https://github.com/Serverless-Devs/agentrun-sdk-python
 // Example:
-// $ s config get -a defualt
+// $ s config get -a default
 
 // You have not yet been found to have configured key information.
 // You can use [s config add] for key configuration, or use [s config add -h] to view configuration help.

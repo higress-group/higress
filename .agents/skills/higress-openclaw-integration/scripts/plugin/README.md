@@ -53,8 +53,8 @@ The plugin will prompt for:
 
 ## Related Resources
 
-- **Parent Skill**: [higress-openclaw-integration](../SKILL.md)
-- **Auto-routing Configuration**: [higress-auto-router](../../higress-auto-router/SKILL.md)
+- **Parent Skill**: [higress-openclaw-integration](../../SKILL.md)
+- **Auto-routing Configuration**: [higress-auto-router](../../../higress-auto-router/SKILL.md)
 
 ## License
 

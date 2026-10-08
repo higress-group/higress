@@ -447,6 +447,23 @@ var autoRoutingNoDefaultConfig = func() json.RawMessage {
 	return data
 }()
 
+var autoRoutingDefaultHeaderConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"modelKey": "model",
+		"enableOnPathSuffix": []string{
+			"/v1/chat/completions",
+		},
+		"autoRouting": map[string]interface{}{
+			"enable":       true,
+			"defaultModel": "qwen-turbo",
+			"rules": []map[string]string{
+				{"pattern": "(?i)(画|绘|生成图|图片|image|draw|paint)", "model": "qwen-vl-max"},
+			},
+		},
+	})
+	return data
+}()
+
 func TestParseConfigAutoRouting(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		t.Run("parse auto routing config", func(t *testing.T) {
@@ -663,8 +680,33 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			modelHeader, found := getHeader(headers, "x-higress-llm-model")
-			require.True(t, found, "x-higress-llm-model header should be set")
+			modelHeader, found := getHeader(headers, "x-model")
+			require.True(t, found, "x-model header should be set")
+			require.Equal(t, "qwen-vl-max", modelHeader)
+		})
+
+		t.Run("auto routing uses default header when modelToHeader is omitted", func(t *testing.T) {
+			host, status := test.NewTestHost(autoRoutingDefaultHeaderConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+			})
+
+			body := []byte(`{
+				"model": "higress/auto",
+				"messages": [{"role": "user", "content": "请帮我画一只可爱的小猫"}]
+			}`)
+			action := host.CallOnHttpRequestBody(body)
+			require.Equal(t, types.ActionContinue, action)
+
+			headers := host.GetRequestHeaders()
+			modelHeader, found := getHeader(headers, DefaultModelHeader)
+			require.True(t, found, "default model header should be set")
 			require.Equal(t, "qwen-vl-max", modelHeader)
 		})
 
@@ -690,7 +732,7 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			modelHeader, found := getHeader(headers, "x-higress-llm-model")
+			modelHeader, found := getHeader(headers, "x-model")
 			require.True(t, found)
 			require.Equal(t, "qwen-coder", modelHeader)
 		})
@@ -717,7 +759,7 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			modelHeader, found := getHeader(headers, "x-higress-llm-model")
+			modelHeader, found := getHeader(headers, "x-model")
 			require.True(t, found)
 			require.Equal(t, "qwen-turbo", modelHeader)
 		})
@@ -744,8 +786,8 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			_, found := getHeader(headers, "x-higress-llm-model")
-			require.False(t, found, "x-higress-llm-model should not be set when no rule matches and no default")
+			_, found := getHeader(headers, "x-model")
+			require.False(t, found, "x-model should not be set when no rule matches and no default")
 		})
 
 		t.Run("normal routing when model is not higress/auto", func(t *testing.T) {
@@ -774,8 +816,8 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.True(t, found)
 			require.Equal(t, "qwen-long", modelHeader)
 
-			// x-higress-llm-model should NOT be set (auto routing not triggered)
-			_, found = getHeader(headers, "x-higress-llm-model")
+			// DefaultModelHeader should NOT be set (auto routing not triggered)
+			_, found = getHeader(headers, DefaultModelHeader)
 			require.False(t, found)
 		})
 
@@ -804,7 +846,7 @@ func TestAutoRoutingIntegration(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			headers := host.GetRequestHeaders()
-			modelHeader, found := getHeader(headers, "x-higress-llm-model")
+			modelHeader, found := getHeader(headers, "x-model")
 			require.True(t, found)
 			require.Equal(t, "qwen-turbo", modelHeader) // matches 翻译 rule
 		})

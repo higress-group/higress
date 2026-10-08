@@ -175,7 +175,7 @@ Configuration fields for each item in `cache.redis`
 
 ### Differences between the two `endpoint_mode`
 
-When `endpoint_mode` is `envoy`, the authentication request will use the original request's HTTP Method and the configured `path_prefix` as the request path prefix, concatenated with the original request path.
+When `endpoint_mode` is `envoy`, the authentication request will use the original request's HTTP Method and the configured `path_prefix` as the request path prefix, concatenated with the original request path. Only the path portion of the original request path is concatenated, so dot segments inside a query value are never resolved as path segments. `path_prefix` must be an absolute, canonical path: if the request path resolves outside of it, contains a raw backslash, or cannot be parsed as a URL, the request is rejected with HTTP 403 (`ext-auth.path_traversal`) without calling the authorization service. `failure_mode_allow` does not apply to these rejections, since it covers an unreachable authorization service rather than a request that cannot be authorized at all.
 
 When `endpoint_mode` is `forward_auth`, the authentication request will use the configured `request_method` as the HTTP Method and the configured `path` as the request path. Higress will automatically generate and send the following headers to the authorization service:
 
