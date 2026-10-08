@@ -302,7 +302,10 @@ func (r *RequestContext) SaveBodyToHistMsg(log log.Log, reqBody []byte, respBody
 		log.Debugf("unmarshal respBody failed: %v", err)
 	} else {
 		if len(respBodystrut.Choices) != 0 {
-			lastSystemMessage = respBodystrut.Choices[len(respBodystrut.Choices)-1].Message.Content
+			lastChoice := respBodystrut.Choices[len(respBodystrut.Choices)-1]
+			if lastChoice.Message != nil {
+				lastSystemMessage = lastChoice.Message.Content
+			}
 		}
 	}
 
