@@ -10,6 +10,8 @@ package server
 
 import (
 	"fmt"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +19,63 @@ import (
 	"sync"
 	"testing"
 )
+
+type autoStartCancellationContext struct {
+	*proxyRouteTestContext
+	closeBeforeProbe bool
+	responseWrites   int
+}
+
+func (c *autoStartCancellationContext) SetContext(key string, value any) {
+	c.proxyRouteTestContext.SetContext(key, value)
+	if key == utils.CtxJsonRpcResponded && value == true {
+		c.responseWrites++
+	}
+	// Close at the final context write before probe submission, after the auto
+	// exchange is registered. This models stream-done winning that boundary.
+	if key == CtxMcpProxyHeaders && value == nil && c.closeBeforeProbe {
+		if e, ok := c.GetContext(CtxMcpAutoExchange).(*AutoExchange); ok {
+			e.closeStream()
+		}
+	}
+}
+
+func TestAutoCancelledBeforeFirstProbeTerminatesLiveRequest(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("closed=%v", closed), func(t *testing.T) {
+			host := newProxyBridgeHost(t, ProtocolStrategyModern)
+			host.CallOnHttpRequestHeaders(modernProxyListHeaders())
+			ctx := &autoStartCancellationContext{proxyRouteTestContext: modernProxyTestContext("tools/list", modernProxyListBody(1)), closeBeforeProbe: closed}
+			request, protocolErr := protocol.PrepareRequest(protocol.NewTransport("POST", "mcp.example.com", modernProxyListHeaders()), modernProxyListBody(1), func(string) bool { return true })
+			require.Nil(t, protocolErr)
+			ctx.SetContext(consts.CtxProtocolRequest, request)
+			ctx.SetContext(utils.CtxNeedPause, true)
+			registerProxyCancellation(ctx)
+			request.Cancel()
+			handler := NewMcpProtocolHandler("http://backend/mcp", 5000)
+			require.NoError(t, handler.startAuto(ctx, nil))
+			if closed {
+				assert.Nil(t, host.GetLocalResponse())
+				assert.Zero(t, ctx.responseWrites)
+			} else {
+				require.NotNil(t, host.GetLocalResponse())
+				assert.Equal(t, uint32(499), host.GetLocalResponse().StatusCode)
+				assert.Equal(t, 1, ctx.responseWrites)
+			}
+			handler.auto.replyCancelled(ctx)
+			handler.auto.replyCancelled(ctx)
+			expectedWrites := 1
+			if closed {
+				expectedWrites = 0
+			}
+			assert.Equal(t, expectedWrites, ctx.responseWrites, "repeated terminal handling must not write twice")
+			assert.Empty(t, host.GetHttpCalloutAttributes(), "no control request is submitted")
+			assert.Empty(t, ctx.calls, "no business request is submitted")
+			assert.Equal(t, types.ActionPause, host.GetHttpStreamAction(), "cancellation must not resume the main request")
+			host.CompleteHttp()
+		})
+	}
+}
 
 func TestRouteCallErrorAndCancellationPreventSubmission(t *testing.T) {
 	for _, mode := range []string{"error", "cancel", "success"} {

@@ -141,6 +141,9 @@ func (h *McpProtocolHandler) startAuto(ctx wrapper.HttpContext, auth *ProxyAuthI
 		return err
 	}
 	e := &AutoExchange{phase: autoPrepared, prepared: prepared, ctx: ctx}
+	// Cancellation can win before the first callout, leaving no callback to
+	// terminate a live paused request. This invocation still owns its response.
+	defer e.replyCancelled(ctx)
 	h.auto = e
 	ctx.SetContext(CtxMcpAutoExchange, e)
 	request, _ := ModernRequestContext(ctx)
