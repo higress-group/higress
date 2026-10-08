@@ -17,15 +17,18 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	pb "github.com/higress-group/wasm-go/pkg/protos"
 	wasmtest "github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"google.golang.org/protobuf/proto"
 )
 
 func newProxyBridgeHost(t *testing.T, strategy ProtocolStrategy) wasmtest.TestHost {
@@ -66,14 +69,40 @@ func calloutAt(t *testing.T, host wasmtest.TestHost, index int) proxytest.HttpCa
 	return callouts[index]
 }
 
+// routedRequest exercises the real SDK RouteCall rather than mocking a callout.
+func routedRequest(t *testing.T, host wasmtest.TestHost) proxytest.HttpCalloutAttribute {
+	t.Helper()
+	require.Empty(t, host.GetHttpCalloutAttributes(), "final HTTP business must not dispatch a sidecall")
+	require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+	return proxytest.HttpCalloutAttribute{CalloutID: ^uint32(0), Headers: host.GetRequestHeaders(), Body: host.GetRequestBody()}
+}
+
+func proxyTestResponse(host wasmtest.TestHost) *proxytest.LocalHttpResponse {
+	if local := host.GetLocalResponse(); local != nil {
+		return local
+	}
+	headers := host.GetResponseHeaders()
+	if len(headers) == 0 {
+		return nil
+	}
+	status, _ := findHeader(headers, ":status")
+	code, _ := strconv.Atoi(status)
+	return &proxytest.LocalHttpResponse{StatusCode: uint32(code), Headers: headers, Data: host.GetResponseBody()}
+}
+
 func completeCallout(host wasmtest.TestHost, callout proxytest.HttpCalloutAttribute, status string, headers [][2]string, body []byte) {
 	allHeaders := append([][2]string{{":status", status}}, headers...)
-	host.CallOnHttpCallResponse(callout.CalloutID, allHeaders, nil, body)
+	if callout.CalloutID == ^uint32(0) {
+		host.CallOnHttpResponseHeaders(allHeaders)
+		host.CallOnHttpResponseBody(body)
+	} else {
+		host.CallOnHttpCallResponse(callout.CalloutID, allHeaders, nil, body)
+	}
 }
 
 func assertNoProxyLeakHeaders(t *testing.T, headers [][2]string) {
 	t.Helper()
-	for _, name := range []string{"Cookie", "Mcp-Session-Id", "Last-Event-ID", "x-envoy-allow-mcp-tools", "Authorization"} {
+	for _, name := range []string{"Mcp-Session-Id", "Last-Event-ID", "x-envoy-allow-mcp-tools", "Authorization"} {
 		_, exists := findHeader(headers, name)
 		assert.False(t, exists, "%s leaked in %#v", name, headers)
 	}
@@ -97,7 +126,7 @@ func TestModernProxyDiscoveryAdvertisesImplementedToolsCapability(t *testing.T) 
 			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
 			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
 
-			response := host.GetLocalResponse()
+			response := proxyTestResponse(host)
 			require.NotNil(t, response)
 			assert.True(t, gjson.GetBytes(response.Data, "result.capabilities.tools").Exists())
 			assert.Empty(t, host.GetHttpCalloutAttributes(), "discovery describes implemented gateway methods without probing upstream")
@@ -118,19 +147,21 @@ func TestModernToModernProxyUsesSingleStatelessCallAndPreservesOpaqueResult(t *t
 		[2]string{"x-envoy-allow-mcp-tools", ""},
 	)
 	require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
-	require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody(body))
+	require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
 
-	call := calloutAt(t, host, 0)
+	call := routedRequest(t, host)
 	assert.Equal(t, string(body), string(call.Body), "modern envelope and metadata bytes must be unchanged")
 	assert.Equal(t, string(protocol.Version20260728), mustHeaderValue(t, call.Headers, protocol.HeaderProtocolVersion))
 	assert.Equal(t, "tools/list", mustHeaderValue(t, call.Headers, protocol.HeaderMethod))
-	assert.Equal(t, "opaque", mustHeaderValue(t, call.Headers, "Mcp-Param-Future"))
+	_, param := findHeader(call.Headers, "Mcp-Param-Future")
+	assert.False(t, param)
+	assert.Equal(t, "private=1", mustHeaderValue(t, call.Headers, "Cookie"))
 	assert.Equal(t, "00-a-b-01", mustHeaderValue(t, call.Headers, "traceparent"))
 	assertNoProxyLeakHeaders(t, call.Headers)
 
 	upstreamResult := []byte(`{"jsonrpc":"2.0","id":7,"result":{"resultType":"input_required","opaque":{"future":true},"content":[{"type":"text","text":"continue"}]}}`)
 	completeCallout(host, call, "200", [][2]string{{"content-type", "application/json"}}, upstreamResult)
-	response := host.GetLocalResponse()
+	response := proxyTestResponse(host)
 	require.NotNil(t, response)
 	assert.Equal(t, uint32(200), response.StatusCode)
 	assert.Equal(t, "input_required", gjson.GetBytes(response.Data, "result.resultType").String())
@@ -167,17 +198,17 @@ func TestModernToLegacyProxyRunsRequestScopedHandshakeAndShapesResult(t *testing
 	_, notificationParam := findHeader(notification.Headers, "Mcp-Param-Future")
 	assert.False(t, notificationParam)
 	completeCallout(host, notification, "202", nil, nil)
-	assert.Equal(t, types.ActionPause, host.GetHttpStreamAction(), "notification completion must not release the downstream request")
+	assert.Equal(t, types.ActionContinue, host.GetHttpStreamAction(), "business continues on its original route")
 
-	toolCall := calloutAt(t, host, 0)
+	toolCall := routedRequest(t, host)
 	assert.Equal(t, "tools/list", gjson.GetBytes(toolCall.Body, "method").String())
 	assert.Equal(t, "upstream-request-session", mustHeaderValue(t, toolCall.Headers, "Mcp-Session-Id"))
 	_, toolParam := findHeader(toolCall.Headers, "Mcp-Param-Future")
 	assert.False(t, toolParam)
 	completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`))
-	assert.Equal(t, types.ActionPause, host.GetHttpStreamAction(), "the exchange completes through a local response, not router fallthrough")
+	assert.Equal(t, types.ActionContinue, host.GetHttpStreamAction(), "business continues on its original route")
 
-	response := host.GetLocalResponse()
+	response := proxyTestResponse(host)
 	require.NotNil(t, response)
 	assert.Equal(t, uint32(200), response.StatusCode)
 	assert.Equal(t, resultTypeComplete, gjson.GetBytes(response.Data, "result.resultType").String())
@@ -208,12 +239,12 @@ func TestModernToLegacyProxyPreservesLargeIntegerToolArguments(t *testing.T) {
 	assert.Equal(t, types.ActionPause, host.GetHttpStreamAction())
 	notification := calloutAt(t, host, 0)
 	completeCallout(host, notification, "202", nil, nil)
-	assert.Equal(t, types.ActionPause, host.GetHttpStreamAction(), "tools/call must remain owned by the bridge after initialized")
-	toolCall := calloutAt(t, host, 0)
+	assert.Equal(t, types.ActionContinue, host.GetHttpStreamAction(), "business continues on its original route")
+	toolCall := routedRequest(t, host)
 	assert.Equal(t, "9007199254740993", gjson.GetBytes(toolCall.Body, "params.arguments.value").Raw)
 	completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(`{"jsonrpc":"2.0","id":2,"result":{"content":[]}}`))
-	assert.Equal(t, types.ActionPause, host.GetHttpStreamAction())
-	response := host.GetLocalResponse()
+	assert.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+	response := proxyTestResponse(host)
 	require.NotNil(t, response)
 	assert.Equal(t, resultTypeComplete, gjson.GetBytes(response.Data, "result.resultType").String())
 	assert.Empty(t, host.GetHttpCalloutAttributes())
@@ -229,13 +260,13 @@ func TestLegacyBridgeInitializedNotificationHTTPFailureStaysPausedUntilToolRespo
 	notification := calloutAt(t, host, 0)
 	completeCallout(host, notification, "500", nil, nil)
 
-	assert.Equal(t, types.ActionPause, host.GetHttpStreamAction(), "a failed notification must not release the original request")
+	assert.Equal(t, types.ActionContinue, host.GetHttpStreamAction(), "business continues on its original route")
 	assert.Nil(t, host.GetLocalResponse(), "the configured legacy behavior still attempts the pending tool RPC")
-	toolCall := calloutAt(t, host, 0)
+	toolCall := routedRequest(t, host)
 	assert.Equal(t, "tools/list", gjson.GetBytes(toolCall.Body, "method").String())
 	completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`))
-	require.NotNil(t, host.GetLocalResponse())
-	assert.Equal(t, types.ActionPause, host.GetHttpStreamAction())
+	require.NotNil(t, proxyTestResponse(host))
+	assert.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
 }
 
 func TestLegacyBridgeInitializedNotificationAuthFailureReturnsLocallyWithoutResume(t *testing.T) {
@@ -251,7 +282,7 @@ func TestLegacyBridgeInitializedNotificationAuthFailureReturnsLocallyWithoutResu
 		{"Set-Cookie", "must-not-leak=1"},
 	}, []byte(`{"secret":"must-not-leak"}`))
 
-	response := host.GetLocalResponse()
+	response := proxyTestResponse(host)
 	require.NotNil(t, response)
 	assert.Equal(t, uint32(401), response.StatusCode)
 	assert.Equal(t, `Bearer realm="legacy"`, mustHeaderValue(t, response.Headers, "WWW-Authenticate"))
@@ -293,7 +324,7 @@ func TestLegacyBridgeInitializedNotificationDispatchFailureReturnsLocallyWithout
 	initialize := calloutAt(t, host, 0)
 	completeCallout(host, initialize, "200", [][2]string{{"Mcp-Session-Id", "request-session"}}, []byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`))
 
-	response := host.GetLocalResponse()
+	response := proxyTestResponse(host)
 	require.NotNil(t, response)
 	assert.Equal(t, int64(-32603), gjson.GetBytes(response.Data, "error.code").Int())
 	assert.Empty(t, host.GetHttpCalloutAttributes(), "synchronous notification dispatch failure must not reach the tool RPC")
@@ -303,15 +334,15 @@ func TestLegacyBridgeInitializedNotificationDispatchFailureReturnsLocallyWithout
 func TestModernProxyPreservesUpstreamAuthenticationStatusAndChallenge(t *testing.T) {
 	host := newProxyBridgeHost(t, ProtocolStrategyModern)
 	require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(modernProxyListHeaders()))
-	require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody(modernProxyListBody(11)))
-	call := calloutAt(t, host, 0)
+	require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(modernProxyListBody(11)))
+	call := routedRequest(t, host)
 	completeCallout(host, call, "401", [][2]string{
 		{"WWW-Authenticate", `Bearer realm="mcp", error="invalid_token"`},
 		{"Set-Cookie", "upstream=secret"},
 		{"Mcp-Session-Id", "upstream-secret-session"},
 	}, []byte(`{"secret":"must-not-be-forwarded"}`))
 
-	response := host.GetLocalResponse()
+	response := proxyTestResponse(host)
 	require.NotNil(t, response)
 	assert.Equal(t, uint32(401), response.StatusCode)
 	assert.Equal(t, `Bearer realm="mcp", error="invalid_token"`, mustHeaderValue(t, response.Headers, "WWW-Authenticate"))
@@ -333,7 +364,7 @@ func TestLegacyDownstreamToModernOnlyProxyIsRejectedBeforeCallout(t *testing.T) 
 	}
 	require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
 	require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":13,"method":"tools/list","params":{}}`)))
-	response := host.GetLocalResponse()
+	response := proxyTestResponse(host)
 	require.NotNil(t, response)
 	assert.Equal(t, int64(-32601), gjson.GetBytes(response.Data, "error.code").Int())
 	assert.Empty(t, host.GetHttpCalloutAttributes())
@@ -616,4 +647,46 @@ func CreateInitializedNotification() *McpRequest {
 
 func CreateMcpErrorResponse(errorType string, originalError error, backendURL string) *McpErrorResponse {
 	panic("CreateMcpErrorResponse not implemented yet")
+}
+
+// No ordinary plugin streaming callback runs for RouteCall. Exercise both the
+// response-header-only and response-body paths through the unchanged SDK.
+func TestRoutedProxyResponsePhases(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		t.Run(fmt.Sprint(empty), func(t *testing.T) {
+			host := newProxyBridgeHost(t, ProtocolStrategyModern)
+			host.CallOnHttpRequestHeaders(modernProxyListHeaders())
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(modernProxyListBody(88)))
+			routedRequest(t, host)
+			headers := [][2]string{{":status", "401"}, {"www-authenticate", "Bearer realm=test"}, {"content-encoding", "gzip"}, {"set-cookie", "private"}}
+			var injected []byte
+			if empty {
+				host.RegisterForeignFunction("inject_encoded_data_to_filter_chain_on_header", func(raw []byte) []byte {
+					args := &pb.InjectEncodedDataToFilterChainArguments{}
+					require.NoError(t, proto.Unmarshal(raw, args))
+					require.True(t, args.Endstream)
+					injected = []byte(args.Body)
+					return []byte{0}
+				})
+				host.CallOnHttpResponseHeaders(headers, wasmtest.WithEndOfStream(true))
+				// Native tests validate the injection payload; real Envoy verifies
+				// the filter-chain extension in the routing harness.
+			} else {
+				host.CallOnHttpResponseHeaders(headers)
+				host.CallOnHttpStreamingResponseBody([]byte(`{"private":`), false)
+				host.CallOnHttpStreamingResponseBody([]byte(`"value"}`), true)
+			}
+			response := proxyTestResponse(host)
+			require.NotNil(t, response)
+			if empty {
+				response.Data = injected
+			}
+			assert.Equal(t, uint32(401), response.StatusCode)
+			assert.Contains(t, string(response.Data), "upstream authorization failed")
+			assert.NotContains(t, string(response.Data), "private")
+			_, encoded := findHeader(response.Headers, "content-encoding")
+			assert.False(t, encoded)
+			host.CompleteHttp()
+		})
+	}
 }

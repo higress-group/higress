@@ -24,6 +24,7 @@ import (
 // routing inputs are resolved before the first callout, including query auth.
 type PreparedProxyRequest struct {
 	target         proxyTarget
+	url            string
 	authHeaders    [][2]string
 	forwardHeaders [][2]string
 	raw            json.RawMessage
@@ -48,12 +49,7 @@ type OutboundOperation struct {
 func (p *PreparedProxyRequest) headers(op OutboundOperation) [][2]string {
 	headers := [][2]string{{"Content-Type", "application/json"}, {"Accept", "application/json,text/event-stream"}}
 	modern := op.version == protocol.Version20260728
-	for _, h := range p.forwardHeaders {
-		_, trace := traceHeaderNames[strings.ToLower(h[0])]
-		if trace || (modern && op.method == string(OpToolsCall) && validModernParamHeader(h[0], h[1])) {
-			headers = append(headers, h)
-		}
-	}
+	headers = append(headers, inheritedProxyHeaders(p.forwardHeaders, modern && op.method == string(OpToolsCall))...)
 	for _, h := range p.authHeaders {
 		ensureHeader(&headers, h[0], h[1])
 	}
@@ -115,6 +111,7 @@ func (h *McpProtocolHandler) prepareAutoRequest(ctx wrapper.HttpContext, auth *P
 		}
 	}
 	var err error
+	p.url = finalURL
 	p.target, err = resolveProxyTarget(finalURL)
 	return p, err
 }

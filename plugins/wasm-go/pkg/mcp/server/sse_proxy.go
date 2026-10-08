@@ -533,13 +533,7 @@ func sendSSEToolRequest(ctx wrapper.HttpContext, endpointURL string, authInfo *P
 // This leverages Envoy's new capability to access request headers in response phase
 func copyHeadersForSSERequest(ctx wrapper.HttpContext) [][2]string {
 	if captured, ok := ctx.GetContext(CtxMcpProxyHeaders).([][2]string); ok {
-		headers := make([][2]string, 0, len(captured))
-		for _, header := range captured {
-			if _, trace := traceHeaderNames[strings.ToLower(header[0])]; trace {
-				headers = append(headers, header)
-			}
-		}
-		return headers
+		return inheritedProxyHeaders(captured, false)
 	}
 	return captureForwardHeaders(ctx, false)
 }

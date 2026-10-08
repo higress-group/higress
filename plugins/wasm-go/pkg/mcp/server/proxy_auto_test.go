@@ -68,12 +68,12 @@ func TestAutoModernFreshProbeAndOpaqueBusiness(t *testing.T) {
 		_, param := findHeader(probe.Headers, "Mcp-Param-Future")
 		assert.False(t, param)
 		completeAutoResult(host, probe, validAutoDiscoverResult)
-		business := calloutAt(t, host, 0)
+		business := routedRequest(t, host)
 		assert.Equal(t, string(modernProxyListBody(id)), string(business.Body))
 		assert.Equal(t, "tools/list", gjson.GetBytes(business.Body, "method").String())
-		assert.Equal(t, probe.Upstream, business.Upstream)
+		assert.Equal(t, "/a%2Fb?tenant=one", mustHeaderValue(t, business.Headers, ":path"))
 		completeAutoResult(host, business, `{"resultType":"complete","tools":[],"opaque":900719925474099312345}`)
-		response := host.GetLocalResponse()
+		response := proxyTestResponse(host)
 		require.NotNil(t, response)
 		assert.Equal(t, int64(id), gjson.GetBytes(response.Data, "id").Int())
 		assert.Equal(t, "900719925474099312345", gjson.GetBytes(response.Data, "result.opaque").Raw)
@@ -99,14 +99,14 @@ func TestAutoLegacyHandshakeAndSessionIsolation(t *testing.T) {
 		assert.Equal(t, "notifications/initialized", gjson.GetBytes(notification.Body, "method").String())
 		assert.False(t, gjson.GetBytes(notification.Body, "id").Exists())
 		completeCallout(host, notification, "202", nil, nil)
-		business := calloutAt(t, host, 0)
+		business := routedRequest(t, host)
 		assert.False(t, gjson.GetBytes(business.Body, "params._meta").Exists())
 		if version == "2025-06-18" {
 			assert.Equal(t, version, mustHeaderValue(t, business.Headers, protocol.HeaderProtocolVersion))
 			assert.Equal(t, "one-request", mustHeaderValue(t, business.Headers, "Mcp-Session-Id"))
 		}
 		completeAutoResult(host, business, `{"tools":[],"opaque":900719925474099312345}`)
-		response := host.GetLocalResponse()
+		response := proxyTestResponse(host)
 		require.NotNil(t, response)
 		assert.Equal(t, "complete", gjson.GetBytes(response.Data, "result.resultType").String())
 		assert.Equal(t, "900719925474099312345", gjson.GetBytes(response.Data, "result.opaque").Raw)
@@ -130,10 +130,12 @@ func TestAutoCancellationAtEveryStage(t *testing.T) {
 			}
 			if phase == "business" {
 				completeCallout(host, call, "202", nil, nil)
-				call = calloutAt(t, host, 0)
+				call = routedRequest(t, host)
 			}
 			host.CompleteHttp()
-			completeAutoResult(host, call, validAutoDiscoverResult)
+			if phase != "business" {
+				completeAutoResult(host, call, validAutoDiscoverResult)
+			}
 			assert.Nil(t, host.GetLocalResponse())
 			assert.Empty(t, host.GetHttpCalloutAttributes())
 		})
@@ -155,12 +157,12 @@ func TestAutoFailureNeverDispatchesBusinessAgain(t *testing.T) {
 			}
 			if phase == "business" {
 				completeCallout(host, call, "202", nil, nil)
-				call = calloutAt(t, host, 0)
+				call = routedRequest(t, host)
 			}
 			// At the business stage this simulates a response lost after backend work.
 			// Runtime verification supplies the real backend execution ledger evidence.
 			completeCallout(host, call, "503", nil, nil)
-			require.NotNil(t, host.GetLocalResponse())
+			require.NotNil(t, proxyTestResponse(host))
 			assert.Empty(t, host.GetHttpCalloutAttributes())
 		})
 	}
@@ -189,18 +191,18 @@ func TestAutoCallWithoutListKeepsIdentityAndRejectsLegacyContinuation(t *testing
 				completeAutoResult(host, initialize, validAutoInitResult)
 				notification := calloutAt(t, host, 0)
 				completeCallout(host, notification, "202", nil, nil)
-				response := host.GetLocalResponse()
+				response := proxyTestResponse(host)
 				require.NotNil(t, response)
 				assert.Equal(t, int64(-32602), gjson.GetBytes(response.Data, "error.code").Int())
 				assert.Empty(t, host.GetHttpCalloutAttributes())
 				return
 			}
 			completeAutoResult(host, probe, validAutoDiscoverResult)
-			business := calloutAt(t, host, 0)
+			business := routedRequest(t, host)
 			assert.Equal(t, string(body), string(business.Body))
 			assert.Equal(t, "value", mustHeaderValue(t, business.Headers, "Mcp-Param-Future"))
 			completeCallout(host, business, "400", [][2]string{{"Content-Type", "application/json"}}, autoError(`"business"`, -32020, `{"opaque":900719925474099312345}`))
-			response := host.GetLocalResponse()
+			response := proxyTestResponse(host)
 			require.NotNil(t, response)
 			assert.Equal(t, uint32(400), response.StatusCode)
 			assert.Equal(t, int64(-32020), gjson.GetBytes(response.Data, "error.code").Int())
@@ -226,7 +228,7 @@ func TestAutoAuthenticationSnapshotAndTarget(t *testing.T) {
 				_, exists := findHeader(host.GetRequestHeaders(), "X-User")
 				assert.False(t, exists)
 				completeAutoResult(host, probe, validAutoDiscoverResult)
-				business := calloutAt(t, host, 0)
+				business := routedRequest(t, host)
 				for _, call := range []proxytest.HttpCalloutAttribute{probe, business} {
 					if in == "query" {
 						assert.Contains(t, mustHeaderValue(t, call.Headers, ":path"), "upstream-key="+user)
@@ -298,7 +300,7 @@ func TestAutoProbeLimitAndOperationalHeaders(t *testing.T) {
 				body = []byte(strings.Repeat("x", autoProbeBodyLimit+1))
 			}
 			completeCallout(host, probe, status, [][2]string{{"WWW-Authenticate", `Bearer realm="test"`}, {"Retry-After", "3"}, {"Set-Cookie", "secret"}}, body)
-			response := host.GetLocalResponse()
+			response := proxyTestResponse(host)
 			require.NotNil(t, response)
 			assert.NotContains(t, string(response.Data), "sensitive")
 			assert.Empty(t, host.GetHttpCalloutAttributes())
@@ -332,7 +334,7 @@ func TestAutoEligibilityAndPermissionBoundary(t *testing.T) {
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"denied","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
 	host.CallOnHttpRequestHeaders(headers)
 	host.CallOnHttpRequestBody(body)
-	require.NotNil(t, host.GetLocalResponse())
+	require.NotNil(t, proxyTestResponse(host))
 	assert.Empty(t, host.GetHttpCalloutAttributes())
 }
 
@@ -355,20 +357,20 @@ func TestAutoDuplicateCallbacksAndDispatchFailure(t *testing.T) {
 	require.Len(t, callbacks, 1)
 	response := jsonAutoResponse(200, autoResult(gjson.GetBytes(bodies[0], "id").Raw, validAutoDiscoverResult))
 	callbacks[0](response)
-	require.Len(t, callbacks, 2)
+	require.Len(t, callbacks, 1)
 	callbacks[0](response)
-	require.Len(t, callbacks, 2)
-	callbacks[1](jsonAutoResponse(200, autoResult(`121`, `{"tools":[],"resultType":"complete"}`)))
-	first := host.GetLocalResponse()
+	require.Len(t, callbacks, 1)
+	business := routedRequest(t, host)
+	completeAutoResult(host, business, `{"tools":[],"resultType":"complete"}`)
+	first := proxyTestResponse(host)
 	require.NotNil(t, first)
-	callbacks[1](jsonAutoResponse(500, nil))
 	callbacks[0](response)
-	assert.Equal(t, first, host.GetLocalResponse())
-	require.Len(t, callbacks, 2)
+	assert.Equal(t, first, proxyTestResponse(host))
+	require.Len(t, callbacks, 1)
 }
 
 func TestAutoImmediateDispatchFailures(t *testing.T) {
-	for _, failedMethod := range []string{"server/discover", "initialize", "notifications/initialized", "tools/list"} {
+	for _, failedMethod := range []string{"server/discover", "initialize", "notifications/initialized"} {
 		t.Run(failedMethod, func(t *testing.T) {
 			original := dispatchPreparedMCP
 			dispatchPreparedMCP = func(target proxyTarget, timeout uint32, headers [][2]string, body []byte, maxBody int, callback func(autoHTTPResponse)) error {
@@ -391,7 +393,7 @@ func TestAutoImmediateDispatchFailures(t *testing.T) {
 			if failedMethod == "tools/list" {
 				completeCallout(host, calloutAt(t, host, 0), "202", nil, nil)
 			}
-			response := host.GetLocalResponse()
+			response := proxyTestResponse(host)
 			require.NotNil(t, response)
 			assert.Contains(t, string(response.Data), "dispatch_failed")
 			assert.Empty(t, host.GetHttpCalloutAttributes())
@@ -435,7 +437,7 @@ func TestAutoFixedAuthenticationIsPreparedOnce(t *testing.T) {
 	server := mcpConfig.server.(*McpProxyServer)
 	server.AddSecurityScheme(SecurityScheme{ID: "fixed", Type: "apiKey", In: "header", Name: "X-Fixed", DefaultCredential: "changed-after-probe"})
 	completeAutoResult(host, probe, validAutoDiscoverResult)
-	business := calloutAt(t, host, 0)
+	business := routedRequest(t, host)
 	assert.Equal(t, "first", mustHeaderValue(t, business.Headers, "X-Fixed"))
 	completeAutoResult(host, business, `{"tools":[],"resultType":"complete"}`)
 }
@@ -456,7 +458,7 @@ func TestAutoMalformedProtocolCandidatesNeverInitialize(t *testing.T) {
 				body = append(append([]byte("["), body...), ']')
 			}
 			completeCallout(host, probe, "400", headers, body)
-			require.NotNil(t, host.GetLocalResponse())
+			require.NotNil(t, proxyTestResponse(host))
 			assert.Empty(t, host.GetHttpCalloutAttributes(), "malformed/modern errors must not authorize a handshake")
 		})
 	}

@@ -1111,6 +1111,10 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config McpServerConfig
 }
 
 func onHttpStreamDone(ctx wrapper.HttpContext, config McpServerConfig) {
+	if exchange, ok := ctx.GetContext(CtxMcpAutoExchange).(*AutoExchange); ok {
+		exchange.closeStream()
+	}
+	finishProxyRequest(ctx)
 	if request, ok := ModernRequestContext(ctx); ok {
 		request.Cancel()
 	}
