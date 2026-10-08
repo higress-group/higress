@@ -573,3 +573,28 @@ func TestCompleteFlow(t *testing.T) {
 		})
 	})
 }
+
+func TestExtraceHttpFrameNoSeparator(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("missing separator does not panic", func(t *testing.T) {
+			require.NotPanics(t, func() {
+				_, _, err := extraceHttpFrame("single line without double newline")
+				require.Error(t, err)
+			})
+		})
+
+		t.Run("empty frame does not panic", func(t *testing.T) {
+			require.NotPanics(t, func() {
+				_, _, err := extraceHttpFrame("")
+				require.Error(t, err)
+			})
+		})
+
+		t.Run("crlf separator parses properly", func(t *testing.T) {
+			headers, body, err := extraceHttpFrame("Header: Value\r\n\r\nBody")
+			require.NoError(t, err)
+			require.Equal(t, [][2]string{{"Header", "Value"}}, headers)
+			require.Equal(t, []byte("Body"), body)
+		})
+	})
+}

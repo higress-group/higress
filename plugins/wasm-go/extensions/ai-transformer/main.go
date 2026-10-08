@@ -79,14 +79,25 @@ func getSplitPos(header string) int {
 }
 
 func extraceHttpFrame(frame string) ([][2]string, []byte, error) {
+	frame = strings.ReplaceAll(frame, "\r\n", "\n")
 	pos := strings.Index(frame, "\n\n")
+	if pos == -1 {
+		return nil, nil, errors.New("invalid http frame: missing header and body separator")
+	}
 	headers := [][2]string{}
-	for _, header := range strings.Split(frame[:pos], "\n") {
-		splitPos := getSplitPos(header)
-		if splitPos == -1 {
-			return nil, nil, errors.New("invalid http frame.")
+	headerSection := frame[:pos]
+	if headerSection != "" {
+		for _, header := range strings.Split(headerSection, "\n") {
+			header = strings.TrimSpace(header)
+			if header == "" {
+				continue
+			}
+			splitPos := getSplitPos(header)
+			if splitPos == -1 {
+				return nil, nil, errors.New("invalid http frame.")
+			}
+			headers = append(headers, [2]string{strings.TrimSpace(header[:splitPos]), strings.TrimSpace(header[splitPos+1:])})
 		}
-		headers = append(headers, [2]string{header[:splitPos], header[splitPos+1:]})
 	}
 	body := []byte(frame[pos+2:])
 	return headers, body, nil
