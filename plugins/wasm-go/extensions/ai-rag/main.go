@@ -119,26 +119,46 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIRagConfig, body []byte,
 	}
 	headers := [][2]string{{"Content-Type", "application/json"}, {"Authorization", "Bearer " + config.DashScopeAPIKey}}
 	reqEmbeddingSerialized, _ := json.Marshal(requestEmbedding)
-	config.DashScopeClient.Post(
+	err := config.DashScopeClient.Post(
 		"/api/v1/services/embeddings/text-embedding/text-embedding",
 		headers,
 		reqEmbeddingSerialized,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			if statusCode != http.StatusOK {
+				log.Errorf("dashscope embedding failed, status code: %d, body: %s", statusCode, string(responseBody))
+				proxywasm.ResumeHttpRequest()
+				return
+			}
 			var responseEmbedding dashscope.Response
-			_ = json.Unmarshal(responseBody, &responseEmbedding)
+			err := json.Unmarshal(responseBody, &responseEmbedding)
+			if err != nil || len(responseEmbedding.Output.Embeddings) == 0 {
+				log.Errorf("unmarshal dashscope embedding failed or empty embeddings, err: %v, body: %s", err, string(responseBody))
+				proxywasm.ResumeHttpRequest()
+				return
+			}
 			requestQuery := dashvector.Request{
 				TopK:         config.DashVectorTopK,
 				OutputFileds: []string{config.DashVectorField},
 				Vector:       responseEmbedding.Output.Embeddings[0].Embedding,
 			}
 			requestQuerySerialized, _ := json.Marshal(requestQuery)
-			config.DashVectorClient.Post(
+			err = config.DashVectorClient.Post(
 				fmt.Sprintf("/v1/collections/%s/query", config.DashVectorCollection),
 				[][2]string{{"Content-Type", "application/json"}, {"dashvector-auth-token", config.DashVectorAPIKey}},
 				requestQuerySerialized,
 				func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+					if statusCode != http.StatusOK {
+						log.Errorf("dashvector query failed, status code: %d, body: %s", statusCode, string(responseBody))
+						proxywasm.ResumeHttpRequest()
+						return
+					}
 					var response dashvector.Response
-					_ = json.Unmarshal(responseBody, &response)
+					err := json.Unmarshal(responseBody, &response)
+					if err != nil {
+						log.Errorf("unmarshal dashvector response failed, err: %v, body: %s", err, string(responseBody))
+						proxywasm.ResumeHttpRequest()
+						return
+					}
 					recallDocIds := []string{}
 					recallDocs := []string{}
 					for _, output := range response.Output {
@@ -162,10 +182,20 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIRagConfig, body []byte,
 					}
 					proxywasm.ResumeHttpRequest()
 				},
+				50000,
 			)
+			if err != nil {
+				log.Errorf("dashvector http call failed, err: %v", err)
+				proxywasm.ResumeHttpRequest()
+				return
+			}
 		},
 		50000,
 	)
+	if err != nil {
+		log.Errorf("dashscope http call failed, err: %v", err)
+		return types.ActionContinue
+	}
 	return types.ActionPause
 }
 

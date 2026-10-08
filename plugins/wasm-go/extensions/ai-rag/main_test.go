@@ -211,6 +211,60 @@ func TestOnHttpRequestBody(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+
+		// 测试DashScope返回错误或者空嵌入向量时不会Panic且能Resume请求
+		t.Run("dashscope error does not panic", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "What is AI?"}]}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionPause, action)
+
+			// 模拟DashScope返回401错误
+			errorResponse := `{"code": "InvalidApiKey", "message": "Requests with invalid API Key"}`
+			require.NotPanics(t, func() {
+				host.CallOnHttpCall([][2]string{
+					{":status", "401"},
+					{"content-type", "application/json"},
+				}, []byte(errorResponse))
+			})
+
+			host.CompleteHttp()
+		})
+
+		t.Run("dashscope empty embeddings does not panic", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "What is AI?"}]}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionPause, action)
+
+			emptyResponse := `{"output": {"embeddings": []}}`
+			require.NotPanics(t, func() {
+				host.CallOnHttpCall([][2]string{
+					{":status", "200"},
+					{"content-type", "application/json"},
+				}, []byte(emptyResponse))
+			})
+
+			host.CompleteHttp()
+		})
 	})
 }
 
