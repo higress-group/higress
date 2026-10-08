@@ -71,7 +71,7 @@ def main():
             with tempfile.TemporaryDirectory(prefix="mcp-routing-source-") as temporary:
                 source = Path(temporary)
                 archive = source / "source.tar"
-                run(["git", "archive", "--format=tar", "--output=" + str(archive), revision, "plugins/wasm-go/pkg/mcp", "plugins/wasm-go/extensions/mcp-server"], cwd=ROOT)
+                run(["git", "archive", "--format=tar", "--output=" + str(archive), revision, "plugins/wasm-go"], cwd=ROOT)
                 with tarfile.open(archive) as bundle: bundle.extractall(source, filter="data")
                 plugin = source / "plugins/wasm-go/extensions/mcp-server"
                 env = dict(os.environ, GOOS="wasip1", GOARCH="wasm")
