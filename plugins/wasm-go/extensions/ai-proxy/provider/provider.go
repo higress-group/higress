@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 
 	"strings"
@@ -1068,27 +1069,45 @@ func doGetMappedModel(model string, modelMapping map[string]string) string {
 		return v
 	}
 
+	// Regex keys carry the most explicit intent, so they take precedence
+	// over wildcard prefixes; they are tried in sorted key order so the
+	// result is stable regardless of map iteration order (#4883).
+	regexKeys := make([]string, 0, len(modelMapping))
+	for k := range modelMapping {
+		if strings.HasPrefix(k, "~") {
+			regexKeys = append(regexKeys, k)
+		}
+	}
+	sort.Strings(regexKeys)
+	for _, k := range regexKeys {
+		pattern := strings.TrimPrefix(k, "~")
+		re := regexp.MustCompile(pattern)
+		if re.MatchString(model) {
+			v := re.ReplaceAllString(model, modelMapping[k])
+			log.Debugf("model [%s] is mapped to [%s] via regex [%s]", model, v, pattern)
+			return v
+		}
+	}
+
+	// Wildcard-prefix keys: the most specific (longest) matching prefix
+	// wins, deterministically. Iterating the map and returning the first
+	// match made the winner random per request when prefixes overlap
+	// (#4883).
+	longestPrefix := ""
+	longestValue := ""
 	for k, v := range modelMapping {
-		if k == wildcard {
+		if k == wildcard || !strings.HasSuffix(k, wildcard) {
 			continue
 		}
-		if strings.HasSuffix(k, wildcard) {
-			k = strings.TrimSuffix(k, wildcard)
-			if strings.HasPrefix(model, k) {
-				log.Debugf("model [%s] is mapped to [%s] via prefix [%s]", model, v, k)
-				return v
-			}
+		prefix := strings.TrimSuffix(k, wildcard)
+		if strings.HasPrefix(model, prefix) && len(prefix) > len(longestPrefix) {
+			longestPrefix = prefix
+			longestValue = v
 		}
-
-		if strings.HasPrefix(k, "~") {
-			k = strings.TrimPrefix(k, "~")
-			re := regexp.MustCompile(k)
-			if re.MatchString(model) {
-				v = re.ReplaceAllString(model, v)
-				log.Debugf("model [%s] is mapped to [%s] via regex [%s]", model, v, k)
-				return v
-			}
-		}
+	}
+	if longestPrefix != "" {
+		log.Debugf("model [%s] is mapped to [%s] via prefix [%s]", model, longestValue, longestPrefix)
+		return longestValue
 	}
 
 	if v, ok := modelMapping[wildcard]; ok {
