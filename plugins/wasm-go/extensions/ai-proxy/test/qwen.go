@@ -878,8 +878,11 @@ func RunQwenOnHttpRequestBodyTests(t *testing.T) {
 			require.NotContains(t, string(processedBody), "\"model\":", "Conversations request should not inject model field")
 		})
 
-		// 测试qwen请求体处理（非兼容模式 responses接口应报不支持）
-		t.Run("qwen non-compatible mode responses request body unsupported", func(t *testing.T) {
+		// DashScope's native protocol has no Responses endpoint. The Responses API
+		// is only exposed by the OpenAI-compatible endpoint on the same host, so a
+		// provider that does not enable compatible mode must still route
+		// /v1/responses to /compatible-mode/v1/responses instead of rejecting it.
+		t.Run("qwen non-compatible mode responses request", func(t *testing.T) {
 			host, status := test.NewTestHost(basicQwenConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -895,16 +898,32 @@ func RunQwenOnHttpRequestBodyTests(t *testing.T) {
 			requestHeaders := host.GetRequestHeaders()
 			require.NotNil(t, requestHeaders)
 
+			// Even without compatible mode the Responses request must be rewritten
+			// to the compatible endpoint, otherwise it would be sent to
+			// dashscope.aliyuncs.com/v1/responses, which DashScope does not serve.
 			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
 			require.True(t, hasPath)
-			require.Contains(t, pathValue, "/v1/responses", "Path should remain unchanged when responses is unsupported")
+			require.Contains(t, pathValue, "/compatible-mode/v1/responses", "Responses request should use the compatible endpoint")
 
-			requestBody := `{"model":"qwen-turbo","input":"test"}`
+			hostValue, hasHost := test.GetHeaderValue(requestHeaders, ":authority")
+			require.True(t, hasHost)
+			require.Equal(t, "dashscope.aliyuncs.com", hostValue, "Responses request should still target the DashScope host")
+
+			authValue, hasAuth := test.GetHeaderValue(requestHeaders, "Authorization")
+			require.True(t, hasAuth)
+			require.Contains(t, authValue, "Bearer sk-qwen-test123456789", "Responses request should carry the configured api token")
+
+			requestBody := `{"model":"gpt-4o","input":"test"}`
 			bodyAction := host.CallOnHttpRequestBody([]byte(requestBody))
 			require.Equal(t, types.ActionContinue, bodyAction)
 
+			processedBody := host.GetRequestBody()
+			require.NotNil(t, processedBody)
+			require.Contains(t, string(processedBody), "\"model\":\"qwen-turbo\"", "Responses request model should be mapped")
+			require.Contains(t, string(processedBody), "\"input\":\"test\"", "Responses request input should be preserved")
+
 			hasUnsupportedErr := hasUnsupportedAPINameError(host.GetErrorLogs())
-			require.True(t, hasUnsupportedErr, "Should log unsupported API name for non-compatible responses")
+			require.False(t, hasUnsupportedErr, "Responses API must be supported for the non-compatible qwen provider")
 		})
 
 		// 覆盖 qwen.GetApiName 中以下分支：
@@ -1350,6 +1369,54 @@ func RunQwenOnHttpResponseBodyTests(t *testing.T) {
 			require.Contains(t, responseStr, "\"object\": \"response\"", "Responses API payload should be passthrough in compatible mode")
 			require.Contains(t, responseStr, "\"text\": \"hello\"", "Assistant content should be preserved")
 		})
+
+		// Non-compatible mode must still pass the Responses payload through
+		// untouched: the compatible endpoint already returns OpenAI-shaped data,
+		// so any native-protocol conversion here would corrupt the response.
+		t.Run("qwen non-compatible mode responses response body", func(t *testing.T) {
+			host, status := test.NewTestHost(basicQwenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/responses"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"qwen-turbo","input":"test"}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			responseHeaders := [][2]string{
+				{":status", "200"},
+				{"Content-Type", "application/json"},
+			}
+			host.CallOnHttpResponseHeaders(responseHeaders)
+
+			responseBody := `{
+				"id": "resp-noncompat-123",
+				"object": "response",
+				"status": "completed",
+				"output": [{
+					"type": "message",
+					"role": "assistant",
+					"content": [{
+						"type": "output_text",
+						"text": "non-compatible passthrough"
+					}]
+				}]
+			}`
+			action := host.CallOnHttpResponseBody([]byte(responseBody))
+			require.Equal(t, types.ActionContinue, action)
+
+			processedResponseBody := host.GetResponseBody()
+			require.NotNil(t, processedResponseBody)
+			responseStr := string(processedResponseBody)
+			require.Contains(t, responseStr, "\"object\": \"response\"", "Responses API payload should be passed through without native conversion")
+			require.Contains(t, responseStr, "non-compatible passthrough", "Assistant content should be preserved")
+			require.False(t, hasUnsupportedAPINameError(host.GetErrorLogs()), "Responses API must be supported for the non-compatible qwen provider")
+		})
 	})
 }
 
@@ -1574,6 +1641,46 @@ func RunQwenOnStreamingResponseBodyTests(t *testing.T) {
 				}
 			}
 			require.True(t, hasMultimodalLogs, "Should have multimodal streaming response processing logs")
+		})
+
+		// A streaming Responses request has to stream through unchanged as well.
+		// In non-compatible mode the qwen provider must not try to translate the
+		// SSE events (which are OpenAI Responses events) into the native protocol.
+		t.Run("qwen non-compatible mode responses streaming response body", func(t *testing.T) {
+			host, status := test.NewTestHost(basicQwenConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/responses"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			requestBody := `{"model":"qwen-turbo","input":"test","stream":true}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"Content-Type", "text/event-stream"},
+			})
+
+			streamChunks := []string{
+				`data: {"type":"response.output_text.delta","delta":"Hel"}`,
+				`data: {"type":"response.output_text.delta","delta":"lo"}`,
+				`data: {"type":"response.completed","response":{"id":"resp-1","object":"response","status":"completed"}}`,
+				`data: [DONE]`,
+			}
+			for _, chunk := range streamChunks {
+				action := host.CallOnHttpStreamingResponseBody([]byte(chunk+"\n\n"), false)
+				require.Equal(t, types.ActionContinue, action)
+				require.Contains(t, string(host.GetResponseBody()), chunk, "Responses SSE chunk should be forwarded unchanged")
+			}
+
+			action := host.CallOnHttpStreamingResponseBody([]byte{}, true)
+			require.Equal(t, types.ActionContinue, action)
+			require.False(t, hasUnsupportedAPINameError(host.GetErrorLogs()), "Responses streaming must be supported for the non-compatible qwen provider")
 		})
 	})
 }
