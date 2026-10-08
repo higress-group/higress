@@ -445,7 +445,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config TransformerConfig, body [
 	var hs map[string][]string
 	var qs map[string][]string
 
-	hs = ctx.GetContext("headers").(map[string][]string)
+	hs, _ = ctx.GetContext("headers").(map[string][]string)
 	if hs == nil {
 		log.Warn("failed to get request headers")
 		return types.ActionContinue
@@ -463,7 +463,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config TransformerConfig, body [
 		kvs:           hs,
 	}
 
-	qs = ctx.GetContext("querys").(map[string][]string)
+	qs, _ = ctx.GetContext("querys").(map[string][]string)
 	if qs == nil {
 		log.Warn("failed to get request querys")
 		return types.ActionContinue
@@ -473,16 +473,18 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config TransformerConfig, body [
 		kvs:           qs,
 	}
 
-	switch structuredBody.(type) {
+	switch sb := structuredBody.(type) {
 	case map[string]interface{}:
-		mapSourceData["body"] = MapSourceData{
-			mapSourceType: "bodyJson",
-			json:          structuredBody.(map[string]interface{})["body"].([]byte),
+		if bodyBytes, ok := sb["body"].([]byte); ok {
+			mapSourceData["body"] = MapSourceData{
+				mapSourceType: "bodyJson",
+				json:          bodyBytes,
+			}
 		}
 	case map[string][]string:
 		mapSourceData["body"] = MapSourceData{
 			mapSourceType: "bodyKv",
-			kvs:           structuredBody.(map[string][]string),
+			kvs:           sb,
 		}
 	}
 
@@ -633,7 +635,7 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config TransformerConfig, body 
 	mapSourceData := make(map[string]MapSourceData)
 	var hs map[string][]string
 
-	hs = ctx.GetContext("headers").(map[string][]string)
+	hs, _ = ctx.GetContext("headers").(map[string][]string)
 	if hs == nil {
 		log.Warn("failed to get response headers")
 		return types.ActionContinue
@@ -643,16 +645,18 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config TransformerConfig, body 
 		kvs:           hs,
 	}
 
-	switch structuredBody.(type) {
+	switch sb := structuredBody.(type) {
 	case map[string]interface{}:
-		mapSourceData["body"] = MapSourceData{
-			mapSourceType: "bodyJson",
-			json:          structuredBody.(map[string]interface{})["body"].([]byte),
+		if bodyBytes, ok := sb["body"].([]byte); ok {
+			mapSourceData["body"] = MapSourceData{
+				mapSourceType: "bodyJson",
+				json:          bodyBytes,
+			}
 		}
 	case map[string][]string:
 		mapSourceData["body"] = MapSourceData{
 			mapSourceType: "bodyKv",
-			kvs:           structuredBody.(map[string][]string),
+			kvs:           sb,
 		}
 	}
 
@@ -815,7 +819,11 @@ func (t requestTransformer) TransformBody(host, path string, body interface{}, m
 
 	case map[string]interface{}:
 		m := body.(map[string]interface{})
-		newBody, err := t.bodyHandler.handle(host, path, m["body"].([]byte), mapSourceData)
+		bodyBytes, ok := m["body"].([]byte)
+		if !ok {
+			return errBodyType
+		}
+		newBody, err := t.bodyHandler.handle(host, path, bodyBytes, mapSourceData)
 		if err != nil {
 			return err
 		}
@@ -875,7 +883,11 @@ func (t responseTransformer) TransformBody(host, path string, body interface{}, 
 	switch body.(type) {
 	case map[string]interface{}:
 		m := body.(map[string]interface{})
-		newBody, err := t.bodyHandler.handle(host, path, m["body"].([]byte), mapSourceData)
+		bodyBytes, ok := m["body"].([]byte)
+		if !ok {
+			return errBodyType
+		}
+		newBody, err := t.bodyHandler.handle(host, path, bodyBytes, mapSourceData)
 		if err != nil {
 			return err
 		}
@@ -988,8 +1000,10 @@ func (h kvHandler) handle(host, path string, kvs map[string][]string, mapSourceD
 				if fromValue, ok := source.search(fromKey); ok {
 					switch source.mapSourceType {
 					case "headers", "querys", "bodyKv":
-						kvs[toKey] = fromValue.([]string)
-						proxywasm.LogDebugf("map key:%s to key:%s success, value is: %v", fromKey, toKey, fromValue)
+						if vals, ok := fromValue.([]string); ok {
+							kvs[toKey] = vals
+							proxywasm.LogDebugf("map key:%s to key:%s success, value is: %v", fromKey, toKey, fromValue)
+						}
 
 					case "bodyJson":
 						if valueJson, ok := fromValue.(gjson.Result); ok {

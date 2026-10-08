@@ -247,6 +247,18 @@ func TestConstructBody(t *testing.T) {
 			body:      map[string]interface{}{"body": []byte{}},
 			expected:  []byte{},
 		},
+		{
+			name:      "invalid body type for application/json",
+			mediaType: "application/json",
+			body:      "invalid string body",
+			errMsg:    errBodyType.Error(),
+		},
+		{
+			name:      "invalid body content for application/json",
+			mediaType: "application/json",
+			body:      map[string]interface{}{"body": 123},
+			errMsg:    errBodyType.Error(),
+		},
 	}
 
 	for _, c := range cases {

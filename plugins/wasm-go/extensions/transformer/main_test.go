@@ -21,6 +21,7 @@ import (
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1080,5 +1081,91 @@ func TestParseConfig_InvalidRegexRejected(t *testing.T) {
 		}))
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusFailed, status)
+	})
+}
+
+func TestTransformBody_InvalidBodyTypeDoesNotPanic(t *testing.T) {
+	reqTrans, err := newRequestTransformer(&TransformerConfig{})
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		err = reqTrans.TransformBody("test.com", "/path", map[string]interface{}{"body": "not-bytes"}, nil)
+		require.Error(t, err)
+	})
+
+	respTrans, err := newResponseTransformer(&TransformerConfig{})
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		err = respTrans.TransformBody("test.com", "/path", map[string]interface{}{"body": "not-bytes"}, nil)
+		require.Error(t, err)
+	})
+}
+
+type mockTransformerContext struct {
+	wrapper.HttpContext
+	data map[string]interface{}
+}
+
+func (m *mockTransformerContext) GetContext(key string) interface{} {
+	return m.data[key]
+}
+
+func (m *mockTransformerContext) SetContext(key string, value interface{}) {
+	m.data[key] = value
+}
+
+type dummyLog struct{}
+
+func (d dummyLog) Trace(msg string)                             {}
+func (d dummyLog) Tracef(format string, args ...interface{})    {}
+func (d dummyLog) Debug(msg string)                             {}
+func (d dummyLog) Debugf(format string, args ...interface{})    {}
+func (d dummyLog) Info(msg string)                              {}
+func (d dummyLog) Infof(format string, args ...interface{})     {}
+func (d dummyLog) Warn(msg string)                              {}
+func (d dummyLog) Warnf(format string, args ...interface{})     {}
+func (d dummyLog) Error(msg string)                             {}
+func (d dummyLog) Errorf(format string, args ...interface{})    {}
+func (d dummyLog) Critical(msg string)                          {}
+func (d dummyLog) Criticalf(format string, args ...interface{}) {}
+func (d dummyLog) ResetID(pluginID string)                      {}
+
+func TestOnHttpRequestBodyAndResponse_NilHeadersDoesNotPanic(t *testing.T) {
+	reqTrans, err := newRequestTransformer(&TransformerConfig{})
+	require.NoError(t, err)
+
+	respTrans, err := newResponseTransformer(&TransformerConfig{})
+	require.NoError(t, err)
+
+	cfg := TransformerConfig{
+		reqTrans:  reqTrans,
+		respTrans: respTrans,
+	}
+
+	// 1. onHttpRequestBody with missing "headers" or "querys" in context
+	ctx := &mockTransformerContext{
+		data: map[string]interface{}{
+			"host":         "example.com",
+			"path":         "/test",
+			"content-type": "application/json",
+		},
+	}
+	require.NotPanics(t, func() {
+		action := onHttpRequestBody(ctx, cfg, []byte(`{"k":"v"}`), dummyLog{})
+		require.Equal(t, types.ActionContinue, action)
+	})
+
+	// 2. onHttpResponseBody with missing "headers" in context
+	ctxResp := &mockTransformerContext{
+		data: map[string]interface{}{
+			"host":         "example.com",
+			"path":         "/test",
+			"content-type": "application/json",
+		},
+	}
+	require.NotPanics(t, func() {
+		action := onHttpResponseBody(ctxResp, cfg, []byte(`{"k":"v"}`), dummyLog{})
+		require.Equal(t, types.ActionContinue, action)
 	})
 }

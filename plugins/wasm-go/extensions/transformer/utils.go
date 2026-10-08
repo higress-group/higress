@@ -159,7 +159,11 @@ func constructBody(contentType string, body interface{}) ([]byte, error) {
 	}
 	switch typ {
 	case ContentTypeApplicationJson:
-		bd, ok := body.(map[string]interface{})["body"].([]byte)
+		m, ok := body.(map[string]interface{})
+		if !ok {
+			return nil, errBodyType
+		}
+		bd, ok := m["body"].([]byte)
 		if !ok {
 			return nil, errBodyType
 		}
