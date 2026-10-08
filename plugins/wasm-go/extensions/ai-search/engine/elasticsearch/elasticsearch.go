@@ -2,6 +2,7 @@ package elasticsearch
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -104,7 +105,7 @@ func (e ElasticsearchSearch) generateQueryBody(ctx engine.SearchContext) string 
 	queryText := strings.Join(ctx.Querys, " ")
 	return fmt.Sprintf(`{
         "_source":{
-            "excludes": "%s"
+            "excludes": %s
         },
 		"retriever": {
 			"rrf": {
@@ -113,7 +114,7 @@ func (e ElasticsearchSearch) generateQueryBody(ctx engine.SearchContext) string 
 						"standard": { 
 							"query": {
 								"match": {
-									"%s": "%s" 
+									%s: %s 
 								}
 							}
 						}
@@ -122,8 +123,8 @@ func (e ElasticsearchSearch) generateQueryBody(ctx engine.SearchContext) string 
 						"standard": { 
 							"query": {
 								"semantic": {
-									"field": "%s", 
-									"query": "%s"
+									"field": %s, 
+									"query": %s
 								}
 							}
 						}
@@ -131,7 +132,21 @@ func (e ElasticsearchSearch) generateQueryBody(ctx engine.SearchContext) string 
 				]
 			}
 		}
-	}`, e.semanticTextField, e.contentField, queryText, e.semanticTextField, queryText)
+	}`, quoteJSONString(e.semanticTextField), quoteJSONString(e.contentField), quoteJSONString(queryText), quoteJSONString(e.semanticTextField), quoteJSONString(queryText))
+}
+
+// quoteJSONString renders s as a JSON string literal, so that an
+// operator-configured field name or the query text cannot terminate the
+// surrounding JSON document or be reinterpreted through JSON escape
+// sequences.
+func quoteJSONString(s string) string {
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		// json.Marshal of a string cannot fail; keep the document well-formed
+		// if that ever changes.
+		return `""`
+	}
+	return string(encoded)
 }
 
 func (e ElasticsearchSearch) CallArgs(ctx engine.SearchContext) engine.CallArgs {
