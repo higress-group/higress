@@ -23,13 +23,19 @@ func ParseIPNet(key string) (*iptree.IPTree, error) {
 
 // ParseIP 解析IP
 func ParseIP(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return ""
+	}
+	if strings.HasPrefix(source, "[") {
+		if end := strings.IndexByte(source, ']'); end > 1 {
+			return source[1:end]
+		}
+		return source
+	}
 	if strings.Contains(source, ".") {
 		// parse ipv4
 		return strings.Split(source, ":")[0]
-	}
-	// parse ipv6
-	if strings.Contains(source, "]") {
-		return strings.Split(source, "]")[0][1:]
 	}
 	return source
 }
