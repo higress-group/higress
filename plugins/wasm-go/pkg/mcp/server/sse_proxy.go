@@ -549,7 +549,7 @@ func applyProxyAuthenticationForSSE(server *McpProxyServer, schemeID string, pas
 	// Create authentication context
 	authCtx := AuthRequestContext{
 		Method:                "POST",
-		Headers:               *headers,
+		Headers:               nil,
 		ParsedURL:             parsedURL,
 		RequestBody:           []byte{},
 		PassthroughCredential: passthroughCredential,
@@ -569,7 +569,9 @@ func applyProxyAuthenticationForSSE(server *McpProxyServer, schemeID string, pas
 	}
 
 	// Update headers
-	*headers = authCtx.Headers
+	for _, header := range authCtx.Headers {
+		ensureHeader(headers, header[0], header[1])
+	}
 
 	// Reconstruct URL
 	u := authCtx.ParsedURL

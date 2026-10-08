@@ -34,11 +34,17 @@ def main():
     args = parser.parse_args()
     out = Path(args.output).resolve()
     out.mkdir(parents=True, exist_ok=False)
+    # Every subprocess and container consumes this immutable invocation copy.
+    # Editing the checkout while a long run is active cannot mix fixture inputs.
+    harness = out / "harness"
+    harness.mkdir()
+    for name in ("run-routing.sh", "run_routing.py", "routing_fixture.py", "routing_backend.py", "verify_routing.py"):
+        shutil.copyfile(HERE / name, harness / name)
     log = open(out / "commands.jsonl", "w")
     prefix = "mcp-routing-" + uuid.uuid4().hex[:10]
     resources = []
     manifest = {"harness_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-                "fixtures": {p.name: sha(p) for p in sorted(HERE.glob("*routing*")) if p.is_file()}, "versions": {}, "images": {}, "resource_prefix": prefix}
+                "fixtures": {p.name: sha(p) for p in sorted(harness.iterdir()) if p.is_file()}, "versions": {}, "images": {}, "resource_prefix": prefix}
 
     def run(command, *, cwd=None, env=None, allow_failure=False, target=None):
         begin = time.time()
@@ -76,8 +82,10 @@ def main():
                 plugin = source / "plugins/wasm-go/extensions/mcp-server"
                 env = dict(os.environ, GOOS="wasip1", GOARCH="wasm")
                 run(["go", "build", "-trimpath", "-buildmode=c-shared", "-o", str(variant_out / "plugin.wasm"), "."], cwd=plugin, env=env, target=variant_out / "build.log")
-                manifest["versions"][variant] = {"source": revision, "wasm_sha256": sha(variant_out / "plugin.wasm"), "go_mod_sha256": sha(plugin / "go.mod")}
-            run([sys.executable, str(HERE / "routing_fixture.py"), str(variant_out / "envoy.json")])
+                run(["go", "list", "-m", "-json", "all"], cwd=plugin, target=variant_out / "modules.json")
+                manifest["versions"][variant] = {"source": revision, "wasm_sha256": sha(variant_out / "plugin.wasm"),
+                    "module_files": {str(p.relative_to(source)): sha(p) for p in sorted(source.rglob("go.*")) if p.name in ("go.mod", "go.sum")}}
+            run([sys.executable, str(harness / "routing_fixture.py"), str(variant_out / "envoy.json")])
             manifest["versions"][variant]["envoy_sha256"] = sha(variant_out / "envoy.json")
             network = prefix + "-" + variant
             run([args.engine, "network", "create", network]); resources.append(("network", network))
@@ -86,7 +94,7 @@ def main():
                 for name in ("backend", "backend-alt", "wrong"):
                     container = network + "-" + name
                     run([args.engine, "run", "-d", "--name", container, "--network", network, "--network-alias", name,
-                         "-v", str(HERE) + ":/harness:ro", "-v", str(variant_out) + ":/evidence", "-e", "BACKEND_ID=" + name,
+                         "-v", str(harness) + ":/harness:ro", "-v", str(variant_out) + ":/evidence", "-e", "BACKEND_ID=" + name,
                          backend, "python", "/harness/routing_backend.py"])
                     resources.append(("container", container)); names.append(container)
                 container = network + "-gateway"
@@ -94,7 +102,7 @@ def main():
                      "-v", str(variant_out) + ":/evidence:ro", "--entrypoint", "/usr/local/bin/envoy", gateway,
                      "-c", "/evidence/envoy.json", "--concurrency", "1", "--log-level", "info"])
                 resources.append(("container", container)); names.append(container)
-                run([args.engine, "run", "--rm", "--network", network, "-v", str(HERE) + ":/harness:ro", "-v", str(variant_out) + ":/evidence",
+                run([args.engine, "run", "--rm", "--network", network, "-v", str(harness) + ":/harness:ro", "-v", str(variant_out) + ":/evidence",
                      "-e", "ROUTING_VARIANT=" + variant, backend, "python", "/harness/verify_routing.py"], allow_failure=True, target=variant_out / "verify.log")
                 rows = json.loads((variant_out / "assertions.json").read_text())
                 success = all(row["pass"] for row in rows) and success

@@ -11,6 +11,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -75,12 +76,20 @@ func routeProxyBusiness(ctx wrapper.HttpContext, target string, headers [][2]str
 	if err != nil {
 		return errors.New("failed to read MCP request headers")
 	}
+	headers = routedHeaderOverrides(original, headers)
 	for _, header := range original {
 		name := strings.ToLower(header[0])
 		if !strings.HasPrefix(name, ":") && name != "host" && reservedProxyHeader(name) {
 			if err := proxywasm.RemoveHttpRequestHeader(header[0]); err != nil {
 				return errors.New("failed to remove consumed MCP header")
 			}
+		}
+	}
+	// Remove all inherited instances of fields that are intentionally replaced,
+	// including credential overrides. Unchanged ordinary headers stay in place.
+	for _, header := range headers {
+		if err := proxywasm.RemoveHttpRequestHeader(header[0]); err != nil {
+			return errors.New("failed to replace MCP outbound header")
 		}
 	}
 	err = ctx.RouteCall(http.MethodPost, target, headers, body, func(status int, headers [][2]string, body []byte) {
@@ -122,4 +131,26 @@ func routeProxyBusiness(ctx wrapper.HttpContext, target string, headers [][2]str
 	e.submitted = true
 	ctx.SetContext(utils.CtxNeedPause, false)
 	return nil
+}
+
+// RouteCall applies Replace for each pair. Ordinary headers already live on the
+// original request, so passing them again would collapse repeated values. Only
+// operation identity and values changed by upstream authentication need a set.
+func routedHeaderOverrides(original, outbound [][2]string) [][2]string {
+	values := func(headers [][2]string, name string) []string {
+		var result []string
+		for _, header := range headers {
+			if strings.EqualFold(header[0], name) {
+				result = append(result, header[1])
+			}
+		}
+		return result
+	}
+	var overrides [][2]string
+	for _, header := range outbound {
+		if reservedProxyHeader(strings.ToLower(header[0])) || !slices.Equal(values(original, header[0]), values(outbound, header[0])) {
+			overrides = append(overrides, header)
+		}
+	}
+	return overrides
 }

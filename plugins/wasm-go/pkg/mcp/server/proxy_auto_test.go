@@ -463,3 +463,19 @@ func TestAutoMalformedProtocolCandidatesNeverInitialize(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoRoutedCredentialOverridesDuplicatesAndPreservesOrdinaryDuplicates(t *testing.T) {
+	host := newAutoTestHost(t, `,"securitySchemes":[{"id":"fixed","type":"apiKey","in":"header","name":"X-Upstream-Key","defaultCredential":"synthetic-configured"}],"defaultUpstreamSecurity":{"id":"fixed"}`)
+	probe := autoStartList(t, host, 161,
+		[2]string{"X-Upstream-Key", "first-client"}, [2]string{"x-upstream-key", "second-client"},
+		[2]string{"X-Custom", "a"}, [2]string{"x-custom", "b"})
+	assert.Equal(t, 1, countHeader(probe.Headers, "X-Upstream-Key"))
+	assert.Equal(t, "synthetic-configured", mustHeaderValue(t, probe.Headers, "X-Upstream-Key"))
+	completeAutoResult(host, probe, validAutoDiscoverResult)
+	business := routedRequest(t, host)
+	assert.Equal(t, 1, countHeader(business.Headers, "X-Upstream-Key"))
+	assert.Equal(t, "synthetic-configured", mustHeaderValue(t, business.Headers, "X-Upstream-Key"))
+	assert.Equal(t, 2, countHeader(business.Headers, "X-Custom"))
+	completeAutoResult(host, business, `{"tools":[],"resultType":"complete"}`)
+	require.NotNil(t, proxyTestResponse(host))
+}

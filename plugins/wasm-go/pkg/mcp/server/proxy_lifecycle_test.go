@@ -92,3 +92,35 @@ func TestProxyCancellationAndCompletionRace(t *testing.T) {
 		assert.True(t, e.closed)
 	}
 }
+
+func TestRoutedOrdinaryDuplicatesRemainOnOriginalRequest(t *testing.T) {
+	original := [][2]string{{"X-Custom", "a"}, {"x-custom", "b"}, {"X-Key", "client-1"}, {"x-key", "client-2"}}
+	outbound := [][2]string{{"X-Custom", "a"}, {"x-custom", "b"}, {"X-Key", "configured"}, {"Content-Type", "application/json"}}
+	assert.Equal(t, [][2]string{{"X-Key", "configured"}, {"Content-Type", "application/json"}}, routedHeaderOverrides(original, outbound))
+}
+
+func TestProxyCredentialsReplaceEveryInheritedOccurrence(t *testing.T) {
+	server := NewMcpProxyServer("credentials")
+	server.AddSecurityScheme(SecurityScheme{ID: "key", Type: "apiKey", In: "header", Name: "X-Upstream-Key", DefaultCredential: "synthetic-configured"})
+	original := [][2]string{{"X-Upstream-Key", "first-client"}, {"x-upstream-key", "second-client"}, {"X-Custom", "a"}, {"x-custom", "b"}}
+	for _, mode := range []string{"http", "auto", "sse"} {
+		t.Run(mode, func(t *testing.T) {
+			headers := append([][2]string(nil), original...)
+			switch mode {
+			case "http":
+				h := NewMcpProtocolHandler("http://backend/mcp", 0)
+				_, err := h.applyProxyAuthentication(server, "key", "", &headers)
+				require.NoError(t, err)
+			case "sse":
+				_, err := applyProxyAuthenticationForSSE(server, "key", "", &headers, "http://backend/mcp")
+				require.NoError(t, err)
+			case "auto":
+				prepared := &PreparedProxyRequest{forwardHeaders: headers, authHeaders: [][2]string{{"X-Upstream-Key", "synthetic-configured"}}}
+				headers = prepared.headers(OutboundOperation{method: "tools/call"})
+			}
+			assert.Equal(t, 1, countHeader(headers, "X-Upstream-Key"))
+			assert.Equal(t, "synthetic-configured", mustHeaderValue(t, headers, "X-Upstream-Key"))
+			assert.Equal(t, 2, countHeader(headers, "X-Custom"), "unrelated ordinary duplicates remain ordered")
+		})
+	}
+}

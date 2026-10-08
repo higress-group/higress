@@ -1283,7 +1283,7 @@ func (h *McpProtocolHandler) applyProxyAuthentication(server *McpProxyServer, sc
 	// Create authentication context
 	authCtx := AuthRequestContext{
 		Method:                "POST",
-		Headers:               *headers,
+		Headers:               nil,
 		ParsedURL:             parsedURL,
 		RequestBody:           []byte{}, // Not used for header/query auth
 		PassthroughCredential: passthroughCredential,
@@ -1304,7 +1304,11 @@ func (h *McpProtocolHandler) applyProxyAuthentication(server *McpProxyServer, sc
 	}
 
 	// Update headers with authentication applied
-	*headers = authCtx.Headers
+	// Resolve credentials separately so a duplicate inherited header cannot
+	// override the selected credential in RouteCall or an HTTP callout.
+	for _, header := range authCtx.Headers {
+		ensureHeader(headers, header[0], header[1])
+	}
 
 	// Reconstruct URL from potentially modified ParsedURL (similar to rest_server.go logic)
 	u := authCtx.ParsedURL
@@ -1605,17 +1609,22 @@ func copyHeadersForStreamableHTTP(ctx wrapper.HttpContext) [][2]string {
 
 // ensureHeader ensures a header is set to a specific value, replacing if it exists
 func ensureHeader(headers *[][2]string, key, value string) {
-	keyLower := strings.ToLower(key)
-	// Check if header already exists
-	for i, h := range *headers {
-		if strings.ToLower(h[0]) == keyLower {
-			// Replace existing header
-			(*headers)[i] = [2]string{key, value}
-			return
+	result := (*headers)[:0]
+	replaced := false
+	for _, header := range *headers {
+		if strings.EqualFold(header[0], key) {
+			if !replaced {
+				result = append(result, [2]string{key, value})
+				replaced = true
+			}
+			continue
 		}
+		result = append(result, header)
 	}
-	// Header doesn't exist, add it
-	*headers = append(*headers, [2]string{key, value})
+	if !replaced {
+		result = append(result, [2]string{key, value})
+	}
+	*headers = result
 }
 
 // copyAndCleanHeadersForSSE copies original request headers and cleans them for SSE GET request
