@@ -890,3 +890,42 @@ func TestExtractJson(t *testing.T) {
 		require.Contains(t, err.Error(), "invalid character 'S' after top-level value")
 	})
 }
+
+type noopLog struct{}
+
+func (noopLog) Trace(string)                     {}
+func (noopLog) Tracef(string, ...interface{})    {}
+func (noopLog) Debug(string)                     {}
+func (noopLog) Debugf(string, ...interface{})    {}
+func (noopLog) Info(string)                      {}
+func (noopLog) Infof(string, ...interface{})     {}
+func (noopLog) Warn(string)                      {}
+func (noopLog) Warnf(string, ...interface{})     {}
+func (noopLog) Error(string)                     {}
+func (noopLog) Errorf(string, ...interface{})    {}
+func (noopLog) Critical(string)                  {}
+func (noopLog) Criticalf(string, ...interface{}) {}
+func (noopLog) ResetID(string)                   {}
+
+func TestSaveBodyToHistMsg_NilMessageInChoices(t *testing.T) {
+	ctx := &RequestContext{}
+	reqBody := []byte(`{"messages":[{"role":"user","content":"hello"}]}`)
+	// choices without message field
+	respBody := []byte(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"hi"}}]}`)
+
+	require.NotPanics(t, func() {
+		ctx.SaveBodyToHistMsg(noopLog{}, reqBody, respBody)
+	})
+	require.Len(t, ctx.HistoryMessages, 1)
+	require.Equal(t, "user", ctx.HistoryMessages[0].Role)
+	require.Equal(t, "hello", ctx.HistoryMessages[0].Content)
+
+	// choices with valid message
+	ctx2 := &RequestContext{}
+	respBody2 := []byte(`{"id":"chatcmpl-2","choices":[{"index":0,"message":{"role":"assistant","content":"world"}}]}`)
+	require.NotPanics(t, func() {
+		ctx2.SaveBodyToHistMsg(noopLog{}, reqBody, respBody2)
+	})
+	require.Len(t, ctx2.HistoryMessages, 2)
+	require.Equal(t, "world", ctx2.HistoryMessages[1].Content)
+}
