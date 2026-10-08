@@ -668,6 +668,57 @@ func TestOnHttpRequestBody(t *testing.T) {
 			// 完成HTTP请求
 			host.CompleteHttp()
 		})
+
+		// 测试负数查询参数不会导致切片越界 panic
+		t.Run("query history with negative cnt", func(t *testing.T) {
+			host, status := test.NewTestHost(basicRedisConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/ai-history/query?cnt=-1"},
+				{":method", "GET"},
+				{"content-type", "application/json"},
+				{"authorization", "Bearer user123"},
+			})
+
+			requestBody := `{"messages":[{"role":"user","content":"查询历史"}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionPause, action)
+
+			cacheResponse := `[{"role":"user","content":"问题1"},{"role":"assistant","content":"回答1"}]`
+			resp := test.CreateRedisRespString(cacheResponse)
+
+			require.NotPanics(t, func() {
+				host.CallOnRedisCall(0, resp)
+			})
+		})
+
+		t.Run("fill history with negative fill_history_cnt", func(t *testing.T) {
+			host, status := test.NewTestHost(basicRedisConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat?fill_history_cnt=-1"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+				{"authorization", "Bearer user123"},
+			})
+
+			requestBody := `{"messages":[{"role":"user","content":"最新问题"}]}`
+			action := host.CallOnHttpRequestBody([]byte(requestBody))
+			require.Equal(t, types.ActionPause, action)
+
+			cacheResponse := `[{"role":"user","content":"问题1"},{"role":"assistant","content":"回答1"}]`
+			resp := test.CreateRedisRespString(cacheResponse)
+
+			require.NotPanics(t, func() {
+				host.CallOnRedisCall(0, resp)
+			})
+		})
 	})
 }
 
@@ -882,5 +933,25 @@ func TestOnHttpStreamResponseBody(t *testing.T) {
 			// 应该返回ActionContinue
 			require.Equal(t, types.ActionContinue, action)
 		})
+	})
+}
+
+func TestFillHistory_NegativeCount(t *testing.T) {
+	chat := []ChatHistory{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "world"},
+	}
+	currMessage := []ChatHistory{
+		{Role: "user", Content: "question"},
+	}
+
+	require.NotPanics(t, func() {
+		res := fillHistory(chat, currMessage, -1)
+		require.Equal(t, currMessage, res)
+	})
+
+	require.NotPanics(t, func() {
+		res := fillHistory(chat, currMessage, -10)
+		require.Equal(t, currMessage, res)
 	})
 }

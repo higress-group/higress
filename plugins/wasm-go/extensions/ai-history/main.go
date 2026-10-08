@@ -231,7 +231,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		path := ctx.Path()
 		if isQueryHistory(path) {
 			cnt := getIntQueryParameter("cnt", path, len(chat)/2) * 2
-			if cnt > len(chat) {
+			if cnt < 0 {
+				cnt = 0
+			} else if cnt > len(chat) {
 				cnt = len(chat)
 			}
 			chat = chat[len(chat)-cnt:]
@@ -245,6 +247,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 			return
 		}
 		fillHistoryCnt := getIntQueryParameter("fill_history_cnt", path, config.FillHistoryCnt) * 2
+		if fillHistoryCnt < 0 {
+			fillHistoryCnt = 0
+		}
 		currJson := bodyJson.Get("messages").String()
 		var currMessage []ChatHistory
 		err = json.Unmarshal([]byte(currJson), &currMessage)
@@ -289,7 +294,9 @@ func fillHistory(chat []ChatHistory, currMessage []ChatHistory, fillHistoryCnt i
 	if userInputCnt > 1 {
 		return currMessage
 	}
-	if fillHistoryCnt > len(chat) {
+	if fillHistoryCnt < 0 {
+		fillHistoryCnt = 0
+	} else if fillHistoryCnt > len(chat) {
 		fillHistoryCnt = len(chat)
 	}
 	finalChat := append(chat[len(chat)-fillHistoryCnt:], currMessage...)
