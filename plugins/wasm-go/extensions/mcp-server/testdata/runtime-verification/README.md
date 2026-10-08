@@ -677,3 +677,50 @@ payloads into this environment. Evidence includes response bodies, request
 metadata, backend routing facts, and logs; inspect it before sharing. Keep
 evidence outside the repository, do not commit generated files, and use
 `RUNTIME_ALLOW_DIRTY=1` only for disposable development diagnosis.
+
+## Routing compatibility (#4597)
+
+The independent `run-routing.sh` suite leaves the REST schema and auto regression
+baselines untouched. It builds three immutable Git snapshots with the same local
+Go toolchain, fixture files and pinned gateway/Python images. Containers run
+sequentially in invocation-owned networks; failure still retains evidence and
+removes only those containers/networks. The output directory must not exist.
+
+```bash
+./run-routing.sh \
+  --oracle 958b5e7f8e0062d1e26963d008e7be4b707fa715 \
+  --affected bda81f1067e1285775e650644a20a635f51b0a6d \
+  --candidate "$(git rev-parse HEAD)" \
+  --gateway-image "$ROUTING_GATEWAY_IMAGE_DIGEST" \
+  --backend-image "$ROUTING_BACKEND_IMAGE_DIGEST" \
+  --engine podman \
+  --output "$VERIFY_OUTPUT/routing"
+```
+
+Use a clean committed candidate; uncommitted changes are not built. Docker can be
+selected with `--engine docker`. Python images supplied as tags are resolved to
+immutable digests before running any variant; pass digests to reproduce a run.
+The gateway must provide the Higress header-phase body-injection extension.
+Only synthetic credentials/parameters are used because existing RouteCall INFO
+payload logging is intentionally retained.
+
+`manifest.json` records source/harness, Go, module, image, Wasm and configuration
+identities, hashes all raw evidence and records cleanup. `commands.jsonl` records
+exact commands, durations and exit codes. Each variant saves backend `ledger.jsonl`,
+HTTP bodies/headers/hashes, machine assertions and full gateway/backend logs.
+Compatibility assertions explicitly expect red on affected and green on oracle
+and candidate. Protocol response assertions compare affected/candidate only;
+modern and auto are never attributed to the legacy oracle. No payload fields are
+normalized: IDs, numbers and bodies are compared directly; timing is only used
+for bounded execution and recorded separately. Header names are case-insensitive.
+
+Coverage includes control versus business counts, earlier/later filter headers
+and later rejection, ordinary headers and removed Authorization, fixed routing,
+route rewrite/hash, 6-second business versus the old 5-second callout timeout,
+2-second route timeout, 503 retry versus no retry, response status/body phases,
+fragmented JSON/SSE, twenty disconnects per HTTP profile, and the legacy SSE
+GET/POST ledger. Native/race tests supply deterministic duplicate-callback and
+cancellation arbitration cases that external clients cannot schedule reliably.
+Run the existing interop suite and MCP package tests as separate regression
+checks. The paired kind test is `GoWasmMcpProxyRoutingCompatibility`; plugin VERSION
+ends in `-alpha` so the CI batch builder includes its Wasm.

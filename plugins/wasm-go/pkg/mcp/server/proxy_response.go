@@ -19,7 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
-	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 )
@@ -513,7 +513,7 @@ func sendAutoFailure(ctx wrapper.HttpContext, id []byte, phase string, failure *
 	if headers == nil {
 		headers = safeAutoResponseHeaders(nil)
 	}
-	proxywasm.SendHttpResponseWithDetail(uint32(failure.status), "mcp-proxy:auto:"+phase+":"+failure.reason, headers, body, -1)
+	utils.WriteHTTPResponse(ctx, uint32(failure.status), "mcp-proxy:auto:"+phase+":"+failure.reason, headers, body)
 }
 
 func autoHeader(headers [][2]string, name string) (string, bool) {

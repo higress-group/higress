@@ -17,6 +17,7 @@ package utils
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -78,7 +79,17 @@ type JsonRpcMethodHandler func(context wrapper.HttpContext, id JsonRpcID, params
 
 type MethodHandlers map[string]JsonRpcMethodHandler
 
+// CtxRoutedProxyResponse marks replacement of an upstream MCP response. Only
+// selected response headers may survive the bridge, just as with local replies.
+const CtxRoutedProxyResponse = "mcp_routed_proxy_response"
+
+// WriteHTTPResponse writes a response in either a request or response callback.
+func WriteHTTPResponse(ctx wrapper.HttpContext, code uint32, detail string, headers [][2]string, body []byte) {
+	makeHttpResponse(ctx, code, detail, headers, body)
+}
+
 func makeHttpResponse(ctx wrapper.HttpContext, code uint32, debugInfo string, headers [][2]string, body []byte) {
+	ctx.SetContext(CtxJsonRpcResponded, true)
 	phase := ctx.GetExecutionPhase()
 	if phase < iface.EncodeHeader {
 		proxywasm.SendHttpResponseWithDetail(code, debugInfo, headers, body, -1)
@@ -87,10 +98,23 @@ func makeHttpResponse(ctx wrapper.HttpContext, code uint32, debugInfo string, he
 	if debugInfo != "" {
 		log.Infof("response detail info:%s", debugInfo)
 	}
+	routed, _ := ctx.GetContext(CtxRoutedProxyResponse).(bool)
+	if routed {
+		upstream, _ := proxywasm.GetHttpResponseHeaders()
+		for _, header := range upstream {
+			if !strings.HasPrefix(header[0], ":") {
+				proxywasm.RemoveHttpResponseHeader(header[0])
+			}
+		}
+	}
 	proxywasm.RemoveHttpResponseHeader("content-length")
 	proxywasm.ReplaceHttpResponseHeader(":status", strconv.Itoa(int(code)))
 	for _, kv := range headers {
-		proxywasm.ReplaceHttpResponseHeader(kv[0], kv[1])
+		if routed {
+			proxywasm.AddHttpResponseHeader(kv[0], kv[1])
+		} else {
+			proxywasm.ReplaceHttpResponseHeader(kv[0], kv[1])
+		}
 	}
 	if phase == iface.EncodeData {
 		proxywasm.ReplaceHttpResponseBody(body)
