@@ -165,7 +165,11 @@ func cloneSchemaSnapshot(schema map[string]any) (map[string]any, error) {
 	if !cloned.IsValid() || cloned.IsNil() {
 		return nil, nil
 	}
-	return cloned.Interface().(map[string]any), nil
+	result, ok := cloned.Interface().(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("cloneSchemaSnapshot: expected map[string]any, got %T", cloned.Interface())
+	}
+	return result, nil
 }
 
 func cloneSchemaSnapshotValue(value reflect.Value, depth int, state *schemaSnapshotState) (reflect.Value, error) {
