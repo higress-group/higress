@@ -431,5 +431,64 @@ func TestOnHttpRequestBody(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 			host.CompleteHttp()
 		})
+
+		// 测试响应头无空头项且无越界
+		t.Run("response headers without leading empty entries", func(t *testing.T) {
+			host, status := test.NewTestHost(basicWorkflowConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			requestBody := []byte(`{"message": "test message"}`)
+			action := host.CallOnHttpRequestBody(requestBody)
+			require.Equal(t, types.ActionPause, action)
+
+			host.CallOnHttpCall([][2]string{
+				{"Content-Type", "application/json"},
+				{"X-Custom", "custom-val"},
+				{":status", "200"},
+			}, []byte(`{"result": "success", "data": "processed"}`))
+
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.Equal(t, uint32(200), localResponse.StatusCode)
+
+			// 检查 headers 中不应包含空的 [2]string{"", ""}
+			for _, h := range localResponse.Headers {
+				require.NotEmpty(t, h[0], "header name should not be empty")
+			}
+
+			host.CompleteHttp()
+		})
+
+		// 测试连续请求不会相互影响导致共享状态污染
+		t.Run("sequential requests do not corrupt shared WorkflowExecStatus", func(t *testing.T) {
+			host, status := test.NewTestHost(parallelWorkflowConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// Request 1
+			requestBody := []byte(`{"data": "test data"}`)
+			action := host.CallOnHttpRequestBody(requestBody)
+			require.Equal(t, types.ActionPause, action)
+
+			host.CallOnHttpCall([][2]string{{":status", "200"}}, []byte(`{"result": "a_result"}`))
+			host.CallOnHttpCall([][2]string{{":status", "200"}}, []byte(`{"result": "b_result"}`))
+			host.CallOnHttpCall([][2]string{{":status", "200"}}, []byte(`{"result": "c_result"}`))
+			host.CallOnHttpCall([][2]string{{":status", "200"}}, []byte(`{"final_result": "success"}`))
+			host.CompleteHttp()
+
+			// Request 2 on the same plugin host
+			action = host.CallOnHttpRequestBody(requestBody)
+			require.Equal(t, types.ActionPause, action)
+			host.CallOnHttpCall([][2]string{{":status", "200"}}, []byte(`{"result": "a_result"}`))
+			host.CallOnHttpCall([][2]string{{":status", "200"}}, []byte(`{"result": "b_result"}`))
+			host.CallOnHttpCall([][2]string{{":status", "200"}}, []byte(`{"result": "c_result"}`))
+			host.CallOnHttpCall([][2]string{{":status", "200"}}, []byte(`{"final_result": "success"}`))
+
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.Equal(t, uint32(200), localResponse.StatusCode)
+			host.CompleteHttp()
+		})
 	})
 }

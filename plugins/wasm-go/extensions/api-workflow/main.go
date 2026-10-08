@@ -181,7 +181,11 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 
 	initHeader := make([][2]string, 0)
 	// 初始化运行状态
-	ctx.SetContext(WorkflowExecStatus, config.Workflow.WorkflowExecStatus)
+	execStatus := make(map[string]int, len(config.Workflow.WorkflowExecStatus))
+	for k, v := range config.Workflow.WorkflowExecStatus {
+		execStatus[k] = v
+	}
+	ctx.SetContext(WorkflowExecStatus, execStatus)
 
 	// 执行工作流
 	for _, edge := range config.Workflow.Edges {
@@ -241,12 +245,19 @@ func recursive(edge Edge, headers [][2]string, body []byte, depth uint32, config
 			// 存入这轮返回的body
 			ctx.SetContext(fmt.Sprintf("%s", edge.Target), responseBody)
 
-			headers_ := make([][2]string, len(responseHeaders))
+			headers_ := make([][2]string, 0, len(responseHeaders))
 			for key, value := range responseHeaders {
-				headers_ = append(headers_, [2]string{key, value[0]})
+				if len(value) > 0 {
+					headers_ = append(headers_, [2]string{key, value[0]})
+				}
 			}
 			// 判断是否进入下一步
-			nextStatus := ctx.GetContext(WorkflowExecStatus).(map[string]int)
+			nextStatus, ok := ctx.GetContext(WorkflowExecStatus).(map[string]int)
+			if !ok || nextStatus == nil {
+				log.Errorf("workflow exec status invalid")
+				_ = utils.SendResponse(500, "api-workflow.exec_status_invalid", utils.MimeTypeTextPlain, "workflow exec status invalid")
+				return
+			}
 
 			// 进入下一步
 			for _, next := range config.Workflow.Edges {
@@ -277,9 +288,11 @@ func recursive(edge Edge, headers [][2]string, body []byte, depth uint32, config
 					}
 					if isPass {
 						log.Debugf("source is %s,target is %s,workflow is pass ", next.Source, next.Target)
-						nextStatus = ctx.GetContext(WorkflowExecStatus).(map[string]int)
-						nextStatus[next.Target] = nextStatus[next.Target] - 1
-						ctx.SetContext(WorkflowExecStatus, nextStatus)
+						if status, ok := ctx.GetContext(WorkflowExecStatus).(map[string]int); ok && status != nil {
+							nextStatus = status
+							nextStatus[next.Target] = nextStatus[next.Target] - 1
+							ctx.SetContext(WorkflowExecStatus, nextStatus)
+						}
 						continue
 
 					}
