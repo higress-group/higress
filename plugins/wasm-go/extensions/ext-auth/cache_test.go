@@ -395,6 +395,39 @@ func TestAuthCacheFlow(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+
+		// (g) 拒绝：认证服务不放行时不得写回缓存
+		t.Run("reject writes nothing to the cache", func(t *testing.T) {
+			host, status := test.NewTestHost(cacheConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/users"},
+				{":method", "POST"},
+				{"authorization", "Bearer token123"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			// miss
+			host.CallOnRedisCall(0, test.CreateRedisRespNull())
+			require.Len(t, host.GetHttpCalloutAttributes(), 1)
+
+			// 认证服务拒绝
+			host.CallOnHttpCall([][2]string{
+				{":status", "403"},
+			}, nil)
+
+			resp := host.GetLocalResponse()
+			require.NotNil(t, resp)
+			require.Equal(t, uint32(403), resp.StatusCode)
+
+			// GET 已被消费，拒绝不得再产生任何 redis 写回
+			require.Empty(t, host.GetRedisCalloutAttributes())
+
+			host.CompleteHttp()
+		})
 	})
 }
 
