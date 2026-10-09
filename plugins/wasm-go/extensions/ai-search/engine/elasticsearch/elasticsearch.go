@@ -2,6 +2,7 @@ package elasticsearch
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -102,36 +103,46 @@ func (e ElasticsearchSearch) generateAuthorizationHeader() string {
 
 func (e ElasticsearchSearch) generateQueryBody(ctx engine.SearchContext) string {
 	queryText := strings.Join(ctx.Querys, " ")
-	return fmt.Sprintf(`{
-        "_source":{
-            "excludes": "%s"
-        },
-		"retriever": {
-			"rrf": {
-				"retrievers": [
-					{
-						"standard": { 
-							"query": {
-								"match": {
-									"%s": "%s" 
-								}
-							}
-						}
+	// Build the query document with json.Marshal instead of fmt.Sprintf so that
+	// the client-controlled query text cannot terminate the surrounding JSON
+	// document or be reinterpreted through JSON escape sequences.
+	query := map[string]interface{}{
+		"_source": map[string]interface{}{
+			"excludes": e.contentField,
+		},
+		"retriever": map[string]interface{}{
+			"rrf": map[string]interface{}{
+				"retrievers": []interface{}{
+					map[string]interface{}{
+						"standard": map[string]interface{}{
+							"query": map[string]interface{}{
+								"match": map[string]interface{}{
+									e.contentField: queryText,
+								},
+							},
+						},
 					},
-					{
-						"standard": { 
-							"query": {
-								"semantic": {
-									"field": "%s", 
-									"query": "%s"
-								}
-							}
-						}
-					}
-				]
-			}
-		}
-	}`, e.semanticTextField, e.contentField, queryText, e.semanticTextField, queryText)
+					map[string]interface{}{
+						"standard": map[string]interface{}{
+							"query": map[string]interface{}{
+								"semantic": map[string]interface{}{
+									"field": e.semanticTextField,
+									"query": queryText,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	body, err := json.Marshal(query)
+	if err != nil {
+		// All values are strings and maps, so json.Marshal cannot fail; keep
+		// the request body a well-formed JSON object if that ever changes.
+		return "{}"
+	}
+	return string(body)
 }
 
 func (e ElasticsearchSearch) CallArgs(ctx engine.SearchContext) engine.CallArgs {
