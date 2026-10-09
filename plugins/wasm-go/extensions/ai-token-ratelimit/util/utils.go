@@ -29,7 +29,10 @@ func ParseIP(source string) string {
 	}
 	// parse ipv6
 	if strings.Contains(source, "]") {
-		return strings.Split(source, "]")[0][1:]
+		// strings.Split always yields at least one element, but a value such as
+		// "]" or "]:80" leaves an empty first element, so the leading bracket
+		// must be removed with TrimPrefix instead of slicing.
+		return strings.TrimPrefix(strings.Split(source, "]")[0], "[")
 	}
 	return source
 }
