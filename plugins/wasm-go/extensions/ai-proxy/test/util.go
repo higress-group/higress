@@ -75,6 +75,33 @@ func RunMapRequestPathByCapabilityTests(t *testing.T) {
 			expected: "/v1/batches/batch-002/cancel",
 		},
 		{
+			name:    "retrieve response replaces response id",
+			apiName: "openai/v1/retrieveresponse",
+			origin:  "/openai/v1/responses/resp_abc",
+			mapping: map[string]string{
+				"openai/v1/retrieveresponse": "/v1/responses/{response_id}",
+			},
+			expected: "/v1/responses/resp_abc",
+		},
+		{
+			name:    "cancel response replaces response id",
+			apiName: "openai/v1/cancelresponse",
+			origin:  "/openai/v1/responses/resp_abc/cancel",
+			mapping: map[string]string{
+				"openai/v1/cancelresponse": "/v1/responses/{response_id}/cancel",
+			},
+			expected: "/v1/responses/resp_abc/cancel",
+		},
+		{
+			name:    "response input items keeps query parameters",
+			apiName: "openai/v1/listresponseinputitems",
+			origin:  "/openai/v1/responses/resp_abc/input_items?after=item_1",
+			mapping: map[string]string{
+				"openai/v1/listresponseinputitems": "/v1/responses/{response_id}/input_items",
+			},
+			expected: "/v1/responses/resp_abc/input_items?after=item_1",
+		},
+		{
 			name:    "video placeholder is replaced",
 			apiName: "openai/v1/retrievevideo",
 			origin:  "/openai/v1/videos/video-xyz",
