@@ -97,11 +97,15 @@ func (f FieldMapping) MaxLength() int {
 	if f.Properties == nil {
 		return 0
 	}
-	maxLength, ok := f.Properties["max_length"].(int)
-	if !ok {
-		return 256
+	// Configuration values come from JSON/structpb, where numbers are float64;
+	// accept plain ints as well for in-process construction.
+	if maxLength, ok := f.Properties["max_length"].(int); ok {
+		return maxLength
 	}
-	return maxLength
+	if maxLength, ok := f.Properties["max_length"].(float64); ok {
+		return int(maxLength)
+	}
+	return 256
 }
 
 // IndexConfig defines configuration for index parameters
@@ -124,6 +128,11 @@ func (i IndexConfig) ParamsInt64(key string) (int64, error) {
 		return mVal, nil
 	}
 	if mVal, ok := i.Params[key].(int); ok {
+		return int64(mVal), nil
+	}
+	// JSON/structpb decode numbers as float64; this is the type the parameter
+	// actually arrives as when the config is parsed from Envoy's TypedStruct.
+	if mVal, ok := i.Params[key].(float64); ok {
 		return int64(mVal), nil
 	}
 	return 0, fmt.Errorf("params %s not found", key)
@@ -164,6 +173,11 @@ func (i SearchConfig) ParamsString(key string) (string, error) {
 func (i SearchConfig) ParamsInt64(key string) (int64, error) {
 	if mVal, ok := i.Params[key].(int64); ok {
 		return mVal, nil
+	}
+	// JSON/structpb decode numbers as float64; this is the type the parameter
+	// actually arrives as when the config is parsed from Envoy's TypedStruct.
+	if mVal, ok := i.Params[key].(float64); ok {
+		return int64(mVal), nil
 	}
 	return 0, fmt.Errorf("params %s not found", key)
 }
