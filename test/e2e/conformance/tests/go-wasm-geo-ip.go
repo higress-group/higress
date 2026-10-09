@@ -28,7 +28,7 @@ func init() {
 
 var WasmPluginsGeoIPPlugin = suite.ConformanceTest{
 	ShortName:   "WasmPluginsGeoIPPlugin",
-	Description: "The geo-ip wasm pluin finds the client's geographic information according to the client's ip address.",
+	Description: "The geo-ip wasm plugin finds the client's geographic information according to the client's ip address.",
 	Manifests:   []string{"tests/go-wasm-geo-ip.yaml"},
 	Features:    []suite.SupportedFeature{suite.WASMGoConformanceFeature},
 	Test: func(t *testing.T, suite *suite.ConformanceTestSuite) {
