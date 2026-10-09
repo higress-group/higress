@@ -14,9 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Simplify the MCP server plugin READMEs
+# Synchronize the MCP server plugin READMEs with the website guides
 
-Focus the Chinese and English plugin READMEs on the built-in Quark Search and
-Amap servers, including their API keys and route backends. Link to the official
-configuration guide for general plugin capabilities and settings, and retain
-the related documentation links with current website URLs.
+Include the full Chinese and English MCP server configuration guides directly
+in the plugin READMEs, including protocol strategies, tool sets, REST tool
+configuration, authentication, examples, and the mcp-router source link.
+Retain the language switchers and related documentation links, and omit the
+website-only front matter.
