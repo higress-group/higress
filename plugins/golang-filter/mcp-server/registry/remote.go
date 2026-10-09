@@ -145,7 +145,7 @@ func (h *HttpRemoteCallHandle) handleParamMapping(mapInfo *map[string]ParameterM
 			} else if info.Position == "Header" {
 				h.Headers[info.BackendName] = []string{fmt.Sprintf("%v", value)}
 			} else {
-				return fmt.Errorf("Unsupport position for args %s, pos is %s", param, info.Position)
+				return fmt.Errorf("Unsupported position for args %s, pos is %s", param, info.Position)
 			}
 		} else {
 			h.Query[param] = fmt.Sprintf("%v", value)
