@@ -1066,6 +1066,10 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIResponseToClaude(t *testing.T) {
 		result, err := converter.ConvertOpenAIResponseToClaude(nil, []byte(openaiResponse))
 		require.NoError(t, err)
 
+		// A successful conversion must not include the non-standard "error" field;
+		// it confuses native Anthropic clients (see issue #3957).
+		assert.NotContains(t, string(result), "\"error\"")
+
 		var claudeResponse claudeTextGenResponse
 		err = json.Unmarshal(result, &claudeResponse)
 		require.NoError(t, err)
