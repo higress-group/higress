@@ -300,11 +300,12 @@ func (a *Agent) promptSudo() bool {
 	for {
 		fmt.Fprintf(a.writer, "\nThis need sudo permission and input root password to continue installation, Proceed? (y/N)")
 		fmt.Scanln(&answer)
-		if strings.TrimSpace(answer) == "y" {
+		val := strings.TrimSpace(answer)
+		if val == "y" || val == "Y" {
 			fmt.Fprintf(a.writer, "\n")
 			return true
 		}
-		if strings.TrimSpace(answer) == "N" {
+		if val == "" || val == "n" || val == "N" {
 			fmt.Fprintf(a.writer, "Cancelled.\n")
 			return false
 		}
@@ -316,11 +317,12 @@ func (a *Agent) promptRestart() bool {
 	for {
 		fmt.Fprintf(a.writer, "\nThis need to restart higress, Proceed? (y/N)")
 		fmt.Scanln(&answer)
-		if strings.TrimSpace(answer) == "y" {
+		val := strings.TrimSpace(answer)
+		if val == "y" || val == "Y" {
 			fmt.Fprintf(a.writer, "\n")
 			return true
 		}
-		if strings.TrimSpace(answer) == "N" {
+		if val == "" || val == "n" || val == "N" {
 			fmt.Fprintf(a.writer, "Cancelled.\n")
 			return false
 		}

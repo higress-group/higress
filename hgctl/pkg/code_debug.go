@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/alibaba/higress/hgctl/pkg/helm"
@@ -327,10 +328,11 @@ func promptCodeDebug(writer io.Writer, t string) bool {
 		fmt.Fprintf(writer, "This will start set xds address to %s in higress-config ConfigMap "+
 			"and trigger rollout for higress-controller and higress-gateway deployments. \nProceed? (y/N)", t)
 		fmt.Scanln(&answer)
-		if answer == "y" {
+		val := strings.TrimSpace(answer)
+		if val == "y" || val == "Y" {
 			return true
 		}
-		if answer == "N" {
+		if val == "" || val == "n" || val == "N" {
 			fmt.Fprintf(writer, "Cancelled.\n")
 			return false
 		}

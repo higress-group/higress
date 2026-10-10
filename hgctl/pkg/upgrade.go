@@ -364,16 +364,18 @@ func promptUpgrade(writer io.Writer) bool {
 	for {
 		fmt.Fprintf(writer, "All Higress resources will be upgrade from the cluster. \nProceed? (y/N)")
 		fmt.Scanln(&answer)
-		if strings.TrimSpace(answer) == "y" {
+		val := strings.TrimSpace(answer)
+		if val == "y" || val == "Y" {
 			fmt.Fprintf(writer, "\n")
 			return true
 		}
-		if strings.TrimSpace(answer) == "N" {
+		if val == "" || val == "n" || val == "N" {
 			fmt.Fprintf(writer, "Cancelled.\n")
 			return false
 		}
 	}
 }
+
 
 func upgradeManifests(profile *helm.Profile, writer io.Writer, devel bool) error {
 	installer, err := newInstallerForUpgrade(profile, writer, false, devel, installer.UpgradeInstallerMode)
