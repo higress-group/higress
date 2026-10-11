@@ -2,6 +2,8 @@ package cache
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"strings"
 
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -52,6 +54,9 @@ type ProviderConfig struct {
 	// @Title 缓存 Key 前缀
 	// @Description 缓存 Key 的前缀，默认值为 "higress-resp-cache:"
 	cacheKeyPrefix string
+	// parseError 保存解析显式 timeout/servicePort 时发现的范围错误，
+	// 在 Validate 中返回，确保非法值不会进入 Redis client 初始化
+	parseError error
 }
 
 func (c *ProviderConfig) GetProviderType() string {
@@ -59,22 +64,37 @@ func (c *ProviderConfig) GetProviderType() string {
 }
 
 func (c *ProviderConfig) FromJson(json gjson.Result) {
+	// parseError 是唯一跨调用残留的字段，复用同一配置对象时先清空，
+	// 避免上一次非法配置的错误污染本次解析结果
+	c.parseError = nil
 	c.typ = json.Get("type").String()
 	c.serviceName = json.Get("serviceName").String()
-	c.servicePort = int(json.Get("servicePort").Int())
-	if !json.Get("servicePort").Exists() {
-		if strings.HasSuffix(c.serviceName, ".static") {
-			// use default logic port which is 80 for static service
-			c.servicePort = 80
+	// 显式提供的端口必须在窄化为 int 前完成范围检查（生产 wasm 目标 int 为
+	// 32 位，超范围值会窄化成错误的小值甚至 0），未提供时保持默认端口
+	if v := json.Get("servicePort"); v.Exists() {
+		if port := v.Int(); port >= 1 && port <= math.MaxInt32 {
+			c.servicePort = int(port)
 		} else {
-			c.servicePort = 6379
+			c.parseError = fmt.Errorf("cache servicePort must be between 1 and %d", int64(math.MaxInt32))
 		}
+	} else if strings.HasSuffix(c.serviceName, ".static") {
+		// use default logic port which is 80 for static service
+		c.servicePort = 80
+	} else {
+		c.servicePort = 6379
 	}
 	c.serviceHost = json.Get("serviceHost").String()
 	c.username = json.Get("username").String()
 	c.password = json.Get("password").String()
-	c.timeout = uint32(json.Get("timeout").Int())
-	if !json.Get("timeout").Exists() {
+	// 显式提供的超时必须在窄化为 uint32 前完成范围检查，避免 -1 或超出
+	// uint32 的值窄化成非法值，未提供时保持默认超时
+	if v := json.Get("timeout"); v.Exists() {
+		if timeout := v.Int(); timeout >= 1 && timeout <= math.MaxUint32 {
+			c.timeout = uint32(timeout)
+		} else {
+			c.parseError = fmt.Errorf("cache timeout must be between 1 and %d", int64(math.MaxUint32))
+		}
+	} else {
 		c.timeout = 10000
 	}
 	c.cacheTTL = int(json.Get("cacheTTL").Int())
@@ -91,6 +111,9 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 }
 
 func (c *ProviderConfig) Validate() error {
+	if c.parseError != nil {
+		return c.parseError
+	}
 	if c.typ == "" {
 		return errors.New("cache service type is required")
 	}
