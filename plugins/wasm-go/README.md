@@ -229,36 +229,26 @@ spec:
 ./test/e2e/conformance/tests/request-block.go
 
 ### step2. 添加 test cases
-将上述所写test cases添加到e2e测试列表中,
+每个测试用例是 `test/e2e/conformance/tests/` 下一对同名文件 `<name>.go` + `<name>.yaml`，
+并在 `init()` 中把自己注册进全局切片 `tests.ConformanceTests`，无需手工维护测试列表：
 
-./test/e2e/e2e_test.go
+```go
+func init() {
+	Register(WasmPluginsRequestBlock)
+}
 
+var WasmPluginsRequestBlock = suite.ConformanceTest{
+	ShortName: "WasmPluginRequestBlock",
+	// ...
+}
 ```
-...
-cSuite.Setup(t)
-	var higressTests []suite.ConformanceTest
 
-	if *isWasmPluginTest {
-		if strings.Compare(*wasmPluginType, "CPP") == 0 {
-			m := make(map[string]suite.ConformanceTest)
-			m["request_block"] = tests.CPPWasmPluginsRequestBlock
-			m["key_auth"] = tests.CPPWasmPluginsKeyAuth
-
-			higressTests = []suite.ConformanceTest{
-				m[*wasmPluginName],
-			}
-		} else {
-			higressTests = []suite.ConformanceTest{
-				tests.WasmPluginsRequestBlock,
-        //这里新增你新写的case方法名称
-			}
-		}
-	} else {
-...
-```
+`test/e2e/e2e_test.go` 直接消费 `tests.ConformanceTests`，所以没有需要手工编辑的
+测试列表。用 `--execute-tests`（逗号分隔的用例 `ShortName` 列表）指定要跑的用例，
+用 `--wasmPluginName` / `--wasmPluginType` 限定 WASM 插件范围。
 
 ### step3. 编译插件并执行 test cases
-考虑到本地构建wasm比较耗时, 我们支持只构建需要测试的插件(同时你也可以临时修改上面第二小步的测试cases列表, 只执行你新写的case)。
+考虑到本地构建wasm比较耗时, 我们支持只构建需要测试的插件(同时你也可以通过`--execute-tests`只执行你新写的case)。
 
 ```bash
 PLUGIN_ROOT=examples PLUGIN_NAME=request-block make higress-wasmplugin-test

@@ -135,37 +135,29 @@ spec:
 
 ### step2. add test cases
 
-Add the test cases written above to the e2e test list,
-
-./test/e2e/e2e_test.go
+Each test case is a paired `<name>.go` + `<name>.yaml` file under
+`test/e2e/conformance/tests/` and registers itself into the global
+`tests.ConformanceTests` slice from an `init()` function, so there is no test
+list to maintain by hand:
 
 ```go
-...
-cSuite.Setup(t)
-	var higressTests []suite.ConformanceTest
+func init() {
+	Register(CPPWasmPluginsRequestBlock)
+}
 
-	if *isWasmPluginTest {
-		if strings.Compare(*wasmPluginType, "CPP") == 0 {
-			m := make(map[string]suite.ConformanceTest)
-			m["request_block"] = tests.CPPWasmPluginsRequestBlock
-			m["key_auth"] = tests.CPPWasmPluginsKeyAuth
-        //Add your newly written case method name here
-
-			higressTests = []suite.ConformanceTest{
-				m[*wasmPluginName],
-			}
-		} else {
-			higressTests = []suite.ConformanceTest{
-				tests.WasmPluginsRequestBlock,
-			}
-		}
-	} else {
-...
+var CPPWasmPluginsRequestBlock = suite.ConformanceTest{
+	ShortName: "CPPWasmPluginRequestBlock",
+	// ...
+}
 ```
+
+`test/e2e/e2e_test.go` consumes `tests.ConformanceTests` directly. Select the
+cases to run with `--execute-tests` (a comma-separated list of case `ShortName`s)
+and scope a WASM plugin run with `--wasmPluginName` / `--wasmPluginType`.
 
 ### step3. compile and run test cases
 
-Considering that building wasm locally is time-consuming, we support building only the plug-ins that need to be tested (at the same time, you can also temporarily modify the list of test cases in the second small step above, and only execute your newly written cases).
+Considering that building wasm locally is time-consuming, we support building only the plug-ins that need to be tested (at the same time, you can also set `--execute-tests` to only execute your newly written cases).
 
 ```bash
 PLUGIN_TYPE=CPP PLUGIN_NAME=request_block make higress-wasmplugin-test

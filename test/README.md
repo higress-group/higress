@@ -38,17 +38,17 @@ It can be divided into below steps:
 4. kube-load-image: load dev higress-controller image it into kind cluster.
 5. install-dev: install higress-controller with dev image, and latest higress-gateway, istiod with helm.
 6. run-e2e-test:
-    1. Setup conformance suite, like define what conformance tests we want to run, in `e2e_test.go` / `higressTests Slice`. Each case we choose to open is defined in `test/ingress/conformance/tests`.
+    1. Setup conformance suite, like define what conformance tests we want to run. Each case we choose to open is defined in `test/e2e/conformance/tests` and registers itself into the global `ConformanceTests` slice during package initialisation.
     2. Prepare resources and install them into cluster, like backend services/deployments.
-    3. Load conformance tests we choose to open in `e2e_test.go` / `higressTests Slice`, and run them one by one, fail if it is not expected.
+    3. Load `ConformanceTests`, and run them one by one, fail if it is not expected.
 
 ### How to write a test case
 
-To add a new test case, you firstly need to add `xxx.go` and `xxx.yaml` in `test/ingress/conformance/tests`. `xxx.yaml` is the Ingress resource you need to apply in the cluster, `xxx.go` defines the HigressConformanceTest.
+To add a new test case, you firstly need to add `xxx.go` and `xxx.yaml` in `test/e2e/conformance/tests`. `xxx.yaml` is the resource you need to apply in the cluster, `xxx.go` defines the `suite.ConformanceTest` value.
 
-And after that, you should add your defined HigressConformanceTest to `e2e_test.go` / `higressTests Slice`.
+And after that, you should register your defined test case by calling `Register(XXX)` from an `init()` function in `xxx.go`. `Register` appends the case to the global `ConformanceTests` slice.
 
-You can understand it quickly just by looking at codes in `test/ingress/conformance/tests/httproute-simple-same-namespace.go` and `test/ingress/conformance/tests/httproute-simple-same-namespace.yaml`, and try to write one.
+You can understand it quickly just by looking at codes in `test/e2e/conformance/tests/httproute-simple-same-namespace.go` and `test/e2e/conformance/tests/httproute-simple-same-namespace.yaml`, and try to write one.
 
 ### How to Implement Test Environment Reusability
 
