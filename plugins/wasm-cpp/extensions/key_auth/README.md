@@ -136,7 +136,7 @@ keys:
 
 | HTTP 状态码 | 出错信息                                                  | 原因说明                |
 | ----------- | --------------------------------------------------------- | ----------------------- |
-| 401         | Request denied by Key Auth check. Muti API key found in request | 请求提供多个 API Key      |
+| 401         | Request denied by Key Auth check. Multi API key found in request | 请求提供多个 API Key      |
 | 401         | Request denied by Key Auth check. No API key found in request | 请求未提供 API Key      |
 | 401         | Request denied by Key Auth check. Invalid API key         | 不允许当前 API Key 访问 |
 | 403         | Request denied by Key Auth check. Unauthorized consumer   | 请求的调用方无访问权限  |

@@ -17,7 +17,7 @@
 本次发布包含 **2** 项重要更新，建议重点关注：
 
 - **feat: add DB MCP Server execute, list tables, describe table tools** ([#2506](https://github.com/alibaba/higress/pull/2506)): 通过增加这些工具，用户能够更方便地管理和操作数据库，提高了系统的灵活性和可用性，使得数据库操作更加直观和高效。
-- **feat: advanced load balance policys for LLM service through wasm plugin** ([#2531](https://github.com/alibaba/higress/pull/2531)): 通过引入先进的负载均衡策略，提升了LLM服务的性能与资源利用率，允许用户根据需求选择最合适的策略来优化其服务。
+- **feat: advanced load balance policies for LLM service through wasm plugin** ([#2531](https://github.com/alibaba/higress/pull/2531)): 通过引入先进的负载均衡策略，提升了LLM服务的性能与资源利用率，允许用户根据需求选择最合适的策略来优化其服务。
 
 详细信息请查看下方重要功能详述部分。
 
@@ -49,7 +49,7 @@
 
 ---
 
-### 2. feat: advanced load balance policys for LLM service through wasm plugin
+### 2. feat: advanced load balance policies for LLM service through wasm plugin
 
 **相关PR**: [#2531](https://github.com/alibaba/higress/pull/2531) | **贡献者**: [rinfx](https://github.com/rinfx)
 
