@@ -18,7 +18,7 @@ import (
 
 // DBClient is a struct to handle database connections and operations
 type DBClient struct {
-	db         *gorm.DB
+	db         atomic.Pointer[gorm.DB]
 	dsn        string
 	dbType     string
 	reconnect  chan struct{}
@@ -78,7 +78,12 @@ func (c *DBClient) connect() error {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	c.db = db
+	// Close the old connection if it exists to prevent connection pool leaks
+	if oldDB := c.db.Swap(db); oldDB != nil {
+		if sqlDB, err := oldDB.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}
 	return nil
 }
 
@@ -113,7 +118,7 @@ func (c *DBClient) reconnectLoop() {
 			api.LogInfof("Database %s connection closed", c.dbType)
 			return
 		case <-ticker.C:
-			if c.db == nil || c.Ping() != nil {
+			if c.db.Load() == nil || c.Ping() != nil {
 				if err := c.connect(); err != nil {
 					api.LogErrorf("Database reconnection failed: %v", err)
 				} else {
@@ -135,7 +140,7 @@ func (c *DBClient) reconnectLoop() {
 }
 
 func (c *DBClient) reconnectIfDbEmpty() error {
-	if c.db == nil {
+	if c.db.Load() == nil {
 		// Trigger reconnection
 		select {
 		case c.reconnect <- struct{}{}:
@@ -148,14 +153,42 @@ func (c *DBClient) reconnectIfDbEmpty() error {
 
 func (c *DBClient) handleSQLError(err error) error {
 	if err != nil {
-		// If execution fails, connection might be lost, trigger reconnection
-		select {
-		case c.reconnect <- struct{}{}:
-		default:
+		// Trigger reconnection only for connection-level errors,
+		// not for syntax errors or other query-level issues.
+		if isConnectionError(err) {
+			select {
+			case c.reconnect <- struct{}{}:
+			default:
+			}
 		}
 		return fmt.Errorf("failed to execute SQL: %w", err)
 	}
 	return nil
+}
+
+// isConnectionError checks if the error indicates a lost connection
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// Common connection error indicators from database drivers
+	connectionErrors := []string{
+		"connection refused",
+		"connection reset",
+		"connection closed",
+		"broken pipe",
+		"EOF",
+		"server closed the connection",
+		"no connection to the server",
+		"connection timed out",
+	}
+	for _, ce := range connectionErrors {
+		if strings.Contains(msg, ce) {
+			return true
+		}
+	}
+	return false
 }
 
 // DescribeTable Get the structure of a specific table.
@@ -254,7 +287,11 @@ func (c *DBClient) ListTables() ([]string, error) {
 		return nil, fmt.Errorf("unsupported database type: %s", c.dbType)
 	}
 
-	rows, err := c.db.Raw(sql).Rows()
+	db := c.db.Load()
+	if db == nil {
+		return nil, fmt.Errorf("database is not connected")
+	}
+	rows, err := db.Raw(sql).Rows()
 	if err := c.handleSQLError(err); err != nil {
 		return nil, err
 	}
@@ -282,7 +319,11 @@ func (c *DBClient) Execute(sql string, args ...interface{}) (int64, error) {
 		return 0, err
 	}
 
-	tx := c.db.Exec(sql, args...)
+	db := c.db.Load()
+	if db == nil {
+		return 0, fmt.Errorf("database is not connected")
+	}
+	tx := db.Exec(sql, args...)
 	if err := c.handleSQLError(tx.Error); err != nil {
 		return 0, err
 	}
@@ -297,7 +338,11 @@ func (c *DBClient) Query(sql string, args ...interface{}) ([]map[string]interfac
 		return nil, err
 	}
 
-	rows, err := c.db.Raw(sql, args...).Rows()
+	db := c.db.Load()
+	if db == nil {
+		return nil, fmt.Errorf("database is not connected")
+	}
+	rows, err := db.Raw(sql, args...).Rows()
 	if err := c.handleSQLError(err); err != nil {
 		return nil, err
 	}
@@ -351,7 +396,8 @@ func (c *DBClient) Query(sql string, args ...interface{}) ([]map[string]interfac
 }
 
 func (c *DBClient) Ping() error {
-	if c.db == nil {
+	db := c.db.Load()
+	if db == nil {
 		return fmt.Errorf("database connection is nil")
 	}
 
@@ -360,7 +406,7 @@ func (c *DBClient) Ping() error {
 	defer cancel()
 
 	// Try to ping the database
-	sqlDB, err := c.db.DB()
+	sqlDB, err := db.DB()
 	if err != nil {
 		return fmt.Errorf("failed to get underlying *sql.DB: %v", err)
 	}
