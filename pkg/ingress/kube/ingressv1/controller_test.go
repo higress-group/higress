@@ -124,6 +124,54 @@ func TestGenerateHttpMatches(t *testing.T) {
 	}
 }
 
+func TestConvertHTTPRouteSkipsInvalidRegexPath(t *testing.T) {
+	c := controller{}
+	wrapper := &common.WrapperConfig{
+		Config: &config.Config{
+			Meta: config.Meta{
+				Namespace: "default",
+				Name:      "regex-routes",
+			},
+			Spec: v1.IngressSpec{
+				Rules: []v1.IngressRule{
+					ingressRule("example.com",
+						ingressPath("/hospital/**", "invalid-backend", 8080),
+						ingressPath("/healthy/[0-9]+", "valid-backend", 8080),
+					),
+				},
+			},
+		},
+		AnnotationsConfig: &annotations.Ingress{
+			Rewrite: &annotations.RewriteConfig{UseRegex: true},
+		},
+	}
+
+	options := &common.ConvertOptions{}
+	if err := c.ConvertHTTPRoute(options, wrapper); err != nil {
+		t.Fatalf("ConvertHTTPRoute() error = %v", err)
+	}
+
+	routes := options.HTTPRoutes["example.com"]
+	if len(routes) != 1 {
+		t.Fatalf("valid route count mismatch, want 1, got %d", len(routes))
+	}
+	if got := routes[0].OriginPath; got != "/healthy/[0-9]+" {
+		t.Fatalf("valid route path mismatch, got %q", got)
+	}
+
+	cache := options.IngressRouteCache.Extract()
+	if len(cache.Valid) != 1 || len(cache.Invalid) != 1 {
+		t.Fatalf("route cache mismatch, want 1 valid and 1 invalid, got %d valid and %d invalid",
+			len(cache.Valid), len(cache.Invalid))
+	}
+	if got := cache.Invalid[0].Path; got != "/hospital/**" {
+		t.Fatalf("invalid route path mismatch, got %q", got)
+	}
+	if !strings.Contains(cache.Invalid[0].Error, "invalid regex") {
+		t.Fatalf("invalid route error does not explain regex failure: %q", cache.Invalid[0].Error)
+	}
+}
+
 func TestSSLPassthroughConvertGatewayAndTLSRoute(t *testing.T) {
 	c := controller{
 		options: common.Options{
