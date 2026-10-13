@@ -1,0 +1,11 @@
+# SQL模板配置示例
+templates:
+  get_user_by_id:
+    sql: "SELECT id, name, email FROM user WHERE id = ?"
+    fields: [id, name, email]
+    mask: [email]
+    allow_roles: [admin, user]
+  get_orders_by_user:
+    sql: "SELECT id, amount, status FROM orders WHERE user_id = ?"
+    fields: [id, amount, status]
+    allow_roles: [admin] 
