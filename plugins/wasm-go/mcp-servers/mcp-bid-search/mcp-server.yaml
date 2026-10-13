@@ -1,0 +1,10 @@
+# Higress MCP Server configuration for mcp.higress.ai submission
+# Target directory in alibaba/higress: plugins/wasm-go/mcp-servers/mcp-bid-information-query/
+# Mode: mcp-proxy — proxies to the natively-deployed FastMCP server (Streamable HTTP)
+# Backend currently runs without authentication (public hosted service)
+server:
+  name: bid-information-query
+  type: mcp-proxy
+  mcpServerURL: "https://mcp.jiefengnews.com/mcp"
+  timeout: 30000
+
