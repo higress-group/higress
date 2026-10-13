@@ -1,4 +1,4 @@
-FROM golang:1.23-bullseye AS golang-base
+FROM higress-registry.cn-hangzhou.cr.aliyuncs.com/mcp-server/golang-base:latest AS golang-base
 
 ARG GOPROXY
 ARG GO_FILTER_NAME
@@ -8,6 +8,7 @@ ENV GOFLAGS=-buildvcs=false
 ENV GOPROXY=${GOPROXY}
 ENV GOARCH=${GOARCH}
 ENV CGO_ENABLED=1
+ENV PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 根据目标架构安装对应的编译工具
 RUN if [ "$GOARCH" = "arm64" ]; then \
