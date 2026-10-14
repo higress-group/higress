@@ -301,6 +301,9 @@ func initAPIs(gjson gjson.Result, c *PluginConfig) error {
 		if err != nil {
 			return err
 		}
+		if len(apiStruct.Servers) == 0 || apiStruct.Servers[0].URL == "" {
+			return errors.New("api servers is required")
+		}
 
 		var allTool_param []ToolsParam
 		//拆除服务下面的每个api的path
