@@ -828,12 +828,16 @@ impl HttpContext for AiDataMasking {
             }
         }
         let new_body = if end_of_stream {
-            self.msg_window.finish(self.is_openai_stream.unwrap())
+            // is_openai_stream is only detected when a non-empty body chunk
+            // arrives; an empty streaming response reaches end_of_stream first,
+            // so the flag is still None here and must not be unwrapped.
+            self.msg_window
+                .finish(self.is_openai_stream.unwrap_or(false))
         } else {
             self.msg_window.pop(
                 self.char_window_size * 2,
                 self.byte_window_size * 2,
-                self.is_openai_stream.unwrap(),
+                self.is_openai_stream.unwrap_or(false),
             )
         };
         self.replace_http_response_body(&new_body);
