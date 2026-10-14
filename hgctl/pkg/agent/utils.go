@@ -309,7 +309,7 @@ func getAgentConfig(config *AgentConfig) error {
 	case options[1]:
 		return importAgentFromCore(config)
 	}
-	return fmt.Errorf("Unsupport way to create a agent")
+	return fmt.Errorf("Unsupported way to create a agent")
 }
 
 func getAgentCoreSubAgents() (map[string]string, []string, error) {
@@ -617,7 +617,7 @@ func queryAgentMCP(config *AgentConfig) error {
 	cyan.Println("  Configure multiple MCP servers if you want to use external tools")
 	config.MCPServers = []MCPServerConfig{}
 
-	// Show Himarket's exising mcp servers
+	// Show Himarket's existing mcp servers
 	existServers, names, err := getHimarketMCPServer()
 	if err == nil && len(existServers) != 0 {
 		yellow.Println("🔗 Get existing MCP Servers from Himarket: ")
@@ -662,7 +662,7 @@ func queryAgentMCP(config *AgentConfig) error {
 	}
 
 	fmt.Println()
-	purple.Println("Add MCP Servers mannually...")
+	purple.Println("Add MCP Servers manually...")
 
 	for {
 		var mcpserver MCPServerConfig
