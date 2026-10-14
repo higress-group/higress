@@ -329,6 +329,15 @@ func TestGaladriel(t *testing.T) {
 	test.RunGaladrielOnStreamingResponseBodyTests(t)
 }
 
+func TestCerebras(t *testing.T) {
+	test.RunCerebrasParseConfigTests(t)
+	test.RunCerebrasOnHttpRequestHeadersTests(t)
+	test.RunCerebrasOnHttpRequestBodyTests(t)
+	test.RunCerebrasOnHttpResponseHeadersTests(t)
+	test.RunCerebrasOnHttpResponseBodyTests(t)
+	test.RunCerebrasOnStreamingResponseBodyTests(t)
+}
+
 func TestMinimax(t *testing.T) {
 	test.RunMinimaxBasePathHandlingTests(t)
 }
