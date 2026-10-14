@@ -221,8 +221,8 @@ jobs:
           for image in ${IMAGES[@]}; do
             echo "Image: $image"
             if [ "$BUILT_IMAGE" == "" ]; then
-              TAG=${image#*:}
-              HUB=${image%:*}
+              image_name=${image##*/}
+              if [[ "$image_name" == *:* ]]; then TAG=${image_name##*:}; HUB=${image%:*}; else TAG=latest; HUB=$image; fi
               HUB=${HUB%/*}
               BUILT_IMAGE="$HUB/pilot:$TAG"; if [ "$release_provenance" = true ]; then BUILT_IMAGE="$HUB/pilot:release-build-$GITHUB_SHA"; fi
               BUILDX_NO_DEFAULT_ATTESTATIONS=1 GOPROXY="https://proxy.golang.org,direct" IMG_URL="$BUILT_IMAGE" make build-istio
@@ -316,8 +316,8 @@ jobs:
           for image in ${IMAGES[@]}; do
             echo "Image: $image"
             if [ "$BUILT_IMAGE" == "" ]; then
-              TAG=${image#*:}
-              HUB=${image%:*}
+              image_name=${image##*/}
+              if [[ "$image_name" == *:* ]]; then TAG=${image_name##*:}; HUB=${image%:*}; else TAG=latest; HUB=$image; fi
               HUB=${HUB%/*}
               BUILT_IMAGE="$HUB/proxyv2:$TAG"; if [ "$release_provenance" = true ]; then BUILT_IMAGE="$HUB/proxyv2:release-build-$GITHUB_SHA"; fi
               BUILDX_NO_DEFAULT_ATTESTATIONS=1 GOPROXY="https://proxy.golang.org,direct" IMG_URL="$BUILT_IMAGE" make build-gateway
