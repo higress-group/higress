@@ -107,7 +107,7 @@ func getServerCommand() *cobra.Command {
 	serveCmd.PersistentFlags().BoolVar(&serverArgs.EnableStatus, "enableStatus", true, "enable the ingress status syncer which use to update the ip in ingress's status")
 	serveCmd.PersistentFlags().StringVar(&serverArgs.IngressClass, "ingressClass", innerconstants.DefaultIngressClass, "if not empty, only watch the ingresses have the specified class, otherwise watch all ingresses")
 	serveCmd.PersistentFlags().StringVar(&serverArgs.GatewayClass, "gatewayClass", innerconstants.DefaultGatewayClass, "if not empty, only process Gateway API resources that belong to the specified GatewayClass")
-	serveCmd.PersistentFlags().StringVar(&serverArgs.WatchNamespace, "watchNamespace", "", "if not empty, only wath the ingresses in the specified namespace, otherwise watch in all namespacees")
+	serveCmd.PersistentFlags().StringVar(&serverArgs.WatchNamespace, "watchNamespace", "", "if not empty, only watch the ingresses in the specified namespace; otherwise watch in all namespaces")
 	serveCmd.PersistentFlags().BoolVar(&serverArgs.Debug, "debug", serverArgs.Debug, "if true, enables more debug http api")
 	serveCmd.PersistentFlags().StringVar(&serverArgs.HttpAddress, "httpAddress", serverArgs.HttpAddress, "the http address")
 	serveCmd.PersistentFlags().StringVar(&serverArgs.GrpcAddress, "grpcAddress", serverArgs.GrpcAddress, "the grpc address")
