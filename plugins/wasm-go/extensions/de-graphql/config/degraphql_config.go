@@ -165,7 +165,7 @@ func (d *DeGraphQLConfig) ParseGqlFromUrl(requestUrl string) (string, error) {
 	build.WriteString(getJsonStr(d.gql))
 	build.WriteString("\"")
 
-	// write varialbes
+	// write variables
 	if len(variables) > 0 {
 		index := 0
 		build.WriteString(",")
