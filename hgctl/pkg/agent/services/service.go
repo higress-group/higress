@@ -185,7 +185,7 @@ func HandleAddRoute(client *HigressClient, body interface{}) ([]byte, error) {
 
 // Himarket-related
 func HandleAddHigressInstance(client *HimarketClient, body interface{}) ([]byte, error) {
-	// This api will not return the higress-gatway-id
+	// This api will not return the higress-gateway-id
 	return client.Post("/api/v1/gateways", body)
 }
 
