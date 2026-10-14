@@ -451,39 +451,54 @@ func (m *chatMessage) ParseContent() []chatMessageContent {
 					})
 				}
 			case contentTypeImageUrl:
-				if subObj, ok := contentMap[contentTypeImageUrl].(map[string]any); ok {
-					msg := chatMessageContent{
-						Type: contentTypeImageUrl,
-						ImageUrl: &chatMessageContentImageUrl{
-							Url: subObj["url"].(string),
-						},
-					}
-					if detail, ok := subObj["detail"].(string); ok {
-						msg.ImageUrl.Detail = detail
-					}
-					contentList = append(contentList, msg)
+				// Content is an arbitrary value decoded from the client request
+				// JSON, so every nested field has to be type-checked before use.
+				// A missing or non-string "url" used to panic the whole request;
+				// drop the malformed part instead so the remaining content still
+				// reaches the upstream provider.
+				url := getNestedString(contentMap, contentTypeImageUrl, "url")
+				if url == "" {
+					log.Errorf("[ai-proxy] dropping %s content part: \"url\" is missing or not a non-empty string", contentTypeImageUrl)
+					continue
 				}
+				msg := chatMessageContent{
+					Type: contentTypeImageUrl,
+					ImageUrl: &chatMessageContentImageUrl{
+						Url: url,
+					},
+				}
+				if detail := getNestedString(contentMap, contentTypeImageUrl, "detail"); detail != "" {
+					msg.ImageUrl.Detail = detail
+				}
+				contentList = append(contentList, msg)
 			case contentTypeInputAudio:
-				if subObj, ok := contentMap[contentTypeInputAudio].(map[string]any); ok {
-					contentList = append(contentList, chatMessageContent{
-						Type: contentTypeInputAudio,
-						InputAudio: &chatMessageContentAudio{
-							Data:   subObj["data"].(string),
-							Format: subObj["format"].(string),
-						},
-					})
+				data := getNestedString(contentMap, contentTypeInputAudio, "data")
+				format := getNestedString(contentMap, contentTypeInputAudio, "format")
+				if data == "" || format == "" {
+					log.Errorf("[ai-proxy] dropping %s content part: \"data\" and \"format\" must both be non-empty strings", contentTypeInputAudio)
+					continue
 				}
+				contentList = append(contentList, chatMessageContent{
+					Type: contentTypeInputAudio,
+					InputAudio: &chatMessageContentAudio{
+						Data:   data,
+						Format: format,
+					},
+				})
 			case contentTypeFile:
-				if subObj, ok := contentMap[contentTypeFile].(map[string]any); ok {
-					contentList = append(contentList, chatMessageContent{
-						Type: contentTypeFile,
-						File: &chatMessageContentFile{
-							FileId: subObj["file_id"].(string),
-							// FileName: subObj["file_name"].(string),
-							// FileData: subObj["file_data"].(string),
-						},
-					})
+				fileId := getNestedString(contentMap, contentTypeFile, "file_id")
+				if fileId == "" {
+					log.Errorf("[ai-proxy] dropping %s content part: \"file_id\" is missing or not a non-empty string", contentTypeFile)
+					continue
 				}
+				contentList = append(contentList, chatMessageContent{
+					Type: contentTypeFile,
+					File: &chatMessageContentFile{
+						// Only file_id is carried over today; file_name/file_data
+						// are not consumed by any provider yet.
+						FileId: fileId,
+					},
+				})
 			}
 		}
 		return contentList
