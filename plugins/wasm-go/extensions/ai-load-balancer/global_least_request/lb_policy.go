@@ -250,7 +250,7 @@ func (lb GlobalLeastRequestLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpC
 
 		if err := proxywasm.SetUpstreamOverrideHost([]byte(hostSelected)); err != nil {
 			ctx.SetContext("error", true)
-			log.Errorf("override upstream host failed, fallback to default lb policy, error informations: %+v", err)
+			log.Errorf("override upstream host failed, fallback to default lb policy, error information: %+v", err)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
@@ -263,7 +263,7 @@ func (lb GlobalLeastRequestLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpC
 	})
 	if err != nil {
 		ctx.SetContext("error", true)
-		log.Errorf("redis eval failed, fallback to default lb policy, error informations: %+v", err)
+		log.Errorf("redis eval failed, fallback to default lb policy, error information: %+v", err)
 		return types.ActionContinue
 	}
 	return types.ActionPause
