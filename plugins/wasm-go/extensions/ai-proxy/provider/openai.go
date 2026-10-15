@@ -45,6 +45,11 @@ func (m *openaiProviderInitializer) DefaultCapabilities() map[string]string {
 		string(ApiNameRetrieveBatch):                        PathOpenAIRetrieveBatch,
 		string(ApiNameCancelBatch):                          PathOpenAICancelBatch,
 		string(ApiNameResponses):                            PathOpenAIResponses,
+		string(ApiNameRetrieveResponse):                     PathOpenAIRetrieveResponse,
+		string(ApiNameCancelResponse):                       PathOpenAICancelResponse,
+		string(ApiNameCompactResponse):                      PathOpenAICompactResponse,
+		string(ApiNameListResponseInputItems):               PathOpenAIListResponseInputItems,
+		string(ApiNameResponseInputTokens):                  PathOpenAIResponseInputTokens,
 		string(ApiNameFineTuningJobs):                       PathOpenAIFineTuningJobs,
 		string(ApiNameRetrieveFineTuningJob):                PathOpenAIRetrieveFineTuningJob,
 		string(ApiNameFineTuningJobEvents):                  PathOpenAIFineTuningJobEvents,
@@ -73,6 +78,8 @@ func isDirectPath(path string) bool {
 		strings.HasSuffix(path, "/images/edits") ||
 		strings.HasSuffix(path, "/models") ||
 		strings.HasSuffix(path, "/responses") ||
+		strings.HasSuffix(path, "/responses/compact") ||
+		strings.HasSuffix(path, "/responses/input_tokens") ||
 		strings.HasSuffix(path, "/fine_tuning/jobs") ||
 		strings.HasSuffix(path, "/fine_tuning/checkpoints") ||
 		strings.HasSuffix(path, "/realtime") ||
