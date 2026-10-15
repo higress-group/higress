@@ -170,6 +170,12 @@ func normalizeHeaderName(name string) string {
 	return name
 }
 
+// publishedKey returns the context key that remembers whether the capped body has
+// already been written to the filter state for the given body buffer.
+func publishedKey(bufferKey string) string {
+	return bufferKey + "_published"
+}
+
 // processStreamingBody common function to process streaming body
 func processStreamingBody(
 	ctx wrapper.HttpContext,
@@ -182,6 +188,13 @@ func processStreamingBody(
 ) []byte {
 	// If body logging is not enabled or max size is <= 0, just return the chunk as is
 	if !enabled || maxSize <= 0 {
+		return chunk
+	}
+
+	// Once the head has been published there is nothing left to accumulate: a
+	// second write would replace the filter-state value that log formats read,
+	// so consumers would see a later slice instead of the beginning.
+	if published, _ := ctx.GetContext(publishedKey(bufferKey)).(bool); published {
 		return chunk
 	}
 
@@ -198,10 +211,11 @@ func processStreamingBody(
 				ctx.SetContext(bufferKey, buffer)
 			} else {
 				buffer = append(buffer, chunk[:remainingCapacity]...)
-				// reach max size, record and clear
+				// reach max size, record once
 				bodyStr := string(buffer)
 				setPropertyWithMarshal(logKey, bodyStr)
-				// clear buffer
+				// remember that the value is final and clear the buffer
+				ctx.SetContext(publishedKey(bufferKey), true)
 				ctx.SetContext(bufferKey, []byte{})
 			}
 		}
@@ -211,7 +225,8 @@ func processStreamingBody(
 	if isEndStream && len(buffer) > 0 {
 		bodyStr := string(buffer)
 		setPropertyWithMarshal(logKey, bodyStr)
-		// clear buffer
+		// remember that the value is final and clear the buffer
+		ctx.SetContext(publishedKey(bufferKey), true)
 		ctx.SetContext(bufferKey, []byte{})
 	}
 
