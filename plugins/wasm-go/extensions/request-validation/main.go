@@ -169,23 +169,18 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte, log 
 		return types.ActionContinue
 	}
 
-	// covert to schema
-	schema := make(map[string]interface{})
-	err := json.Unmarshal(body, &schema)
-	if err != nil {
-		log.Errorf("unmarshal body failed: %v", err)
+	// A body that is not valid JSON keeps the fail-open behaviour that
+	// TestOnHttpRequestBody_InvalidJson_PassThrough pins. Unmarshalling into a map
+	// instead would also fail for valid JSON that is not an object (array, string,
+	// number, boolean) and would skip validation for bodies the schema must reject,
+	// so the body is only checked for JSON validity and then validated as-is.
+	if !json.Valid(body) {
+		log.Errorf("request body is not valid JSON, skip body schema validation")
 		return types.ActionContinue
 	}
 
-	// convert to json string
-	schemaBytes, err := json.Marshal(schema)
-	if err != nil {
-		log.Errorf("marshal schema failed: %v", err)
-		return types.ActionContinue
-	}
-
-	// validate
-	document := strings.NewReader(string(schemaBytes))
+	// validate the original body bytes
+	document := strings.NewReader(string(body))
 	compile, err := config.compiler.Compile(defaultBodySchema)
 	if err != nil {
 		log.Errorf("compile schema failed: %v", err)
