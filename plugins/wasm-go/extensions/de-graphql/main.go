@@ -72,7 +72,15 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.DeGraphQLConfig
 	}
 	replaceBody, err := config.ParseGqlFromUrl(requestUrl)
 	if err != nil {
+		// The request cannot be translated into a GraphQL body (for example a variable
+		// value that does not match its declared type). Forwarding it with an empty body
+		// would ask the upstream to run a different query than the client sent.
 		log.Warnf("failed to parse request url %s : %v", requestUrl, err)
+		if sendErr := proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "de-graphql.invalid_request", nil,
+			[]byte(fmt.Sprintf("invalid graphql request: %v", err)), -1); sendErr != nil {
+			log.Errorf("failed to send rejected response: %v", sendErr)
+		}
+		return types.ActionPause
 	}
 	log.Debugf("replace body:%s", replaceBody)
 

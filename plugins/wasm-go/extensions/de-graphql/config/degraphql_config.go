@@ -15,11 +15,13 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
-	"strings"
-
 	"regexp"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -28,6 +30,10 @@ const (
 )
 
 var gqlVariableRegex = regexp.MustCompile(`\$(\w+)\s*:\s*(String|Float|Int|Boolean)(!?)`)
+
+// jsonNumberRegex matches the JSON number grammar, which is narrower than what
+// strconv.ParseInt/ParseFloat accept (no "+1", "1.", ".5", "Inf" or hex floats).
+var jsonNumberRegex = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
 
 type VariableType string
 
@@ -161,9 +167,11 @@ func (d *DeGraphQLConfig) ParseGqlFromUrl(requestUrl string) (string, error) {
 
 	// write query
 	build.WriteString("{\"query\":")
-	build.WriteString("\"")
-	build.WriteString(getJsonStr(d.gql))
-	build.WriteString("\"")
+	queryJson, err := json.Marshal(d.gql)
+	if err != nil {
+		return "", err
+	}
+	build.Write(queryJson)
 
 	// write varialbes
 	if len(variables) > 0 {
@@ -174,12 +182,8 @@ func (d *DeGraphQLConfig) ParseGqlFromUrl(requestUrl string) (string, error) {
 			build.WriteString("\"")
 			build.WriteString(variable.name)
 			build.WriteString("\":")
-			if variable.typ == StringType {
-				build.WriteString("\"")
-				build.WriteString(getJsonStr(variable.value))
-				build.WriteString("\"")
-			} else {
-				build.WriteString(variable.value)
+			if err := writeJsonVariableValue(&build, variable); err != nil {
+				return "", err
 			}
 			if index < len(variables)-1 {
 				build.WriteString(",")
@@ -193,7 +197,49 @@ func (d *DeGraphQLConfig) ParseGqlFromUrl(requestUrl string) (string, error) {
 	return build.String(), nil
 }
 
-func getJsonStr(str string) string {
-	d := strings.ReplaceAll(str, "\"", "\\\"")
-	return strings.ReplaceAll(d, "\n", "\\n")
+// writeJsonVariableValue appends the value of a query-string variable to the upstream
+// body, encoded as the JSON type declared in the GraphQL document. The value comes from
+// the request URL, so it must be validated against the declared type: writing it verbatim
+// allowed arbitrary JSON to be injected into the variables object and let a mistyped value
+// produce a body that is not valid JSON at all.
+func writeJsonVariableValue(build *strings.Builder, variable Variable) error {
+	switch variable.typ {
+	case StringType:
+		marshalled, err := json.Marshal(variable.value)
+		if err != nil {
+			return fmt.Errorf("variable %q cannot be encoded as a JSON string: %v", variable.name, err)
+		}
+		build.Write(marshalled)
+		return nil
+	case IntType:
+		if _, err := strconv.ParseInt(variable.value, 10, 64); err != nil {
+			return fmt.Errorf("variable %q expects an Int value, got %q", variable.name, variable.value)
+		}
+		// Keep the caller's notation (e.g. a leading sign) only when it is a valid
+		// JSON number; check after the parse so out-of-range values are rejected too.
+		if !jsonNumberRegex.MatchString(variable.value) {
+			return fmt.Errorf("variable %q expects an Int value, got %q", variable.name, variable.value)
+		}
+		build.WriteString(variable.value)
+		return nil
+	case FloatType:
+		if _, err := strconv.ParseFloat(variable.value, 64); err != nil {
+			return fmt.Errorf("variable %q expects a Float value, got %q", variable.name, variable.value)
+		}
+		// Keep the caller's notation (e.g. "12.0") so the emitted body stays identical
+		// for values that were already accepted before this change.
+		if !jsonNumberRegex.MatchString(variable.value) {
+			return fmt.Errorf("variable %q expects a Float value, got %q", variable.name, variable.value)
+		}
+		build.WriteString(variable.value)
+		return nil
+	case BooleanType:
+		if variable.value != "true" && variable.value != "false" {
+			return fmt.Errorf("variable %q expects a Boolean value, got %q", variable.name, variable.value)
+		}
+		build.WriteString(variable.value)
+		return nil
+	default:
+		return fmt.Errorf("variable %q has an unsupported type %q", variable.name, variable.typ)
+	}
 }
