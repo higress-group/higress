@@ -95,6 +95,34 @@ var configMissingCache = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：cacheResponseCode 仅含非法值
+var configInvalidResponseCodeOnly = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"cache": map[string]interface{}{
+			"type":        "redis",
+			"serviceName": "redis.static",
+			"servicePort": 6379,
+		},
+		"cacheKeyFromHeader": "x-user-id",
+		"cacheResponseCode":  []interface{}{"abc"},
+	})
+	return data
+}()
+
+// 测试配置：cacheResponseCode 合法值与非法值混合
+var configMixedResponseCode = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"cache": map[string]interface{}{
+			"type":        "redis",
+			"serviceName": "redis.static",
+			"servicePort": 6379,
+		},
+		"cacheKeyFromHeader": "x-user-id",
+		"cacheResponseCode":  []interface{}{"502", "abc", 200},
+	})
+	return data
+}()
+
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		// 测试header key配置
@@ -175,6 +203,40 @@ func TestParseConfig(t *testing.T) {
 			cfg, ok := configRaw.(*config.PluginConfig)
 			require.True(t, ok)
 			require.Equal(t, []int32{200}, cfg.CacheResponseCode)
+		})
+	})
+}
+
+func TestParseConfigCacheResponseCode(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		// 非法值应被跳过；全部非法时回退到默认的200
+		t.Run("invalid value skipped, default applied when all invalid", func(t *testing.T) {
+			host, status := test.NewTestHost(configInvalidResponseCodeOnly)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			configRaw, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, configRaw)
+
+			cfg, ok := configRaw.(*config.PluginConfig)
+			require.True(t, ok)
+			require.Equal(t, []int32{200}, cfg.CacheResponseCode)
+		})
+
+		// 合法与非法混合：应跳过非法值，保留所有合法项
+		t.Run("mixed values keep all valid entries", func(t *testing.T) {
+			host, status := test.NewTestHost(configMixedResponseCode)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			configRaw, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, configRaw)
+
+			cfg, ok := configRaw.(*config.PluginConfig)
+			require.True(t, ok)
+			require.Equal(t, []int32{502, 200}, cfg.CacheResponseCode)
 		})
 	})
 }
