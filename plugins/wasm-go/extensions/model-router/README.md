@@ -11,6 +11,7 @@
 | `enableOnPathSuffix` | array of string | 选填                    | ["/completions","/embeddings","/images/generations","/audio/speech","/fine_tuning/jobs","/moderations","/image-synthesis","/video-synthesis","/rerank","/messages"] | 只对这些特定路径后缀的请求生效，可以配置为 "*" 以匹配所有路径 |
 | `keepOriginalModelName` | bool         | 选填                    | false                    | 配合 `addProviderHeader` 使用，设为 true 时仍提取 provider 写入 header，但不改写请求体中的 model 字段 |
 | `autoRouting`        | object          | 选填                    | -                        | 自动路由配置，详见下方说明                            |
+| `redis`        | object          | 选填                    | -                        | 自动路由agent模式下需要的redis配置                            |
 
 ### autoRouting 配置
 
@@ -19,6 +20,15 @@
 | `enable`       | bool            | 必填     | false  | 是否启用自动路由功能                                         |
 | `defaultModel` | string          | 选填     | -      | 当没有规则匹配时使用的默认模型                               |
 | `rules`        | array of object | 选填     | -      | 路由规则数组，按顺序匹配                                     |
+| `agentMode`        | bool | 选填     | -      | 是否启用agent优化模式                                    |
+
+### redis配置
+| 名称           | 数据类型        | 填写要求 | 默认值 | 描述                                                         |
+| -------------- | --------------- | -------- | ------ | ------------------------------------------------------------ |
+| `service_name` | string          | 选填     | -      | redis的static service name                               |
+| `service_port`        | array of object | 选填     | -      | redis需要的port                                     |
+| `timeout`        | int | 选填     | -      | 超时时间                                   |
+
 
 ### rules 配置
 
@@ -137,17 +147,27 @@ keepOriginalModelName: true
 
 ```yaml
 autoRouting:
-  enable: true
-  defaultModel: "qwen-turbo"
-  rules:
-    - pattern: "(?i)(画|绘|生成图|图片|image|draw|paint)"
-      model: "qwen-vl-max"
-    - pattern: "(?i)(代码|编程|code|program|function|debug)"
-      model: "qwen-coder"
-    - pattern: "(?i)(翻译|translate|translation)"
-      model: "qwen-turbo"
-    - pattern: "(?i)(数学|计算|math|calculate)"
-      model: "qwen-math"
+    agentMode: true
+    defaultModel: gpt-5.6-sol
+    enable: true
+    rules:
+    - model: qwen-vl-max
+      pattern: (?i)(画|绘|生成图|图片|image|draw|paint)
+    - model: qwen-coder
+      pattern: (?i)(代码|编程|code|program|function|debug)
+    - model: qwen-turbo
+      pattern: (?i)(翻译|translate|translation)
+    - model: qwen-math
+      pattern: (?i)(数学|计算|math|calculate)
+    enable: true
+    modelKey: model
+    modelToHeader: x-higress-llm-model
+    redis:
+      database: 1
+      redis_key_prefix: 'chat_quota:'
+      service_name: redis.dns
+      service_port: 6379
+      timeout: 2000
 ```
 
 #### 工作原理
@@ -158,6 +178,8 @@ autoRouting:
 4. 匹配成功时，将对应的 model 值设置到 `x-higress-llm-model` 请求头
 5. 如果所有规则都未匹配，则使用 `defaultModel` 配置的默认模型
 6. 如果未配置 `defaultModel` 且无规则匹配，则不设置路由头（会记录警告日志）
+7. 针对agent loop做了优化，实现单一agent loop下可以路由到同一个模型，避免agent反复思考会被路由到不同模型，导致质量不一
+
 
 #### 使用示例
 
