@@ -16,6 +16,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -174,4 +175,40 @@ func TestGeminiTransformResponseBodyFunctionCall(t *testing.T) {
 	assert.Equal(t, 10, response.Usage.PromptTokens)
 	assert.Equal(t, 5, response.Usage.CompletionTokens)
 	assert.Equal(t, 15, response.Usage.TotalTokens)
+}
+
+func TestGeminiStreamResponsePreservesFunctionCalls(t *testing.T) {
+	provider := &geminiProvider{}
+	chunk := []byte(`data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Hangzhou"}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":1,"totalTokenCount":11}}` + "\n\n")
+
+	body, err := provider.OnStreamingResponseBody(newMockMultipartHttpContext(), ApiNameChatCompletion, chunk, false)
+	require.NoError(t, err)
+
+	payload := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(body)), "data:"))
+	var response chatCompletionResponse
+	require.NoError(t, json.Unmarshal([]byte(payload), &response))
+	require.Len(t, response.Choices, 1)
+	require.NotNil(t, response.Choices[0].Delta)
+	require.Len(t, response.Choices[0].Delta.ToolCalls, 1)
+	assert.Equal(t, "get_weather", response.Choices[0].Delta.ToolCalls[0].Function.Name)
+	assert.JSONEq(t, `{"city":"Hangzhou"}`, response.Choices[0].Delta.ToolCalls[0].Function.Arguments)
+	require.NotNil(t, response.Choices[0].FinishReason)
+	assert.Equal(t, finishReasonToolCall, *response.Choices[0].FinishReason)
+}
+
+func TestGeminiStreamResponseTextOnlyUnchanged(t *testing.T) {
+	provider := &geminiProvider{}
+	chunk := []byte(`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":1,"totalTokenCount":11}}` + "\n\n")
+
+	body, err := provider.OnStreamingResponseBody(newMockMultipartHttpContext(), ApiNameChatCompletion, chunk, false)
+	require.NoError(t, err)
+
+	payload := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(body)), "data:"))
+	var response chatCompletionResponse
+	require.NoError(t, json.Unmarshal([]byte(payload), &response))
+	require.Len(t, response.Choices, 1)
+	require.NotNil(t, response.Choices[0].Delta)
+	assert.Equal(t, "hello", response.Choices[0].Delta.Content)
+	require.NotNil(t, response.Choices[0].FinishReason)
+	assert.Equal(t, "stop", *response.Choices[0].FinishReason)
 }
