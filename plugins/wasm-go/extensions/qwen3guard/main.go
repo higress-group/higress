@@ -23,6 +23,11 @@ const (
 	ctxDuringCall    = "qwen3guard.during_call"
 )
 
+// ctxRequestStream records whether the intercepted request negotiated a
+// streaming (SSE) answer. The intercept payload has to mirror that choice, so
+// the flag is captured once in onHttpRequestBody and reused by every deny path.
+const ctxRequestStream = "qwen3guard.request_stream"
+
 func main() {}
 
 func init() {
@@ -59,6 +64,11 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, c pluginConfig, log log.Log) 
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, c pluginConfig, body []byte, log log.Log) types.Action {
+	// Probe the request's stream flag before any early return so that the response
+	// moderation path can pick the same reply shape even when request moderation
+	// itself is disabled.
+	streamingRequest := isStreamingRequest(body)
+	ctx.SetContext(ctxRequestStream, streamingRequest)
 	prompt, ok := extractJSONText(body, c.requestContentJSONPath)
 	if ok {
 		ctx.SetContext(ctxRequestPrompt, prompt)
@@ -83,10 +93,14 @@ func onHttpRequestBody(ctx wrapper.HttpContext, c pluginConfig, body []byte, log
 				return
 			}
 			if shouldBlockRisk(result.Safety, c.riskLevelBar) {
+				// Mirror the caller's stream flag: a streaming client (Dify, the OpenAI SDKs,
+				// LangChain, ...) reads the answer as SSE and would drop a non-streaming JSON
+				// document, showing an empty message even though we did return denyMessage.
+				deny := buildDenyResponse(c.denyMessage, streamingRequest)
 				proxywasm.SendHttpResponse(
 					uint32(c.denyCode),
-					[][2]string{{"content-type", "application/json"}},
-					buildChatDenyBody(c.denyMessage),
+					[][2]string{{"content-type", deny.contentType}},
+					deny.body,
 					-1,
 				)
 				ctx.DontReadResponseBody()
@@ -147,10 +161,11 @@ func onHttpResponseBody(ctx wrapper.HttpContext, c pluginConfig, body []byte, lo
 				return
 			}
 			if shouldBlockRisk(result.Safety, c.riskLevelBar) {
+				deny := buildDenyResponse(c.denyMessage, ctx.GetBoolContext(ctxRequestStream, false))
 				proxywasm.SendHttpResponse(
 					uint32(c.denyCode),
-					[][2]string{{"content-type", "application/json"}},
-					buildChatDenyBody(c.denyMessage),
+					[][2]string{{"content-type", deny.contentType}},
+					deny.body,
 					-1,
 				)
 				return

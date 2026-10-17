@@ -6,6 +6,11 @@ import (
 	"time"
 )
 
+const (
+	contentTypeJSON = "application/json"
+	contentTypeSSE  = "text/event-stream"
+)
+
 type chatCompletionBody struct {
 	ID      string       `json:"id"`
 	Object  string       `json:"object"`
@@ -96,6 +101,39 @@ func buildStreamDenyBody(message string) []byte {
 	chunkData, _ := json.Marshal(chunk)
 	endData, _ := json.Marshal(end)
 	return []byte(fmt.Sprintf("data: %s\n\ndata: %s\n\ndata: [DONE]\n\n", chunkData, endData))
+}
+
+// denyResponse pairs the intercept payload with the content-type that has to
+// travel with it. The two always change together: a client that negotiated a
+// streaming answer will not look at a JSON document, and a non-streaming
+// client cannot parse an SSE frame.
+type denyResponse struct {
+	contentType string
+	body        []byte
+}
+
+// buildDenyResponse chooses the intercept payload that matches the shape of
+// the request being answered.
+//
+// OpenAI-compatible clients that send "stream": true read the answer as
+// Server-Sent Events and take the assistant text from choices[].delta.content.
+// If such a request is answered with a plain chat.completion document (the
+// non-streaming shape) the client's SSE reader finds no "data:" frame at all,
+// so gateways and workflow platforms such as Dify render an empty/null message
+// even though the gateway did return the configured denyMessage. Deriving both
+// the body and the content-type from the request's own stream flag keeps the
+// intercept visible to the caller in either mode.
+func buildDenyResponse(message string, streaming bool) denyResponse {
+	if streaming {
+		return denyResponse{
+			contentType: contentTypeSSE,
+			body:        buildStreamDenyBody(message),
+		}
+	}
+	return denyResponse{
+		contentType: contentTypeJSON,
+		body:        buildChatDenyBody(message),
+	}
 }
 
 func newDenyID() string {
