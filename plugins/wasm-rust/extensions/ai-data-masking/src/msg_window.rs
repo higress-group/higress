@@ -38,6 +38,13 @@ impl MessageWindow {
                 .to_vec();
             ret.as_bytes().to_vec()
         } else {
+            // A non-UTF-8 buffer can be shorter than byte_window_size (for
+            // example, a binary upstream error body). The subtraction must be
+            // guarded like the character branch above, otherwise it underflows
+            // (or wraps into an out-of-range slice index in release builds).
+            if self.message.len() <= byte_window_size {
+                return Vec::new();
+            }
             let ret = self.message[..self.message.len() - byte_window_size].to_vec();
             self.message = self.message[self.message.len() - byte_window_size..].to_vec();
             ret
@@ -62,5 +69,28 @@ mod tests {
         msg_window.update(b"hello world");
         assert_eq!(msg_window.pop(5, 5), b"worldhello ");
         assert_eq!(msg_window.finish(), b"world");
+    }
+
+    #[test]
+    fn test_msg_window_non_utf8_shorter_than_window_does_not_panic() {
+        // A non-UTF-8 buffer that is shorter than byte_window_size must not
+        // panic; nothing is emitted and the buffer is kept for finish().
+        let mut msg_window = super::MessageWindow::default();
+        msg_window.update(&[0xff, 0xfe, b'e', b'r', b'r', 0x80]);
+        assert_eq!(msg_window.pop(128, 128), Vec::<u8>::new());
+        assert_eq!(
+            msg_window.finish(),
+            vec![0xff, 0xfe, b'e', b'r', b'r', 0x80]
+        );
+    }
+
+    #[test]
+    fn test_msg_window_non_utf8_longer_than_window_keeps_window_bytes() {
+        let mut msg_window = super::MessageWindow::default();
+        let mut data = vec![b'a'; 20];
+        data.push(0xff);
+        msg_window.update(&data);
+        assert_eq!(msg_window.pop(5, 5), vec![b'a'; 16]);
+        assert_eq!(msg_window.finish(), vec![b'a', b'a', b'a', b'a', 0xff]);
     }
 }
