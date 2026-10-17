@@ -202,6 +202,10 @@ Fireworks AI 所对应的 `type` 为 `fireworks`。它并无特有的配置字�
 
 Galadriel 所对应的 `type` 为 `galadriel`。它并无特有的配置字段。
 
+#### WebWright
+
+WebWright 所对应的 `type` 为 `webwright`。它并无特有的配置字段。
+
 #### 文心一言（Baidu）
 
 文心一言所对应的 `type` 为 `baidu`。它并无特有的配置字段。

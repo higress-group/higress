@@ -165,6 +165,7 @@ const (
 	providerTypeVllm       = "vllm"
 	providerTypeGeneric    = "generic"
 	providerTypeKling      = "kling"
+	providerTypeWebWright  = "webwright"
 
 	protocolOpenAI   = "openai"
 	protocolOriginal = "original"
@@ -272,6 +273,7 @@ var (
 		providerTypeVllm:       &vllmProviderInitializer{},
 		providerTypeGeneric:    &genericProviderInitializer{},
 		providerTypeKling:      &klingProviderInitializer{},
+		providerTypeWebWright:  &webwrightProviderInitializer{},
 	}
 )
 
