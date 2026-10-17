@@ -7,6 +7,7 @@ import (
 
 const (
 	ProviderTypeDashscope = "dashscope"
+	ProviderTypeLocal     = "local"
 )
 
 type providerInitializer interface {
@@ -18,6 +19,7 @@ type providerInitializer interface {
 var (
 	providerInitializers = map[string]providerInitializer{
 		ProviderTypeDashscope: &dashScopeProviderInitializer{},
+		ProviderTypeLocal:     &localProviderInitializer{},
 	}
 )
 
