@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -124,12 +125,22 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIRagConfig, body []byte,
 		headers,
 		reqEmbeddingSerialized,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-			var responseEmbedding dashscope.Response
-			_ = json.Unmarshal(responseBody, &responseEmbedding)
+			embeddingVector, err := parseEmbeddingVector(statusCode, responseBody)
+			if err != nil {
+				// The embedding step is best-effort: when the embedding provider
+				// fails (invalid api key, quota, 5xx, malformed body, ...) we log
+				// the reason and release the paused request. The chat completion
+				// then proceeds without recalled documents. Falling through here
+				// used to index an empty embeddings slice and trap the plugin
+				// instance with an out-of-range panic.
+				log.Errorf("failed to get the embedding for RAG recall: %v, response: %s", err, responseBody)
+				proxywasm.ResumeHttpRequest()
+				return
+			}
 			requestQuery := dashvector.Request{
 				TopK:         config.DashVectorTopK,
 				OutputFileds: []string{config.DashVectorField},
-				Vector:       responseEmbedding.Output.Embeddings[0].Embedding,
+				Vector:       embeddingVector,
 			}
 			requestQuerySerialized, _ := json.Marshal(requestQuery)
 			config.DashVectorClient.Post(
@@ -167,6 +178,27 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIRagConfig, body []byte,
 		50000,
 	)
 	return types.ActionPause
+}
+
+// parseEmbeddingVector extracts the first embedding vector from a DashScope
+// text-embedding response. Both the HTTP status and the payload shape are
+// validated before the embeddings slice is indexed: a DashScope error document
+// (for example an invalid api key or quota response) has no "output.embeddings"
+// array, so an unconditional Embeddings[0] would panic with "index out of range"
+// and fail the in-flight request. Returning an error here lets the caller skip
+// the DashVector recall instead.
+func parseEmbeddingVector(statusCode int, responseBody []byte) ([]float32, error) {
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", statusCode)
+	}
+	var responseEmbedding dashscope.Response
+	if err := json.Unmarshal(responseBody, &responseEmbedding); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	if len(responseEmbedding.Output.Embeddings) == 0 {
+		return nil, errors.New("no embedding found in response")
+	}
+	return responseEmbedding.Output.Embeddings[0].Embedding, nil
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config AIRagConfig, log log.Log) types.Action {
