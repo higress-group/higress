@@ -22,6 +22,7 @@ Plugin Priority: `300`
 | `accessKey` | string | required | - | Aliyun accesskey |
 | `secretKey` | string | required | - | Aliyun secretkey |
 | `action` | string | required | - | Aliyun ai guardrails business interface |
+| `securityToken` | string | optional | - | Aliyun security token (used for temporary credentials) |
 | `checkRequest` | bool | optional | false | check if the input is legal |
 | `checkResponse` | bool | optional | false | check if the output is legal |
 | `requestCheckService` | string | optional | llm_query_moderation | Aliyun yundun service name for input check |
