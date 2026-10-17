@@ -375,7 +375,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 				content := gjson.GetBytes(responseBody, "choices.0.message.content").String()
 				log.Infof("LLM rewritten query response: %s (took %v), original search query:%s",
 					strings.ReplaceAll(content, "\n", `\n`), time.Since(startTime), query)
-				if strings.Contains(content, "none") {
+				if isNoSearchReply(content) {
 					log.Debugf("no search required")
 					proxywasm.ResumeHttpRequest()
 					return
@@ -573,6 +573,15 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config Config) types.Action 
 		ctx.SetResponseBodyBufferLimit(DEFAULT_MAX_BODY_BYTES)
 	}
 	return types.ActionContinue
+}
+
+// isNoSearchReply reports whether the rewrite model answered that no search is
+// needed. The rewrite prompt asks for the exact reply "none", so the answer is
+// compared as a whole: a real search plan such as
+// "internet: nonetheless meaning" contains the letters "none" and must still be
+// searched for.
+func isNoSearchReply(content string) bool {
+	return strings.EqualFold(strings.TrimSpace(content), "none")
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, config Config, body []byte) types.Action {
