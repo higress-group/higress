@@ -69,13 +69,19 @@ func TestDeleteCookie(t *testing.T) {
 			key:    "missing",
 			want:   "user=alice;other=value",
 		},
-		// deleteCookie 用 HasPrefix(pair, key) 删除，不区分段是否含 "="：
-		// 任何以 key 开头的段都会被删除（包括无 "=" 的段）。
+		// deleteCookie 用 strings.Cut(pair, "=") 取名并精确匹配（与 findCookie 一致）：
+		// 无 "=" 的段不会匹配任何 key，会被保留。
 		{
-			name:   "segment without equals sign is deleted when key matches prefix",
+			name:   "segment without equals sign is kept",
 			cookie: "user; other=value",
 			key:    "user",
-			want:   "other=value",
+			want:   "user;other=value",
+		},
+		{
+			name:   "keeps cookies whose name shares the token cookie prefix",
+			cookie: "user_session=<jwt>; user_session_v2=keepme; theme=dark",
+			key:    "user_session",
+			want:   "user_session_v2=keepme;theme=dark",
 		},
 	}
 
