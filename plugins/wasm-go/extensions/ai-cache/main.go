@@ -101,7 +101,13 @@ func onHttpRequestBody(ctx wrapper.HttpContext, c config.PluginConfig, body []by
 		var userMessages []string
 		for _, msg := range messages {
 			if msg.Get("role").String() == "user" {
-				userMessages = append(userMessages, msg.Get("content").String())
+				// Escape the separator (and the escape character) in every message, so that the
+				// joined key identifies the message sequence and not just the text it contains.
+				// Joining the raw texts made one message containing a newline indistinguishable
+				// from two messages: ["a\nb"] and ["a", "b"] both produced "a\nb", so two
+				// different conversations could share one cache entry and one of them could be
+				// answered with the other's cached response.
+				userMessages = append(userMessages, escapeCacheKeySeparator(msg.Get("content").String()))
 			}
 		}
 		key = strings.Join(userMessages, "\n")
@@ -129,6 +135,14 @@ func onHttpRequestBody(ctx wrapper.HttpContext, c config.PluginConfig, body []by
 	}
 
 	return types.ActionPause
+}
+
+// escapeCacheKeySeparator makes a user message safe to embed in the newline-separated
+// "allQuestions" cache key. The escape character is escaped first, so the transformation is
+// reversible and no message can contribute a separator of its own.
+func escapeCacheKeySeparator(message string) string {
+	escaped := strings.ReplaceAll(message, "\\", "\\\\")
+	return strings.ReplaceAll(escaped, "\n", "\\n")
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, c config.PluginConfig, log log.Log) types.Action {
