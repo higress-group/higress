@@ -582,3 +582,68 @@ func TestEdgeCases(t *testing.T) {
 		})
 	})
 }
+
+func TestProxyURLPreservesRequestURI(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, tc := range []struct {
+			name, url, want string
+		}{
+			{"plain path", "https://ai.example.com/v1/chat/completions", "/v1/chat/completions"},
+			{"API version", "https://ai.example.com/openai/deployments/model/chat/completions?api-version=2024-10-21", "/openai/deployments/model/chat/completions?api-version=2024-10-21"},
+			{"raw query", "https://ai.example.com/v1/chat/completions?tag=a%2Fb&tag=c+d&empty=", "/v1/chat/completions?tag=a%2Fb&tag=c+d&empty="},
+			{"query only", "https://ai.example.com?version=1", "/?version=1"},
+			{"empty path", "https://ai.example.com", "/"},
+			{"fragment excluded", "https://ai.example.com/v1/chat/completions?version=1#local", "/v1/chat/completions?version=1"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				configJSON, err := json.Marshal(map[string]interface{}{
+					"scene": map[string]interface{}{"category": "test"},
+					"llm": map[string]interface{}{
+						"proxyServiceName": "ai-service",
+						"proxyUrl":         tc.url,
+					},
+				})
+				require.NoError(t, err)
+				host, status := test.NewTestHost(configJSON)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				contextID := host.InitializeHttpContext()
+				host.CallOnRequestHeaders(contextID, [][2]string{
+					{":authority", "example.com"}, {":path", "/api/chat"},
+					{":method", "POST"}, {"content-type", "application/json"},
+				}, false)
+				require.Equal(t, types.ActionPause, host.CallOnRequestBody(contextID, []byte(`{"messages":[{"role":"user","content":"hello"}]}`), true))
+				callouts := host.GetCalloutAttributesFromContext(contextID)
+				require.Len(t, callouts, 1)
+				var requestURI string
+				for _, header := range callouts[0].Headers {
+					if header[0] == ":path" {
+						requestURI = header[1]
+					}
+				}
+				require.Equal(t, tc.want, requestURI)
+				host.CallOnHttpCallResponse(callouts[0].CalloutID, [][2]string{{":status", "200"}}, nil, []byte(`{"choices":[{"message":{"content":"test"}}]}`))
+				require.Equal(t, types.ActionContinue, host.GetCurrentHttpStreamAction(contextID))
+				host.CompleteHttpContext(contextID)
+			})
+		}
+	})
+}
+
+func TestParseConfigDoesNotLogProxyURLQuery(t *testing.T) {
+	const queryValue = "fixture-query-value-must-not-be-logged"
+	configJSON, err := json.Marshal(map[string]interface{}{
+		"scene": map[string]interface{}{"category": "test"},
+		"llm": map[string]interface{}{
+			"proxyServiceName": "ai-service",
+			"proxyUrl":         "https://ai.example.com/v1/chat/completions?custom=" + queryValue,
+		},
+	})
+	require.NoError(t, err)
+	logger := &recordingConfigLog{}
+	config := &PluginConfig{}
+	require.NoError(t, parseConfig(gjson.ParseBytes(configJSON), config, logger))
+	require.Equal(t, "/v1/chat/completions?custom="+queryValue, config.LLMInfo.ProxyPath)
+	require.NotContains(t, strings.Join(logger.entries, "\n"), queryValue)
+}

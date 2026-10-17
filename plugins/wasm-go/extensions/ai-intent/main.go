@@ -134,8 +134,9 @@ func parseConfig(json gjson.Result, c *PluginConfig, log log.Log) error {
 	if err != nil {
 		return errors.New("llm.proxyUrl parsing error")
 	}
-	c.LLMInfo.ProxyPath = parsedURL.Path
-	log.Infof("c.LLMInfo.ProxyPath:%s", c.LLMInfo.ProxyPath)
+	c.LLMInfo.ProxyPath = parsedURL.RequestURI()
+	// Keep logging only the path; query parameters can contain credentials.
+	log.Infof("c.LLMInfo.ProxyPath:%s", parsedURL.EscapedPath())
 	c.LLMInfo.ProxyDomain = json.Get("llm.proxyDomain").String()
 	//没有配置llm.proxyDomain时，则从proxyUrl中解析获取
 	if c.LLMInfo.ProxyDomain == "" {
@@ -212,7 +213,8 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	promptStr := fmt.Sprintf(config.SceneInfo.Prompt, string(originalQuestion), config.SceneInfo.Category)
 	log.Infof("[onHttpRequestBody] after prompt is:  %s", promptStr)
 	proxyUrl, proxyRequestBody, proxyRequestHeader := generateProxyRequest(&config, []string{string(promptStr)}, log)
-	log.Infof("[onHttpRequestBody] proxyUrl is:  %s", proxyUrl)
+	proxyPath, _, _ := strings.Cut(proxyUrl, "?")
+	log.Infof("[onHttpRequestBody] proxyUrl is:  %s", proxyPath)
 	log.Infof("[onHttpRequestBody] proxyRequestBody is:  %s", string(proxyRequestBody))
 	//调用大模型 获取意向类型
 	llmProxyErr := config.LLMInfo.ProxyClient.Post(
