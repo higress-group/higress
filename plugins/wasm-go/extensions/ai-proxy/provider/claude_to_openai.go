@@ -254,10 +254,11 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body [
 					Content: content,
 				}
 				applyReasoningFields(&openaiMsg, conversionResult, options)
-				if openaiMsg.Content == nil && openaiMsg.ReasoningContent == "" && conversionResult.hasReasoningBlocks {
-					// Strict OpenAI-style providers reject role-only messages. When Claude turns
-					// contain only non-portable reasoning blocks, degrade them to an empty visible
-					// message instead of emitting an invalid assistant/user turn.
+				if openaiMsg.Content == nil && openaiMsg.ReasoningContent == "" && len(claudeMsg.Content.GetArrayValue()) > 0 {
+					// Strict OpenAI-style providers reject role-only messages. When Claude
+					// turns carry only blocks that have no OpenAI equivalent (opaque
+					// reasoning, document urls, ...), degrade them to an empty visible
+					// message instead of serializing a turn without any content key.
 					openaiMsg.Content = ""
 				}
 				openaiRequest.Messages = append(openaiRequest.Messages, openaiMsg)
@@ -287,6 +288,8 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body [
 				Name:        claudeTool.Name,
 				Description: claudeTool.Description,
 				Parameters:  claudeTool.InputSchema,
+				// `strict` exists on both protocols, so the flag survives the conversion.
+				Strict: claudeTool.Strict,
 			},
 		}
 		openaiRequest.Tools = append(openaiRequest.Tools, openaiTool)
@@ -1123,6 +1126,35 @@ func (c *ClaudeToOpenAIConverter) convertContentArray(claudeContents []claudeCha
 						},
 					})
 				}
+			}
+		case "document":
+			// Claude documents (a base64 PDF in most cases) used to disappear here,
+			// which reduced a document-only turn to a role-only message without a
+			// content key. OpenAI's `file` part carries the same inline payload.
+			if claudeContent.Source == nil {
+				log.Warnf("[Claude->OpenAI] dropping document block without source")
+				break
+			}
+			switch claudeContent.Source.Type {
+			case "base64":
+				result.openaiContents = append(result.openaiContents, chatMessageContent{
+					Type: contentTypeFile,
+					File: &chatMessageContentFile{
+						FileData: fmt.Sprintf("data:%s;base64,%s", claudeContent.Source.MediaType, claudeContent.Source.Data),
+					},
+				})
+			case "text":
+				// An inline text document is plain text for OpenAI.
+				result.textParts = append(result.textParts, claudeContent.Source.Data)
+				result.openaiContents = append(result.openaiContents, chatMessageContent{
+					Type: contentTypeText,
+					Text: claudeContent.Source.Data,
+				})
+			case "url":
+				// OpenAI accepts document bytes or a file id, never a document url.
+				log.Warnf("[Claude->OpenAI] dropping document url %q, OpenAI file parts accept file_data or file_id only", claudeContent.Source.Url)
+			default:
+				log.Warnf("[Claude->OpenAI] dropping document with unsupported source type %q", claudeContent.Source.Type)
 			}
 		case "tool_use":
 			preserveClaudeContentBlocks = true
