@@ -611,8 +611,7 @@ func CompareResponse(cRes *roundtripper.CapturedResponse, expected Assertion) er
 			}
 
 			switch cTyp {
-			case ContentTypeTextPlain:
-			case ContentTypeTextEventStream:
+			case ContentTypeTextPlain, ContentTypeTextEventStream:
 				if !bytes.Equal(expected.Response.ExpectedResponse.Body, cRes.Body) {
 					return fmt.Errorf("expected %s body to be %s, got %s", cTyp, string(expected.Response.ExpectedResponse.Body), string(cRes.Body))
 				}
