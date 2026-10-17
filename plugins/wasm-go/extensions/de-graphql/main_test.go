@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -365,6 +366,76 @@ func TestOnHttpResponseBody(t *testing.T) {
 
 			// 响应体处理应该返回 ActionContinue
 			require.Equal(t, types.ActionContinue, action)
+
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestOnHttpRequestHeadersRejectsInvalidVariables verifies that a request whose
+// variable value cannot be represented as the declared GraphQL type is rejected
+// with 400 instead of being forwarded to the GraphQL endpoint.
+func TestOnHttpRequestHeadersRejectsInvalidVariables(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		// `?id=1,"admin":true` is what the previous implementation copied into
+		// the variables object verbatim, silently adding a member to the
+		// GraphQL operation. It must now be rejected before the callout.
+		t.Run("int variable carrying extra JSON", func(t *testing.T) {
+			host, status := test.NewTestHost(multiTypeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", `/api/graphql?id=1,"admin":true&enabled=true&score=1.0&title=ok`},
+				{":method", "GET"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local, "the malformed variable must produce a local response")
+			require.Equal(t, uint32(http.StatusBadRequest), local.StatusCode)
+			require.Contains(t, string(local.Data), "Int")
+
+			host.CompleteHttp()
+		})
+
+		t.Run("int variable that is not numeric", func(t *testing.T) {
+			host, status := test.NewTestHost(multiTypeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", `/api/graphql?id=abc&enabled=true&score=1.0&title=ok`},
+				{":method", "GET"},
+			})
+			require.Equal(t, types.ActionContinue, action)
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Equal(t, uint32(http.StatusBadRequest), local.StatusCode)
+
+			host.CompleteHttp()
+		})
+
+		t.Run("valid typed variables are forwarded", func(t *testing.T) {
+			host, status := test.NewTestHost(multiTypeConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", `/api/graphql?id=7&enabled=false&score=2.5&title=ok`},
+				{":method", "GET"},
+			})
+			require.Equal(t, types.ActionPause, action)
+			require.Nil(t, host.GetLocalResponse())
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(`{"data":{"item":{"id":"7"}}}`))
 
 			host.CompleteHttp()
 		})

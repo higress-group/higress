@@ -156,6 +156,15 @@ query ($owner : String!, $name : String!) {
 }
 ```
 
+### 变量类型的校验与转义
+
+查询参数以字符串形式传入，插件会按照 `gql` 中声明的类型把它们转换为对应的 JSON 标量：
+
+- `String` 作为 JSON 字符串写入，由 `encoding/json` 完成转义，值中的引号、反斜杠、换行等字符不会再破坏请求体；
+- `Int` / `Float` 必须能解析为整数 / 浮点数；
+- `Boolean` 必须能解析为布尔值。
+
+只有 `gql` 中声明的变量会写入 `variables`，其它查询参数一律忽略。若某个变量取值无法转换为声明的类型，插件会直接返回 `400 Bad Request` 并说明是哪个变量，而不会把非法或带有额外字段的 JSON 转发给上游 GraphQL 端点。
 
 ### GitHub GraphQL 测试
 

@@ -156,6 +156,15 @@ query ($owner : String!, $name : String!) {
 }
 ```
 
+### Variable type validation and escaping
+
+Query parameters arrive as strings; the plugin converts each one into the JSON scalar required by the type declared in `gql`:
+
+- `String` is written as a JSON string escaped by `encoding/json`, so quotes, backslashes and newlines in the value can no longer break the request body;
+- `Int` / `Float` must parse as an integer / floating point number;
+- `Boolean` must parse as a boolean.
+
+Only variables declared in `gql` are written into `variables`; every other query parameter is ignored. If a value cannot be converted to its declared type the plugin answers with `400 Bad Request` naming the offending variable, instead of forwarding malformed or extended JSON to the upstream GraphQL endpoint.
 
 ### GitHub GraphQL 测试
 
