@@ -185,18 +185,54 @@ func (d *ChromaProvider) parseQueryResponse(responseBody []byte, log log.Log) ([
 		return nil, err
 	}
 
-	log.Debugf("[Chroma] queryResp Ids len: %d", len(queryResp.Ids))
-	if len(queryResp.Ids) == 1 && len(queryResp.Ids[0]) == 0 {
-		return nil, errors.New("no query results found in response")
+	if log != nil {
+		log.Debugf("[Chroma] queryResp Ids len: %d", len(queryResp.Ids))
 	}
-	results := make([]QueryResult, 0, len(queryResp.Ids[0]))
-	for i := range queryResp.Ids[0] {
-		result := QueryResult{
-			Text:   queryResp.Ids[0][i],
-			Score:  queryResp.Distances[0][i],
-			Answer: queryResp.Documents[0][i],
-		}
-		results = append(results, result)
+
+	// Chroma reports request failures such as an unknown collection as a body
+	// like {"error":"..."}, and reports a query that matched nothing as
+	// {"ids":[]}. Both leave queryResp.Ids empty, so indexing queryResp.Ids[0]
+	// without validating the shape first panics with "index out of range".
+	// That panic happens inside the HTTP callback created by QueryEmbedding, so
+	// it aborts the callback before it can invoke handleQueryResults and the
+	// request ai-cache paused to await the vector search never resumes. Return
+	// a descriptive error instead: handleQueryResults forwards it to
+	// handleInternalError, which resumes the request.
+	//
+	// Distances and Documents are declared with `omitempty` in
+	// chromaQueryResponse, so they may legitimately be absent or shorter than
+	// Ids even for a well-formed response; they must be length-checked too.
+	ids := queryResp.Ids
+	if len(ids) == 0 || len(ids[0]) == 0 {
+		return nil, errors.New("[Chroma] no query results found in response")
+	}
+	n := len(ids[0])
+
+	// Flatten the optional per-batch slices, tolerating their absence so the
+	// length checks below can report the actual shape instead of panicking.
+	var distances []float64
+	if len(queryResp.Distances) > 0 {
+		distances = queryResp.Distances[0]
+	}
+	var documents []string
+	if len(queryResp.Documents) > 0 {
+		documents = queryResp.Documents[0]
+	}
+
+	if len(distances) < n {
+		return nil, fmt.Errorf("[Chroma] distances are missing or shorter than ids: got %d, want at least %d", len(distances), n)
+	}
+	if len(documents) < n {
+		return nil, fmt.Errorf("[Chroma] documents are missing or shorter than ids: got %d, want at least %d", len(documents), n)
+	}
+
+	results := make([]QueryResult, 0, n)
+	for i := 0; i < n; i++ {
+		results = append(results, QueryResult{
+			Text:   ids[0][i],
+			Score:  distances[i],
+			Answer: documents[i],
+		})
 	}
 	return results, nil
 }
