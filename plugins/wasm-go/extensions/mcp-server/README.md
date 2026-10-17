@@ -72,7 +72,7 @@ Accept: application/json, text/event-stream
 | legacy | legacy upstream | 保留现有行为 |
 | legacy | modern-only upstream | 不支持，已暂缓 |
 
-Outbound headers 按每个 RPC 重建。`Authorization` 只会根据显式 proxy auth policy 生成或转发。`Cookie`、下游 session、`Last-Event-ID`、内部路由头和无关凭据默认不转发。未识别但格式合法的 `Mcp-Param-*` 仅在 modern→modern 的当前 Tool RPC 中透传，不得进入 discover、initialize 或 legacy RPC。
+出站头基于现有认证处理后的请求继承：`Cookie`、租户头、自定义业务头和前置插件添加的普通头默认保留，无需新增配置。已被认证逻辑移除的凭据不会恢复；`Authorization` 继续遵循 `downstreamSecurity`、`passthroughAuthHeader` 和显式上游凭据规则。下游 session、`Last-Event-ID` 和内部控制头按操作清理；MCP 协议头重新生成。格式合法的 `Mcp-Param-*` 仅透传到当前 modern tools/call，不进入 discover、initialize 或 legacy RPC。
 
 ### 迁移与默认行为
 
@@ -92,7 +92,7 @@ server:
     probeTimeoutMs: 1000
 ```
 
-`autoDetection.probeTimeoutMs` 仅在 `auto + http` 下解析：缺省 1000 ms，必须是可表示为 uint32 的正整数，实际探测超时取它与有效 `timeout` 的较小值。单独配置 autoDetection 不启用 auto；原 timeout 仍约束每次 callout，整条链路总耗时可能更长。
+`autoDetection.probeTimeoutMs` 仅在 `auto + http` 下解析：缺省 1000 ms，必须是可表示为 uint32 的正整数，实际探测超时取它与有效 `timeout` 的较小值。单独配置 autoDetection 不启用 auto；插件 `timeout` 约束探测/握手等独立子请求（缺省 5000ms），最终 HTTP 业务请求由原路由的 timeout 控制，整条链路总耗时可能更长。
 
 每次真正转发的 `tools/list` 或 `tools/call` 都先完成现有权限检查，再使用一次解析的有效上游凭证发送 `server/discover`。modern 成功序列为 discover → Tool RPC（2 次）；legacy 成功序列为 discover → initialize → initialized → Tool RPC（4 次）。没有缓存、跨请求会话复用或合并；调用工具无需先 list。下游 discover 只查询网关自身能力，不访问上游。
 
@@ -108,9 +108,19 @@ legacy 握手严格检查返回版本、Tools 能力、serverInfo 和 initialize
 
 有效凭证必须有 discover 权限。固定、工具级和透传凭证都应用于本次探测与业务；显式 Cookie 可使用 `apiKey` 的 `in: header, name: Cookie` 生成，原有 `in: cookie` 不受支持。探测不携带 Mcp-Name/Mcp-Param；auto 仅在实际 modern tools/call 转发适用参数头。
 
-同一上游池实例必须提供一致协议能力；探测与业务仍可能落到不同实例。JSON/SSE 在完整 callout 响应后解析，不提供实时进度或订阅。1 MiB 限制在复制探测 body 到 Wasm 前检查，不限制 Envoy 已接收的全部缓冲，也不限制 Tool 结果大小。取消阻止后续阶段并忽略迟到回调，不宣称能撤回已提交的宿主调用；其他层重试不属于本插件的单次派发保证。最终 RPC 仍沿用现有转发路径，独立的 [#4597](https://github.com/higress-group/higress/issues/4597) 不在本次范围内。
+同一上游池实例必须提供一致协议能力；探测与业务仍可能落到不同实例。HTTP JSON/SSE 在完整业务响应后解析，不提供实时进度或订阅。1 MiB 限制在复制探测 body 到 Wasm 前检查，不限制 Envoy 已接收的全部缓冲，也不限制 Tool 结果大小。取消阻止后续阶段，不宣称能撤回已提交的工具副作用。取消后的有效连接明确终止响应，断连后的回调不再访问流。
 
 独立示例见 [auto.yaml](../../../../samples/mcp/protocol/2026-07-28/auto.yaml)。
+
+### 主请求转发兼容性
+
+HTTP `legacy`、`modern`、`auto` 的最终 `tools/list` / `tools/call` 使用当前 SDK 的 `RouteCall` 继续原请求，后置请求插件和原路由的 header/path rewrite、timeout、retry、hash policy 因此生效。继续保留 `DisableReroute`：本插件修改 host/path 不主动重新匹配路由。插件只提交一次业务请求；Envoy 路由重试可能产生多次后端尝试，不承诺工具恰好执行一次。
+
+initialize、initialized、auto discover 仍是独立子请求，不经过后置插件；后置插件添加的凭据不能反向作用于已完成的握手。旧 SSE 仍使用主请求 GET 建立通道和独立 POST RPC，同时恢复普通头继承。上游协议识别要求后续插件不把最终业务改到另一个逻辑服务。
+
+同步 modern 通过 Continue 放行，异步握手成功才 Resume 一次。响应转换和取消清理在 RouteCall 回调及 stream-done 中完成，覆盖无 body 的响应头阶段和完整 body 的响应体阶段。本次不修改或升级 SDK；保留 RouteCall 已有 INFO 完整请求/响应日志以及内部改写操作未逐项检查返回错误的行为，不要求调整日志级别。
+
+旧配置无需迁移。回滚时将 WasmPlugin 的 `url` 恢复为之前记录的插件镜像 digest（本地挂载环境恢复原 Wasm 文件并重新加载），保留原路由配置；回滚后最终业务的 sidecall 差异与普通头限制也会恢复。真实数据面三版本验证入口见 [runtime-verification](testdata/runtime-verification/README.md#routing-compatibility-4597)。
 
 ### 明确暂缓范围
 

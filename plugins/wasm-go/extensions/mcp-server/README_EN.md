@@ -65,7 +65,7 @@ Accept: application/json, text/event-stream
 | legacy | legacy upstream | Existing behavior retained |
 | legacy | modern-only upstream | Unsupported and deferred |
 
-Outbound headers are rebuilt for every RPC. `Authorization` is generated or forwarded only through an explicit proxy authentication policy. Cookies, downstream sessions, `Last-Event-ID`, internal routing headers, and unrelated credentials are not forwarded by default. A well-formed but unrecognized `Mcp-Param-*` header is forwarded only for the current Tool RPC on a modern-to-modern path; it must not enter discover, initialize, or a legacy RPC.
+Outbound headers inherit the request after existing authentication processing. Cookies, tenant/custom headers and ordinary headers added by earlier filters are forwarded by default without new configuration. Removed credentials are never restored. Authorization retains the existing downstreamSecurity, passthroughAuthHeader and explicit upstream credential rules. Downstream sessions, Last-Event-ID and internal control headers are removed or rebuilt for the operation. Valid Mcp-Param-* headers are forwarded only on modern tools/call, never discover, initialize or legacy RPCs.
 
 ### Migration and defaults
 
@@ -85,7 +85,7 @@ server:
     probeTimeoutMs: 1000
 ```
 
-`autoDetection.probeTimeoutMs` is consumed only by `auto + http`. It defaults to 1000 ms and must be a positive uint32 integer. The probe uses the smaller of this value and the effective timeout. This section alone does not enable auto. The existing timeout still applies per callout, so total request latency may exceed it.
+`autoDetection.probeTimeoutMs` is consumed only by `auto + http`. It defaults to 1000 ms and must be a positive uint32 integer. The probe uses the smaller of this value and the effective timeout. This section alone does not enable auto. Plugin timeout still applies to control callouts (5000 ms by default); the original route controls the final HTTP business timeout. Total exchange latency may exceed either timeout.
 
 Each forwarded tools/list or tools/call completes existing authorization checks and prepares effective upstream credentials once before discovering. Modern success makes 2 calls: discover → Tool RPC. Legacy success makes 4: discover → initialize → initialized → Tool RPC. There is no cache, cross-request session reuse or coalescing, and a tool call does not require a prior list. Downstream discover remains local to the gateway.
 
@@ -101,9 +101,19 @@ The auto handshake validates version, Tools capability, serverInfo and the initi
 
 Credentials must permit discover. Fixed, tool-level and passthrough authentication apply to every phase of the same request. Explicit Cookie authentication can use `apiKey` with `in: header, name: Cookie`; the existing `in: cookie` setting is unsupported. Probes carry no Mcp-Name/Mcp-Param headers; auto forwards applicable parameter headers only on actual modern tools/call requests.
 
-Upstream pool instances must have consistent protocol capabilities because probe and business calls may reach different instances. JSON/SSE is parsed after the complete callout response, without live progress or subscriptions. The 1 MiB probe guard prevents copying oversized bodies into Wasm; it does not bound all Envoy receive buffers or Tool results. Cancellation suppresses later phases and callbacks but cannot retract a submitted hostcall. Retry policies in other layers are outside this plugin's single-dispatch guarantee. The final RPC retains the existing forwarding path; [#4597](https://github.com/higress-group/higress/issues/4597) is independent.
+Upstream pool instances must have consistent protocol capabilities because probe and business calls may reach different instances. HTTP JSON/SSE is parsed after the complete business response, without live progress or subscriptions. The 1 MiB probe guard prevents copying oversized bodies into Wasm; it does not bound all Envoy receive buffers or Tool results. Cancellation prevents later phases but cannot retract submitted tool effects. A cancelled live response is explicitly terminated; callbacks after stream closure do not access the stream.
 
 See the separate [auto.yaml example](../../../../samples/mcp/protocol/2026-07-28/auto.yaml).
+
+### Main-request forwarding compatibility
+
+Final HTTP tools/list and tools/call requests use the existing SDK RouteCall for legacy, modern and auto. Later request filters and the original route's header/path rewrite, timeout, retry and hash policies apply. DisableReroute remains enabled: this plugin's host/path changes do not trigger route rematching. One plugin submission can produce multiple backend attempts under route retries; this is not an exactly-once guarantee.
+
+Initialize, initialized and auto discover remain independent callouts and do not traverse later filters. Credentials added by later filters cannot affect earlier control requests. Legacy SSE retains its main GET channel and POST callouts, with ordinary headers inherited again. Auto assumes later filters do not redirect business to another logical service.
+
+Synchronous modern requests continue directly; asynchronous handshakes resume the request once on success. RouteCall response callbacks and stream-done own response conversion and cancellation cleanup, including empty-body header responses and buffered body responses. This change neither modifies nor upgrades the SDK. Existing RouteCall INFO logs containing full requests/responses and unchecked internal rewrite errors remain; no logging configuration change is required.
+
+Existing configurations need no migration. Roll back by restoring the previously recorded WasmPlugin URL image digest (or the previous mounted Wasm and reload it), keeping route configuration intact. The previous sidecall differences and ordinary-header restrictions return with that rollback. See [runtime verification](testdata/runtime-verification/README.md#routing-compatibility-4597) for the three-version comparison.
 
 ### Explicitly deferred scope
 

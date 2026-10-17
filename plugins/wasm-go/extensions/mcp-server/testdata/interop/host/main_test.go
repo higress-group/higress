@@ -60,6 +60,14 @@ func (h *unexpectedBusinessHost) CallOnHttpCallResponse(id uint32, headers, trai
 	h.TestHost.CallOnHttpCallResponse(id, headers, trailers, body)
 }
 
+func (h *unexpectedBusinessHost) GetRequestBody() []byte {
+	body := h.TestHost.GetRequestBody()
+	if gjson.GetBytes(body, "method").String() == "tools/call" {
+		h.businessCalls++
+	}
+	return body
+}
+
 func runProbeChecker(t *testing.T, root string, wantExit int, wantMessage string) {
 	t.Helper()
 	output, err := exec.Command("python3", "../check_probe.py", root).CombinedOutput()
@@ -117,7 +125,7 @@ func TestProbeCheckerRejectsEarlierUnexpectedBusinessCallout(t *testing.T) {
 	handler.completeCallouts = nil
 	handler.mu.Unlock()
 	if actualBusinessCalls != 1 {
-		t.Fatalf("negative test did not exercise a real business callout: %d", actualBusinessCalls)
+		t.Fatalf("negative test did not exercise a real routed business request: %d", actualBusinessCalls)
 	}
 	// The next probe is valid. The independent, sticky verdict must still fail
 	// the same checker run.sh uses, even if an SDK swallowed the earlier 500.

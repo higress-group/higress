@@ -36,12 +36,21 @@ type capturedRouteCall struct {
 
 type proxyRouteTestContext struct {
 	*protocolTestHTTPContext
-	calls []capturedRouteCall
+	calls            []capturedRouteCall
+	routeError       error
+	beforeReturn     func()
+	responseCallback iface.RouteResponseCallback
 }
+
+func (c *proxyRouteTestContext) GetExecutionPhase() iface.HTTPExecutionPhase { return iface.DecodeData }
 
 func (c *proxyRouteTestContext) RouteCall(method, target string, headers [][2]string, body []byte, callback iface.RouteResponseCallback) error {
 	c.calls = append(c.calls, capturedRouteCall{method: method, url: target, headers: headers, body: append([]byte(nil), body...)})
-	return nil
+	c.responseCallback = callback
+	if c.beforeReturn != nil {
+		c.beforeReturn()
+	}
+	return c.routeError
 }
 
 func modernProxyTestContext(method string, raw []byte) *proxyRouteTestContext {
@@ -88,10 +97,10 @@ func TestOutboundHeaderProfilesAreRequestScopedAndIsolated(t *testing.T) {
 		{"Mcp-Param-Bad Name", "drop"},
 		{"Cookie", "drop"},
 	}}}
-	modern := baseOutboundHeaders(ctx, true, "tools/list", "", "downstream-session")
+	modern := baseOutboundHeaders(ctx, true, "tools/call", "echo", "downstream-session")
 	assert.Equal(t, "opaque", mustHeaderValue(t, modern, "Mcp-Param-Future"))
-	assert.Equal(t, "tools/list", mustHeaderValue(t, modern, protocol.HeaderMethod))
-	for _, forbidden := range []string{"Mcp-Param-Bad Name", "Cookie", "Mcp-Session-Id"} {
+	assert.Equal(t, "tools/call", mustHeaderValue(t, modern, protocol.HeaderMethod))
+	for _, forbidden := range []string{"Mcp-Param-Bad Name", "Mcp-Session-Id"} {
 		_, exists := findHeader(modern, forbidden)
 		assert.False(t, exists)
 	}
@@ -168,6 +177,8 @@ func TestModernBridgeCancellationCleansRequestScopedSessionState(t *testing.T) {
 	require.NotNil(t, ctx.GetContext(CtxMcpProxyCancel))
 
 	request.Cancel()
+	assert.Equal(t, "request-session", ctx.GetContext(CtxMcpProxySessionID), "cancellation must not touch context maps on a foreign goroutine")
+	finishProxyRequest(ctx)
 	assert.Nil(t, ctx.GetContext(CtxMcpProxySessionID))
 	assert.Nil(t, ctx.GetContext(CtxMcpProxyInitialized))
 	assert.Nil(t, ctx.GetContext(CtxMcpProxyHeaders))

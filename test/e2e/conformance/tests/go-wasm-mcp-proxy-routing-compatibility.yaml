@@ -1,0 +1,202 @@
+# Copyright (c) 2026 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Synthetic routing fixture: no external MCP service or credentials required.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-routing-backend
+  namespace: higress-conformance-infra
+data:
+  backend.py: |
+    import json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.end_headers()
+        def do_POST(self):
+            if self.headers.get("transfer-encoding", "").lower() == "chunked":
+                chunks = []
+                while True:
+                    size = int(self.rfile.readline().strip().split(b";", 1)[0], 16)
+                    if not size: self.rfile.readline(); break
+                    chunks.append(self.rfile.read(size)); self.rfile.read(2)
+                raw = b"".join(chunks)
+            else: raw = self.rfile.read(int(self.headers.get("content-length", "0")))
+            request = json.loads(raw)
+            method = request["method"]
+            if method == "notifications/initialized":
+                self.send_response(202); self.send_header("content-length", "0"); self.end_headers(); return
+            if method == "server/discover":
+                result = {"resultType":"complete", "supportedVersions":["2026-07-28"], "capabilities":{"tools":{}}, "ttlMs":0,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"fixture","version":"1"}}}
+            elif method == "initialize":
+                result = {"protocolVersion":"2025-03-26", "capabilities":{"tools":{}}, "serverInfo":{"name":"fixture","version":"1"}}
+            else:
+                valid = self.headers.get("cookie") == "synthetic=compat" and self.headers.get("x-tenant") == "synthetic-tenant" and self.headers.get("x-routing-policy") == "original-route"
+                result = {"content":[{"type":"text","text":"headers-and-route-ok" if valid else "routing-regression"}],"isError":False}
+                if self.headers.get("mcp-protocol-version") == "2026-07-28": result["resultType"] = "complete"
+            body = json.dumps({"jsonrpc":"2.0","id":request.get("id"),"result":result}).encode()
+            self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    ThreadingHTTPServer(("0.0.0.0",8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-routing-backend
+  namespace: higress-conformance-infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp-routing-backend}
+  template:
+    metadata:
+      labels: {app: mcp-routing-backend}
+    spec:
+      containers:
+        - name: backend
+          image: python:3.12-alpine
+          command: ["python", "/fixture/backend.py"]
+          ports: [{containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+          volumeMounts: [{name: fixture, mountPath: /fixture, readOnly: true}]
+      volumes:
+        - name: fixture
+          configMap: {name: mcp-routing-backend}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-routing-backend
+  namespace: higress-conformance-infra
+spec:
+  selector: {app: mcp-routing-backend}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-routing-legacy
+  namespace: higress-conformance-infra
+  annotations:
+    higress.io/request-header-control-update: x-routing-policy original-route
+spec:
+  ingressClassName: higress
+  rules:
+    - host: mcp-routing-legacy.example.com
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-routing-backend
+                port: {number: 8080}
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: mcp-routing-legacy
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  matchRules:
+    - ingress: [higress-conformance-infra/mcp-routing-legacy]
+      configDisable: false
+      config:
+        server:
+          name: routing
+          type: mcp-proxy
+          transport: http
+          protocolStrategy: legacy
+          mcpServerURL: http://mcp-routing-backend:8080/target
+  url: file:///opt/plugins/wasm-go/extensions/mcp-server/plugin.wasm
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-routing-modern
+  namespace: higress-conformance-infra
+  annotations:
+    higress.io/request-header-control-update: x-routing-policy original-route
+spec:
+  ingressClassName: higress
+  rules:
+    - host: mcp-routing-modern.example.com
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-routing-backend
+                port: {number: 8080}
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: mcp-routing-modern
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  matchRules:
+    - ingress: [higress-conformance-infra/mcp-routing-modern]
+      configDisable: false
+      config:
+        server:
+          name: routing
+          type: mcp-proxy
+          transport: http
+          protocolStrategy: modern
+          mcpServerURL: http://mcp-routing-backend:8080/target
+  url: file:///opt/plugins/wasm-go/extensions/mcp-server/plugin.wasm
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-routing-auto
+  namespace: higress-conformance-infra
+  annotations:
+    higress.io/request-header-control-update: x-routing-policy original-route
+spec:
+  ingressClassName: higress
+  rules:
+    - host: mcp-routing-auto.example.com
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-routing-backend
+                port: {number: 8080}
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: mcp-routing-auto
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  matchRules:
+    - ingress: [higress-conformance-infra/mcp-routing-auto]
+      configDisable: false
+      config:
+        server:
+          name: routing
+          type: mcp-proxy
+          transport: http
+          protocolStrategy: auto
+          mcpServerURL: http://mcp-routing-backend:8080/target
+  url: file:///opt/plugins/wasm-go/extensions/mcp-server/plugin.wasm
