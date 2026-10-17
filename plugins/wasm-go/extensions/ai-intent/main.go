@@ -206,7 +206,13 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	bodyJson := gjson.ParseBytes(body)
 	TempKey := strings.Trim(bodyJson.Get(config.KeyFrom.RequestBody).Raw, `"`)
 	//原始问题
-	originalQuestion, _ := zhToUnicode([]byte(TempKey))
+	originalQuestionBytes, err := zhToUnicode([]byte(TempKey))
+if err != nil {
+    // 解码失败，回退原始用户输入，避免内容丢失
+    originalQuestionBytes = []byte(TempKey)
+}
+originalQuestion := string(originalQuestionBytes)
+
 	log.Infof("[onHttpRequestBody] originalQuestion is:  %s", string(originalQuestion))
 	//prompt拼接,替换问题和预设的场景类别，参数占位替换
 	promptStr := fmt.Sprintf(config.SceneInfo.Prompt, string(originalQuestion), config.SceneInfo.Category)
