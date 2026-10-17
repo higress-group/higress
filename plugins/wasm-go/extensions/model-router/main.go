@@ -175,6 +175,8 @@ func extractLastUserMessage(body []byte) string {
 	var lastUserContent string
 	for _, msg := range messages.Array() {
 		if msg.Get("role").String() == "user" {
+			// A later user turn supersedes earlier text even when it has no text parts.
+			lastUserContent = ""
 			content := msg.Get("content")
 			if content.IsArray() {
 				// Handle array content (e.g., multimodal messages with text and images)
