@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -51,7 +52,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIPromptTemplateConfig, b
 		name := gjson.GetBytes(body, "template").String()
 		template := config.templates[name]
 		for key, value := range gjson.GetBytes(body, "properties").Map() {
-			template = strings.ReplaceAll(template, fmt.Sprintf("{{%s}}", key), value.String())
+			// The template is serialized JSON, so replacement text must retain JSON escaping.
+			escaped, _ := json.Marshal(value.String())
+			template = strings.ReplaceAll(template, fmt.Sprintf("{{%s}}", key), string(escaped[1:len(escaped)-1]))
 		}
 		proxywasm.ReplaceHttpRequestBody([]byte(template))
 	}
