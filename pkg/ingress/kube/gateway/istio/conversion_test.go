@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -33,6 +34,7 @@ import (
 	"sigs.k8s.io/gateway-api/pkg/consts"
 	"sigs.k8s.io/yaml"
 
+	higressconstants "github.com/alibaba/higress/v2/pkg/config/constants"
 	istio "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/config/kube/crd"
 	"istio.io/istio/pilot/pkg/features"
@@ -873,6 +875,89 @@ func TestConvertResources(t *testing.T) {
 			outputStatus := sq.Dump()
 			goldenStatusFile := fmt.Sprintf("testdata/%s.status.yaml.golden", tt.name)
 			util.CompareContent(t, []byte(outputStatus), goldenStatusFile)
+		})
+	}
+}
+
+func TestBuildListenerRejectsInvalidListeners(t *testing.T) {
+	terminate := k8s.TLSModeTerminate
+	gateway := &k8s.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", Generation: 1},
+	}
+	tests := []struct {
+		name       string
+		listener   k8s.Listener
+		controller k8s.GatewayController
+		portErr    error
+		valid      bool
+	}{
+		{
+			name:       "invalid port",
+			listener:   k8s.Listener{Name: "http", Port: 80, Protocol: k8s.HTTPProtocolType},
+			controller: k8s.GatewayController(higressconstants.ManagedGatewayController),
+			portErr:    fmt.Errorf("invalid port"),
+		},
+		{
+			name:       "unsupported protocol",
+			listener:   k8s.Listener{Name: "udp", Port: 1234, Protocol: k8s.UDPProtocolType},
+			controller: k8s.GatewayController(higressconstants.ManagedGatewayController),
+		},
+		{
+			name: "unsupported TLSRoute termination",
+			listener: k8s.Listener{
+				Name: "tls", Port: 443, Protocol: k8s.TLSProtocolType,
+				TLS: &k8s.ListenerTLSConfig{
+					Mode: &terminate,
+					Options: map[k8s.AnnotationKey]k8s.AnnotationValue{
+						gatewayTLSTerminateModeKey: "ISTIO_SIMPLE",
+					},
+				},
+				AllowedRoutes: &k8s.AllowedRoutes{
+					Kinds: []k8s.RouteGroupKind{{Kind: "TLSRoute"}},
+				},
+			},
+			controller: k8s.GatewayController(higressconstants.ManagedGatewayController),
+		},
+		{
+			name:       "invalid mesh waypoint",
+			listener:   k8s.Listener{Name: "http", Port: 80, Protocol: k8s.HTTPProtocolType},
+			controller: constants.ManagedGatewayMeshController,
+		},
+		{
+			name:       "invalid east-west waypoint",
+			listener:   k8s.Listener{Name: "http", Port: 80, Protocol: k8s.HTTPProtocolType},
+			controller: constants.ManagedGatewayEastWestController,
+		},
+		{
+			name:       "valid HTTP listener",
+			listener:   k8s.Listener{Name: "http", Port: 80, Protocol: k8s.HTTPProtocolType},
+			controller: k8s.GatewayController(higressconstants.ManagedGatewayController),
+			valid:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, statuses, valid := buildListener(nil, nil, nil, ReferenceGrants{}, nil,
+				gateway, nil, gateway.Spec, tt.listener, 0, tt.controller, tt.portErr)
+			if valid != tt.valid {
+				t.Fatalf("listener valid = %v, want %v", valid, tt.valid)
+			}
+			accepted := meta.FindStatusCondition(statuses[0].Conditions, string(k8s.ListenerConditionAccepted))
+			programmed := meta.FindStatusCondition(statuses[0].Conditions, string(k8s.ListenerConditionProgrammed))
+			if accepted == nil || programmed == nil {
+				t.Fatalf("missing listener conditions: %v", statuses[0].Conditions)
+			}
+			wantStatus := metav1.ConditionFalse
+			if tt.valid {
+				wantStatus = metav1.ConditionTrue
+			}
+			if accepted.Status != wantStatus || programmed.Status != wantStatus {
+				t.Fatalf("Accepted=%s, Programmed=%s, want %s", accepted.Status, programmed.Status, wantStatus)
+			}
+			if !tt.valid && programmed.Reason != string(k8s.ListenerReasonInvalid) {
+				t.Fatalf("Programmed reason = %q, want Invalid", programmed.Reason)
+			}
 		})
 	}
 }
