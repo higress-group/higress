@@ -375,10 +375,6 @@ func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig
 	if handler, ok := activeProvider.(provider.RequestBodyHandler); ok {
 		apiName, _ := ctx.GetContext(provider.CtxKeyApiName).(provider.ApiName)
 		providerConfig := pluginConfig.GetProviderConfig()
-		// If retryOnFailure is enabled, save the transformed body to the context in case of retry
-		if providerConfig.IsRetryOnFailureEnabled() {
-			ctx.SetContext(provider.CtxRequestBody, body)
-		}
 		newBody, settingErr := providerConfig.ReplaceByCustomSettings(body)
 		if settingErr != nil {
 			log.Errorf("failed to replace request body by custom settings: %v", settingErr)
@@ -390,6 +386,10 @@ func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig
 		}
 		log.Debugf("[onHttpRequestBody] newBody=%s", newBody)
 		body = newBody
+		// Cache after request settings, before provider conversion, so retries keep the same parameters.
+		if providerConfig.IsRetryOnFailureEnabled() {
+			ctx.SetContext(provider.CtxRequestBody, body)
+		}
 		action, err := handler.OnRequestBody(ctx, apiName, body)
 		if err == nil {
 			return action
