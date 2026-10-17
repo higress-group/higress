@@ -235,7 +235,10 @@ impl MsgWindow {
         let mut ret = Vec::new();
         for mw in self.message_windows.values_mut() {
             for value in mw.pop(char_window_size, byte_window_size) {
-                let usage = self.usage.finish();
+                // peek() instead of finish(): the accumulator must survive
+                // across events within one pop() call and across callbacks,
+                // and every emitted event must observe the same snapshot.
+                let usage = self.usage.peek();
                 let mut ret_value = self.last_value.clone();
                 ret_value[CHOICES_PATH] = Value::Array(vec![value]);
                 ret_value[USAGE_PATH] = usage;
@@ -252,12 +255,15 @@ impl MsgWindow {
             self.update_event(event);
         }
         let mut ret = Vec::new();
+        // Consume the accumulator once and attach the same final usage to
+        // every trailing event; calling finish() per event left every event
+        // after the first with usage: null.
+        let usage = self.usage.finish();
         for mw in &mut self.message_windows.values_mut() {
             for value in mw.finish() {
-                let usage = self.usage.finish();
                 let mut ret_value = self.last_value.clone();
                 ret_value[CHOICES_PATH] = Value::Array(vec![value]);
-                ret_value[USAGE_PATH] = usage;
+                ret_value[USAGE_PATH] = usage.clone();
                 ret.extend(format!("data: {}\n\n", ret_value).as_bytes())
             }
         }
@@ -343,6 +349,63 @@ mod tests {
         let res = "***higress*** 是一个基于 Istio 的高性能服务网格数据平面项目，旨在提供高吞吐量、低延迟和可扩展的服务通信管理。它为企业级应用提供了丰富的流量治理功能，如负载均衡、熔断、限流等，并支持多协议代理（包括 HTTP/1.1, HTTP/2, gRPC）。***higress*** 的设计目标是优化 Istio 在大规模集群中的性能表现，满足高并发场景下的需求。";
         assert_eq!(message, res);
         assert_eq!(reasoning_message, res);
+    }
+
+    #[test]
+    fn test_usage_attached_to_every_popped_event() {
+        let mut msg_win = MsgWindow::default();
+        // One content event followed by one reasoning_content event: the flag
+        // switch makes a single pop() emit two events.
+        msg_win.push(
+            b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}],\"usage\":{\"total_tokens\":5}}\n\n",
+            true,
+        );
+        msg_win.push(
+            b"data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"lo\"}}],\"usage\":{\"total_tokens\":9}}\n\n",
+            true,
+        );
+        let out = msg_win.pop(0, 0, true);
+        let events: Vec<&str> = std::str::from_utf8(&out)
+            .unwrap()
+            .split("\n\n")
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(events.len(), 2);
+        for event in events {
+            let value: Value = serde_json::from_str(event.strip_prefix("data: ").unwrap()).unwrap();
+            assert_eq!(
+                value["usage"]["total_tokens"].as_i64(),
+                Some(14),
+                "every popped event must carry the accumulated usage, got: {value}"
+            );
+        }
+        // The accumulated usage must not be consumed by pop().
+        let tail = msg_win.finish(true);
+        let tail_events: Vec<&str> = std::str::from_utf8(&tail)
+            .unwrap()
+            .split("\n\n")
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(!tail_events.is_empty());
+        for event in tail_events {
+            let value: Value = serde_json::from_str(event.strip_prefix("data: ").unwrap()).unwrap();
+            assert_eq!(value["usage"]["total_tokens"].as_i64(), Some(14));
+        }
+    }
+
+    #[test]
+    fn test_float_usage_survives_stream_rewrite() {
+        let mut msg_win = MsgWindow::default();
+        msg_win.push(
+            b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}],\"usage\":{\"prompt_tokens\":10.5,\"total_tokens\":31.0}}\n\n",
+            true,
+        );
+        let out = msg_win.finish(true);
+        let text = std::str::from_utf8(&out).unwrap();
+        let event = text.split("\n\n").find(|s| !s.is_empty()).unwrap();
+        let value: Value = serde_json::from_str(event.strip_prefix("data: ").unwrap()).unwrap();
+        assert_eq!(value["usage"]["prompt_tokens"].as_f64(), Some(10.5));
+        assert_eq!(value["usage"]["total_tokens"].as_f64(), Some(31.0));
     }
 
     fn raw_message(file_name: &str) -> String {
