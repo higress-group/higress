@@ -277,6 +277,16 @@ rule_items:
         token_per_day: 1000
 ```
 
+### Malformed or missing real-IP header
+
+When `limit_by_per_ip` reads the client IP from a request header
+(`from-header-<header_name>`), that header is client controlled. If the header
+is missing or its value cannot be parsed as an IP address (for example `]`,
+`]:80` or `abc`), the plugin logs the failure and rejects the request with the
+configured `rejected_code`/`rejected_msg` instead of silently skipping the rule.
+Make sure a trusted proxy in front of the gateway always populates the header
+with a single client IP; for a comma separated list only the first entry is used.
+
 ## Diagnosing
 
 See the [Rate-limit Plugin FAQ](../../../../docs/faq/rate-limit-plugin-faq-en.md#rate-limit-not-taking-effect) for complete diagnosis recipes.
@@ -284,6 +294,7 @@ See the [Rate-limit Plugin FAQ](../../../../docs/faq/rate-limit-plugin-faq-en.md
 | Symptom | Check first |
 | --- | --- |
 | Requests always return 200 and Redis has no rate-limit keys | No rule matched, or configuration parsing prevented the rule from loading |
+| `limit_by_per_ip` requests are rejected with the configured code | The real-IP header is missing or not a valid IP; check the header value and the plugin error log |
 | Redis cluster `cx_connect_fail` is greater than 0 | Port, credentials, or network connectivity |
 | Wasm `update_rejected` / `config_fail` keeps increasing | The parser rejected the pushed configuration; inspect the concrete gateway log error |
 

@@ -29,7 +29,14 @@ func ParseIP(source string) string {
 	}
 	// parse ipv6
 	if strings.Contains(source, "]") {
-		return strings.Split(source, "]")[0][1:]
+		// strings.Split always yields at least one element, but a client
+		// controlled value such as "]", "]:80" or "]abc" leaves an empty first
+		// element, so slicing it as [0][1:] would panic with "slice bounds out
+		// of range [1:0]". Removing the optional leading bracket with
+		// TrimPrefix keeps returning an empty string for those malformed values,
+		// letting the caller treat them as "cannot resolve" instead of crashing
+		// the request-header handler.
+		return strings.TrimPrefix(strings.Split(source, "]")[0], "[")
 	}
 	return source
 }

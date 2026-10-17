@@ -150,7 +150,16 @@ func parseConfig(json gjson.Result, cfg *config.AiTokenRateLimitConfig) error {
 func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig) types.Action {
 	ctx.DisableReroute()
 
-	matched := collectMatchedRules(ctx, cfg)
+	matched, err := collectMatchedRules(ctx, cfg)
+	if err != nil {
+		// A per-IP rule could not resolve a trustworthy client IP. Fail closed:
+		// deny the request instead of forwarding it without any limit, because
+		// ignoring the failure would let a caller switch the rule off by sending
+		// a malformed (or missing) real-IP header value.
+		log.Errorf("ai-token-ratelimit: rejecting request, %v", err)
+		rejectedInvalidClientIP(cfg)
+		return types.HeaderStopAllIterationAndWatermark
+	}
 	if len(matched) == 0 {
 		// 无任何规则命中：直接放行，不发起 Redis 调用
 		log.Debugf("ai-token-ratelimit: no rule matched, path=%s host=%s", ctx.Path(), ctx.Host())
@@ -175,7 +184,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 	// 暂存命中规则，供响应阶段多键 INCRBY 使用
 	ctx.SetContext(LimitRedisContextKey, LimitRedisContext{rules: matched})
 
-	err := cfg.RedisClient.Eval(MultiKeyRequestPhaseScript, n, keys, args, func(response resp.Value) {
+	err = cfg.RedisClient.Eval(MultiKeyRequestPhaseScript, n, keys, args, func(response resp.Value) {
 		arr := response.Array()
 		if len(arr) != n {
 			log.Errorf("redis response length mismatch: got %d, want %d", len(arr), n)
@@ -328,7 +337,11 @@ func processTokenUsage(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfi
 // collectMatchedRules 遍历 global_threshold 和 rule_items，返回所有命中规则。
 // 顺序：global_threshold（如有）→ rule_items 中所有命中项（按数组顺序追加）。
 // 该顺序决定了"触发时优先报告哪条规则"以及"未触发时 tightest 的选择范围"。
-func collectMatchedRules(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig) []MatchedRule {
+//
+// The returned error is non-nil only when a per-IP rule cannot resolve its
+// client IP; the caller must then fail the request closed instead of
+// forwarding it unlimited.
+func collectMatchedRules(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig) ([]MatchedRule, error) {
 	var matched []MatchedRule
 
 	if cfg.GlobalThreshold != nil {
@@ -340,7 +353,10 @@ func collectMatchedRules(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCon
 	}
 
 	for _, ruleItem := range cfg.RuleItems {
-		val, hitRule, hitItem := hitRateRuleItem(ctx, ruleItem)
+		val, hitRule, hitItem, err := hitRateRuleItem(ctx, ruleItem)
+		if err != nil {
+			return nil, err
+		}
 		if hitRule != nil && hitItem != nil {
 			matched = append(matched, MatchedRule{
 				key:    fmt.Sprintf(AiTokenRateLimitFormat, cfg.RuleName, hitRule.LimitType, hitItem.TimeWindow, hitRule.Key, val),
@@ -350,10 +366,14 @@ func collectMatchedRules(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCon
 		}
 	}
 
-	return matched
+	return matched, nil
 }
 
-func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string, *config.LimitRuleItem, *config.LimitConfigItem) {
+// hitRateRuleItem resolves a single rule item. A non-nil error is a hard
+// failure that must abort request processing (currently only an unresolvable
+// client IP for a per-IP rule), while a nil result without error simply means
+// that the rule does not match.
+func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string, *config.LimitRuleItem, *config.LimitConfigItem, error) {
 	switch rule.LimitType {
 	// 根据HTTP请求头限流
 	case config.LimitByHeaderType, config.LimitByPerHeaderType:
@@ -361,7 +381,7 @@ func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string
 		if err != nil {
 			return logDebugAndReturnEmpty("failed to get request header %s: %v", rule.Key, err)
 		}
-		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val)
+		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val), nil
 	// 根据HTTP请求参数限流
 	case config.LimitByParamType, config.LimitByPerParamType:
 		parse, err := url.Parse(ctx.Path())
@@ -376,14 +396,14 @@ func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string
 		if !ok {
 			return logDebugAndReturnEmpty("request param %s is empty", rule.Key)
 		}
-		return val[0], &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val[0])
+		return val[0], &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val[0]), nil
 	// 根据consumer限流
 	case config.LimitByConsumerType, config.LimitByPerConsumerType:
 		val, err := proxywasm.GetHttpRequestHeader(util.ConsumerHeader)
 		if err != nil {
 			return logDebugAndReturnEmpty("failed to get request header %s: %v", util.ConsumerHeader, err)
 		}
-		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val)
+		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val), nil
 	// 根据cookie中key值限流
 	case config.LimitByCookieType, config.LimitByPerCookieType:
 		cookie, err := proxywasm.GetHttpRequestHeader(CookieHeader)
@@ -394,27 +414,30 @@ func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string
 		if val == "" {
 			return logDebugAndReturnEmpty("cookie key '%s' extracted from cookie '%s' is empty.", rule.Key, cookie)
 		}
-		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val)
+		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val), nil
 	// 根据客户端IP限流
 	case config.LimitByPerIpType:
 		realIp, err := getDownStreamIp(rule)
 		if err != nil {
-			log.Warnf("failed to get down stream ip: %v", err)
-			return "", &rule, nil
+			// Do not fall through with a nil config item: that would silently
+			// drop the rule and turn a client-controlled malformed header into a
+			// fail-open bypass of the limiter. Propagate the error so the caller
+			// can reject the request instead.
+			return "", &rule, nil, fmt.Errorf("failed to resolve client ip for limit_by_per_ip rule %q: %w", rule.Key, err)
 		}
 		for _, item := range rule.ConfigItems {
 			if _, found, _ := item.IpNet.Get(realIp); !found {
 				continue
 			}
-			return realIp.String(), &rule, &item
+			return realIp.String(), &rule, &item, nil
 		}
 	}
-	return "", nil, nil
+	return "", nil, nil, nil
 }
 
-func logDebugAndReturnEmpty(errMsg string, args ...interface{}) (string, *config.LimitRuleItem, *config.LimitConfigItem) {
+func logDebugAndReturnEmpty(errMsg string, args ...interface{}) (string, *config.LimitRuleItem, *config.LimitConfigItem, error) {
 	log.Debugf(errMsg, args...)
-	return "", nil, nil
+	return "", nil, nil, nil
 }
 
 func findMatchingItem(limitType config.LimitRuleItemType, items []config.LimitConfigItem, key string) *config.LimitConfigItem {
@@ -440,24 +463,37 @@ func getDownStreamIp(rule config.LimitRuleItem) (net.IP, error) {
 	var (
 		realIpStr string
 		err       error
+		source    string
 	)
 	if rule.LimitByPerIp.SourceType == config.HeaderSourceType {
+		source = fmt.Sprintf("header %q", rule.LimitByPerIp.HeaderName)
 		realIpStr, err = proxywasm.GetHttpRequestHeader(rule.LimitByPerIp.HeaderName)
 		if err == nil {
 			realIpStr = strings.Split(strings.Trim(realIpStr, " "), ",")[0]
 		}
 	} else {
+		source = "source address"
 		var bs []byte
 		bs, err = proxywasm.GetProperty([]string{"source", "address"})
 		realIpStr = string(bs)
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read client ip from %s: %w", source, err)
 	}
+	// util.ParseIP removes an optional IPv6 bracket and port. That helper must
+	// strip the bracket with strings.TrimPrefix instead of slicing the split
+	// result: for a client-controlled value such as "]" or "]:80" the first
+	// element is empty, and slicing it as [0][1:] would panic with
+	// "slice bounds out of range [1:0]".
 	ip := util.ParseIP(realIpStr)
+	if ip == "" {
+		// An empty value cannot be parsed, so report it as an error. The rule
+		// then fails closed instead of being silently skipped.
+		return nil, fmt.Errorf("client ip from %s is empty after parsing %q", source, realIpStr)
+	}
 	realIP := net.ParseIP(ip)
 	if realIP == nil {
-		return nil, fmt.Errorf("invalid ip[%s]", ip)
+		return nil, fmt.Errorf("invalid ip[%s] from %s", ip, source)
 	}
 	return realIP, nil
 }
@@ -471,6 +507,20 @@ func rejected(cfg config.AiTokenRateLimitConfig, context LimitContext) {
 	headers[RateLimitResetHeader] = []string{strconv.Itoa(context.reset)}
 	_ = proxywasm.SendHttpResponseWithDetail(
 		cfg.RejectedCode, "ai-token-ratelimit.rejected", util.ReconvertHeaders(headers), []byte(cfg.RejectedMsg), -1)
+
+	route, _ := util.GetRouteName()
+	cluster, _ := util.GetClusterName()
+	consumer, _ := util.GetConsumer()
+	cfg.IncrementCounter(generateMetricName(route, cluster, "none", consumer, TokenRateLimitCount), 1)
+}
+
+// rejectedInvalidClientIP fails the request closed when a per-IP rule cannot
+// resolve a trustworthy client IP from its configured source. The client IP is
+// usually read from a request header, so without this a caller could disable
+// the limiter for a route simply by sending a malformed value such as "]".
+func rejectedInvalidClientIP(cfg config.AiTokenRateLimitConfig) {
+	_ = proxywasm.SendHttpResponseWithDetail(
+		cfg.RejectedCode, "ai-token-ratelimit.invalid_client_ip", nil, []byte(cfg.RejectedMsg), -1)
 
 	route, _ := util.GetRouteName()
 	cluster, _ := util.GetClusterName()
