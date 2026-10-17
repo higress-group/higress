@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"testing"
 
 	"ext-auth/expr"
@@ -9,6 +10,34 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 )
+
+func TestPreserveHeadersOnInternalRedirectConfig(t *testing.T) {
+	for _, tc := range []struct {
+		value    string
+		valid    bool
+		expected []string
+	}{
+		{`["Authorization","X-API-Key","authorization"]`, true, []string{"authorization", "x-api-key"}},
+		{`[]`, true, nil},
+		{`"authorization"`, false, nil},
+		{`[""]`, false, nil},
+		{`[":authority"]`, false, nil},
+		{`["authorization\r\ninjected"]`, false, nil},
+		{`[123]`, false, nil},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			var cfg ExtAuthConfig
+			raw := fmt.Sprintf(`{"http_service":{"endpoint":{"service_name":"auth.example","path_prefix":"/auth"},"authorization_request":{"preserve_headers_on_internal_redirect":%s}}}`, tc.value)
+			err := ParseConfig(gjson.Parse(raw), &cfg)
+			if tc.valid {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.expected, cfg.HttpService.AuthorizationRequest.PreserveHeadersOnInternalRedirect)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
+}
 
 func TestParseConfig(t *testing.T) {
 	tests := []struct {

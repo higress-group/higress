@@ -35,7 +35,7 @@ func main() {}
 func init() {
 	wrapper.SetCtx(
 		"ext-auth",
-		wrapper.ParseConfig(config.ParseConfig),
+		wrapper.ParseConfigWithContext(parseConfigWithPreservedIdentity),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
 	)
@@ -63,6 +63,17 @@ const (
 )
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.ExtAuthConfig) types.Action {
+	if len(config.HttpService.AuthorizationRequest.PreserveHeadersOnInternalRedirect) > 0 {
+		headers, err := preparePreservedAuthHeaders(config.HttpService.AuthorizationRequest.PreserveHeadersOnInternalRedirect)
+		if err != nil {
+			// A trusted-state failure is not an unavailable auth server. Never
+			// apply failure_mode_allow or fall back to client-supplied original headers.
+			log.Error("failed to preserve external authorization identity")
+			_ = sendResponse(http.StatusInternalServerError, "ext-auth.identity_state", nil, nil)
+			return types.ActionContinue
+		}
+		ctx.SetContext(preservedAuthHeadersContext, headers)
+	}
 	matchRequest, err := buildMatchRequest(ctx, config.MatchRules)
 	if err != nil {
 		log.Errorf("failed to read request headers for match rules: %v; continuing external authorization", err)
@@ -184,6 +195,9 @@ func buildExtAuthRequestHeaders(ctx wrapper.HttpContext, cfg config.ExtAuthConfi
 	httpServiceConfig := cfg.HttpService
 	requestConfig := httpServiceConfig.AuthorizationRequest
 	reqHeaders, _ := proxywasm.GetHttpRequestHeaders()
+	if original, ok := ctx.GetContext(preservedAuthHeadersContext).(preservedAuthHeaders); ok {
+		reqHeaders = restorePreservedHeaders(reqHeaders, original)
+	}
 	if requestConfig.AllowedHeaders != nil {
 		for _, header := range reqHeaders {
 			headK := header[0]
