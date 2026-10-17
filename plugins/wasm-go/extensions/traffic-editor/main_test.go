@@ -304,3 +304,26 @@ func compareHeaders(headers1, headers2 [][2]string) bool {
 	}
 	return true
 }
+
+func TestQueryCommandsPreserveEscapedPath(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, path := range []string{"/objects/a%2Fb", "/objects/a%3Fb", "/objects/a%23b", "/objects/a%25b", "/objects/%252F"} {
+			t.Run(path, func(t *testing.T) {
+				host, status := test.NewTestHost([]byte(`{"defaultConfig":{"commands":[
+					{"type":"set","target":{"type":"request_query","name":"added"},"value":"new"},
+					{"type":"delete","target":{"type":"request_query","name":"removed"}}
+				]}}`))
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"}, {":method", "GET"},
+					{":path", path + "?kept=1&removed=2"},
+				}))
+				gotPath, found := test.GetHeaderValue(host.GetRequestHeaders(), ":path")
+				require.True(t, found)
+				require.Equal(t, path+"?added=new&kept=1", gotPath)
+				host.CompleteHttp()
+			})
+		}
+	})
+}
