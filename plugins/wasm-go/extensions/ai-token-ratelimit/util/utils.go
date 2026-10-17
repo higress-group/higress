@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 
@@ -21,17 +22,31 @@ func ParseIPNet(key string) (*iptree.IPTree, error) {
 	return tree, nil
 }
 
-// ParseIP 解析IP
+// ParseIP normalises an address taken from a client-controlled source into a
+// bare IP literal.
+//
+// The input may be a bare address ("1.2.3.4", "2001:db8::1"), a bracketed IPv6
+// address ("[::1]"), or a socket address with a port ("1.2.3.4:8080",
+// "[::1]:443"). Because the value comes from a request header or a downstream
+// address, this must never panic and must never hand back something that
+// net.ParseIP cannot validate as an address.
+//
+// A value that cannot be normalised into a valid IP is returned unchanged, so
+// the caller keeps rejecting it through the existing "invalid ip[...]" path.
 func ParseIP(source string) string {
-	if strings.Contains(source, ".") {
-		// parse ipv4
-		return strings.Split(source, ":")[0]
+	if source == "" {
+		return source
 	}
-	// parse ipv6
-	if strings.Contains(source, "]") {
-		return strings.Split(source, "]")[0][1:]
+	normalized := source
+	if host, _, err := net.SplitHostPort(source); err == nil {
+		normalized = host
+	} else if strings.HasPrefix(source, "[") && strings.HasSuffix(source, "]") {
+		normalized = source[1 : len(source)-1]
 	}
-	return source
+	if net.ParseIP(normalized) == nil {
+		return source
+	}
+	return normalized
 }
 
 // ReconvertHeaders headers: map[string][]string -> [][2]string

@@ -169,6 +169,33 @@ var ipLimitConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：客户端可控请求头作为 per-IP 来源。
+// 该值由调用方控制，任何无法解析为 IP 的值都必须让请求失败关闭，
+// 否则调用方只要发一个畸形（或干脆不发）请求头就能关掉这条限流。
+var ipHeaderLimitConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"rule_name": "ai-token-ip-header-limit",
+		"rule_items": []map[string]interface{}{
+			{
+				"limit_by_per_ip": "from-header-x-real-ip",
+				"limit_keys": []map[string]interface{}{
+					{
+						"key":              "192.168.1.0/24",
+						"token_per_minute": 300,
+					},
+				},
+			},
+		},
+		"redis": map[string]interface{}{
+			"service_name": "redis.static",
+			"service_port": 6379,
+		},
+		"rejected_code": 429,
+		"rejected_msg":  "cannot resolve client ip",
+	})
+	return data
+}()
+
 // 测试配置：正则表达式限流配置
 var regexpLimitConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -700,6 +727,85 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 
 			require.Nil(t, host.GetLocalResponse())
 
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestPerIpRuleFailsClosed covers the client-controlled per-IP source.
+//
+// A per-IP rule whose source value cannot be resolved is not "a rule that does
+// not apply" - it is a rule we cannot evaluate. Dropping it would let a caller
+// switch the limit off for a single request by sending a malformed header, or
+// by omitting the header entirely, which is the security half of the ParseIP
+// fix: removing the panic alone would only turn the crash into a silent bypass.
+func TestPerIpRuleFailsClosed(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		unresolvable := []struct {
+			name    string
+			headers [][2]string
+		}{
+			{
+				name: "closing bracket",
+				headers: [][2]string{
+					{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+					{"x-real-ip", "]"},
+				},
+			},
+			{
+				name: "closing bracket with port",
+				headers: [][2]string{
+					{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+					{"x-real-ip", "]:8080"},
+				},
+			},
+			{
+				name: "not an address",
+				headers: [][2]string{
+					{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+					{"x-real-ip", "not-an-ip"},
+				},
+			},
+			{
+				name: "header absent",
+				headers: [][2]string{
+					{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+				},
+			},
+		}
+
+		for _, tt := range unresolvable {
+			t.Run(tt.name, func(t *testing.T) {
+				host, status := test.NewTestHost(ipHeaderLimitConfig)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				action := host.CallOnHttpRequestHeaders(tt.headers)
+
+				// 就地拒绝：插件在请求头阶段直接响应，不再进入 Redis 阶段。
+				require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+				local := host.GetLocalResponse()
+				require.NotNil(t, local, "expected the request to be rejected locally")
+				require.Equal(t, uint32(429), local.StatusCode)
+				require.Equal(t, "cannot resolve client ip", string(local.Data))
+				host.CompleteHttp()
+			})
+		}
+
+		// 可解析的请求头必须照常进入 Redis 阶段，确认失败关闭没有误伤正常请求。
+		t.Run("resolvable header still reaches redis", func(t *testing.T) {
+			host, status := test.NewTestHost(ipHeaderLimitConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+				{"x-real-ip", "192.168.1.10"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			host.CallOnRedisCall(0, multiRuleResp([3]int{300, 1, 60}))
+			require.Nil(t, host.GetLocalResponse(), "a resolvable ip must not be rejected")
 			host.CompleteHttp()
 		})
 	})
