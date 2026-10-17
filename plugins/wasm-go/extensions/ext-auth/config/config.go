@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"ext-auth/expr"
+	"ext-auth/extract"
 
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -24,12 +25,45 @@ const (
 	EndpointModeForwardAuth = "forward_auth"
 )
 
+const (
+	// MaxCacheTTL bounds how long an allow decision may be cached, so a stale
+	// allow can never outlive it.
+	MaxCacheTTL = 600
+
+	// DefaultCacheRedisTimeout is the per-call Redis timeout in milliseconds. It is
+	// kept short because the cache sits on the authorization critical path and must
+	// fail open rather than stall the request.
+	DefaultCacheRedisTimeout = 1000
+
+	// Sources for a cache.key_fields entry. These name where on the incoming request
+	// to read a key field, and are distinct from the response-side extract.Source*
+	// values used by success_condition / mapped_upstream_headers.
+	KeyFieldSourceHeader = "header"
+	KeyFieldSourceQuery  = "query"
+)
+
+// Operators supported by a success_condition entry.
+const (
+	OpEq        = "eq"
+	OpNe        = "ne"
+	OpIn        = "in"
+	OpNotIn     = "not_in"
+	OpExists    = "exists"
+	OpNotExists = "not_exists"
+	OpGt        = "gt"
+	OpLt        = "lt"
+)
+
 type ExtAuthConfig struct {
 	HttpService               HttpService
 	MatchRules                expr.MatchRules
 	FailureModeAllow          bool
 	FailureModeAllowHeaderAdd bool
 	StatusOnError             uint32
+	// SuccessCondition is a flat list of conditions evaluated as an implicit AND.
+	SuccessCondition []Condition
+	// Cache holds the opt-in auth-result cache. It is active only when Cache.Enabled.
+	Cache CacheConfig
 }
 
 type HttpService struct {
@@ -62,6 +96,47 @@ type AllowedProperty struct {
 type AuthorizationResponse struct {
 	AllowedUpstreamHeaders expr.Matcher
 	AllowedClientHeaders   expr.Matcher
+	MappedUpstreamHeaders  []HeaderMapping
+}
+
+// HeaderMapping extracts a value from the authorization response by Source and Key,
+// then forwards it to the upstream request under the ToHeader name.
+type HeaderMapping struct {
+	Source   string
+	Key      string
+	ToHeader string
+}
+
+// Condition is a single success_condition entry: extract a value from the
+// authorization response by Source and Key, then compare it against Value using Op.
+type Condition struct {
+	Source string
+	Key    string
+	Op     string
+	Value  []string
+}
+
+// CacheConfig holds the auth-result cache settings. Caching is opt-in and
+// best-effort: when Enabled is false (the default) no Redis client is created and
+// every request goes straight to the authorization server.
+type CacheConfig struct {
+	Enabled bool
+	// TTL is the cache entry lifetime in seconds, clamped to [1, MaxCacheTTL].
+	TTL int
+	// Client reads and writes cache entries. It is nil when caching is inactive.
+	Client wrapper.RedisClient
+	// KeyFields, when non-empty, narrows the cache key to these request fields plus
+	// the method and query-free path, instead of hashing the full forwarded request.
+	// When empty the default full-request key is used.
+	KeyFields []CacheKeyField
+}
+
+// CacheKeyField names one request field that composes the cache key when
+// cache.key_fields is configured. Source is KeyFieldSourceHeader or
+// KeyFieldSourceQuery and Key is the header name or query parameter name.
+type CacheKeyField struct {
+	Source string
+	Key    string
 }
 
 func ParseConfig(json gjson.Result, config *ExtAuthConfig) error {
@@ -93,7 +168,108 @@ func ParseConfig(json gjson.Result, config *ExtAuthConfig) error {
 	}
 	config.StatusOnError = statusOnError
 
+	if err := parseCacheConfig(json, config); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// parseCacheConfig reads the optional top-level cache block. Caching stays off
+// unless cache.enabled is true with a positive ttl and a Redis service_name. A
+// non-positive ttl means the cache gate is not satisfied: caching is silently left
+// off rather than failing the whole config, so the request keeps flowing through the
+// original cache-free path.
+func parseCacheConfig(json gjson.Result, config *ExtAuthConfig) error {
+	cacheConfig := json.Get("cache")
+	if !cacheConfig.Exists() || !cacheConfig.Get("enabled").Bool() {
+		return nil
+	}
+
+	ttl := int(cacheConfig.Get("ttl").Int())
+	if ttl <= 0 {
+		return nil
+	}
+	if ttl > MaxCacheTTL {
+		log.Warnf("cache.ttl %d exceeds the maximum %d and was clamped", ttl, MaxCacheTTL)
+		ttl = MaxCacheTTL
+	}
+
+	keyFields, err := parseCacheKeyFields(cacheConfig.Get("key_fields"))
+	if err != nil {
+		return err
+	}
+
+	redisConfig := cacheConfig.Get("redis")
+	serviceName := redisConfig.Get("service_name").String()
+	if serviceName == "" {
+		return errors.New("cache.redis.service_name must not be empty when cache is enabled")
+	}
+	servicePort := redisConfig.Get("service_port").Int()
+	if servicePort == 0 {
+		if strings.HasSuffix(serviceName, ".static") {
+			servicePort = 80
+		} else {
+			servicePort = 6379
+		}
+	}
+	timeout := redisConfig.Get("timeout").Int()
+	if timeout == 0 {
+		timeout = DefaultCacheRedisTimeout
+	}
+
+	client := wrapper.NewRedisClusterClient(wrapper.FQDNCluster{
+		FQDN: serviceName,
+		Port: servicePort,
+	})
+	database := int(redisConfig.Get("database").Int())
+	if err := client.Init(redisConfig.Get("username").String(), redisConfig.Get("password").String(), timeout, wrapper.WithDataBase(database)); err != nil {
+		return err
+	}
+
+	config.Cache = CacheConfig{Enabled: true, TTL: ttl, Client: client, KeyFields: keyFields}
+	return nil
+}
+
+// parseCacheKeyFields reads the optional cache.key_fields list. An absent list
+// yields nil, which selects the default full-request cache key. Any invalid shape
+// is a hard error so the whole plugin config is rejected rather than silently
+// degrading to a key the operator did not intend.
+func parseCacheKeyFields(result gjson.Result) ([]CacheKeyField, error) {
+	if !result.Exists() {
+		return nil, nil
+	}
+	if !result.IsArray() {
+		return nil, errors.New("cache.key_fields must be an array")
+	}
+
+	items := result.Array()
+	fields := make([]CacheKeyField, 0, len(items))
+	for i, item := range items {
+		if !item.IsObject() {
+			return nil, fmt.Errorf("cache.key_fields[%d] must be an object with 'source' and 'key'", i)
+		}
+
+		source := item.Get("source").String()
+		if source != KeyFieldSourceHeader && source != KeyFieldSourceQuery {
+			return nil, fmt.Errorf("cache.key_fields[%d]: invalid source %q, must be %q or %q",
+				i, source, KeyFieldSourceHeader, KeyFieldSourceQuery)
+		}
+
+		key := item.Get("key").String()
+		if key == "" {
+			return nil, fmt.Errorf("cache.key_fields[%d]: 'key' must not be empty", i)
+		}
+		// Header names are case-insensitive, so normalize to lower case for stable
+		// lookup and a stable digest regardless of how the operator cased the config.
+		// Query parameter names are case-sensitive and are kept verbatim.
+		if source == KeyFieldSourceHeader {
+			key = strings.ToLower(key)
+		}
+
+		fields = append(fields, CacheKeyField{Source: source, Key: key})
+	}
+	return fields, nil
 }
 
 func parseHttpServiceConfig(json gjson.Result, config *ExtAuthConfig) error {
@@ -116,6 +292,12 @@ func parseHttpServiceConfig(json gjson.Result, config *ExtAuthConfig) error {
 	if err := parseAuthorizationResponseConfig(json, &httpService); err != nil {
 		return err
 	}
+
+	successCondition, err := parseSuccessCondition(json.Get("success_condition"))
+	if err != nil {
+		return err
+	}
+	config.SuccessCondition = successCondition
 
 	config.HttpService = httpService
 
@@ -251,9 +433,115 @@ func parseAuthorizationResponseConfig(json gjson.Result, httpService *HttpServic
 			authorizationResponse.AllowedClientHeaders = result
 		}
 
+		mappedUpstreamHeaders := authorizationResponseConfig.Get("mapped_upstream_headers")
+		if mappedUpstreamHeaders.Exists() {
+			mappings, err := parseMappedUpstreamHeaders(mappedUpstreamHeaders)
+			if err != nil {
+				return err
+			}
+			authorizationResponse.MappedUpstreamHeaders = mappings
+		}
+
 		httpService.AuthorizationResponse = authorizationResponse
 	}
 	return nil
+}
+
+func parseMappedUpstreamHeaders(result gjson.Result) ([]HeaderMapping, error) {
+	if !result.IsArray() {
+		return nil, errors.New("mapped_upstream_headers must be an array")
+	}
+	items := result.Array()
+	mappings := make([]HeaderMapping, 0, len(items))
+	for i, item := range items {
+		source := item.Get("source").String()
+		if !isValidSource(source) {
+			return nil, fmt.Errorf("mapped_upstream_headers[%d]: invalid source %q, must be one of %s, %s, %s",
+				i, source, extract.SourceStatusCode, extract.SourceHeader, extract.SourceBodyJson)
+		}
+
+		key := item.Get("key").String()
+		if source != extract.SourceStatusCode && key == "" {
+			return nil, fmt.Errorf("mapped_upstream_headers[%d]: source %q requires a key", i, source)
+		}
+
+		toHeader := item.Get("to_header").String()
+		if toHeader == "" {
+			return nil, fmt.Errorf("mapped_upstream_headers[%d]: missing required field 'to_header'", i)
+		}
+
+		mappings = append(mappings, HeaderMapping{
+			Source:   source,
+			Key:      key,
+			ToHeader: toHeader,
+		})
+	}
+	return mappings, nil
+}
+
+func parseSuccessCondition(result gjson.Result) ([]Condition, error) {
+	if !result.Exists() {
+		return nil, nil
+	}
+	if !result.IsArray() {
+		return nil, errors.New("success_condition must be an array")
+	}
+
+	items := result.Array()
+	conditions := make([]Condition, 0, len(items))
+	for i, item := range items {
+		source := item.Get("source").String()
+		if !isValidSource(source) {
+			return nil, fmt.Errorf("success_condition[%d]: invalid source %q, must be one of %s, %s, %s",
+				i, source, extract.SourceStatusCode, extract.SourceHeader, extract.SourceBodyJson)
+		}
+
+		op := item.Get("op").String()
+		if !isValidOp(op) {
+			return nil, fmt.Errorf("success_condition[%d]: invalid op %q", i, op)
+		}
+
+		key := item.Get("key").String()
+		if source != extract.SourceStatusCode && key == "" {
+			return nil, fmt.Errorf("success_condition[%d]: source %q requires a key", i, source)
+		}
+
+		var values []string
+		if valueResult := item.Get("value"); valueResult.IsArray() {
+			values = convertToStringList(valueResult.Array())
+		} else if valueResult.Exists() {
+			values = []string{valueResult.String()}
+		}
+		if op != OpExists && op != OpNotExists && len(values) == 0 {
+			return nil, fmt.Errorf("success_condition[%d]: op %q requires a value", i, op)
+		}
+
+		conditions = append(conditions, Condition{
+			Source: source,
+			Key:    key,
+			Op:     op,
+			Value:  values,
+		})
+	}
+	return conditions, nil
+}
+
+func isValidSource(source string) bool {
+	switch source {
+	case extract.SourceStatusCode, extract.SourceHeader, extract.SourceBodyJson:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidOp(op string) bool {
+	switch op {
+	case OpEq, OpNe, OpIn, OpNotIn, OpExists, OpNotExists, OpGt, OpLt:
+		return true
+	default:
+		return false
+	}
 }
 
 func parseMatchRules(json gjson.Result, config *ExtAuthConfig) error {
