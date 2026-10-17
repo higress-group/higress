@@ -202,29 +202,29 @@ func SortHTTPRoutes(routes []*WrapperHTTPRoute) {
 	// default backend,user specified root path => path type => path length =>
 	// methods => header => query param
 	// refer https://gateway-api.sigs.k8s.io/v1alpha2/references/spec/#gateway.networking.k8s.io/v1beta1.HTTPRouteSpec
-	sort.SliceStable(routes, func(i, j int) bool {
+	less := func(a, b *WrapperHTTPRoute) bool {
 		// Move default backend to end
-		if isDefaultBackend(routes[i]) {
+		if isDefaultBackend(a) {
 			return false
 		}
-		if isDefaultBackend(routes[j]) {
+		if isDefaultBackend(b) {
 			return true
 		}
 
 		// Move user specified root path match to end
-		if isAllCatch(routes[i]) {
+		if isAllCatch(a) {
 			return false
 		}
-		if isAllCatch(routes[j]) {
+		if isAllCatch(b) {
 			return true
 		}
 
-		if routes[i].OriginPathType == routes[j].OriginPathType {
-			if in, jn := len(routes[i].OriginPath), len(routes[j].OriginPath); in != jn {
+		if a.OriginPathType == b.OriginPathType {
+			if in, jn := len(a.OriginPath), len(b.OriginPath); in != jn {
 				return in > jn
 			}
 
-			lenI, lenJ := len(routes[i].HTTPRoute.Match), len(routes[j].HTTPRoute.Match)
+			lenI, lenJ := len(a.HTTPRoute.Match), len(b.HTTPRoute.Match)
 			if lenI == 0 && lenJ == 0 {
 				return false
 			}
@@ -234,7 +234,7 @@ func SortHTTPRoutes(routes []*WrapperHTTPRoute) {
 			if lenJ == 0 {
 				return true
 			}
-			match1, match2 := routes[i].HTTPRoute.Match[0], routes[j].HTTPRoute.Match[0]
+			match1, match2 := a.HTTPRoute.Match[0], b.HTTPRoute.Match[0]
 			// methods
 			if in, jn := len(match1.Method.GetRegex()), len(match2.Method.GetRegex()); in != jn {
 				if in != 0 && jn != 0 {
@@ -253,17 +253,108 @@ func SortHTTPRoutes(routes []*WrapperHTTPRoute) {
 			return false
 		}
 
-		if routes[i].OriginPathType == Exact {
+		if a.OriginPathType == Exact {
 			return true
 		}
 
-		if routes[i].OriginPathType != Exact &&
-			routes[j].OriginPathType != Exact {
-			return routes[i].OriginPathType == Prefix
+		if a.OriginPathType != Exact &&
+			b.OriginPathType != Exact {
+			return a.OriginPathType == Prefix
 		}
 
 		return false
+	}
+
+	// Group (canary, base) pairs into sort units so that a canary route always
+	// stays adjacent to its base route, as required by the nginx-ingress
+	// semantic model. Units are compared with each other through their base
+	// route, and within a unit the canary routes come first, followed by the
+	// base. Routes without a canary relationship each form their own unit, so
+	// configurations without canary routes sort exactly as before.
+	// See https://github.com/higress-group/higress/issues/4849
+	units := groupCanaryRoutes(routes)
+	sort.SliceStable(units, func(i, j int) bool {
+		return less(units[i].rep, units[j].rep)
 	})
+
+	n := 0
+	for _, unit := range units {
+		for _, canary := range unit.canaries {
+			routes[n] = canary
+			n++
+		}
+		routes[n] = unit.rep
+		n++
+	}
+}
+
+// routeSortUnit is a logical unit used by SortHTTPRoutes. rep is the
+// representative route whose attributes are used for comparisons against
+// other units. canaries are the canary routes bound to rep, emitted right
+// before it in their original relative order.
+type routeSortUnit struct {
+	rep      *WrapperHTTPRoute
+	canaries []*WrapperHTTPRoute
+}
+
+// groupCanaryRoutes binds canary routes to their base route. A route is
+// treated as the base of a canary when both share the same non-empty RuleKey
+// and the base itself is not a canary, mirroring the association applied by
+// the ingress controller. Every route starts as its own unit; canary routes
+// with a resolvable base are moved into the base's unit.
+func groupCanaryRoutes(routes []*WrapperHTTPRoute) []*routeSortUnit {
+	units := make([]*routeSortUnit, 0, len(routes))
+	baseUnitByRuleKey := make(map[string]*routeSortUnit, len(routes))
+	for _, route := range routes {
+		unit := &routeSortUnit{rep: route}
+		units = append(units, unit)
+		if route.RuleKey == "" || isCanaryHTTPRoute(route) {
+			continue
+		}
+		// Only the first non-canary route of a rule key is a pairing candidate,
+		// so duplicate keys never merge unrelated routes into one unit.
+		if _, ok := baseUnitByRuleKey[route.RuleKey]; !ok {
+			baseUnitByRuleKey[route.RuleKey] = unit
+		}
+	}
+
+	for i, route := range routes {
+		if route.RuleKey == "" || !isCanaryHTTPRoute(route) {
+			continue
+		}
+		baseUnit, ok := baseUnitByRuleKey[route.RuleKey]
+		if !ok || baseUnit.rep == route {
+			// A canary without its base route keeps sorting on its own
+			// attributes.
+			continue
+		}
+		// Detach the canary from its own unit and bind it to the base unit.
+		units[i] = nil
+		baseUnit.canaries = append(baseUnit.canaries, route)
+	}
+
+	return compactSortUnits(units)
+}
+
+// isCanaryHTTPRoute reports whether the route originates from a canary
+// ingress. Routes without annotation information are never canaries.
+func isCanaryHTTPRoute(route *WrapperHTTPRoute) bool {
+	if route == nil || route.WrapperConfig == nil || route.WrapperConfig.AnnotationsConfig == nil {
+		return false
+	}
+	return route.WrapperConfig.AnnotationsConfig.IsCanary()
+}
+
+// compactSortUnits drops units detached by groupCanaryRoutes while preserving
+// the order of the remaining units.
+func compactSortUnits(units []*routeSortUnit) []*routeSortUnit {
+	compact := units[:0]
+	for _, unit := range units {
+		if unit != nil {
+			compact = append(compact, unit)
+		}
+	}
+	return compact
 }
 
 func constructRouteName(route *WrapperHTTPRoute) string {

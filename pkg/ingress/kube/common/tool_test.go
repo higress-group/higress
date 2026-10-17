@@ -1326,7 +1326,6 @@ func TestGetLbStatusListV1AndV1Beta1(t *testing.T) {
 	})
 }
 
-
 func makeSortRoute(path string, pathType PathType, isDefault bool, match *networking.HTTPMatchRequest) *WrapperHTTPRoute {
 	r := &WrapperHTTPRoute{
 		HTTPRoute: &networking.HTTPRoute{
@@ -1453,4 +1452,92 @@ func TestSortHTTPRoutes_NoPanic(t *testing.T) {
 	if !routes[len(routes)-1].IsDefaultBackend {
 		t.Errorf("expected default backend last")
 	}
+}
+
+// TestSortHTTPRoutes_CanaryBaseAdjacency reproduces
+// https://github.com/higress-group/higress/issues/4849: a canary route must
+// stay adjacent to its base route when the base is an allCatch Prefix /
+// route and routes of another path type coexist on the same host.
+func TestSortHTTPRoutes_CanaryBaseAdjacency(t *testing.T) {
+	headerMatch := func(key string) []*networking.HTTPMatchRequest {
+		return []*networking.HTTPMatchRequest{{
+			Headers: map[string]*networking.StringMatch{
+				key: {MatchType: &networking.StringMatch_Exact{Exact: "true"}},
+			},
+		}}
+	}
+	newRoute := func(name, ruleKey string, pathType PathType, path string, canary bool, match []*networking.HTTPMatchRequest) *WrapperHTTPRoute {
+		route := &WrapperHTTPRoute{
+			WrapperConfig: &WrapperConfig{
+				Config: &config.Config{
+					Meta: config.Meta{Name: name, Namespace: "higress-system"},
+				},
+				AnnotationsConfig: &annotations.Ingress{},
+			},
+			Host:           "www.foo.com",
+			OriginPathType: pathType,
+			OriginPath:     path,
+			ClusterId:      "cluster1",
+			RuleKey:        ruleKey,
+			HTTPRoute:      &networking.HTTPRoute{Name: name, Match: match},
+		}
+		if canary {
+			route.WrapperConfig.AnnotationsConfig.Canary = &annotations.CanaryConfig{Enabled: true}
+		}
+		return route
+	}
+
+	// Same host, two (canary, base) pairs and mixed path types, in the order
+	// ApplyCanaryIngress produces before convertVirtualService sorts them.
+	input := []*WrapperHTTPRoute{
+		newRoute("frontend-canary", "rule-frontend", Prefix, "/", true, headerMatch("x-gray-frontend")),
+		newRoute("frontend", "rule-frontend", Prefix, "/", false, nil),
+		newRoute("backend-canary", "rule-backend", PrefixRegex, "/api/(.*)", true, headerMatch("x-gray-user")),
+		newRoute("backend", "rule-backend", PrefixRegex, "/api/(.*)", false, nil),
+	}
+
+	SortHTTPRoutes(input)
+
+	names := make([]string, 0, len(input))
+	for _, route := range input {
+		names = append(names, route.HTTPRoute.Name)
+	}
+	// Each pair is sorted as a single unit keyed off the base: the allCatch
+	// frontend unit goes last, and every canary stays right before its base.
+	assert.Equal(t, []string{"backend-canary", "backend", "frontend-canary", "frontend"}, names)
+}
+
+// TestSortHTTPRoutes_CanaryWithoutBase ensures a canary whose base route is
+// absent is still sorted on its own attributes instead of being dropped.
+func TestSortHTTPRoutes_CanaryWithoutBase(t *testing.T) {
+	canary := &WrapperHTTPRoute{
+		WrapperConfig: &WrapperConfig{
+			Config:            &config.Config{Meta: config.Meta{Name: "canary", Namespace: "bar"}},
+			AnnotationsConfig: &annotations.Ingress{Canary: &annotations.CanaryConfig{Enabled: true}},
+		},
+		Host:           "test.com",
+		OriginPathType: Prefix,
+		OriginPath:     "/a",
+		ClusterId:      "cluster1",
+		RuleKey:        "rule-without-base",
+		HTTPRoute:      &networking.HTTPRoute{Name: "canary"},
+	}
+	plain := &WrapperHTTPRoute{
+		WrapperConfig: &WrapperConfig{
+			Config:            &config.Config{Meta: config.Meta{Name: "plain", Namespace: "bar"}},
+			AnnotationsConfig: &annotations.Ingress{},
+		},
+		Host:           "test.com",
+		OriginPathType: Exact,
+		OriginPath:     "/b",
+		ClusterId:      "cluster1",
+		RuleKey:        "rule-plain",
+		HTTPRoute:      &networking.HTTPRoute{Name: "plain"},
+	}
+
+	input := []*WrapperHTTPRoute{canary, plain}
+	SortHTTPRoutes(input)
+
+	assert.Equal(t, "plain", input[0].HTTPRoute.Name)
+	assert.Equal(t, "canary", input[1].HTTPRoute.Name)
 }
