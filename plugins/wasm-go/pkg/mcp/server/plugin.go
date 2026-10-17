@@ -936,14 +936,27 @@ func (o *addMCPServerOption) Apply(ctx *Context) {
 }
 
 func ToInputSchema(v any) map[string]any {
+	if v == nil {
+		return nil
+	}
 	t := reflect.TypeOf(v)
+	if t == nil {
+		return nil
+	}
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
 	inputSchema := jsonschema.Reflect(v).Definitions[t.Name()]
-	inputSchemaBytes, _ := json.Marshal(inputSchema)
+	inputSchemaBytes, err := json.Marshal(inputSchema)
+	if err != nil {
+		log.Errorf("ToInputSchema: failed to marshal schema: %v", err)
+		return nil
+	}
 	var result map[string]any
-	json.Unmarshal(inputSchemaBytes, &result)
+	if err := json.Unmarshal(inputSchemaBytes, &result); err != nil {
+		log.Errorf("ToInputSchema: failed to unmarshal schema: %v", err)
+		return nil
+	}
 	return result
 }
 
