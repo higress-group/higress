@@ -9,6 +9,8 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"sort"
+	"sync"
 	"strconv"
 
 	"strings"
@@ -1058,6 +1060,23 @@ func getMappedModel(model string, modelMapping map[string]string) string {
 	return model
 }
 
+// mappedModelRegexCache caches compiled modelMapping regex patterns.
+// modelMapping is consulted on every request; compiling the same pattern
+// each time showed up as avoidable per-request work (#4883).
+var mappedModelRegexCache sync.Map // pattern string -> *regexp.Regexp
+
+func compiledMappedModelRegex(pattern string) (*regexp.Regexp, error) {
+	if cached, ok := mappedModelRegexCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp), nil
+	}
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	mappedModelRegexCache.Store(pattern, compiled)
+	return compiled, nil
+}
+
 func doGetMappedModel(model string, modelMapping map[string]string) string {
 	if len(modelMapping) == 0 {
 		return ""
@@ -1068,27 +1087,49 @@ func doGetMappedModel(model string, modelMapping map[string]string) string {
 		return v
 	}
 
-	for k, v := range modelMapping {
-		if k == wildcard {
+	// Regex keys carry the most explicit intent, so they take precedence
+	// over wildcard prefixes; they are tried in sorted key order so the
+	// result is stable regardless of map iteration order (#4883).
+	regexKeys := make([]string, 0, len(modelMapping))
+	for k := range modelMapping {
+		if strings.HasPrefix(k, "~") {
+			regexKeys = append(regexKeys, k)
+		}
+	}
+	sort.Strings(regexKeys)
+	for _, k := range regexKeys {
+		pattern := strings.TrimPrefix(k, "~")
+		re, err := compiledMappedModelRegex(pattern)
+		if err != nil {
+			log.Errorf("invalid model mapping regex [%s]: %v", pattern, err)
 			continue
 		}
-		if strings.HasSuffix(k, wildcard) {
-			k = strings.TrimSuffix(k, wildcard)
-			if strings.HasPrefix(model, k) {
-				log.Debugf("model [%s] is mapped to [%s] via prefix [%s]", model, v, k)
-				return v
-			}
+		if re.MatchString(model) {
+			v := re.ReplaceAllString(model, modelMapping[k])
+			log.Debugf("model [%s] is mapped to [%s] via regex [%s]", model, v, pattern)
+			return v
 		}
+	}
 
-		if strings.HasPrefix(k, "~") {
-			k = strings.TrimPrefix(k, "~")
-			re := regexp.MustCompile(k)
-			if re.MatchString(model) {
-				v = re.ReplaceAllString(model, v)
-				log.Debugf("model [%s] is mapped to [%s] via regex [%s]", model, v, k)
-				return v
-			}
+	// Wildcard-prefix keys: the most specific (longest) matching prefix
+	// wins, deterministically. Iterating the map and returning the first
+	// match made the winner random per request when prefixes overlap
+	// (#4883).
+	longestPrefix := ""
+	longestValue := ""
+	for k, v := range modelMapping {
+		if k == wildcard || !strings.HasSuffix(k, wildcard) {
+			continue
 		}
+		prefix := strings.TrimSuffix(k, wildcard)
+		if strings.HasPrefix(model, prefix) && len(prefix) > len(longestPrefix) {
+			longestPrefix = prefix
+			longestValue = v
+		}
+	}
+	if longestPrefix != "" {
+		log.Debugf("model [%s] is mapped to [%s] via prefix [%s]", model, longestValue, longestPrefix)
+		return longestValue
 	}
 
 	if v, ok := modelMapping[wildcard]; ok {
