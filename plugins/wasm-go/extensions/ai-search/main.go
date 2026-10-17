@@ -620,11 +620,12 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config Config, body []byte) typ
 const (
 	PARTIAL_MESSAGE_CONTEXT_KEY = "partialMessage"
 	BUFFER_CONTENT_CONTEXT_KEY  = "bufferContent"
+	BUFFER_MESSAGE_CONTEXT_KEY  = "bufferMessage"
 	BUFFER_SIZE                 = 30
 )
 
 func onStreamingResponseBody(ctx wrapper.HttpContext, config Config, chunk []byte, isLastChunk bool) []byte {
-	if ctx.GetBoolContext("ReferenceAppended", false) {
+	if ctx.GetBoolContext("ReferenceAppended", false) && ctx.GetContext(PARTIAL_MESSAGE_CONTEXT_KEY) == nil {
 		return chunk
 	}
 	references := ctx.GetStringContext("References", "")
@@ -643,17 +644,22 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, config Config, chunk []byt
 	messages := strings.Split(string(partialMessage), "\n\n")
 	var newMessages []string
 	for i, msg := range messages {
-		if i < len(messages)-1 {
-			newMsg := processSSEMessage(ctx, msg, fmt.Sprintf(config.referenceFormat, references), config.referenceLocation == "tail")
+		if i < len(messages)-1 || (isLastChunk && msg != "") {
+			newMsg := processSSEMessage(ctx, msg, fmt.Sprintf(config.referenceFormat, references), config.referenceLocation == "tail", false)
 			if newMsg != "" {
 				newMessages = append(newMessages, newMsg)
 			}
 		}
 	}
-	if !strings.HasSuffix(string(partialMessage), "\n\n") {
+	if !isLastChunk && !strings.HasSuffix(string(partialMessage), "\n\n") {
 		ctx.SetContext(PARTIAL_MESSAGE_CONTEXT_KEY, []byte(messages[len(messages)-1]))
 	} else {
 		ctx.SetContext(PARTIAL_MESSAGE_CONTEXT_KEY, nil)
+	}
+	if isLastChunk && config.referenceLocation != "tail" {
+		if flushed := flushBufferedSSEMessage(ctx, fmt.Sprintf(config.referenceFormat, references)); flushed != "" {
+			newMessages = append(newMessages, flushed)
+		}
 	}
 	if len(newMessages) > 0 {
 		return []byte(fmt.Sprintf("%s\n\n", strings.Join(newMessages, "\n\n")))
@@ -662,7 +668,10 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, config Config, chunk []byt
 	}
 }
 
-func processSSEMessage(ctx wrapper.HttpContext, sseMessage string, references string, tailReference bool) string {
+func processSSEMessage(ctx wrapper.HttpContext, sseMessage string, references string, tailReference bool, endOfStream bool) string {
+	if ctx.GetBoolContext("ReferenceAppended", false) {
+		return sseMessage
+	}
 	log.Debugf("single sse message: %s", sseMessage)
 	subMessages := strings.Split(sseMessage, "\n")
 	var message string
@@ -679,6 +688,11 @@ func processSSEMessage(ctx wrapper.HttpContext, sseMessage string, references st
 	// Skip the prefix "data:"
 	bodyJson := message[5:]
 	if strings.TrimSpace(bodyJson) == "[DONE]" {
+		if !tailReference {
+			if flushed := flushBufferedSSEMessage(ctx, references); flushed != "" {
+				return flushed + "\n\n" + sseMessage
+			}
+		}
 		return sseMessage
 	}
 	bodyJson = strings.TrimPrefix(bodyJson, " ")
@@ -702,57 +716,81 @@ func processSSEMessage(ctx wrapper.HttpContext, sseMessage string, references st
 		return sseMessage
 	}
 
-	// Original head reference logic
+	// A terminal event may have no content. It must still release any text
+	// retained while checking the opening or closing reasoning tag.
+	endOfStream = endOfStream || gjson.Get(bodyJson, "choices.0.finish_reason").String() != ""
 	deltaContent := gjson.Get(bodyJson, "choices.0.delta.content").String()
-	// Skip the preceding content that might be empty due to the presence of a separate reasoning_content field.
-	if deltaContent == "" {
+	if deltaContent == "" && !endOfStream {
 		return sseMessage
 	}
 	bufferContent := ctx.GetStringContext(BUFFER_CONTENT_CONTEXT_KEY, "") + deltaContent
-	if len(bufferContent) < BUFFER_SIZE {
-		ctx.SetContext(BUFFER_CONTENT_CONTEXT_KEY, bufferContent)
-		return ""
+	if bufferContent == "" {
+		return sseMessage
 	}
 	if !ctx.GetBoolContext("FirstMessageChecked", false) {
+		if len(bufferContent) < BUFFER_SIZE && !endOfStream {
+			ctx.SetContext(BUFFER_CONTENT_CONTEXT_KEY, bufferContent)
+			ctx.SetContext(BUFFER_MESSAGE_CONTEXT_KEY, sseMessage)
+			return ""
+		}
 		ctx.SetContext("FirstMessageChecked", true)
-		if !strings.Contains(strings.TrimLeftFunc(bufferContent, unicode.IsSpace), "<think>") {
-			modifiedMessage, err := sjson.Set(bodyJson, "choices.0.delta.content", fmt.Sprintf("%s\n\n%s", references, bufferContent))
-			if err != nil {
-				log.Errorf("update message failed:%s", err)
-			}
+		if !strings.HasPrefix(strings.TrimLeftFunc(bufferContent, unicode.IsSpace), "<think>") {
+			clearBufferedSSEMessage(ctx)
 			ctx.SetContext("ReferenceAppended", true)
-			return fmt.Sprintf("data: %s", modifiedMessage)
+			return replaceSSEContent(sseMessage, fmt.Sprintf("%s\n\n%s", references, bufferContent))
 		}
 	}
-	// Content has <think> prefix
-	// Check for complete </think> tag
-	thinkEnd := strings.Index(bufferContent, "</think>")
-	if thinkEnd != -1 {
+	if thinkEnd := strings.Index(bufferContent, "</think>"); thinkEnd != -1 {
 		modifiedContent := bufferContent[:thinkEnd+8] +
 			fmt.Sprintf("\n%s\n\n%s", references, bufferContent[thinkEnd+8:])
-		modifiedMessage, err := sjson.Set(bodyJson, "choices.0.delta.content", modifiedContent)
+		clearBufferedSSEMessage(ctx)
+		ctx.SetContext("ReferenceAppended", true)
+		return replaceSSEContent(sseMessage, modifiedContent)
+	}
+
+	// Only retain a possible closing tag; already identified reasoning text
+	// must be emitted in full, including content buffered in earlier events.
+	if !endOfStream {
+		for i := 1; i < len("</think>"); i++ {
+			if strings.HasSuffix(bufferContent, "</think>"[:i]) {
+				ctx.SetContext(BUFFER_CONTENT_CONTEXT_KEY, bufferContent[len(bufferContent)-i:])
+				ctx.SetContext(BUFFER_MESSAGE_CONTEXT_KEY, sseMessage)
+				return replaceSSEContent(sseMessage, bufferContent[:len(bufferContent)-i])
+			}
+		}
+	}
+
+	// An unfinished reasoning tag at stream end is returned verbatim.
+	clearBufferedSSEMessage(ctx)
+	return replaceSSEContent(sseMessage, bufferContent)
+}
+
+func clearBufferedSSEMessage(ctx wrapper.HttpContext) {
+	ctx.SetContext(BUFFER_CONTENT_CONTEXT_KEY, "")
+	ctx.SetContext(BUFFER_MESSAGE_CONTEXT_KEY, "")
+}
+
+func flushBufferedSSEMessage(ctx wrapper.HttpContext, references string) string {
+	if ctx.GetStringContext(BUFFER_CONTENT_CONTEXT_KEY, "") == "" {
+		return ""
+	}
+	// Reuse the last buffered event's envelope when no JSON terminal event
+	// exists (for example [DONE] or an HTTP end-of-stream callback).
+	message := ctx.GetStringContext(BUFFER_MESSAGE_CONTEXT_KEY, "")
+	return processSSEMessage(ctx, replaceSSEContent(message, ""), references, false, true)
+}
+
+func replaceSSEContent(sseMessage, content string) string {
+	for _, line := range strings.Split(sseMessage, "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		modifiedMessage, err := sjson.Set(strings.TrimSpace(line[5:]), "choices.0.delta.content", content)
 		if err != nil {
 			log.Errorf("update message failed:%s", err)
+			return sseMessage
 		}
-		ctx.SetContext("ReferenceAppended", true)
-		return fmt.Sprintf("data: %s", modifiedMessage)
+		return strings.Replace(sseMessage, line, "data: "+modifiedMessage, 1)
 	}
-
-	// Check for partial </think> tag at end of buffer
-	// Look for any partial match that could be completed in next message
-	for i := 1; i < len("</think>"); i++ {
-		if strings.HasSuffix(bufferContent, "</think>"[:i]) {
-			// Store only the partial match for the next message
-			ctx.SetContext(BUFFER_CONTENT_CONTEXT_KEY, bufferContent[len(bufferContent)-i:])
-			// Return the content before the partial match
-			modifiedMessage, err := sjson.Set(bodyJson, "choices.0.delta.content", bufferContent[:len(bufferContent)-i])
-			if err != nil {
-				log.Errorf("update message failed:%s", err)
-			}
-			return fmt.Sprintf("data: %s", modifiedMessage)
-		}
-	}
-
-	ctx.SetContext(BUFFER_CONTENT_CONTEXT_KEY, "")
 	return sseMessage
 }
