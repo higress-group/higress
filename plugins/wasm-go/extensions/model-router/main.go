@@ -373,7 +373,10 @@ func handleMultipartBody(ctx wrapper.HttpContext, config ModelRouterConfig, body
 		}
 	}
 
-	writer.Close()
+	if err := writer.Close(); err != nil {
+		log.Errorf("failed to close multipart writer: %v", err)
+		return types.ActionContinue
+	}
 
 	if modified {
 		_ = proxywasm.ReplaceHttpRequestBody(newBody.Bytes())
