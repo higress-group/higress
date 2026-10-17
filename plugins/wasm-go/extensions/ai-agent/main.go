@@ -269,15 +269,75 @@ func noneStream(assistantMessage Message, actionInput string, rawResponse Respon
 	}
 }
 
+// streamResponseChunk mirrors the JSON object emitted in a single SSE "data:"
+// frame while streaming a final answer. Encoding it with encoding/json keeps
+// the frame valid even when the model output contains double quotes,
+// backslashes, newlines or nested JSON objects, and json.Marshal renders those
+// characters as "\n"/"\"" escapes so a single frame never spans multiple SSE
+// lines (a blank line inside the answer can no longer inject extra frames).
+type streamResponseChunk struct {
+	ID      string                 `json:"id"`
+	Choices []streamResponseChoice `json:"choices"`
+	Model   string                 `json:"model"`
+	Object  string                 `json:"object"`
+	Usage   Usage                  `json:"usage"`
+}
+
+// streamResponseChoice is one entry of the "choices" array in a streamed chunk.
+type streamResponseChoice struct {
+	Index        int                 `json:"index"`
+	Delta        streamResponseDelta `json:"delta"`
+	FinishReason string              `json:"finish_reason"`
+}
+
+// streamResponseDelta carries the incremental content of a streamed choice.
+type streamResponseDelta struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// buildStreamResponseBody renders the SSE body for the final answer: one
+// "data:" frame carrying the chat chunk plus the terminating "data:[DONE]"
+// frame. The chunk is marshalled with encoding/json rather than formatted into
+// a hand-written template so that every value (content, id and model included)
+// is escaped correctly.
+func buildStreamResponseBody(actionInput string, rawResponse Response) []byte {
+	chunk := streamResponseChunk{
+		ID:     rawResponse.ID,
+		Model:  rawResponse.Model,
+		Object: "chat.completion",
+		Choices: []streamResponseChoice{{
+			Index: 0,
+			Delta: streamResponseDelta{
+				Role:    "assistant",
+				Content: actionInput,
+			},
+			FinishReason: "stop",
+		}},
+		Usage: rawResponse.Usage,
+	}
+
+	payload, err := json.Marshal(chunk)
+	if err != nil {
+		// Marshalling the concrete types above cannot fail today; returning nil
+		// keeps a malformed frame from ever reaching the client if that changes.
+		return nil
+	}
+
+	var body strings.Builder
+	body.WriteString("data:")
+	body.Write(payload)
+	body.WriteString("\n\ndata:[DONE]\n\n")
+	return []byte(body.String())
+}
+
 func stream(actionInput string, rawResponse Response, log log.Log) {
 	headers := [][2]string{{"content-type", "text/event-stream; charset=utf-8"}}
 	proxywasm.ReplaceHttpResponseHeaders(headers)
-	// Remove quotes from actionInput
-	actionInput = strings.Trim(actionInput, "\"")
-	returnStreamResponseTemplate := `data:{"id":"%s","choices":[{"index":0,"delta":{"role":"assistant","content":"%s"},"finish_reason":"stop"}],"model":"%s","object":"chat.completion","usage":{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d}}` + "\n\ndata:[DONE]\n\n"
-	newbody := fmt.Sprintf(returnStreamResponseTemplate, rawResponse.ID, actionInput, rawResponse.Model, rawResponse.Usage.PromptTokens, rawResponse.Usage.CompletionTokens, rawResponse.Usage.TotalTokens)
-	log.Infof("[onHttpResponseBody] newResponseBody: ", newbody)
-	proxywasm.ReplaceHttpResponseBody([]byte(newbody))
+
+	newbody := buildStreamResponseBody(actionInput, rawResponse)
+	log.Infof("[onHttpResponseBody] newResponseBody: %s", string(newbody))
+	proxywasm.ReplaceHttpResponseBody(newbody)
 
 	log.Debug("[onHttpResponseBody] replace response success")
 	proxywasm.ResumeHttpResponse()
@@ -389,6 +449,16 @@ func outputParser(response string, log log.Log) (string, string) {
 	if len(match) == 3 {
 		action := match[1]
 		actionInput := match[2]
+		// The regex either captures a JSON string literal (surrounding quotes
+		// included) or a JSON object. Decode the quoted form so callers receive
+		// the raw value instead of an escaped literal; a JSON object is already
+		// in the shape callers expect.
+		if strings.HasPrefix(actionInput, "\"") {
+			var decoded string
+			if err := json.Unmarshal([]byte(actionInput), &decoded); err == nil {
+				actionInput = decoded
+			}
+		}
 		log.Debugf("Parsed action:%s, action_input:%s", action, actionInput)
 		return action, actionInput
 	}
