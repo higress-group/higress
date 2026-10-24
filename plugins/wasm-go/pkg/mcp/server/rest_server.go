@@ -630,6 +630,48 @@ func (t *RestTool) renderURL(serverConfig map[string]interface{}, args map[strin
 	return renderedURL, nil
 }
 
+// buildRequestURLString reconstructs the target passed to RouteCall. Keeping this in one
+// place ensures the URL exposed to templates is identical to the URL actually dispatched.
+func buildRequestURLString(u *url.URL) string {
+	encodedPath := u.EscapedPath()
+	var target string
+	if u.Scheme != "" && u.Host != "" {
+		target = u.Scheme + "://" + u.Host + encodedPath
+	} else {
+		target = "/" + strings.TrimPrefix(encodedPath, "/")
+	}
+	if u.RawQuery != "" {
+		target += "?" + u.RawQuery
+	}
+	if u.Fragment != "" {
+		target += "#" + u.Fragment
+	}
+	return target
+}
+
+// addRequestTemplateContext exposes the resolved outgoing request to header and body
+// templates. HMAC-style upstream authentication needs the path and query assembled from
+// the request template and tool arguments, which are not available before this point.
+func addRequestTemplateContext(data []byte, method string, u *url.URL) []byte {
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	uri := path
+	if u.RawQuery != "" {
+		uri += "?" + u.RawQuery
+	}
+
+	data, _ = sjson.SetBytes(data, "request.method", method)
+	data, _ = sjson.SetBytes(data, "request.url", buildRequestURLString(u))
+	data, _ = sjson.SetBytes(data, "request.uri", uri)
+	data, _ = sjson.SetBytes(data, "request.path", path)
+	data, _ = sjson.SetBytes(data, "request.query", u.RawQuery)
+	data, _ = sjson.SetBytes(data, "request.scheme", u.Scheme)
+	data, _ = sjson.SetBytes(data, "request.host", u.Host)
+	return data
+}
+
 // RestMCPServer implements Server interface for REST-to-MCP conversion
 type RestMCPServer struct {
 	name                      string
@@ -984,23 +1026,7 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 	}
 
 	// Regular REST tool with HTTP request
-	// Execute header templates from tool config
 	headers := make([][2]string, 0, len(t.toolConfig.RequestTemplate.Headers))
-	for i, header := range t.toolConfig.RequestTemplate.Headers {
-		if header.Key == "" {
-			log.Warnf("Skipping header with empty key at index %d", i)
-			continue
-		}
-		tmpl, ok := t.toolConfig.parsedHeaderTemplates[header.Key]
-		if !ok {
-			return fmt.Errorf("header template not found for %s", header.Key)
-		}
-		value, err := executeTemplate(tmpl, templateDataBytes)
-		if err != nil {
-			return fmt.Errorf("error executing header template for %s: %v", header.Key, err)
-		}
-		headers = append(headers, [2]string{header.Key, value})
-	}
 
 	// Authorization or specific API key headers are handled by extractAndRemoveIncomingCredential if tool-level security is defined.
 	// If no tool-level security is defined, this generic RemoveHttpRequestHeader("Authorization") acts as a fallback.
@@ -1080,6 +1106,29 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 
 	// Update the URL with the new query string
 	parsedURL.RawQuery = query.Encode()
+
+	// Header and body templates see the fully resolved path and query, including values
+	// supplied through position/path and argsToUrlParam. Signing templates can therefore
+	// use the assembled target before transport-level security adds its own query values.
+	templateDataBytes = addRequestTemplateContext(templateDataBytes, t.toolConfig.RequestTemplate.Method, parsedURL)
+
+	// Execute header templates from tool config. This must happen after URL assembly so
+	// request-aware templates can sign the final target rather than a partial URL.
+	for i, header := range t.toolConfig.RequestTemplate.Headers {
+		if header.Key == "" {
+			log.Warnf("Skipping header with empty key at index %d", i)
+			continue
+		}
+		tmpl, ok := t.toolConfig.parsedHeaderTemplates[header.Key]
+		if !ok {
+			return fmt.Errorf("header template not found for %s", header.Key)
+		}
+		value, err := executeTemplate(tmpl, templateDataBytes)
+		if err != nil {
+			return fmt.Errorf("error executing header template for %s: %v", header.Key, err)
+		}
+		headers = append(headers, [2]string{header.Key, value})
+	}
 
 	// Add header parameters from args
 	for name, value := range headerArgs {
@@ -1218,19 +1267,7 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 	}
 	// After applySecurity, authReqCtx.Headers and authReqCtx.ParsedURL (RawQuery) might have been modified.
 	// Update urlStr from the potentially modified ParsedURL.
-	u := authReqCtx.ParsedURL
-	encodedPath := u.EscapedPath()
-	if u.Scheme != "" && u.Host != "" {
-		urlStr = u.Scheme + "://" + u.Host + encodedPath
-	} else {
-		urlStr = "/" + strings.TrimPrefix(encodedPath, "/")
-	}
-	if u.RawQuery != "" {
-		urlStr += "?" + u.RawQuery
-	}
-	if u.Fragment != "" {
-		urlStr += "#" + u.Fragment
-	}
+	urlStr = buildRequestURLString(authReqCtx.ParsedURL)
 	// Make HTTP request using potentially modified headers from authReqCtx
 	err = ctx.RouteCall(authReqCtx.Method, urlStr, authReqCtx.Headers, authReqCtx.RequestBody,
 		func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
