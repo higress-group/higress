@@ -1075,6 +1075,69 @@ func TestParseTemplates_PopulatesArgPositions(t *testing.T) {
 	require.False(ok)
 }
 
+func TestAddRequestTemplateContext(t *testing.T) {
+	tests := []struct {
+		name       string
+		rawURL     string
+		method     string
+		wantURL    string
+		wantURI    string
+		wantPath   string
+		wantQuery  string
+		wantScheme string
+		wantHost   string
+	}{
+		{
+			name:       "absolute URL with path query and fragment",
+			rawURL:     "https://api.example.com/items/42?fixed=1&q=hello+world#section",
+			method:     "POST",
+			wantURL:    "https://api.example.com/items/42?fixed=1&q=hello+world#section",
+			wantURI:    "/items/42?fixed=1&q=hello+world",
+			wantPath:   "/items/42",
+			wantQuery:  "fixed=1&q=hello+world",
+			wantScheme: "https",
+			wantHost:   "api.example.com",
+		},
+		{
+			name:      "relative URL preserves escaped path and query",
+			rawURL:    "/items/a%2Fb?q=a%2Bb",
+			method:    "GET",
+			wantURL:   "/items/a%2Fb?q=a%2Bb",
+			wantURI:   "/items/a%2Fb?q=a%2Bb",
+			wantPath:  "/items/a%2Fb",
+			wantQuery: "q=a%2Bb",
+		},
+		{
+			name:       "empty path uses root URI",
+			rawURL:     "http://backend.example",
+			method:     "DELETE",
+			wantURL:    "http://backend.example",
+			wantURI:    "/",
+			wantPath:   "/",
+			wantQuery:  "",
+			wantScheme: "http",
+			wantHost:   "backend.example",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsedURL, err := url.Parse(tt.rawURL)
+			require.NoError(t, err)
+
+			var got map[string]map[string]string
+			require.NoError(t, json.Unmarshal(addRequestTemplateContext(nil, tt.method, parsedURL), &got))
+			assert.Equal(t, tt.method, got["request"]["method"])
+			assert.Equal(t, tt.wantURL, got["request"]["url"])
+			assert.Equal(t, tt.wantURI, got["request"]["uri"])
+			assert.Equal(t, tt.wantPath, got["request"]["path"])
+			assert.Equal(t, tt.wantQuery, got["request"]["query"])
+			assert.Equal(t, tt.wantScheme, got["request"]["scheme"])
+			assert.Equal(t, tt.wantHost, got["request"]["host"])
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // executeTemplate — nil + execution error
 // ---------------------------------------------------------------------------

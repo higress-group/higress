@@ -237,6 +237,7 @@ REST-to-MCP 功能使用 [GJSON Template](https://github.com/higress-group/gjson
 - **请求模板**：用于构造 HTTP 请求 URL、头部和正文
   - 使用 `.config.fieldName` 访问配置值
   - 使用 `.args.argName` 访问工具参数
+  - 在头部和正文模板中使用 `.request.method`、`.request.url`、`.request.uri`、`.request.path`、`.request.query`、`.request.scheme`、`.request.host` 访问已解析的上游请求
 
 - **响应模板**：用于将 HTTP 响应转换为适合 AI 消费的格式
   - 使用 GJSON 路径语法访问 JSON 响应字段
