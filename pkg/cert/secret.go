@@ -26,6 +26,16 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+const (
+	certDomainAnnotation = "higress.io/cert-domain"
+
+	certNotAfterAnnotation  = "higress.io/cert-notAfter"
+	certNotBeforeAnnotation = "higress.io/cert-notBefore"
+	certRenewAnnotation     = "higress.io/cert-renew"
+	certRenewTimeAnnotation = "higress.io/cert-renew-time"
+	certSourceAnnotation    = "higress.io/cert-source"
+)
+
 type SecretMgr struct {
 	client    kubernetes.Interface
 	namespace string
@@ -50,38 +60,45 @@ func (s *SecretMgr) Update(domain string, secretName string, privateKey []byte, 
 		name = secretP
 	}
 
-	secret := s.constructSecret(domain, name, namespace, privateKey, certificate, notBefore, notAfter, isRenew)
-	_, err := s.client.CoreV1().Secrets(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	existingSecret, err := s.client.CoreV1().Secrets(namespace).Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// create secret
-			_, err2 := s.client.CoreV1().Secrets(namespace).Create(context.Background(), secret, metav1.CreateOptions{})
-			return err2
+			_, createErr := s.client.CoreV1().Secrets(namespace).Create(context.Background(), s.constructSecret(domain, name, namespace, privateKey, certificate, notBefore, notAfter, isRenew), metav1.CreateOptions{})
+			return createErr
 		}
 		return err
 	}
-	// check secret annotations
-	if _, ok := secret.Annotations["higress.io/cert-domain"]; !ok {
+
+	// Only update Secrets that Higress already owns for this exact domain. Checking the
+	// fetched object (rather than the freshly built one) prevents overwriting a
+	// user-managed Secret whose name happens to appear in the credential config.
+	if existingSecret.Annotations[certDomainAnnotation] != domain {
 		return fmt.Errorf("the secret name %s is not automatic https secret name for the domain:%s, please rename it in config", secretName, domain)
 	}
-	_, err1 := s.client.CoreV1().Secrets(namespace).Update(context.Background(), secret, metav1.UpdateOptions{})
-	if err1 != nil {
-		return err1
-	}
 
-	return nil
+	// Mutate the existing object instead of replacing it so labels, owner references
+	// and user annotations survive certificate updates.
+	if existingSecret.Annotations == nil {
+		existingSecret.Annotations = make(map[string]string)
+	}
+	for key, value := range certAnnotations(domain, notBefore, notAfter, isRenew) {
+		existingSecret.Annotations[key] = value
+	}
+	if !isRenew {
+		delete(existingSecret.Annotations, certRenewTimeAnnotation)
+	}
+	if existingSecret.Data == nil {
+		existingSecret.Data = make(map[string][]byte)
+	}
+	existingSecret.Data["tls.key"] = privateKey
+	existingSecret.Data["tls.crt"] = certificate
+
+	_, err = s.client.CoreV1().Secrets(namespace).Update(context.Background(), existingSecret, metav1.UpdateOptions{})
+	return err
 }
 
 func (s *SecretMgr) constructSecret(domain string, name string, namespace string, privateKey []byte, certificate []byte, notBefore time.Time, notAfter time.Time, isRenew bool) *v1.Secret {
-	annotationMap := make(map[string]string, 0)
-	annotationMap["higress.io/cert-domain"] = domain
-	annotationMap["higress.io/cert-notAfter"] = notAfter.Format("2006-01-02 15:04:05")
-	annotationMap["higress.io/cert-notBefore"] = notBefore.Format("2006-01-02 15:04:05")
-	annotationMap["higress.io/cert-renew"] = strconv.FormatBool(isRenew)
-	annotationMap["higress.io/cert-source"] = string(IssuerTypeLetsencrypt)
-	if isRenew {
-		annotationMap["higress.io/cert-renew-time"] = time.Now().Format("2006-01-02 15:04:05")
-	}
 	// Required fields:
 	// - Secret.Data["tls.key"] - TLS private key.
 	//   Secret.Data["tls.crt"] - TLS certificate.
@@ -92,10 +109,24 @@ func (s *SecretMgr) constructSecret(domain string, name string, namespace string
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
 			Namespace:   namespace,
-			Annotations: annotationMap,
+			Annotations: certAnnotations(domain, notBefore, notAfter, isRenew),
 		},
 		Type: v1.SecretTypeTLS,
 		Data: dataMap,
 	}
 	return secret
+}
+
+func certAnnotations(domain string, notBefore time.Time, notAfter time.Time, isRenew bool) map[string]string {
+	annotations := map[string]string{
+		certDomainAnnotation:    domain,
+		certNotAfterAnnotation:  notAfter.Format("2006-01-02 15:04:05"),
+		certNotBeforeAnnotation: notBefore.Format("2006-01-02 15:04:05"),
+		certRenewAnnotation:     strconv.FormatBool(isRenew),
+		certSourceAnnotation:    string(IssuerTypeLetsencrypt),
+	}
+	if isRenew {
+		annotations[certRenewTimeAnnotation] = time.Now().Format("2006-01-02 15:04:05")
+	}
+	return annotations
 }
