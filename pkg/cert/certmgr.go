@@ -260,6 +260,7 @@ func (s *CertMgr) OnEvent(ctx context.Context, event string, data map[string]any
 		err2 := s.secretMgr.Update(domain, secretName, privateKey, certificate, notBeforeTime, notAfterTime, isRenew)
 		if err2 != nil {
 			CertLog.Errorf("update secretName %s for domain %s error: %v", secretName, domain, err2)
+			return err2
 		}
 		return err
 	}
