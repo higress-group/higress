@@ -68,7 +68,7 @@ verifySupported() {
   local supported="darwin-amd64\ndarwin-arm64\nlinux-amd64\nlinux-arm64\nwindows-amd64\nwindows-arm64\n"
   if ! echo "${supported}" | grep -q "${OS}-${ARCH}"; then
     echo "No prebuilt binary for ${OS}-${ARCH}."
-    echo "To build from source, go to https://github.com/alibaba/higress"
+    echo "To build from source, go to https://github.com/higress-group/higress"
     exit 1
   fi
 
@@ -199,11 +199,11 @@ installNodeWindows() {
 checkDesiredVersion() {
   if [ "$VERSION" == "" ]; then
     # Get tag from release URL
-    local latest_release_url="https://github.com/alibaba/higress/releases"
+    local latest_release_url="https://github.com/higress-group/higress/releases"
     if [ "${HAS_CURL}" == "true" ]; then
-      VERSION=$(curl -Ls $latest_release_url | grep 'href="/alibaba/higress/releases/tag/v[0-9]*.[0-9]*.[0-9]*\"' | sed -E 's/.*\/alibaba\/higress\/releases\/tag\/(v[0-9\.]+)".*/\1/g' | head -1)
+      VERSION=$(curl -Ls $latest_release_url | grep 'href="/higress-group/higress/releases/tag/v[0-9]*.[0-9]*.[0-9]*\"' | sed -E 's/.*\/alibaba\/higress\/releases\/tag\/(v[0-9\.]+)".*/\1/g' | head -1)
     elif [ "${HAS_WGET}" == "true" ]; then
-      VERSION=$(wget $latest_release_url -O - 2>&1 | grep 'href="/alibaba/higress/releases/tag/v[0-9]*.[0-9]*.[0-9]*\"' | sed -E 's/.*\/alibaba\/higress\/releases\/tag\/(v[0-9\.]+)".*/\1/g' | head -1)
+      VERSION=$(wget $latest_release_url -O - 2>&1 | grep 'href="/higress-group/higress/releases/tag/v[0-9]*.[0-9]*.[0-9]*\"' | sed -E 's/.*\/alibaba\/higress\/releases\/tag\/(v[0-9\.]+)".*/\1/g' | head -1)
     fi
     
     if [ "$VERSION" == "" ]; then 
@@ -237,7 +237,7 @@ downloadFile() {
   if [ "${OS}" == "windows" ]; then
     hgctl_DIST="hgctl_${VERSION}_${OS}_${ARCH}.zip"
   fi
-  DOWNLOAD_URL="https://github.com/alibaba/higress/releases/download/$VERSION/$hgctl_DIST"
+  DOWNLOAD_URL="https://github.com/higress-group/higress/releases/download/$VERSION/$hgctl_DIST"
   hgctl_TMP_ROOT="$(mktemp -dt hgctl-installer-XXXXXX)"
   hgctl_TMP_FILE="$hgctl_TMP_ROOT/$hgctl_DIST"
   echo "Downloading $DOWNLOAD_URL"
@@ -280,7 +280,7 @@ fail_trap() {
     else
       echo "Failed to install $BINARY_NAME"
     fi
-    echo -e "\tFor support, go to https://github.com/alibaba/higress."
+    echo -e "\tFor support, go to https://github.com/higress-group/higress."
   fi
   cleanup
   exit $result
