@@ -478,6 +478,29 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			host.CompleteHttp()
 		})
 
+		// 回归：current == threshold 时应触发限流（此前用 > 会在边界多放行一次）
+		t.Run("rate limit at exact threshold", func(t *testing.T) {
+			host, status := test.NewTestHost(globalThresholdConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			resp := multiRuleResp([3]int{1000, 1000, 60})
+			host.CallOnRedisCall(0, resp)
+
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.Equal(t, uint32(429), localResponse.StatusCode)
+
+			host.CompleteHttp()
+		})
+
 		// 测试没有匹配到限流规则的情况
 		t.Run("no matching limit rule", func(t *testing.T) {
 			host, status := test.NewTestHost(headerLimitConfig)
