@@ -8,6 +8,31 @@ http_archive(
     sha256 = "5eda539c841265031c2f82d8ae7a3a6490bd62176e0c038fc469eabf91f6149b",
 )
 
+# Pin protobuf to a Bazel 6 compatible release. proxy-wasm-cpp-sdk's default
+# (protobuf 26.x) requires Bazel 7+ (its upb_generator BUILD uses the
+# proto_lang_toolchain output_files attribute removed in Bazel 7), which breaks
+# analysis under the Bazel 6.0.0 toolchain used by the build image.
+http_archive(
+    name = "com_google_protobuf",
+    sha256 = "2c6a36c7b5a55accae063667ef3c55f2642e67476d96d355ff0acb13dbb47f09",
+    strip_prefix = "protobuf-21.12",
+    urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protobuf-all-21.12.tar.gz"],
+)
+
+# rules_pkg is required by rules_nodejs (pulled in transitively via
+# proxy-wasm-cpp-sdk's emscripten_deps -> nodejs_register_toolchains).
+http_archive(
+    name = "rules_pkg",
+    sha256 = "62eeb544ff1ef41d786e329e1536c1d541bb9bcad27ae984d57f18f314018e66",
+    urls = [
+        "https://github.com/bazelbuild/rules_pkg/releases/download/0.6.0/rules_pkg-0.6.0.tar.gz",
+    ],
+)
+
+load("@rules_pkg//:deps.bzl", "rules_pkg_dependencies")
+
+rules_pkg_dependencies()
+
 load("//bazel:third_party.bzl", "wasm_extension_dependency")
 
 wasm_extension_dependency()
