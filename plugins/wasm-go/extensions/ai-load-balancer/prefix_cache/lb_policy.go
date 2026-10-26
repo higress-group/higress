@@ -258,6 +258,11 @@ func (lb PrefixCacheLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpContext,
 		}
 		hostSelected := response.String()
 		if err := proxywasm.SetUpstreamOverrideHost([]byte(hostSelected)); err != nil {
+			// The script has already incremented hostSelected and the request will
+			// not reach it; HandleHttpStreamDone skips its decrement once error is set.
+			if compErr := utils.CompensateCounter(lb.redisClient, fmt.Sprintf(RedisKeyFormat, routeName, clusterName), hostSelected); compErr != nil {
+				log.Errorf("cannot compensate the request counter after a failed override: %v", compErr)
+			}
 			ctx.SetContext("error", true)
 			log.Errorf("override upstream host failed, fallback to default lb policy, error informations: %+v", err)
 		}
