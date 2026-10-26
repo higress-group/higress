@@ -425,3 +425,175 @@ func TestCompleteFlow(t *testing.T) {
 		})
 	})
 }
+
+// TestOnHttpRequestBody 验证请求体阶段的重放检查逻辑。
+//
+// 这是 issue #4601 的核心回归测试：带请求体的请求（如 POST）必须在
+// 请求体阶段发起 Redis SETNX 并挂起请求等待回调，而非在请求头阶段
+// 挂起（请求头阶段的 ActionPause 挂不住后续 body 阶段，会导致回调
+// 来晚、重放漏放）。
+func TestOnHttpRequestBody(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		// 带请求体的首次请求：header 阶段暂存 nonce，body 阶段发 SETNX，
+		// Redis 返回 OK（写入成功）→ 放行。
+		t.Run("POST with body - first request allowed", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 1. 请求头阶段：有 body，暂存 nonce，返回 ActionPause
+			headerAction := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+				{"X-Higress-Nonce", "dGVzdC1ub25jZS12YWx1ZQ=="},
+			})
+			require.Equal(t, types.ActionPause, headerAction)
+
+			// 2. 请求体阶段：发起 SETNX，返回 ActionPause 等待回调
+			bodyAction := host.CallOnHttpRequestBody([]byte(`{"key":"value"}`))
+			require.Equal(t, types.ActionPause, bodyAction)
+
+			// 3. 模拟 Redis SETNX 成功（首次写入）→ ResumeHttpRequest 放行
+			host.CallOnRedisCall(0, test.CreateRedisRespString("OK"))
+
+			host.CompleteHttp()
+		})
+
+		// 带请求体的重放请求：body 阶段发 SETNX，Redis 返回 nil
+		//（key 已存在，写入失败）→ 应返回 429。
+		t.Run("POST with body - replay request rejected", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 1. 请求头阶段
+			headerAction := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+				{"X-Higress-Nonce", "dGVzdC1ub25jZS12YWx1ZQ=="},
+			})
+			require.Equal(t, types.ActionPause, headerAction)
+
+			// 2. 请求体阶段：发起 SETNX，返回 ActionPause 等待回调
+			bodyAction := host.CallOnHttpRequestBody([]byte(`{"key":"value"}`))
+			require.Equal(t, types.ActionPause, bodyAction)
+
+			// 3. 模拟 Redis SETNX 失败（key 已存在，重放）→ SendHttpResponse(429)
+			host.CallOnRedisCall(0, test.CreateRedisRespNull())
+
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse, "replay request should be rejected with 429")
+			require.Equal(t, uint32(429), localResponse.StatusCode)
+			require.Equal(t, "Replay Attack Detected", string(localResponse.Data))
+
+			host.CompleteHttp()
+		})
+
+		// 带请求体的请求，Redis 返回错误 → fail-open 放行
+		t.Run("POST with body - redis error fail-open", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+				{"X-Higress-Nonce", "dGVzdC1ub25jZS12YWx1ZQ=="},
+			})
+
+			bodyAction := host.CallOnHttpRequestBody([]byte(`{"key":"value"}`))
+			require.Equal(t, types.ActionPause, bodyAction)
+
+			// Redis 返回错误 → ResumeHttpRequest 放行（fail-open）
+			host.CallOnRedisCall(0, test.CreateRedisRespError("connection refused"))
+
+			host.CompleteHttp()
+		})
+
+		// 带请求体但无 nonce（非强制模式）→ 两阶段都直接放行
+		t.Run("POST with body - no nonce non-force mode", func(t *testing.T) {
+			host, status := test.NewTestHost(customConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			headerAction := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+			})
+			require.Equal(t, types.ActionContinue, headerAction)
+
+			// body 阶段：无 nonce 暂存，直接放行
+			bodyAction := host.CallOnHttpRequestBody([]byte(`{"key":"value"}`))
+			require.Equal(t, types.ActionContinue, bodyAction)
+
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestCompleteFlowWithBody 验证带请求体的完整请求流程：
+// header 阶段暂存 nonce → body 阶段发 SETNX → Redis 回调判决。
+// 这直接覆盖 issue #4601 报告的 POST 重放漏放场景。
+func TestCompleteFlowWithBody(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("POST complete flow - first then replay", func(t *testing.T) {
+			nonce := "dGVzdC1ub25jZS12YWx1ZQ=="
+
+			// --- 第一次请求（首次，应放行）---
+			host, status := test.NewTestHost(basicConfig)
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			headerAction := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+				{"X-Higress-Nonce", nonce},
+			})
+			require.Equal(t, types.ActionPause, headerAction)
+
+			bodyAction := host.CallOnHttpRequestBody([]byte(`{"key":"value"}`))
+			require.Equal(t, types.ActionPause, bodyAction)
+
+			// SETNX 成功 → 放行
+			host.CallOnRedisCall(0, test.CreateRedisRespString("OK"))
+			host.CompleteHttp()
+			host.Reset()
+
+			// --- 第二次请求（重放，应 429）---
+			host2, status2 := test.NewTestHost(basicConfig)
+			defer host2.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status2)
+
+			headerAction2 := host2.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+				{"X-Higress-Nonce", nonce},
+			})
+			require.Equal(t, types.ActionPause, headerAction2)
+
+			bodyAction2 := host2.CallOnHttpRequestBody([]byte(`{"key":"value"}`))
+			require.Equal(t, types.ActionPause, bodyAction2)
+
+			// SETNX 失败（key 已存在）→ 429
+			host2.CallOnRedisCall(0, test.CreateRedisRespNull())
+
+			localResponse := host2.GetLocalResponse()
+			require.NotNil(t, localResponse, "replay POST should be rejected")
+			require.Equal(t, uint32(429), localResponse.StatusCode)
+			require.Equal(t, "Replay Attack Detected", string(localResponse.Data))
+
+			host2.CompleteHttp()
+		})
+	})
+}
