@@ -19,11 +19,235 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
+	template "github.com/higress-group/gjson_template"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/iface"
+	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tidwall/sjson"
 )
+
+type captureRouteCallContext struct {
+	wrapper.HttpContext
+	contextValues map[string]interface{}
+	method        string
+	url           string
+	headers       [][2]string
+	body          []byte
+}
+
+func (c *captureRouteCallContext) RouteCall(method, url string, headers [][2]string, body []byte, _ iface.RouteResponseCallback) error {
+	c.method = method
+	c.url = url
+	c.headers = headers
+	c.body = body
+	return nil
+}
+
+func (c *captureRouteCallContext) GetContext(key string) interface{} {
+	return c.contextValues[key]
+}
+
+func (c *captureRouteCallContext) GetExecutionPhase() iface.HTTPExecutionPhase {
+	return iface.DecodeHeader
+}
+
+func TestBuildRequestTemplateDataIncludesHeaders(t *testing.T) {
+	data, err := buildRequestTemplateData(
+		map[string]interface{}{"endpoint": "https://example.com"},
+		map[string]interface{}{"query": "select 1"},
+		[][2]string{
+			{"User_ID", "user-123"},
+			{"bucket", "reports"},
+			{"Target-Path", "daily/2026-07-24"},
+		},
+		false,
+	)
+	require.NoError(t, err)
+
+	bodyTemplate, err := template.New("body").Parse(`{
+		"endpoint": "{{.config.endpoint}}",
+		"query": "{{.args.query}}",
+		"user": "{{.headers.user_id}}",
+		"bucket": "{{.headers.bucket}}",
+		"targetPath": "{{gjson "headers.target-path"}}"
+	}`)
+	require.NoError(t, err)
+
+	body, err := executeTemplate(bodyTemplate, data)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"endpoint": "https://example.com",
+		"query": "select 1",
+		"user": "user-123",
+		"bucket": "reports",
+		"targetPath": "daily/2026-07-24"
+	}`, body)
+}
+
+func TestRestMCPToolCallRendersRequestHeaders(t *testing.T) {
+	log.SetPluginLog(&testLogger{})
+	host, reset := proxytest.NewHostEmulator(
+		proxytest.NewEmulatorOption().WithHttpContext(
+			func(uint32) types.HttpContext { return &types.DefaultHttpContext{} },
+		),
+	)
+	defer reset()
+	contextID := host.InitializeHttpContext()
+	action := host.CallOnRequestHeaders(contextID, [][2]string{
+		{":method", "POST"},
+		{":path", "/mcp"},
+		{"user_id", "user-456"},
+		{"bucket", "archive"},
+	}, false)
+	require.Equal(t, types.ActionContinue, action)
+
+	server := NewRestMCPServer("rest")
+	server.SetConfig([]byte(`{"url":"https://backend.example.com"}`))
+	require.NoError(t, server.AddRestTool(RestTool{
+		Name: "header-template",
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "{{.config.url}}/upload",
+			Method: "POST",
+			Body:   `{"user":"{{.headers.user_id}}","bucket":"{{.headers.bucket}}"}`,
+		},
+	}))
+	tool := server.GetMCPTools()["header-template"].Create([]byte(`{}`))
+	ctx := &captureRouteCallContext{
+		contextValues: map[string]interface{}{utils.CtxJsonRpcID: utils.JsonRpcID{IntValue: 1}},
+	}
+
+	require.NoError(t, tool.Call(ctx, server))
+	assert.Equal(t, "POST", ctx.method)
+	assert.Equal(t, "https://backend.example.com/upload", ctx.url)
+	assert.JSONEq(t, `{"user":"user-456","bucket":"archive"}`, string(ctx.body))
+}
+
+func TestRestMCPToolCallDoesNotExposeAuthorizationUnlessPassthroughEnabled(t *testing.T) {
+	for _, testCase := range []struct {
+		name                  string
+		passthroughAuthHeader bool
+		apiKeySecurity        bool
+		httpSecurity          bool
+		wantAuthorization     string
+	}{
+		{
+			name:              "authorization hidden by default",
+			wantAuthorization: "",
+		},
+		{
+			name:                  "authorization available when passthrough is enabled",
+			passthroughAuthHeader: true,
+			wantAuthorization:     "Bearer secret-token",
+		},
+		{
+			name:                  "authorization available with unrelated downstream security",
+			passthroughAuthHeader: true,
+			apiKeySecurity:        true,
+			wantAuthorization:     "Bearer secret-token",
+		},
+		{
+			name:                  "downstream HTTP credential remains hidden from templates",
+			passthroughAuthHeader: true,
+			httpSecurity:          true,
+			wantAuthorization:     "",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			log.SetPluginLog(&testLogger{})
+			host, reset := proxytest.NewHostEmulator(
+				proxytest.NewEmulatorOption().WithHttpContext(
+					func(uint32) types.HttpContext { return &types.DefaultHttpContext{} },
+				),
+			)
+			defer reset()
+			contextID := host.InitializeHttpContext()
+			host.CallOnRequestHeaders(contextID, [][2]string{
+				{":method", "POST"},
+				{":path", "/mcp"},
+				{"authorization", "Bearer secret-token"},
+				{"x-api-key", "api-key-secret"},
+			}, false)
+
+			server := NewRestMCPServer("rest")
+			server.SetConfig([]byte(`{"url":"https://backend.example.com"}`))
+			server.SetPassthroughAuthHeader(testCase.passthroughAuthHeader)
+			if testCase.apiKeySecurity {
+				server.AddSecurityScheme(SecurityScheme{
+					ID:   "client-api-key",
+					Type: "apiKey",
+					In:   "header",
+					Name: "x-api-key",
+				})
+				server.SetDefaultDownstreamSecurity(SecurityRequirement{ID: "client-api-key"})
+			}
+			if testCase.httpSecurity {
+				server.AddSecurityScheme(SecurityScheme{
+					ID:     "client-bearer",
+					Type:   "http",
+					Scheme: "bearer",
+				})
+				server.SetDefaultDownstreamSecurity(SecurityRequirement{
+					ID:          "client-bearer",
+					Passthrough: true,
+				})
+			}
+			require.NoError(t, server.AddRestTool(RestTool{
+				Name: "authorization-template",
+				RequestTemplate: RestToolRequestTemplate{
+					URL:    "{{.config.url}}/upload",
+					Method: "POST",
+					Body:   `{"authorization":"{{.headers.authorization}}"}`,
+				},
+			}))
+			tool := server.GetMCPTools()["authorization-template"].Create([]byte(`{}`))
+			ctx := &captureRouteCallContext{}
+
+			require.NoError(t, tool.Call(ctx, server))
+			var rendered map[string]string
+			require.NoError(t, json.Unmarshal(ctx.body, &rendered))
+			assert.Equal(t, testCase.wantAuthorization, rendered["authorization"])
+		})
+	}
+}
+
+func TestRestMCPToolCallRendersHeadersInDirectResponse(t *testing.T) {
+	log.SetPluginLog(&testLogger{})
+	host, reset := proxytest.NewHostEmulator(
+		proxytest.NewEmulatorOption().WithHttpContext(
+			func(uint32) types.HttpContext { return &types.DefaultHttpContext{} },
+		),
+	)
+	defer reset()
+	contextID := host.InitializeHttpContext()
+	host.CallOnRequestHeaders(contextID, [][2]string{
+		{":method", "POST"},
+		{":path", "/mcp"},
+		{"user_id", "user-789"},
+	}, false)
+
+	server := NewRestMCPServer("rest")
+	require.NoError(t, server.AddRestTool(RestTool{
+		Name: "direct-header-template",
+		ResponseTemplate: RestToolResponseTemplate{
+			Body: `request user: {{.headers.user_id}}`,
+		},
+	}))
+	tool := server.GetMCPTools()["direct-header-template"].Create([]byte(`{}`))
+	ctx := &captureRouteCallContext{
+		contextValues: map[string]interface{}{utils.CtxJsonRpcID: utils.JsonRpcID{IntValue: 1}},
+	}
+
+	require.NoError(t, tool.Call(ctx, server))
+	response := host.GetSentLocalResponse(contextID)
+	require.NotNil(t, response)
+	assert.Contains(t, string(response.Data), "request user: user-789")
+}
 
 func TestConvertArgToString(t *testing.T) {
 	tests := []struct {
