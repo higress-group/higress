@@ -1,0 +1,153 @@
+# Copyright (c) 2025 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-statistics-basic
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "ai-statistics-basic.test"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-statistics-custom-attrs
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "ai-statistics-custom.test"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-statistics-with-proxy
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "ai-statistics-proxy.test"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+# ai-proxy插件配置（与ai-statistics配合使用）
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-proxy-for-statistics
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  phase: UNSPECIFIED_PHASE
+  priority: 100
+  matchRules:
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          modelMapping:
+            'gpt-3.5-turbo': qwen-turbo
+            '*': qwen-turbo
+          type: qwen
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-statistics-with-proxy
+---
+# ai-statistics插件配置
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-statistics
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  phase: CUSTOM
+  priority: 200
+  matchRules:
+    # 基础配置 - 只使用默认统计
+    - config: {}
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-statistics-basic
+    # 自定义属性配置
+    - config:
+        attributes:
+          - key: "custom_header"
+            value_source: "request_header"
+            value: "x-custom-header"
+            apply_to_log: true
+            apply_to_span: true
+          - key: "request_model"
+            value_source: "request_body"
+            value: "model"
+            apply_to_log: true
+          - key: "response_id"
+            value_source: "response_body"
+            value: "id"
+            apply_to_log: true
+          - key: "stream_content"
+            value_source: "response_streaming_body"
+            value: "choices.0.delta.content"
+            rule: "append"
+            apply_to_log: true
+          - key: "consumer_info"
+            value_source: "request_header"
+            value: "x-mse-consumer"
+            default_value: "anonymous"
+            apply_to_log: true
+          - key: "fixed_env"
+            value_source: "fixed_value"
+            value: "test"
+            apply_to_log: true
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-statistics-custom-attrs
+    # 与ai-proxy配合使用
+    - config:
+        attributes:
+          - key: "proxy_model"
+            value_source: "response_body"
+            value: "model"
+            apply_to_log: true
+          - key: "proxy_tokens"
+            value_source: "response_body"
+            value: "usage.total_tokens"
+            apply_to_log: true
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-statistics-with-proxy
