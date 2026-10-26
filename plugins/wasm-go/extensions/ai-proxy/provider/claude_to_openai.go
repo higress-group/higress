@@ -188,7 +188,23 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body [
 	}
 
 	// Convert messages from Claude format to OpenAI format
+	// Collect any role:"system" messages from the messages array so they can be
+	// merged with the top-level system field into a single leading system message.
+	var inlineSystemParts []string
 	for _, claudeMsg := range claudeRequest.Messages {
+		if claudeMsg.Role == roleSystem {
+			if claudeMsg.Content.IsString {
+				if s := claudeMsg.Content.GetStringValue(); s != "" {
+					inlineSystemParts = append(inlineSystemParts, s)
+				}
+			} else {
+				conversionResult := c.convertContentArray(claudeMsg.Content.GetArrayValue())
+				if len(conversionResult.textParts) > 0 {
+					inlineSystemParts = append(inlineSystemParts, strings.Join(conversionResult.textParts, "\n\n"))
+				}
+			}
+			continue
+		}
 		// Handle different content types using the type-safe wrapper
 		if claudeMsg.Content.IsString {
 			// Simple text content
@@ -265,17 +281,34 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body [
 		}
 	}
 
-	// Handle system message - Claude has separate system field
+	// Handle system message - merge the top-level system field and any inline
+	// role:"system" messages into a single leading system message so that strict
+	// OpenAI-compatible backends (e.g. vLLM) do not reject non-leading system messages.
+	var systemTextParts []string
+	var systemContents []chatMessageContent
 	if claudeRequest.System != nil {
-		systemMsg := chatMessage{Role: roleSystem}
 		if !claudeRequest.System.IsArray {
-			// Strip dynamic cch field from billing header to enable caching
-			systemMsg.Content = stripCchFromBillingHeader(claudeRequest.System.StringValue)
+			systemTextParts = append(systemTextParts, stripCchFromBillingHeader(claudeRequest.System.StringValue))
 		} else {
 			conversionResult := c.convertContentArray(claudeRequest.System.ArrayValue)
-			systemMsg.Content = conversionResult.openaiContents
+			systemContents = append(systemContents, conversionResult.openaiContents...)
 		}
-		// Insert system message at the beginning
+	}
+	systemTextParts = append(systemTextParts, inlineSystemParts...)
+
+	if len(systemTextParts) > 0 || len(systemContents) > 0 {
+		systemMsg := chatMessage{Role: roleSystem}
+		if len(systemContents) > 0 {
+			if len(systemTextParts) > 0 {
+				systemContents = append([]chatMessageContent{{
+					Type: contentTypeText,
+					Text: strings.Join(systemTextParts, "\n\n"),
+				}}, systemContents...)
+			}
+			systemMsg.Content = systemContents
+		} else {
+			systemMsg.Content = strings.Join(systemTextParts, "\n\n")
+		}
 		openaiRequest.Messages = append([]chatMessage{systemMsg}, openaiRequest.Messages...)
 	}
 
