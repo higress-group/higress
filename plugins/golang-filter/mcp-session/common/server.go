@@ -78,7 +78,7 @@ type MCPServer struct {
 	clientMu             sync.Mutex // Separate mutex for client context
 	currentClient        NotificationContext
 	initialized          atomic.Bool // Use atomic for the initialized flag
-	destory              chan struct{}
+	destroy              chan struct{}
 }
 
 // serverKey is the context key for storing the server instance
@@ -227,7 +227,7 @@ func NewMCPServer(
 			prompts:   nil,
 			logging:   false,
 		},
-		destory: make(chan struct{}),
+		destroy: make(chan struct{}),
 	}
 
 	for _, opt := range opts {
@@ -830,11 +830,11 @@ func (s *MCPServer) handleNotification(
 }
 
 func (s *MCPServer) Close() {
-	close(s.destory)
+	close(s.destroy)
 }
 
 func (s *MCPServer) GetDestoryChannel() chan struct{} {
-	return s.destory
+	return s.destroy
 }
 
 func createResponse(id interface{}, result interface{}) mcp.JSONRPCMessage {
