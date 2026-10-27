@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	HUGGINGFACE_DOMAIN             = "api-inference.huggingface.co"
+	HUGGINGFACE_DOMAIN             = "router.huggingface.co"
 	HUGGINGFACE_PORT               = 443
 	HUGGINGFACE_DEFAULT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-	HUGGINGFACE_ENDPOINT           = "/pipeline/feature-extraction/{modelId}"
+	HUGGINGFACE_ENDPOINT           = "/hf-inference/models/{modelId}/pipeline/feature-extraction"
 )
 
 type huggingfaceProviderInitializer struct {
