@@ -19,7 +19,8 @@ func main() {
 	absent := flag.Bool("instructions-absent", false, "require an empty SDK instructions value")
 	serverName := flag.String("server-name", demo.GatewayName, "expected SDK discovery serverInfo name")
 	methods := flag.String("expected-methods", "server/discover,tools/list,tools/call", "exact upstream method sequence")
-	phase := flag.String("phase", "manual", "request correlation prefix")
+	phase := flag.String("phase", "manual", "request correlation phase")
+	runID := flag.String("run-id", "", "unique verification run ID (random by default)")
 	flag.Parse()
 	if *endpoint == "" {
 		log.Fatal("--endpoint is required")
@@ -36,7 +37,7 @@ func main() {
 	defer cancel()
 	report, err := demo.Run(ctx, demo.Options{Endpoint: *endpoint, AdminURL: *adminURL,
 		ExpectedInstructions: expected, UpstreamInstructions: string(instructions), ServerName: *serverName,
-		Phase: *phase, ExpectedMethods: strings.Split(*methods, ",")})
+		Phase: *phase, RunID: *runID, ExpectedMethods: strings.Split(*methods, ",")})
 	if err != nil {
 		log.Fatal(err)
 	}

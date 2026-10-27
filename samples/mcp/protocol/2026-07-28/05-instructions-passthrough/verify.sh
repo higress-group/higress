@@ -22,6 +22,8 @@ admin="http://127.0.0.1:$upstream_port"
 gateway="http://127.0.0.1:$MCP_DEMO_GATEWAY_PORT"
 restore_file=""
 restore_needed=0
+run_id=$(python3 -c 'import uuid; print(uuid.uuid4().hex)')
+printf '%s\n' "$run_id" >"$MCP_DEMO_EVIDENCE/run-id.txt"
 
 config_manifest() {
   kubectl -n mcp-demo create configmap mcp-instructions-config \
@@ -47,22 +49,33 @@ wait_route() {
   return 1
 }
 
+
+wait_gateway_access() {
+  : >"$MCP_DEMO_EVIDENCE/gateway-poll.log"
+  for attempt in $(seq 1 60); do
+    printf 'attempt=%s\n' "$attempt" >>"$MCP_DEMO_EVIDENCE/gateway-poll.log"
+    if kubectl --request-timeout=5s -n higress-system logs deployment/higress-gateway --since=15m >"$MCP_DEMO_EVIDENCE/gateway.log" 2>>"$MCP_DEMO_EVIDENCE/gateway-poll.log"; then
+      code=0
+      python3 "$CASE_DIR/verify_gateway.py" --evidence "$MCP_DEMO_EVIDENCE" --run-id "$run_id" >>"$MCP_DEMO_EVIDENCE/gateway-poll.log" 2>&1 || code=$?
+      if [[ "$code" == 0 ]]; then return 0; fi
+      if [[ "$code" != 1 ]]; then return 1; fi
+    fi
+    sleep 1
+  done
+  echo "current-run gateway access records did not flush within 60 attempts" >&2
+  return 1
+}
+
 cleanup() {
   status=$?
   trap - EXIT INT TERM
   set +e
   curl -fsS "$admin/__state" >"$MCP_DEMO_EVIDENCE/final-upstream-state.json"
   kubectl -n mcp-demo logs deployment/instructions-mcp >"$MCP_DEMO_EVIDENCE/upstream.log" 2>&1
-  kubectl -n higress-system logs deployment/higress-gateway --since=15m >"$MCP_DEMO_EVIDENCE/gateway.log" 2>&1 || status=1
   if [[ "$status" == 0 ]]; then
-    for phase in on off changed; do
-      for id in 1 2 3; do
-        if ! grep -Fq "demo05-$phase-$id" "$MCP_DEMO_EVIDENCE/gateway.log"; then
-          echo "missing gateway request correlation: demo05-$phase-$id" >&2
-          status=1
-        fi
-      done
-    done
+    wait_gateway_access || status=1
+  else
+    kubectl -n higress-system logs deployment/higress-gateway --since=15m >"$MCP_DEMO_EVIDENCE/gateway.log" 2>&1
   fi
   if [[ "$restore_needed" == 1 ]]; then
     if kubectl apply -f "$restore_file" >"$MCP_DEMO_EVIDENCE/restore.log" 2>&1 &&
@@ -135,11 +148,11 @@ forward_upstream
 wait_route /instructions/on
 wait_route /instructions/off
 client="$MCP_DEMO_EVIDENCE/client"
-"$client" --phase direct --endpoint "$admin/mcp" --admin-url "$admin" \
+"$client" --run-id "$run_id" --phase direct --endpoint "$admin/mcp" --admin-url "$admin" \
   --instructions-file "$CASE_DIR/fixture/instructions.txt" --server-name native-instructions-upstream >"$MCP_DEMO_EVIDENCE/direct.json"
-"$client" --phase on --endpoint "$gateway/instructions/on" --admin-url "$admin" \
+"$client" --run-id "$run_id" --phase on --endpoint "$gateway/instructions/on" --admin-url "$admin" \
   --instructions-file "$CASE_DIR/fixture/instructions.txt" >"$MCP_DEMO_EVIDENCE/on.json"
-"$client" --phase off --endpoint "$gateway/instructions/off" --admin-url "$admin" \
+"$client" --run-id "$run_id" --phase off --endpoint "$gateway/instructions/off" --admin-url "$admin" \
   --instructions-file "$CASE_DIR/fixture/instructions.txt" --instructions-absent \
   --expected-methods tools/list,tools/call >"$MCP_DEMO_EVIDENCE/off.json"
 config_manifest "$CASE_DIR/fixture/instructions-changed.txt" "$MCP_DEMO_EVIDENCE/config-changed.json"
@@ -147,7 +160,7 @@ kubectl apply -f "$MCP_DEMO_EVIDENCE/config-changed.json"
 kubectl -n mcp-demo rollout restart deployment/instructions-mcp
 kubectl -n mcp-demo rollout status deployment/instructions-mcp --timeout=180s
 forward_upstream
-"$client" --phase changed --endpoint "$gateway/instructions/on" --admin-url "$admin" \
+"$client" --run-id "$run_id" --phase changed --endpoint "$gateway/instructions/on" --admin-url "$admin" \
   --instructions-file "$CASE_DIR/fixture/instructions-changed.txt" >"$MCP_DEMO_EVIDENCE/changed.json"
 kubectl -n mcp-demo get ingress mcp-2026-instructions-on mcp-2026-instructions-off -o yaml >"$MCP_DEMO_EVIDENCE/ingress.yaml"
 kubectl -n higress-system get wasmplugin mcp-2026-instructions -o yaml >"$MCP_DEMO_EVIDENCE/wasmplugin.yaml"

@@ -56,7 +56,9 @@ cat "$MCP_DEMO_EVIDENCE/completion.txt"
 - SDK 协商版本为 `2026-07-28`；直连 `serverInfo` 为 `native-instructions-upstream`，经过 Higress 时仍为 `instructions-gateway`、版本 `1.0.0`。
 - 列表中恰有 `get_weather`，调用返回 `杭州：晴，25°C`，无工具错误。
 - 每阶段上游序列和现代 method/协议头严格匹配，不出现 legacy initialize；off 不触发上游 discover。
-- `gateway.log` 中可关联 on/off/changed 的 `demo05-<phase>-<n>` 请求；Ingress/WasmPlugin 快照记录实际路由。
+- 每次运行生成独立 run ID；SDK transport 为每个请求设置专用普通标记 `X-Mcp-Demo-Request` 和匹配的 User-Agent。上游记录标记及网关实际 `requestId`，不要求网关保留客户端 `X-Request-ID`。`gateway-correlations.json` 按 User-Agent、路径、阶段、响应码、路由和实际 ID 关联 on/off/changed 的9条 access 记录；Ingress/WasmPlugin 快照记录实际路由。
+
+access log 可能缓冲，脚本最多轮询60次等待本次运行的记录，不接受旧运行的记录代替。原始日志保留在 `gateway.log`，轮询过程在 `gateway-poll.log`。
 
 health、`/__state` 和 `POST /__reset` 仅作辅助观察和分阶段清空 ledger，不实现 MCP 协议。生成的客户端二进制、SDK 输出、源码/插件/镜像身份、ConfigMap 快照与校验和均写入外部 `MCP_DEMO_EVIDENCE`，不写入 Git。`verify.sh` 不运行 Inspector。
 

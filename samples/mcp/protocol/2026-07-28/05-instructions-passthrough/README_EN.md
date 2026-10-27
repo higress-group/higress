@@ -56,7 +56,9 @@ Each JSON contains `sdkResult`, `listResult`, `callResult` and `upstream.events`
 - Negotiated `2026-07-28`; direct `serverInfo` is `native-instructions-upstream`, while gateway discovery remains `instructions-gateway`, version `1.0.0`.
 - Exactly one listed `get_weather` tool, and a successful call returning `杭州：晴，25°C`.
 - The exact upstream sequence and modern method/protocol headers, without legacy initialize. The off phase must not discover upstream.
-- Correlated `demo05-<phase>-<n>` gateway records for on/off/changed. Ingress and WasmPlugin snapshots retain the actual routes.
+- A unique run ID, dedicated ordinary `X-Mcp-Demo-Request` marker and matching per-request User-Agent. The upstream records both this marker and the actual gateway `requestId`; client `X-Request-ID` preservation is not assumed. `gateway-correlations.json` joins all 9 on/off/changed access records by User-Agent, path, phase, response code, route and actual request ID. Ingress and WasmPlugin snapshots retain the actual routes.
+
+Access logs may be buffered. The script polls up to 60 times for this run's records; previous-run records cannot substitute. Raw logs remain in `gateway.log`, and polling diagnostics in `gateway-poll.log`.
 
 Health, `GET /__state` and `POST /__reset` are auxiliary observation/reset endpoints; they do not implement MCP. The binary, SDK results, source/plugin/image identities, ConfigMap snapshots and checksums go to external `MCP_DEMO_EVIDENCE`. Do not commit them. `verify.sh` does not run Inspector.
 

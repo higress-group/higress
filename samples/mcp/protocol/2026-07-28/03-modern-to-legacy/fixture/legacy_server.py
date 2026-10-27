@@ -39,6 +39,24 @@ def record_event(handler, request):
         EVENTS.append(event)
 
 
+def read_request_body(handler):
+    length = int(handler.headers.get("Content-Length", "0"))
+    if length:
+        return handler.rfile.read(length).decode("utf-8", "replace")
+    if handler.headers.get("Transfer-Encoding", "").lower() != "chunked":
+        return ""
+    chunks = []
+    while True:
+        size = int(handler.rfile.readline().strip().split(b";", 1)[0], 16)
+        if size == 0:
+            # These deterministic fixture requests do not send trailers.
+            handler.rfile.readline()
+            break
+        chunks.append(handler.rfile.read(size))
+        handler.rfile.read(2)
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "mcp-demo-legacy-fixture/1"
 
@@ -67,8 +85,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         global EVENTS, SEQUENCE
         path = urlparse(self.path).path
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length).decode("utf-8", "replace")
+        body = read_request_body(self)
         if path == "/__reset":
             with LOCK:
                 EVENTS = []

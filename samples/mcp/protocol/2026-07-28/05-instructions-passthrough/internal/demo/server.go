@@ -22,6 +22,8 @@ type Event struct {
 	ProtocolVersion string `json:"protocolVersion"`
 	MethodHeader    string `json:"methodHeader"`
 	RequestID       string `json:"requestId"`
+	Marker          string `json:"marker"`
+	UserAgent       string `json:"userAgent"`
 }
 
 type State struct {
@@ -49,6 +51,8 @@ func NewFixture(instructions string) (*Fixture, http.Handler) {
 				event.ProtocolVersion = extra.Header.Get("MCP-Protocol-Version")
 				event.MethodHeader = extra.Header.Get("Mcp-Method")
 				event.RequestID = extra.Header.Get("X-Request-ID")
+				event.Marker = extra.Header.Get("X-Mcp-Demo-Request")
+				event.UserAgent = extra.Header.Get("User-Agent")
 			}
 			f.mu.Lock()
 			f.events = append(f.events, event)
