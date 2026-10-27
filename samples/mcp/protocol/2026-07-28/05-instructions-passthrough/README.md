@@ -83,24 +83,21 @@ wait_http http://127.0.0.1:18083/healthz
 
 ## Step 4：可选 Inspector 2.12.0 手动复现
 
-安装/执行固定版本，显式指定 Modern 和 HTTP。路径名不是 `/mcp`，因此不能依赖 transport 自动判断。把可写 catalog 放在证据目录，避免修改默认个人 catalog：
+安装/执行固定版本，显式指定 Modern 和 HTTP。路径名不是 `/mcp`，因此不能依赖 transport 自动判断。直接使用 URL 模式；该模式不会读取或初始化默认 catalog：
 
 ```bash
 node --version  # >=22.19.0
 npx --yes @modelcontextprotocol/inspector@2.12.0 --cli \
   http://127.0.0.1:18080/instructions/on \
   --transport http --protocol-era modern \
-  --catalog "$MCP_DEMO_EVIDENCE/inspector-catalog.json" \
   --method initialize --format json
 npx --yes @modelcontextprotocol/inspector@2.12.0 --cli \
   http://127.0.0.1:18080/instructions/on \
   --transport http --protocol-era modern \
-  --catalog "$MCP_DEMO_EVIDENCE/inspector-catalog.json" \
   --method tools/list --format json
 npx --yes @modelcontextprotocol/inspector@2.12.0 --cli \
   http://127.0.0.1:18080/instructions/on \
   --transport http --protocol-era modern \
-  --catalog "$MCP_DEMO_EVIDENCE/inspector-catalog.json" \
   --method tools/call --tool-name get_weather --tool-arg city=杭州
 curl -fsS http://127.0.0.1:18083/__state | python3 -m json.tool
 ```

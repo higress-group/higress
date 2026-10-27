@@ -83,24 +83,21 @@ To deploy separately, run `fixture/build.sh`; create the ConfigMap with `kubectl
 
 ## Step 4: Optional manual Inspector 2.12.0 reproduction
 
-Use the pinned official version with explicit Modern and HTTP. These paths are not named `/mcp`, so transport auto-detection is insufficient. Keep its writable catalog in the evidence directory:
+Use the pinned official version with explicit Modern and HTTP. These paths are not named `/mcp`, so transport auto-detection is insufficient. Use ad-hoc URL mode directly; it bypasses the default catalog:
 
 ```bash
 node --version  # >=22.19.0
 npx --yes @modelcontextprotocol/inspector@2.12.0 --cli \
   http://127.0.0.1:18080/instructions/on \
   --transport http --protocol-era modern \
-  --catalog "$MCP_DEMO_EVIDENCE/inspector-catalog.json" \
   --method initialize --format json
 npx --yes @modelcontextprotocol/inspector@2.12.0 --cli \
   http://127.0.0.1:18080/instructions/on \
   --transport http --protocol-era modern \
-  --catalog "$MCP_DEMO_EVIDENCE/inspector-catalog.json" \
   --method tools/list --format json
 npx --yes @modelcontextprotocol/inspector@2.12.0 --cli \
   http://127.0.0.1:18080/instructions/on \
   --transport http --protocol-era modern \
-  --catalog "$MCP_DEMO_EVIDENCE/inspector-catalog.json" \
   --method tools/call --tool-name get_weather --tool-arg city=杭州
 curl -fsS http://127.0.0.1:18083/__state | python3 -m json.tool
 ```
