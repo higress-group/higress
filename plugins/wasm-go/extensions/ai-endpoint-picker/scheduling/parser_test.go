@@ -159,3 +159,65 @@ func TestParseVLLMSignalsStaleMetricDoesNotHideFreshSignal(t *testing.T) {
 		t.Fatalf("fresh KV signal = %+v, want available 0.3", got)
 	}
 }
+
+func TestParseVLLMSignalsRejectsNegativeKVUtilization(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics string
+	}{
+		{
+			name:    "current metric",
+			metrics: "# TYPE vllm:kv_cache_usage_perc gauge\nvllm:kv_cache_usage_perc -0.1\n",
+		},
+		{
+			name:    "legacy metric",
+			metrics: "# TYPE vllm:gpu_cache_usage_perc gauge\nvllm:gpu_cache_usage_perc -0.1\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			signals, err := ParseVLLMSignals(test.metrics, "model")
+			if err != nil {
+				t.Fatalf("ParseVLLMSignals() error = %v", err)
+			}
+			if got, ok := signals[SignalKVCache]; ok {
+				t.Fatalf("negative KV sample yielded signal %+v, want none", got)
+			}
+		})
+	}
+}
+
+func TestParseVLLMSignalsAcceptsKVUtilizationBoundaries(t *testing.T) {
+	for _, sample := range []struct {
+		exposition string
+		value      float64
+	}{
+		{exposition: "0", value: 0},
+		{exposition: "1", value: 1},
+	} {
+		metrics := "# TYPE vllm:kv_cache_usage_perc gauge\nvllm:kv_cache_usage_perc " + sample.exposition + "\n"
+		signals, err := ParseVLLMSignals(metrics, "model")
+		if err != nil {
+			t.Fatalf("ParseVLLMSignals(%q) error = %v", sample.exposition, err)
+		}
+		got, ok := signals[SignalKVCache]
+		if !ok || !got.Available || got.Value != sample.value {
+			t.Fatalf("KV sample %s = %+v (present=%v), want available %v", sample.exposition, got, ok, sample.value)
+		}
+	}
+}
+
+// A corrupt current-family sample must not shadow a usable legacy one: the two
+// families carry the same quantity, and the queue guard next door likewise
+// treats an unusable sample as absent rather than as a value.
+func TestParseVLLMSignalsFallsBackWhenCurrentKVIsNegative(t *testing.T) {
+	metrics := "# TYPE vllm:kv_cache_usage_perc gauge\nvllm:kv_cache_usage_perc -0.1\n" +
+		"# TYPE vllm:gpu_cache_usage_perc gauge\nvllm:gpu_cache_usage_perc 0.5\n"
+	signals, err := ParseVLLMSignals(metrics, "model")
+	if err != nil {
+		t.Fatalf("ParseVLLMSignals() error = %v", err)
+	}
+	if got := signals[SignalKVCache]; !got.Available || got.Value != 0.5 || got.Source != legacyKVMetric {
+		t.Fatalf("KV signal = %+v, want legacy value 0.5", got)
+	}
+}
