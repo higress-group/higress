@@ -18,7 +18,7 @@ cd samples/mcp
 
 ```text
 https://github.com/higress-group/higress.git
-14c36d9bd70b3dc38237cda6175b3f9dede0dccd
+1268f41d5de0ab07ecd9759c8217b7815dfc655e
 ```
 
 构建结果写入：
@@ -41,6 +41,7 @@ file:///opt/plugins/mcp-server/2026-07-28/plugin.wasm
 | [02 REST-to-MCP](./02-rest-to-mcp/README.md) | 将 MCP Tool 调用转换成一次普通 REST 请求 |
 | [03 Modern-to-Legacy](./03-modern-to-legacy/README.md) | request-scoped legacy handshake、结果适配和 Header 隔离 |
 | [04 Request Validation](./04-request-validation/README.md) | 参数、Origin、Header/Body 一致性校验以及后端零调用 |
+| [05 Instructions](./05-instructions-passthrough/README.md) | 原生 Go SDK 直连、开启/关闭透传及上游指引变更验证 |
 
 各 Demo 可以独立执行。进入任一目录，按照 README 部署资源、发送请求、观察证据并清理即可。
 

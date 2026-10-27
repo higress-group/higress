@@ -1,0 +1,66 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-2026-instructions-on
+  namespace: mcp-demo
+spec:
+  ingressClassName: higress
+  rules:
+    - http:
+        paths:
+          - path: /instructions/on
+            pathType: Exact
+            backend:
+              service:
+                name: instructions-mcp
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-2026-instructions-off
+  namespace: mcp-demo
+spec:
+  ingressClassName: higress
+  rules:
+    - http:
+        paths:
+          - path: /instructions/off
+            pathType: Exact
+            backend:
+              service:
+                name: instructions-mcp
+                port:
+                  number: 8080
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: mcp-2026-instructions
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  matchRules:
+    - ingress:
+        - mcp-demo/mcp-2026-instructions-on
+      configDisable: false
+      config:
+        server:
+          name: instructions-gateway
+          type: mcp-proxy
+          transport: http
+          protocolStrategy: modern
+          passthroughInstructions: true
+          mcpServerURL: http://instructions-mcp.mcp-demo.svc.cluster.local:8080/mcp
+    - ingress:
+        - mcp-demo/mcp-2026-instructions-off
+      configDisable: false
+      config:
+        server:
+          name: instructions-gateway
+          type: mcp-proxy
+          transport: http
+          protocolStrategy: modern
+          mcpServerURL: http://instructions-mcp.mcp-demo.svc.cluster.local:8080/mcp
+  url: file:///opt/plugins/mcp-server/2026-07-28/plugin.wasm

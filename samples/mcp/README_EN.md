@@ -38,7 +38,7 @@ See the [shared environment guide](./environment/README_EN.md) for prerequisites
 
 | MCP protocol version | Plugin source | Available demos |
 | --- | --- | --- |
-| [2026-07-28](./protocol/2026-07-28/README_EN.md) | Built locally from a pinned Higress source commit | Stateless HTTP, REST-to-MCP, modern-to-legacy, and early request validation |
+| [2026-07-28](./protocol/2026-07-28/README_EN.md) | Built locally from a pinned Higress source commit | Stateless HTTP, REST-to-MCP, modern-to-legacy, early request validation, and [native SDK instructions](./protocol/2026-07-28/05-instructions-passthrough/README_EN.md) |
 
 ## Layout
 

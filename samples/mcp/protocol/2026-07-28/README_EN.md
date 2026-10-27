@@ -18,7 +18,7 @@ The default source is:
 
 ```text
 https://github.com/higress-group/higress.git
-14c36d9bd70b3dc38237cda6175b3f9dede0dccd
+1268f41d5de0ab07ecd9759c8217b7815dfc655e
 ```
 
 The build writes:
@@ -41,6 +41,7 @@ file:///opt/plugins/mcp-server/2026-07-28/plugin.wasm
 | [02 REST-to-MCP](./02-rest-to-mcp/README_EN.md) | Translate one MCP Tool call into one ordinary REST request |
 | [03 Modern-to-Legacy](./03-modern-to-legacy/README_EN.md) | Request-scoped legacy handshakes, result adaptation, and header isolation |
 | [04 Request Validation](./04-request-validation/README_EN.md) | Argument, Origin, and header/body validation with zero backend calls |
+| [05 Instructions](./05-instructions-passthrough/README_EN.md) | Native Go SDK direct/on/off/changed-instructions verification |
 
 Each demo can be run independently. Enter any demo directory and follow its README to deploy resources, send requests, inspect evidence, and clean up.
 

@@ -38,7 +38,7 @@ less ./protocol/2026-07-28/01-stateless-http/README.md
 
 | MCP 协议版本 | 插件来源 | 已提供的 Demo |
 | --- | --- | --- |
-| [2026-07-28](./protocol/2026-07-28/README.md) | 固定 Higress 源码 commit 本地构建 | 无状态 HTTP、REST-to-MCP、modern-to-legacy、请求前置校验 |
+| [2026-07-28](./protocol/2026-07-28/README.md) | 固定 Higress 源码 commit 本地构建 | 无状态 HTTP、REST-to-MCP、modern-to-legacy、请求前置校验、[原生 SDK instructions](./protocol/2026-07-28/05-instructions-passthrough/README.md) |
 
 ## 目录结构
 
