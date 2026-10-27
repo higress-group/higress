@@ -391,7 +391,7 @@ static_resources:
 static_resources:
   listeners:
 """
-    explicit_baseline += "".join(listener_yaml(*entry, wasm_file="auto-baseline-plugin.wasm") for entry in LISTENERS if entry[0] < 10009)
+    explicit_baseline += "".join(listener_yaml(*entry, wasm_file="explicit-baseline-plugin.wasm") for entry in LISTENERS if entry[0] < 10009)
     explicit_baseline += "  clusters:\n" + cluster_yaml("backend-primary") + cluster_yaml("backend-secondary")
     (OUT / "envoy-auto-explicit-baseline.yaml").write_text(explicit_baseline)
 

@@ -2,8 +2,10 @@
 
 import concurrent.futures
 import json
+import re
 import socket
 import time
+from collections import Counter
 
 PORT = 10009
 PROBE = "server/discover"
@@ -21,6 +23,31 @@ FAILURES = {
     "init-version": 502, "notify-fail": 200, "network": 502,
     "modern-ordinary-error": 400, "trailing-json": 502, "batch": 502,
 }
+
+
+# Explicit/default profiles compare against the accepted pre-instructions proxy,
+# independently of the older binary used to prove auto was unsupported.
+EXPLICIT_CASE_NAMES = {
+    "proxy-modern-stateless-and-header-isolation", "proxy-modern-to-legacy-isolated-handshakes",
+    "proxy-default-is-legacy-for-three-versions", "proxy-legacy-to-modern-is-explicitly-unsupported",
+    "proxy-auth-errors-and-cross-origin-isolation",
+}
+
+
+def explicit_baseline_matches(candidate_cases, candidate_exchanges, baseline, baseline_log):
+    baseline_cases = baseline.get("cases", [])
+    expected_cases = Counter(EXPLICIT_CASE_NAMES)
+    request_ids = [exchange.get("accessRequestId") for exchange in baseline.get("exchanges", [])]
+    access_ids = re.findall(r"access request_id=([^ ]+)", baseline_log)
+    return (
+        Counter(case.get("case") for case in candidate_cases) == expected_cases
+        and Counter(case.get("case") for case in baseline_cases) == expected_cases
+        and all(case.get("status") == "PASS" for case in candidate_cases + baseline_cases)
+        and candidate_cases == baseline_cases
+        and candidate_exchanges == baseline.get("exchanges")
+        and bool(request_ids) and Counter(request_ids) == Counter(access_ids)
+        and len(request_ids) == len(set(request_ids))
+    )
 
 
 def wait_for(read, predicate, description, timeout=10):

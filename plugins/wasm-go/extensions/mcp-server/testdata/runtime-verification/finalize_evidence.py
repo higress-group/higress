@@ -10,6 +10,7 @@ from collections import Counter
 from pathlib import Path
 
 from typed_canonical import DESCRIPTOR_MISMATCH_EXIT, canonical_json_sha256, loads_typed
+from verify_auto import EXPLICIT_CASE_NAMES, explicit_baseline_matches
 
 
 root = Path(os.environ["RUNTIME_EVIDENCE"])
@@ -298,31 +299,19 @@ matrix["cases"].append({
 
 explicit_path = root / "auto-explicit-baseline.json"
 explicit = json.loads(explicit_path.read_text()) if explicit_path.exists() else {"cases": [], "exchanges": []}
-explicit_names = {
-    "proxy-modern-stateless-and-header-isolation", "proxy-modern-to-legacy-isolated-handshakes",
-    "proxy-default-is-legacy-for-three-versions", "proxy-legacy-to-modern-is-explicitly-unsupported",
-    "proxy-auth-errors-and-cross-origin-isolation",
-}
+explicit_names = EXPLICIT_CASE_NAMES
 candidate_explicit = [case for case in matrix["cases"] if case.get("case") in explicit_names]
-baseline_explicit = explicit.get("cases", [])
 explicit_client_path = root / "client-exchanges.json"
 candidate_exchanges = json.loads(explicit_client_path.read_text()).get("exchanges", []) if explicit_client_path.exists() else []
 candidate_exchanges = [exchange for exchange in candidate_exchanges if exchange.get("case") in explicit_names]
 explicit_log_path = root / "gateway-auto-explicit-baseline.log"
 explicit_log = explicit_log_path.read_text(errors="replace") if explicit_log_path.exists() else ""
 explicit_ids = [exchange.get("accessRequestId") for exchange in explicit.get("exchanges", [])]
-explicit_access = re.findall(r"access request_id=([^ ]+)", explicit_log)
-explicit_ok = (
-    {case.get("case") for case in baseline_explicit} == explicit_names
-    and all(case.get("status") == "PASS" for case in baseline_explicit)
-    and candidate_explicit == baseline_explicit
-    and candidate_exchanges == explicit.get("exchanges")
-    and bool(explicit_ids) and Counter(explicit_ids) == Counter(explicit_access)
-    and len(explicit_ids) == len(set(explicit_ids))
-)
+explicit_ok = explicit_baseline_matches(candidate_explicit, candidate_exchanges, explicit, explicit_log)
 matrix["cases"].append({
     "case": "auto-explicit-strategy-baseline-differential", "status": "PASS" if explicit_ok else "FAIL",
-    "detail": {"sourceSha": os.environ["AUTO_BASELINE_SHA"], "caseNames": sorted(explicit_names),
+    "detail": {"sourceSha": os.environ["EXPLICIT_BASELINE_SHA"],
+               "pluginSha256": os.environ["EXPLICIT_BASELINE_PLUGIN_SHA256"], "caseNames": sorted(explicit_names),
                "clientExchangeCount": len(explicit_ids), "comparison": "status, selected headers, normalized response, backend sequence and access IDs"}
     if explicit_ok else {"error": "explicit baseline/candidate contract or access evidence differs"},
 })
@@ -372,6 +361,12 @@ manifest = {
     "baseline_source_sha": os.environ["BASELINE_SHA"],
     "auto_baseline_source_sha": os.environ["AUTO_BASELINE_SHA"],
     "auto_baseline_plugin_sha256": os.environ["AUTO_BASELINE_PLUGIN_SHA256"],
+    "auto_baseline_role": "pre-change auto configuration rejection",
+    "auto_baseline_config_sha256": hashlib.sha256((root / "envoy-auto-baseline.yaml").read_bytes()).hexdigest(),
+    "explicit_baseline_source_sha": os.environ["EXPLICIT_BASELINE_SHA"],
+    "explicit_baseline_plugin_sha256": os.environ["EXPLICIT_BASELINE_PLUGIN_SHA256"],
+    "explicit_baseline_role": "five-profile explicit/default compatibility differential",
+    "explicit_baseline_config_sha256": hashlib.sha256((root / "envoy-auto-explicit-baseline.yaml").read_bytes()).hexdigest(),
     "baseline_plugin_sha256": os.environ["BASELINE_PLUGIN_SHA256"],
     "oracle_source_sha": os.environ["ORACLE_SHA"],
     "oracle_plugin_sha256": os.environ["ORACLE_PLUGIN_SHA256"],
@@ -417,7 +412,7 @@ manifest = {
 checksums = []
 for path in sorted(root.iterdir()):
     if path.is_file() and path.name not in (
-        "plugin.wasm", "baseline-plugin.wasm", "oracle-plugin.wasm", "auto-baseline-plugin.wasm",
+        "plugin.wasm", "baseline-plugin.wasm", "oracle-plugin.wasm", "auto-baseline-plugin.wasm", "explicit-baseline-plugin.wasm",
         "corpus-plugin-candidate.wasm", "corpus-plugin-affected.wasm", "corpus-plugin-oracle.wasm", "SHA256SUMS",
     ):
         checksums.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}")

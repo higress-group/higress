@@ -716,28 +716,33 @@ def descriptor_self_test():
     return 0
 
 
+def check_modern_proxy_events(events):
+    check([event["rpcMethod"] for event in events] == ["tools/list", "tools/call"], f"modern proxy probed/retried: {events}")
+    for event in events:
+        check(event["protocolVersion"] == MODERN and event["mcpMethod"] == event["rpcMethod"], f"modern metadata absent: {event}")
+        check(event["cookiePresent"] and event["unrelatedCredentialPresent"], f"ordinary proxy header lost: {event}")
+        check(not any(event[key] for key in ("sessionPresent", "lastEventIDPresent", "internalRoutePresent", "authorizationPresent")), f"controlled header leaked: {event}")
+    check(events[0]["futureParam"] is None and events[1]["futureParam"] == "opaque-current-call", f"Mcp-Param scope wrong: {events}")
+
+
 def modern_proxy():
     backend_reset()
-    sensitive = {
+    fixture_headers = {
         "Cookie": "downstream-cookie", "Mcp-Session-Id": "downstream-session",
         "Last-Event-ID": "downstream-event",
         "x-unrelated-credential": "unrelated", "Authorization": "Bearer downstream-not-policy",
         "x-envoy-allow-mcp-tools": "proxy_echo",
     }
-    status, _, listed = modern_rpc(10003, "tools/list", "proxy-modern-list", extra_headers=sensitive)
+    status, _, listed = modern_rpc(10003, "tools/list", "proxy-modern-list", extra_headers=fixture_headers)
     check(status == 200, f"modern proxy list failed: {status} {listed}")
     result_contract(listed, ttl=True)
-    call_headers = dict(sensitive)
+    call_headers = dict(fixture_headers)
     call_headers["Mcp-Param-Future"] = "opaque-current-call"
     status, _, called = modern_rpc(10003, "tools/call", "proxy-modern-call", "proxy_echo", {"value": "modern"}, call_headers)
     check(status == 200, f"modern proxy call failed: {status} {called}")
     result_contract(called)
     events = backend_state()["events"]
-    check([event["rpcMethod"] for event in events] == ["tools/list", "tools/call"], f"modern proxy probed/retried: {events}")
-    for event in events:
-        check(event["protocolVersion"] == MODERN and event["mcpMethod"] == event["rpcMethod"], f"modern metadata absent: {event}")
-        check(not any(event[key] for key in ("cookiePresent", "sessionPresent", "lastEventIDPresent", "internalRoutePresent", "unrelatedCredentialPresent", "authorizationPresent")), f"sensitive header leaked: {event}")
-    check(events[0]["futureParam"] is None and events[1]["futureParam"] == "opaque-current-call", f"Mcp-Param scope wrong: {events}")
+    check_modern_proxy_events(events)
     return {"upstreamSequence": [event["rpcMethod"] for event in events], "singleStatelessRPC": True, "backendEvents": {"backend-primary": events}}
 
 

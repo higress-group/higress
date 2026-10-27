@@ -33,7 +33,9 @@ BASELINE_SOURCE_DIR=""
 INSTRUCTIONS_BASELINE_SOURCE_DIR=""
 AUTO_BASELINE_SHA=dc0999326b1a8df4269c13d0cf6ee2b725259f6e
 AUTO_BASELINE_SOURCE_DIR=""
-export AUTO_BASELINE_SHA
+EXPLICIT_BASELINE_SHA=36f2f1ac5c7305c5a46c296c617b45d1fbacb7d3
+EXPLICIT_BASELINE_SOURCE_DIR=""
+export AUTO_BASELINE_SHA EXPLICIT_BASELINE_SHA
 ORACLE_REVISION=39ec41aab6eb1d40499bed2847085696de0ebb96
 ORACLE_SHA=$(git -C "$REPO_ROOT" rev-parse "$ORACLE_REVISION^{commit}")
 ORACLE_SOURCE_DIR=""
@@ -58,6 +60,9 @@ cleanup() {
   fi
   if test -n "$AUTO_BASELINE_SOURCE_DIR" && test -d "$AUTO_BASELINE_SOURCE_DIR"; then
     rm -rf -- "$AUTO_BASELINE_SOURCE_DIR"
+  fi
+  if test -n "$EXPLICIT_BASELINE_SOURCE_DIR" && test -d "$EXPLICIT_BASELINE_SOURCE_DIR"; then
+    rm -rf -- "$EXPLICIT_BASELINE_SOURCE_DIR"
   fi
   if test -n "$ORACLE_SOURCE_DIR" && test -d "$ORACLE_SOURCE_DIR"; then
     rm -rf -- "$ORACLE_SOURCE_DIR"
@@ -161,6 +166,14 @@ AUTO_BASELINE_PLUGIN_SHA256=$(file_sha256 "$RUNTIME_EVIDENCE/auto-baseline-plugi
 export AUTO_BASELINE_PLUGIN_SHA256
 rm -rf -- "$AUTO_BASELINE_SOURCE_DIR"
 AUTO_BASELINE_SOURCE_DIR=""
+echo "building explicit-profile compatibility baseline WASM from $EXPLICIT_BASELINE_SHA"
+EXPLICIT_BASELINE_SOURCE_DIR=$(mktemp -d "$RUNTIME_EVIDENCE/explicit-baseline-source.XXXXXX") || exit 3
+git -C "$REPO_ROOT" archive "$EXPLICIT_BASELINE_SHA" | tar -x -C "$EXPLICIT_BASELINE_SOURCE_DIR" || exit 3
+(cd "$EXPLICIT_BASELINE_SOURCE_DIR/plugins/wasm-go/extensions/mcp-server" && GOOS=wasip1 GOARCH=wasm go build -trimpath -buildmode=c-shared -o "$RUNTIME_EVIDENCE/explicit-baseline-plugin.wasm" .) || exit 3
+EXPLICIT_BASELINE_PLUGIN_SHA256=$(file_sha256 "$RUNTIME_EVIDENCE/explicit-baseline-plugin.wasm")
+export EXPLICIT_BASELINE_PLUGIN_SHA256
+rm -rf -- "$EXPLICIT_BASELINE_SOURCE_DIR"
+EXPLICIT_BASELINE_SOURCE_DIR=""
 echo "building exact-head registered-schema corpus WASM from $SOURCE_SHA"
 CANDIDATE_CORPUS_SOURCE_DIR=$(mktemp -d "$RUNTIME_EVIDENCE/candidate-corpus-source.XXXXXX") || exit 3
 git -C "$REPO_ROOT" archive "$SOURCE_SHA" | tar -x -C "$CANDIDATE_CORPUS_SOURCE_DIR" || exit 3
@@ -390,6 +403,7 @@ set -e
 unlink "$RUNTIME_EVIDENCE/plugin.wasm"
 unlink "$RUNTIME_EVIDENCE/baseline-plugin.wasm"
 unlink "$RUNTIME_EVIDENCE/auto-baseline-plugin.wasm"
+unlink "$RUNTIME_EVIDENCE/explicit-baseline-plugin.wasm"
 unlink "$RUNTIME_EVIDENCE/oracle-plugin.wasm"
 unlink "$RUNTIME_EVIDENCE/corpus-plugin-candidate.wasm"
 unlink "$RUNTIME_EVIDENCE/corpus-plugin-affected.wasm"

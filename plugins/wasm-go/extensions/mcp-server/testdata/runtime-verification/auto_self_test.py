@@ -6,15 +6,23 @@ additional downstream/upstream lifecycle gauges before accepting cancellation.
 """
 
 import concurrent.futures
+import copy
 import http.client
 import json
+import os
+import re
+import tempfile
 import threading
 import unittest
 from types import SimpleNamespace
+from pathlib import Path
+from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 
 import auto_backend
 import backend
+import generate_envoy
+import verify
 import verify_auto
 
 
@@ -165,6 +173,89 @@ class AutoFixtureTest(unittest.TestCase):
                     self.assertEqual(headers["Content-Type"], "text/event-stream")
                     self.assertEqual(body.count(b'"result":'), 2 if mode == "sse-duplicate" else 0)
                 self.assertEqual(len(self.state()["events"]), 1)
+
+
+
+class ExplicitCompatibilityTest(unittest.TestCase):
+    def test_modern_proxy_preserves_ordinary_headers_and_stateless_boundaries(self):
+        events = [{
+            "rpcMethod": method, "mcpMethod": method, "protocolVersion": verify.MODERN,
+            "cookiePresent": True, "unrelatedCredentialPresent": True,
+            "authorizationPresent": False, "sessionPresent": False,
+            "lastEventIDPresent": False, "internalRoutePresent": False,
+            "futureParam": None if method == "tools/list" else "opaque-current-call",
+        } for method in ("tools/list", "tools/call")]
+        verify.check_modern_proxy_events(events)
+        for index in (0, 1):
+            for key, bad_value in (
+                ("cookiePresent", False), ("unrelatedCredentialPresent", False),
+                ("authorizationPresent", True), ("sessionPresent", True),
+                ("lastEventIDPresent", True), ("internalRoutePresent", True),
+                ("protocolVersion", "wrong"), ("mcpMethod", "initialize"),
+                ("futureParam", "wrong-scope"),
+            ):
+                with self.subTest(index=index, field=key):
+                    corrupt = copy.deepcopy(events)
+                    corrupt[index][key] = bad_value
+                    with self.assertRaises(AssertionError):
+                        verify.check_modern_proxy_events(corrupt)
+        for corrupt in (events[:1], events + [events[1]], list(reversed(events))):
+            with self.subTest(sequence=corrupt):
+                with self.assertRaises(AssertionError):
+                    verify.check_modern_proxy_events(corrupt)
+
+    def test_explicit_differential_rejects_contract_and_access_corruption(self):
+        cases = [{"case": name, "status": "PASS", "detail": {
+            "backendEvents": {"backend-primary": [{"rpcMethod": "tools/call", "seq": 1}]},
+        }} for name in sorted(verify_auto.EXPLICIT_CASE_NAMES)]
+        exchanges = [{"case": row["case"], "accessRequestId": f"request-{index}",
+                      "request": {"rpcMethod": "tools/call", "rpcId": index},
+                      "response": {"status": 200, "headers": {"content-type": "application/json"},
+                                   "body": {"result": {"content": ["expected"]}}, "bodySha256": "expected-hash"}}
+                     for index, row in enumerate(cases)]
+        baseline = {"cases": cases, "exchanges": exchanges}
+        log = "".join(f"access request_id={row['accessRequestId']} listener=fixture code=200\n" for row in exchanges)
+        self.assertTrue(verify_auto.explicit_baseline_matches(cases, exchanges, baseline, log))
+        for fault in ("case-failed", "case-missing", "case-duplicate", "backend-sequence", "request", "response",
+                      "response-header", "response-status", "response-hash", "exchange-missing", "request-id"):
+            with self.subTest(fault=fault):
+                changed_cases, changed_exchanges = copy.deepcopy(cases), copy.deepcopy(exchanges)
+                if fault == "case-failed": changed_cases[0]["status"] = "FAIL"
+                elif fault == "case-missing": changed_cases.pop()
+                elif fault == "case-duplicate": changed_cases.append(copy.deepcopy(changed_cases[0]))
+                elif fault == "backend-sequence": changed_cases[0]["detail"]["backendEvents"]["backend-primary"].append({"rpcMethod": "initialize"})
+                elif fault == "request": changed_exchanges[0]["request"]["rpcMethod"] = "initialize"
+                elif fault == "response": changed_exchanges[0]["response"]["body"]["result"]["content"] = ["corrupt"]
+                elif fault == "response-header": changed_exchanges[0]["response"]["headers"]["content-type"] = "text/plain"
+                elif fault == "response-status": changed_exchanges[0]["response"]["status"] = 500
+                elif fault == "response-hash": changed_exchanges[0]["response"]["bodySha256"] = "wrong-hash"
+                elif fault == "exchange-missing": changed_exchanges.pop()
+                elif fault == "request-id": changed_exchanges[0]["accessRequestId"] = changed_exchanges[1]["accessRequestId"]
+                self.assertFalse(verify_auto.explicit_baseline_matches(changed_cases, changed_exchanges, baseline, log))
+        lines = log.splitlines(keepends=True)
+        for corrupt_log in ("".join(lines[1:]), log + lines[0], log + "access request_id=unexpected listener=fixture code=200\n"):
+            with self.subTest(access=corrupt_log):
+                self.assertFalse(verify_auto.explicit_baseline_matches(cases, exchanges, baseline, corrupt_log))
+
+    def test_auto_rejection_and_explicit_compatibility_use_separate_pinned_modules(self):
+        here = Path(__file__).parent
+        runner = (here / "run.sh").read_text()
+        revisions = {name: re.search(rf"^{name}=([0-9a-f]{{40}})$", runner, re.MULTILINE).group(1)
+                     for name in ("AUTO_BASELINE_SHA", "EXPLICIT_BASELINE_SHA")}
+        self.assertEqual(revisions["AUTO_BASELINE_SHA"], "dc0999326b1a8df4269c13d0cf6ee2b725259f6e")
+        self.assertEqual(revisions["EXPLICIT_BASELINE_SHA"], "36f2f1ac5c7305c5a46c296c617b45d1fbacb7d3")
+        self.assertNotEqual(revisions["AUTO_BASELINE_SHA"], revisions["EXPLICIT_BASELINE_SHA"])
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"RUNTIME_VERIFY_INSTRUCTIONS": "0"}):
+            with patch.object(generate_envoy, "OUT", Path(directory)):
+                generate_envoy.main()
+            rejection = (Path(directory) / "envoy-auto-baseline.yaml").read_text()
+            compatibility = (Path(directory) / "envoy-auto-explicit-baseline.yaml").read_text()
+            self.assertIn("/runtime/auto-baseline-plugin.wasm", rejection)
+            self.assertNotIn("explicit-baseline-plugin.wasm", rejection)
+            self.assertIn("/runtime/explicit-baseline-plugin.wasm", compatibility)
+            self.assertNotIn("auto-baseline-plugin.wasm", compatibility)
+            self.assertIn('"protocolStrategy":"auto"', rejection)
+            self.assertNotIn('"protocolStrategy":"auto"', compatibility)
 
 
 if __name__ == "__main__":
