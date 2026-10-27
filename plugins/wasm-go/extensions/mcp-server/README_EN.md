@@ -42,6 +42,7 @@ Plugin execution priority: `30`
 | `server.defaultUpstreamSecurity` | object | No | - | Default backend authentication configuration, overridden by tool-level `requestTemplate.security`. `id` references a security scheme. REST-to-MCP also supports `credential` overrides; for MCP proxy, configure fixed credentials with the scheme's `defaultCredential`. |
 | `server.version` | string | No | `1.0.0` | Server version reported in legacy MCP initialization responses. Does not select the MCP protocol version. |
 | `server.protocolStrategy` | string | No | `legacy` | Backend protocol strategy: `legacy`, `modern`, or `auto`. For `mcp-proxy` only; see Protocol Support and Backend Connections. |
+| `server.passthroughInstructions` | boolean | No | false | May be enabled only for one explicit `mcp-proxy` with `transport: http` and `protocolStrategy: modern`. Extracts instructions from a successful upstream discover result; see below. |
 | `server.autoDetection.probeTimeoutMs` | integer | No | `1000` | Backend protocol detection timeout, in milliseconds. Must be a positive integer. Used only with `protocolStrategy: auto` and `transport: http`; the effective detection timeout does not exceed `server.timeout`. |
 
 ### Tool Set Configuration
@@ -286,6 +287,16 @@ Keep the following in mind:
 - Detection requests use the configured backend credentials. The backend must allow those credentials to access its discovery interface. Backend instances behind the same route should have consistent protocol capabilities.
 - `transport: sse` enables access to legacy SSE backends; it does not provide a general real-time subscription or push service to clients.
 Upstream pool instances must have consistent protocol capabilities because probe and business calls may reach different instances. HTTP JSON/SSE is parsed after the complete business response, without live progress or subscriptions. The 1 MiB probe guard prevents copying oversized bodies into Wasm; it does not bound all Envoy receive buffers or Tool results. Cancellation prevents later phases but cannot retract submitted tool effects. A cancelled live response is explicitly terminated; callbacks after stream closure do not access the stream.
+
+
+
+### Upstream instructions
+
+By default, `server/discover` returns the existing local gateway result without an upstream request. Set `server.passthroughInstructions: true` on the modern HTTP proxy configuration above to retrieve upstream usage instructions. Enabling it with `auto`, `legacy`, SSE, REST or `toolSet` is a configuration error; non-boolean values are also rejected.
+
+Each enabled modern `server/discover` uses the existing main request route, timeout, retry and server-level authentication rules, preserving the original request ID and `_meta`. Extraction is attempted only for HTTP 200 responses with an object result and no JSON-RPC error. Explicit non-`complete` results retain the existing proxy result path; upstream failures retain the existing error path rather than becoming a successful local discover response.
+
+Only a non-empty string of at most 32768 decoded UTF-8 bytes is merged, preserving whitespace. A missing, empty, wrongly typed or oversized field is omitted without affecting other local fields. The gateway still owns `supportedVersions`, `capabilities`, `serverInfo`, `resultType`, `ttlMs` and `cacheScope`. Instructions are not cached. Without server-level credentials, discover remains anonymous and does not inspect tool-level credentials. This option retains the existing SDK logging, read/write and `original-*` context visibility boundaries.
 
 
 ## Authentication and Security

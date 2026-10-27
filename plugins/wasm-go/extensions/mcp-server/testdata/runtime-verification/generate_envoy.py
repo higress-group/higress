@@ -329,8 +329,53 @@ static_resources:
     return rendered + cluster_yaml("backend-primary")
 
 
+
+def instructions_configs():
+    """Focused instructions mode shares listener/cluster rendering with the full matrix."""
+    for variant in ("baseline", "candidate"):
+        rendered = "admin:\n  address:\n    socket_address: {address: 0.0.0.0, port_value: 9901}\nstatic_resources:\n  listeners:\n"
+        for port in (range(14000, 14010) if variant == "candidate" else (14001, 14002)):
+            config = proxy(f"instructions-{port}", "modern", auth=port == 14003)
+            server = config["server"]
+            server["mcpServerURL"] = "http://backend-primary:8080/instructions"
+            if port != 14002 and variant == "candidate":
+                server["passthroughInstructions"] = port != 14001
+            if port == 14004:
+                server["securitySchemes"] = [{"id": "QueryKey", "type": "apiKey", "in": "query", "name": "api_key", "defaultCredential": "runtime-key"}]
+                server["defaultUpstreamSecurity"] = {"id": "QueryKey"}
+            if port == 14005:
+                server["passthroughAuthHeader"] = True
+            if port == 14006:
+                server["securitySchemes"] = [{"id": "ToolOnly", "type": "http", "scheme": "bearer", "defaultCredential": "tool-only-token"}]
+                config["tools"] = deepcopy(TOOLS)
+                config["tools"][0]["requestTemplate"] = {"security": {"id": "ToolOnly"}}
+            listener = listener_yaml(port, f"instructions-{port}", "backend-primary", config,
+                                     "instructions-baseline-plugin.wasm" if variant == "baseline" else "plugin.wasm")
+            if port == 14007:
+                listener = listener.replace("timeout: 30s}", "timeout: 30s, retry_policy: {retry_on: 5xx, num_retries: 1}}")
+            if port == 14008:
+                listener = listener.replace("timeout: 30s}", "timeout: 0.2s}")
+            if port == 14009:
+                listener = listener.replace("                - name: envoy.filters.http.router", """                - name: envoy.filters.http.lua
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                    inline_code: |
+                      function envoy_on_request(handle)
+                        if handle:headers():get("x-instructions-deny") == "yes" then
+                          handle:respond({[":status"] = "403"}, "fixture deny")
+                        end
+                      end
+                - name: envoy.filters.http.router""")
+            rendered += listener
+        rendered += "  clusters:\n" + cluster_yaml("backend-primary")
+        (OUT / f"envoy-instructions-{variant}.yaml").write_text(rendered)
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
+    if os.environ.get("RUNTIME_VERIFY_INSTRUCTIONS") == "1":
+        instructions_configs()
+        return
     main_config = '''admin:
   address:
     socket_address: {address: 0.0.0.0, port_value: 9901}

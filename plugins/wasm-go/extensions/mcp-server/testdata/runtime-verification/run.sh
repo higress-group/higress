@@ -30,6 +30,7 @@ export COMPOSE_PROJECT_NAME
 BASELINE_REVISION=c55d9825c90868f50edbff9764a6b3cf2eb13162
 BASELINE_SHA=$(git -C "$REPO_ROOT" rev-parse "$BASELINE_REVISION^{commit}")
 BASELINE_SOURCE_DIR=""
+INSTRUCTIONS_BASELINE_SOURCE_DIR=""
 AUTO_BASELINE_SHA=dc0999326b1a8df4269c13d0cf6ee2b725259f6e
 AUTO_BASELINE_SOURCE_DIR=""
 export AUTO_BASELINE_SHA
@@ -51,6 +52,9 @@ cleanup() {
   podman compose -f "$HARNESS_DIR/compose.yaml" --profile verify down --volumes --remove-orphans >/dev/null 2>&1 || true
   if test -n "$BASELINE_SOURCE_DIR" && test -d "$BASELINE_SOURCE_DIR"; then
     rm -rf -- "$BASELINE_SOURCE_DIR"
+  fi
+  if test -n "$INSTRUCTIONS_BASELINE_SOURCE_DIR" && test -d "$INSTRUCTIONS_BASELINE_SOURCE_DIR"; then
+    rm -rf -- "$INSTRUCTIONS_BASELINE_SOURCE_DIR"
   fi
   if test -n "$AUTO_BASELINE_SOURCE_DIR" && test -d "$AUTO_BASELINE_SOURCE_DIR"; then
     rm -rf -- "$AUTO_BASELINE_SOURCE_DIR"
@@ -94,6 +98,62 @@ file_sha256() {
 }
 
 PLUGIN_SHA256=$(file_sha256 "$RUNTIME_EVIDENCE/plugin.wasm")
+
+# The optional feature mode records its own focused manifest; it does not
+# certify or replace the historical full runtime/routing regression matrix.
+if test "${RUNTIME_VERIFY_INSTRUCTIONS:-0}" = 1; then
+  INSTRUCTIONS_BASELINE_SHA=$(git -C "$REPO_ROOT" rev-parse "${INSTRUCTIONS_BASELINE_SHA:-36f2f1ac5c7305c5a46c296c617b45d1fbacb7d3}^{commit}") || exit 3
+  export INSTRUCTIONS_BASELINE_SHA PLUGIN_SHA256 RUNTIME_VERIFY_INSTRUCTIONS
+  INSTRUCTIONS_BASELINE_SOURCE_DIR=$(mktemp -d "$RUNTIME_EVIDENCE/instructions-baseline-source.XXXXXX") || exit 3
+  git -C "$REPO_ROOT" archive "$INSTRUCTIONS_BASELINE_SHA" | tar -x -C "$INSTRUCTIONS_BASELINE_SOURCE_DIR" || exit 3
+  (cd "$INSTRUCTIONS_BASELINE_SOURCE_DIR/plugins/wasm-go/extensions/mcp-server" && GOOS=wasip1 GOARCH=wasm go build -trimpath -buildmode=c-shared -o "$RUNTIME_EVIDENCE/instructions-baseline-plugin.wasm" .) || exit 3
+  INSTRUCTIONS_BASELINE_PLUGIN_SHA256=$(file_sha256 "$RUNTIME_EVIDENCE/instructions-baseline-plugin.wasm")
+  export INSTRUCTIONS_BASELINE_PLUGIN_SHA256
+  rm -rf -- "$INSTRUCTIONS_BASELINE_SOURCE_DIR"
+  INSTRUCTIONS_BASELINE_SOURCE_DIR=""
+  RUNTIME_OUT="$RUNTIME_EVIDENCE" python3 "$HARNESS_DIR/generate_envoy.py" || exit 3
+  if test "${RUNTIME_SKIP_PULL:-0}" = 1; then
+    test "${RUNTIME_ALLOW_DIRTY:-0}" = 1 || exit 2
+  else
+    podman pull --quiet higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:v2.2.3 >/dev/null || exit 3
+    podman pull --quiet docker.io/library/python:3.12-alpine >/dev/null || exit 3
+  fi
+  compose_runtime() { podman compose -f "$HARNESS_DIR/compose.yaml" "$@"; }
+  RUNTIME_LIFECYCLE_DIAGNOSTICS="$RUNTIME_EVIDENCE/lifecycle-diagnostics.log"
+  export RUNTIME_LIFECYCLE_DIAGNOSTICS
+  : >"$RUNTIME_LIFECYCLE_DIAGNOSTICS"
+  . "$HARNESS_DIR/lifecycle.sh"
+  podman version --format '{{.Client.Version}}' >"$RUNTIME_EVIDENCE/podman-version.txt" || exit 4
+  podman compose version >"$RUNTIME_EVIDENCE/compose-version.txt" 2>&1 || exit 4
+  podman image inspect higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:v2.2.3 --format '{{range .RepoDigests}}{{println .}}{{end}}' >"$RUNTIME_EVIDENCE/gateway-image-digests.txt" || exit 4
+  podman image inspect docker.io/library/python:3.12-alpine --format '{{range .RepoDigests}}{{println .}}{{end}}' >"$RUNTIME_EVIDENCE/backend-image-digests.txt" || exit 4
+  compose_runtime --profile verify config --format json | sed -e 's/runtime-upstream-token/<redacted>/g' -e 's/runtime-key/<redacted>/g' >"$RUNTIME_EVIDENCE/compose-config.json" || exit 4
+  python3 "$HARNESS_DIR/compose_config_self_test.py" "$RUNTIME_EVIDENCE/compose-config.json" || exit 4
+  printf 'RUNTIME_VERIFY_INSTRUCTIONS=1 INSTRUCTIONS_BASELINE_SHA=%s bash testdata/runtime-verification/run.sh\n' "$INSTRUCTIONS_BASELINE_SHA" >"$RUNTIME_EVIDENCE/command.txt"
+  compose_runtime up -d backend-primary || exit 4
+  VERIFY_STATUS=0
+  for variant in baseline candidate; do
+    service="gateway-instructions-$variant"
+    compose_runtime up -d "$service" || exit 4
+    compose_runtime --profile verify run --rm --no-deps -e RUNTIME_VERIFY_INSTRUCTIONS=1 \
+      -e "RUNTIME_INSTRUCTIONS_VARIANT=$variant" -e "RUNTIME_GATEWAY_HOST=$service" verifier || VERIFY_STATUS=1
+    compose_runtime exec -T "$service" /usr/local/bin/envoy --version >"$RUNTIME_EVIDENCE/envoy-$variant-version.txt" || exit 4
+    stop_runtime_service "$service" || exit 4
+    compose_runtime logs --no-color "$service" | sed -e 's/runtime-upstream-token/<redacted>/g' -e 's/runtime-key/<redacted>/g' >"$RUNTIME_EVIDENCE/gateway-instructions-$variant.log" || exit 4
+  done
+  cleanup
+  trap - EXIT INT TERM
+  if test -z "$(podman ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" --format '{{.ID}}')"; then
+    echo "PASS no containers remain for compose project $COMPOSE_PROJECT_NAME" >"$RUNTIME_EVIDENCE/cleanup-proof.txt"
+  else
+    echo "FAIL containers remain for compose project $COMPOSE_PROJECT_NAME" >"$RUNTIME_EVIDENCE/cleanup-proof.txt"
+    VERIFY_STATUS=1
+  fi
+  python3 "$HARNESS_DIR/finalize_evidence.py" || VERIFY_STATUS=1
+  unlink "$RUNTIME_EVIDENCE/plugin.wasm"
+  unlink "$RUNTIME_EVIDENCE/instructions-baseline-plugin.wasm"
+  exit "$VERIFY_STATUS"
+fi
 AUTO_BASELINE_SOURCE_DIR=$(mktemp -d "$RUNTIME_EVIDENCE/auto-baseline-source.XXXXXX") || exit 3
 git -C "$REPO_ROOT" archive "$AUTO_BASELINE_SHA" | tar -x -C "$AUTO_BASELINE_SOURCE_DIR" || exit 3
 (cd "$AUTO_BASELINE_SOURCE_DIR/plugins/wasm-go/extensions/mcp-server" && GOOS=wasip1 GOARCH=wasm go build -trimpath -buildmode=c-shared -o "$RUNTIME_EVIDENCE/auto-baseline-plugin.wasm" .) || exit 3

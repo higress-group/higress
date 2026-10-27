@@ -11,6 +11,40 @@ A clean exact-head run must pass every enumerated case with **0 FAIL**.
 `expected-main-cases.json` binds the traffic case IDs to the final matrix; a
 missing or duplicate case is a failure, even if all remaining cases pass.
 
+## Focused upstream instructions mode
+
+From `plugins/wasm-go/extensions/mcp-server`, on a clean committed candidate:
+
+```bash
+RUNTIME_VERIFY_INSTRUCTIONS=1 \
+INSTRUCTIONS_BASELINE_SHA=36f2f1ac5c7305c5a46c296c617b45d1fbacb7d3 \
+RUNTIME_EVIDENCE=/Users/<user>/instructions-evidence \
+bash testdata/runtime-verification/run.sh
+```
+
+This optional mode uses the same build, pinned images, listener generator,
+backend, exchange ledger, lifecycle helpers and task-owned cleanup as the full
+runner. It builds only the candidate and the pinned pre-feature baseline. Both
+use the candidate harness; the baseline receives configurations that omit the
+new flag. Candidate omitted/false responses are compared to that baseline.
+The remaining cases cover extraction and field omission, decoded UTF-8 byte
+limits, gateway field ownership without whole-result schema validation,
+server-level header/query/passthrough/anonymous authentication, public discover
+with protected tools, failures and incomplete results, ordinary header/metadata
+preservation, main-route retries and timeout, denial by a later filter, current
+request values and concurrent isolation, and a disconnected client followed by
+a fresh request. Configured Envoy retries are counted separately from a single
+plugin route submission. The disconnect case observes the existing lifecycle;
+it does not assert a new active upstream reset guarantee.
+
+`instructions-baseline.json`, `instructions-candidate.json`, access logs,
+image/tool versions, cleanup proof and `instructions-manifest.json` identify
+this as **focused** evidence. Its manifest explicitly does not certify the
+historical full matrix. Run the existing default `run.sh` and `run-routing.sh`
+separately for those regressions; their fixed baselines and assertions remain
+unchanged. The normal dirty-tree development override is not acceptance
+verification.
+
 ## Purpose and validation boundary
 
 This harness verifies the MCP 2026 Tools Baseline at the Envoy data-plane

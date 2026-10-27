@@ -20,7 +20,7 @@ if (!root) {
   throw new Error('MCP_INTEROP_ROOT is required');
 }
 
-for (const path of ['direct', 'proxy-modern', 'proxy-legacy', 'proxy-auto-modern', 'proxy-auto-legacy', 'proxy-auto-switch', 'proxy-auto-error']) {
+for (const path of ['direct', 'proxy-modern', 'proxy-instructions', 'proxy-legacy', 'proxy-auto-modern', 'proxy-auto-legacy', 'proxy-auto-switch', 'proxy-auto-error']) {
   const client = new Client(
     { name: 'higress-typescript-interop', version: '1.0.0' },
     { versionNegotiation: { mode: { pin: protocolVersion } } },
@@ -36,6 +36,10 @@ for (const path of ['direct', 'proxy-modern', 'proxy-legacy', 'proxy-auto-modern
     }
     if (!client.getDiscoverResult()?.supportedVersions?.includes(protocolVersion)) {
       throw new Error('server/discover result did not advertise the pinned version');
+    }
+
+    if (path === 'proxy-instructions' && client.getDiscoverResult()?.instructions !== 'Use the weather tool for current conditions.') {
+      throw new Error(`unexpected instructions: ${client.getDiscoverResult()?.instructions}`);
     }
 
     if (path === 'proxy-auto-error') {

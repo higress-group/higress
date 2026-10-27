@@ -2,6 +2,9 @@
 """Focused fault-injection checks for runtime lifecycle polling and fixtures."""
 
 import json
+import os
+import subprocess
+import sys
 import socket
 import tempfile
 import threading
@@ -9,6 +12,7 @@ import urllib.request
 from pathlib import Path
 
 import backend
+import generate_envoy
 import verify
 
 
@@ -131,9 +135,97 @@ def check_partial_corpus_diagnostic():
     ) = original
 
 
+
+def check_instructions_fixture():
+    with tempfile.TemporaryDirectory() as directory:
+        original_out = generate_envoy.OUT
+        generate_envoy.OUT = Path(directory)
+        try:
+            generate_envoy.instructions_configs()
+        finally:
+            generate_envoy.OUT = original_out
+        baseline = (Path(directory) / "envoy-instructions-baseline.yaml").read_text()
+        candidate = (Path(directory) / "envoy-instructions-candidate.yaml").read_text()
+        require("passthroughInstructions" not in baseline, "baseline depends on new flag support")
+        require(candidate.count('"passthroughInstructions":true') == 8 and
+                candidate.count('"passthroughInstructions":false') == 1, "focused flag coverage changed")
+        for marker in ("retry_policy: {retry_on: 5xx, num_retries: 1}", "timeout: 0.2s", "envoy.filters.http.lua"):
+            require(marker in candidate, f"missing main-route fixture: {marker}")
+    original_getfqdn = socket.getfqdn
+    socket.getfqdn = lambda _name: "localhost"
+    try:
+        server = backend.ThreadingHTTPServer(("127.0.0.1", 0), backend.Handler)
+    finally:
+        socket.getfqdn = original_getfqdn
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request_body = {"jsonrpc": "2.0", "id": "original-id", "method": "server/discover", "params": {"_meta": verify.modern_meta()}}
+        for mode in ("normal", "limit", "oversize", "missing", "rpc-error", "incomplete", "sse"):
+            request = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/instructions",
+                                             data=json.dumps(request_body).encode(),
+                                             headers={"X-Instructions-Mode": mode, "Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=2) as response:
+                raw = response.read()
+                if mode == "sse":
+                    require(response.headers["Content-Type"] == "text/event-stream", "SSE fixture lost its content type")
+                    raw = raw.removeprefix(b"data: ").strip()
+                value = json.loads(raw)
+            require(value["id"] == "original-id", "fixture rewrote original RPC ID")
+            result = value["result"]
+            require(result["ttlMs"] == 0.5, "unrelated-schema compatibility control disappeared")
+            if mode in ("limit", "oversize"):
+                require(len(result["instructions"].encode()) == (32768 if mode == "limit" else 32769), "decoded byte boundary changed")
+            if mode == "missing":
+                require("instructions" not in result, "missing-field control includes instructions")
+            if mode == "rpc-error":
+                require("error" in value and "instructions" in result, "error/result exclusion control lost")
+            if mode == "incomplete":
+                require(result["resultType"] == "input_required", "incomplete result control lost")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+
+def check_instructions_evidence_rejects_incomplete_runs():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment = dict(os.environ, RUNTIME_EVIDENCE=directory, RUNTIME_VERIFY_INSTRUCTIONS="1",
+                           SOURCE_SHA="1" * 40, SOURCE_TREE_CLEAN="true", INSTRUCTIONS_BASELINE_SHA="2" * 40,
+                           PLUGIN_SHA256="3" * 64, INSTRUCTIONS_BASELINE_PLUGIN_SHA256="4" * 64)
+        snapshots = {}
+        for variant, count in (("baseline", 2), ("candidate", 29)):
+            names = [f"case-{index}" for index in range(count)]
+            snapshots[variant] = {"expectedCases": names, "cases": [{"case": name, "status": "PASS"} for name in names],
+                                  "exchanges": [{"accessRequestId": f"request-{variant}"}]}
+            (root / f"instructions-{variant}.json").write_text(json.dumps(snapshots[variant]))
+            (root / f"gateway-instructions-{variant}.log").write_text(f"access request_id=request-{variant} listener=fixture code=200\n")
+        (root / "cleanup-proof.txt").write_text("PASS no containers remain")
+        def finalize():
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("finalize_evidence.py"))],
+                                    env=environment, capture_output=True, text=True)
+            manifest = json.loads((root / "instructions-manifest.json").read_text())
+            require(manifest["historicalFullMatrixVerified"] is False, "focused evidence certified full regressions")
+            return result.returncode, manifest["passed"]
+        require(finalize() == (0, True), "complete focused evidence was rejected")
+        candidate = snapshots["candidate"]
+        candidate["cases"].pop()
+        (root / "instructions-candidate.json").write_text(json.dumps(candidate))
+        require(finalize() == (1, False), "missing focused case accepted")
+        (root / "instructions-candidate.json").write_text(json.dumps(snapshots["baseline"]))
+        require(finalize() == (1, False), "baseline-only evidence accepted as candidate matrix")
+        (root / "instructions-candidate.json").write_text(json.dumps({**candidate, "cases": candidate["cases"] + [{"case": "case-28", "status": "PASS"}]}))
+        (root / "gateway-instructions-candidate.log").write_text("")
+        require(finalize() == (1, False), "missing route access evidence accepted")
+
+
 if __name__ == "__main__":
     check_transient_lds_publish_timeout()
     check_rejection_poll_classification()
     check_corpus_get_fixture()
     check_partial_corpus_diagnostic()
+    check_instructions_fixture()
+    check_instructions_evidence_rejects_incomplete_runs()
     print("runtime orchestration fault-injection self-tests passed")

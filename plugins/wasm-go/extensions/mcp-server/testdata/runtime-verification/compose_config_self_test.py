@@ -21,6 +21,7 @@ for name, service in config.get("services", {}).items():
     envoy_commands.append((name, command))
 
 expected = {"gateway", "gateway-auto", "gateway-auto-baseline", "gateway-auto-explicit-baseline", "gateway-baseline", "gateway-oracle", "gateway-generation"}
+expected.update("gateway-instructions-" + revision for revision in ("baseline", "candidate"))
 expected.update("gateway-control-" + revision for revision in ("candidate", "affected", "oracle"))
 expected.update("gateway-corpus-" + revision for revision in ("candidate", "affected", "oracle"))
 check({name for name, _ in envoy_commands} == expected, "resolved Envoy service set is incomplete or unexpected")

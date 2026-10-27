@@ -140,6 +140,7 @@ func setupMcpProxyServer(serverName string, serverJson gjson.Result, serverConfi
 	// Parse passthroughAuthHeader (optional, defaults to false)
 	passthroughAuthHeader := serverJson.Get("passthroughAuthHeader").Bool()
 	proxyServer.SetPassthroughAuthHeader(passthroughAuthHeader)
+	proxyServer.passthroughInstructions = serverJson.Get("passthroughInstructions").Bool()
 
 	// Parse security schemes
 	securitySchemesJson := serverJson.Get("securitySchemes")
@@ -489,6 +490,17 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 	pluginServerConfigJson := configJson.Get("server.config").Raw // Config for the plugin instance itself, if any.
 	config.serverVersion = DefaultServerVersion
 
+	if value := serverJson.Get("passthroughInstructions"); value.Exists() {
+		if value.Type != gjson.True && value.Type != gjson.False {
+			return errors.New("server.passthroughInstructions must be a boolean")
+		}
+		if value.Bool() && (toolSetJson.Exists() || serverJson.Get("type").String() != "mcp-proxy" ||
+			serverJson.Get("protocolStrategy").String() != string(ProtocolStrategyModern) ||
+			serverJson.Get("transport").String() != string(TransportHTTP)) {
+			return errors.New("server.passthroughInstructions requires a single modern HTTP mcp-proxy server")
+		}
+	}
+
 	// serverConfigJsonForInstance is the config passed to the specific server instance (single or REST)
 	// It's distinct from pluginServerConfigJson which might be for the mcp-server plugin itself.
 	var serverConfigJsonForInstance string
@@ -714,6 +726,9 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		toolsAvailable := modernMethodPolicy(*config, "tools/list").Available &&
 			modernMethodPolicy(*config, "tools/call").Available
 		result := ShapeResult(request, currentServerNameForHandlers, DiscoveryResult(toolsAvailable))
+		if proxyServer, ok := config.server.(*McpProxyServer); ok && proxyServer.passthroughInstructions {
+			return proxyServer.forwardDiscovery(ctx, result)
+		}
 		utils.OnMCPResponseSuccess(ctx, result, fmt.Sprintf("mcp:%s:server/discover", currentServerNameForHandlers))
 		return nil
 	}

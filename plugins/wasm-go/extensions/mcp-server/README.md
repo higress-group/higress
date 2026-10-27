@@ -42,6 +42,7 @@
 | `server.defaultUpstreamSecurity` | object | 选填 | - | 默认的后端认证配置，可被工具级 `requestTemplate.security` 覆盖。`id` 引用认证方案；REST-to-MCP 还支持通过 `credential` 覆盖默认凭证。MCP 代理的固定凭证使用认证方案的 `defaultCredential`。 |
 | `server.version` | string | 选填 | `1.0.0` | 服务版本号，用于旧版 MCP 的初始化响应。此字段不用于选择 MCP 协议版本。 |
 | `server.protocolStrategy` | string | 选填 | `legacy` | MCP 代理访问后端时使用的协议策略：`legacy`、`modern` 或 `auto`。仅适用于 `mcp-proxy`，详见“协议支持与后端连接”。 |
+| `server.passthroughInstructions` | boolean | 选填 | false | 仅在单个显式 `mcp-proxy`、`transport: http`、`protocolStrategy: modern` 配置下可设为 `true`。从上游成功 discover 结果中提取 instructions，详见下文。 |
 | `server.autoDetection.probeTimeoutMs` | integer | 选填 | `1000` | 自动识别后端协议时的探测超时，单位为毫秒，必须为正整数。仅在 `protocolStrategy: auto` 且 `transport: http` 时使用；实际探测超时不超过 `server.timeout`。 |
 
 ### 工具集配置
@@ -289,6 +290,16 @@ server:
 - 自动探测会增加后端请求。后端协议已知时，可以直接配置 `legacy` 或 `modern`。
 - 自动探测请求使用配置的后端凭证，后端需要允许对应凭证访问发现接口。同一路由的后端实例应保持协议能力一致。
 - `transport: sse` 表示插件能够接入旧版 SSE 后端，不代表向客户端提供通用的实时订阅或消息推送能力。
+
+
+### 上游 instructions
+
+默认不访问上游，`server/discover` 保持原有的网关本地结果。需要上游使用说明时，可在上述 modern HTTP 代理配置中设置 `server.passthroughInstructions: true`；`auto`、`legacy`、SSE、REST 和 `toolSet` 配置不支持启用，非 boolean 值会导致配置错误。
+
+开启后，每个 modern `server/discover` 请求均沿用当前主请求的路由、超时、重试及 server 级认证规则访问上游，保留原请求 ID 和 `_meta`。只有 HTTP 200、无 JSON-RPC error 且结果为对象的普通成功响应才尝试提取 `instructions`。显式非 `complete` 结果继续走原有代理结果路径；上游错误也保留现有错误路径，不回退为成功的本地 discover。
+
+只合并非空字符串，按解码后的 UTF-8 字节计算，上限为 32768 字节；空白原样保留。字段缺失、空串、类型不符或超限时仅省略该字段，不影响其他本地结果。`supportedVersions`、`capabilities`、`serverInfo`、`resultType`、`ttlMs`、`cacheScope` 继续由网关生成。该字段不缓存；未配置 server 级凭据时保持匿名 discover，不扫描工具级凭据。此选项不改变现有 SDK 日志、读取/写入或 `original-*` 上下文的数据可见范围。
+
 
 ## 认证与安全
 

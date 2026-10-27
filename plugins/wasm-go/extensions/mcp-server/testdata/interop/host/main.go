@@ -55,6 +55,9 @@ var configs = map[string]json.RawMessage{
 	"/proxy-modern": json.RawMessage(`{
 		"server":{"name":"interop-proxy-modern","type":"mcp-proxy","transport":"http","protocolStrategy":"modern","mcpServerURL":"http://fixture.invalid/mcp"}
 	}`),
+	"/proxy-instructions": json.RawMessage(`{
+		"server":{"name":"interop-proxy-instructions","type":"mcp-proxy","transport":"http","protocolStrategy":"modern","passthroughInstructions":true,"mcpServerURL":"http://fixture.invalid/mcp"}
+	}`),
 	"/proxy-legacy": json.RawMessage(`{
 		"server":{"name":"interop-proxy-legacy","type":"mcp-proxy","transport":"http","protocolStrategy":"legacy","mcpServerURL":"http://fixture.invalid/mcp"}
 	}`),
@@ -180,7 +183,9 @@ func completeFixtureCallouts(host wasmtest.TestHost, path, profile, business str
 	var observed []string
 	verify := func() error {
 		var expected []string
-		if path != "/direct" && business != "server/discover" {
+		if path == "/proxy-instructions" && business == "server/discover" {
+			expected = append(expected, "server/discover")
+		} else if path != "/direct" && business != "server/discover" {
 			if strings.HasPrefix(path, "/proxy-auto-") {
 				expected = append(expected, "server/discover")
 			}
@@ -200,7 +205,7 @@ func completeFixtureCallouts(host wasmtest.TestHost, path, profile, business str
 	routed := false
 	for step := 0; step < 5; step++ {
 		callouts := host.GetHttpCalloutAttributes()
-		if len(callouts) == 0 && (routed || path == "/direct" || business == "server/discover" || host.GetLocalResponse() != nil) {
+		if len(callouts) == 0 && (routed || path == "/direct" || (business == "server/discover" && path != "/proxy-instructions") || host.GetLocalResponse() != nil) {
 			return verify()
 		}
 		var callout proxytest.HttpCalloutAttribute
@@ -236,6 +241,9 @@ func completeFixtureCallouts(host wasmtest.TestHost, path, profile, business str
 			} else {
 				status = "200"
 				response = []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"ttlMs":0,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"fixture-modern","version":"1"}}}}`, id))
+			}
+			if path == "/proxy-instructions" {
+				response = []byte(strings.Replace(string(response), `"resultType":"complete"`, `"resultType":"complete","instructions":"Use the weather tool for current conditions."`, 1))
 			}
 		case "initialize":
 			status = "200"

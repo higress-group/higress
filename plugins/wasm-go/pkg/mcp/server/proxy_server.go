@@ -101,6 +101,7 @@ type McpProxyServer struct {
 	transport                 TransportProtocol   // Transport protocol (http or sse)
 	protocolStrategy          ProtocolStrategy    // Configured strategy, never a detected profile
 	autoDetection             AutoDetectionConfig
+	passthroughInstructions   bool // Immutable opt-in discovery field enhancement
 	passthroughAuthHeader     bool // If true, pass through Authorization header even without downstream security
 }
 
@@ -225,12 +226,13 @@ func (s *McpProxyServer) GetConfig(v any) {
 // Clone implements Server interface
 func (s *McpProxyServer) Clone() Server {
 	newServer := &McpProxyServer{
-		Name:             s.Name,
-		base:             s.base.CloneBase(),
-		toolsConfig:      make(map[string]McpProxyToolConfig),
-		securitySchemes:  make(map[string]SecurityScheme),
-		protocolStrategy: s.GetProtocolStrategy(),
-		autoDetection:    s.GetAutoDetectionConfig(),
+		Name:                    s.Name,
+		base:                    s.base.CloneBase(),
+		toolsConfig:             make(map[string]McpProxyToolConfig),
+		securitySchemes:         make(map[string]SecurityScheme),
+		protocolStrategy:        s.GetProtocolStrategy(),
+		autoDetection:           s.GetAutoDetectionConfig(),
+		passthroughInstructions: s.passthroughInstructions,
 	}
 	for k, v := range s.toolsConfig {
 		newServer.toolsConfig[k] = v
@@ -260,10 +262,9 @@ func (s *McpProxyServer) GetPassthroughAuthHeader() bool {
 	return s.passthroughAuthHeader
 }
 
-// ForwardToolsList forwards tools/list request to backend MCP server
-func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error {
-	wrapperCtx := ctx.(wrapper.HttpContext)
-
+// prepareServerProxyAuth preserves the server-level policy used by tools/list.
+// Discovery has no tool context and deliberately follows this same policy.
+func (s *McpProxyServer) prepareServerProxyAuth(ctx wrapper.HttpContext) *ProxyAuthInfo {
 	// Handle default downstream security for tools/list requests
 	// tools/list requests use server-level default authentication configuration
 	passthroughCredential := ""
@@ -295,14 +296,8 @@ func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error
 			proxywasm.RemoveHttpRequestHeader("Authorization")
 		}
 	}
-	_, modernDownstream := ModernRequestContext(wrapperCtx)
-	wrapperCtx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(wrapperCtx, modernDownstream && (s.GetProtocolStrategy() == ProtocolStrategyModern || s.GetProtocolStrategy() == ProtocolStrategyAuto)))
-
-	// Create protocol handler using server fields
-	handler := NewMcpProtocolHandler(s.GetMcpServerURL(), s.GetTimeout())
-	handler.SetProtocolStrategy(s.GetProtocolStrategy())
-	handler.transport = s.GetTransport()
-	handler.autoDetection = s.GetAutoDetectionConfig()
+	_, modernDownstream := ModernRequestContext(ctx)
+	ctx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(ctx, modernDownstream && (s.GetProtocolStrategy() == ProtocolStrategyModern || s.GetProtocolStrategy() == ProtocolStrategyAuto)))
 
 	// Prepare authentication information for gateway-to-backend communication
 	var authInfo *ProxyAuthInfo
@@ -319,6 +314,21 @@ func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error
 			authInfo = &ProxyAuthInfo{ForwardAuthorization: authorization, Server: s}
 		}
 	}
+
+	return authInfo
+}
+
+// ForwardToolsList forwards tools/list request to backend MCP server
+func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error {
+	wrapperCtx := ctx.(wrapper.HttpContext)
+
+	authInfo := s.prepareServerProxyAuth(wrapperCtx)
+
+	// Create protocol handler using server fields
+	handler := NewMcpProtocolHandler(s.GetMcpServerURL(), s.GetTimeout())
+	handler.SetProtocolStrategy(s.GetProtocolStrategy())
+	handler.transport = s.GetTransport()
+	handler.autoDetection = s.GetAutoDetectionConfig()
 
 	// This will handle initialization asynchronously if needed and use ActionPause/Resume
 	return handler.ForwardToolsList(wrapperCtx, cursor, authInfo)

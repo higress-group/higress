@@ -817,7 +817,187 @@ def auth_and_isolation():
     return {"explicitAuth": True, "preservedStatuses": [401, 403], "postFailureOrigin": "secondary", "backendEvents": {"backend-primary": backend_state()["events"], "backend-secondary": secondary}}
 
 
+
+def instructions_verification():
+    # This mode is deliberately separate evidence from the historical full matrix.
+    from concurrent.futures import ThreadPoolExecutor
+    variant = os.environ["RUNTIME_INSTRUCTIONS_VARIANT"]
+    wait_http("http://backend-primary:8080/healthz")
+    wait_http(f"http://{GATEWAY_HOST}:9901/ready")
+    defaults = {}
+
+    def discover(port=14000, mode="normal", headers=None, rpc_id=None):
+        rpc_id = rpc_id or f"instructions-{mode}-{port}"
+        return modern_rpc(port, "server/discover", rpc_id,
+                          extra_headers={"X-Instructions-Mode": mode, **(headers or {})})
+
+    def local(response, expected, rpc_id, port=14000):
+        status, headers, body = response
+        check(status == 200 and body.get("id") == rpc_id and "error" not in body,
+              f"not a successful discover: {status} {body}")
+        result = body["result"]
+        check(result.get("resultType") == "complete" and result.get("ttlMs") == 0
+              and result.get("cacheScope") == "private", f"gateway field ownership: {result}")
+        check(result.get("supportedVersions") != ["upstream-only"] and
+              result.get("serverInfo", {}).get("name") != "upstream-only" and
+              "resources" not in result.get("capabilities", {}) and
+              result.get("_meta", {}).get("io.modelcontextprotocol/serverInfo") ==
+              {"name": f"instructions-{port}", "version": "1.0.0"},
+              f"upstream fields merged: {result}")
+        check(result.get("instructions") == expected if expected is not None else "instructions" not in result,
+              f"instructions mismatch: {result}")
+        check(not any(name.lower() == "mcp-session-id" for name in headers), "upstream session leaked")
+        return result
+
+    def disabled(port):
+        def case():
+            backend_reset()
+            rpc_id = f"default-{port}"
+            response = discover(port, rpc_id=rpc_id)
+            local(response, None, rpc_id, port)
+            check(not backend_state()["events"], "default-off called upstream")
+            defaults[str(port)] = EXCHANGES[-1]["response"]
+            if variant == "candidate":
+                baseline = json.loads((EVIDENCE / "instructions-baseline.json").read_text())["defaults"][str(port)]
+                check(defaults[str(port)] == baseline, "default/off differs from pinned baseline")
+            return {"backendAttempts": 0, "baselineEqual": variant == "candidate"}
+        return case
+
+    def success(mode, expected):
+        def case():
+            backend_reset()
+            rpc_id = f"instructions-{mode}-14000"
+            local(discover(mode=mode, headers={"X-Tenant": "tenant-a", "Cookie": "fixture=cookie"}), expected, rpc_id)
+            events = backend_state()["events"]
+            check(len(events) == 1, f"expected one main-route attempt: {events}")
+            event = events[0]
+            request = event["instructionsRequest"]
+            check(event["rpcId"] == rpc_id and event["rpcMethod"] == "server/discover"
+                  and event["mcpMethod"] == "server/discover" and event["protocolVersion"] == MODERN,
+                  f"request identity/protocol changed: {event}")
+            check(request["meta"] == modern_meta() and request["tenant"] == "tenant-a" and event["cookiePresent"],
+                  f"metadata/ordinary headers changed: {event}")
+            check(not any(event[key] for key in ("sessionPresent", "lastEventIDPresent", "internalRoutePresent", "futureParam")),
+                  f"reserved header leaked: {event}")
+            return {"pluginSubmissions": 1, "backendAttempts": 1, "backendEvents": events}
+        return case
+
+    def auth(port, predicate):
+        def case():
+            backend_reset()
+            rpc_id = f"instructions-normal-{port}"
+            headers = {"Authorization": "Bearer instructions-client"} if port == 14005 else {}
+            local(discover(port, headers=headers), "Use the weather tool. 天气", rpc_id, port)
+            events = backend_state()["events"]
+            check(len(events) == 1 and predicate(events[0]), f"auth policy changed: {events}")
+            return {"backendEvents": events}
+        return case
+
+    def failure(mode):
+        def case():
+            backend_reset()
+            status, _, body = discover(mode=mode)
+            if mode in ("http401", "http403"):
+                check(status == int(mode[4:]), f"auth status changed: {status} {body}")
+            else:
+                check(status != 200 or "error" in body, f"failure became local success: {status} {body}")
+            check(not isinstance(body, dict) or body.get("result", {}).get("instructions") != "must not extract",
+                  "error instructions leaked")
+            check(len(backend_state()["events"]) == 1, "failure path submitted more than once")
+            return {"backendEvents": backend_state()["events"]}
+        return case
+
+    def incomplete():
+        backend_reset()
+        status, _, body = discover(mode="incomplete")
+        check(status == 200 and body["result"]["resultType"] == "input_required" and
+              body["result"]["instructions"] == "upstream incomplete" and
+              body["result"]["serverInfo"]["name"] == "upstream-only", "incomplete result replaced by local success")
+        return {"backendEvents": backend_state()["events"]}
+
+    def retry():
+        backend_reset()
+        local(discover(14007, "retry"), "Use the weather tool. 天气", "instructions-retry-14007", 14007)
+        events = backend_state()["events"]
+        check(len(events) == 2 and events[0]["rpcId"] == events[1]["rpcId"], f"route retry not preserved: {events}")
+        return {"pluginSubmissions": 1, "configuredRouteRetries": 1, "backendAttempts": 2, "backendEvents": events}
+
+    def timeout():
+        backend_reset()
+        started = time.monotonic()
+        status, _, body = discover(14008, "slow")
+        elapsed = time.monotonic() - started
+        check((status != 200 or "error" in body) and 0.15 <= elapsed < 0.9,
+              f"existing route deadline not observed: {status} {elapsed:.3f}s {body}")
+        time.sleep(1.1)
+        check(len(backend_state()["events"]) == 1, "timeout caused extra submission")
+        return {"elapsedSeconds": elapsed, "backendEvents": backend_state()["events"]}
+
+    def later_filter():
+        backend_reset()
+        status, _, body = discover(14009, headers={"X-Instructions-Deny": "yes"})
+        check(status == 403 and not backend_state()["events"], f"later filter bypassed: {status} {body}")
+        return {"backendAttempts": 0}
+
+    def current_request():
+        backend_reset()
+        first = discover(mode="fresh")[2]["result"]["instructions"]
+        second = discover(mode="fresh", rpc_id="fresh-second")[2]["result"]["instructions"]
+        check(first != second, "instructions cached")
+        def tenant(value):
+            rpc_id = f"tenant-{value}"
+            return local(discover(mode="identity", rpc_id=rpc_id, headers={"X-Tenant": value}), "tenant:" + value, rpc_id)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(tenant, ("a", "b")))
+        check(len(backend_state()["events"]) == 4, "request isolation caused extra/missing attempts")
+        return {"backendEvents": backend_state()["events"]}
+
+    def disconnect():
+        backend_reset()
+        body = json.dumps({"jsonrpc": "2.0", "id": "disconnect", "method": "server/discover", "params": {"_meta": modern_meta()}}).encode()
+        request = (b"POST /mcp HTTP/1.1\r\nHost: mcp.runtime.test\r\nContent-Type: application/json\r\n"
+                   b"MCP-Protocol-Version: 2026-07-28\r\nMcp-Method: server/discover\r\n"
+                   b"X-Instructions-Mode: slow\r\nX-Request-ID: rv-instructions-disconnect\r\nContent-Length: "
+                   + str(len(body)).encode() + b"\r\n\r\n" + body)
+        with socket.create_connection((GATEWAY_HOST, 14000), timeout=5) as connection:
+            connection.sendall(request)
+            deadline = time.monotonic() + 5
+            while not backend_state()["events"] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            check(len(backend_state()["events"]) == 1, "disconnect request did not reach main route")
+        time.sleep(1.1)
+        local(discover(rpc_id="after-disconnect"), "Use the weather tool. 天气", "after-disconnect")
+        check(len(backend_state()["events"]) == 2, "late callback affected subsequent request")
+        return {"backendEvents": backend_state()["events"], "scope": "existing cancellation path; no active reset guarantee"}
+
+    cases = [(f"default-off-{port}", disabled(port)) for port in (14001, 14002)]
+    if variant == "candidate":
+        values = {"normal": "Use the weather tool. 天气", "sse": "Use the weather tool. 天气", "whitespace": " \n\t ",
+                  "limit": "界" * 10922 + "ab", "missing": None, "empty": None, "number": None,
+                  "object": None, "null": None, "oversize": None}
+        cases += [("field-" + mode, success(mode, value)) for mode, value in values.items()]
+        cases += [("failure-" + mode, failure(mode)) for mode in ("http401", "http403", "http429", "http500", "rpc-error", "invalid")]
+        cases += [
+            ("auth-anonymous", auth(14000, lambda e: not e["authorizationPresent"])),
+            ("auth-fixed-header", auth(14003, lambda e: e["authorizationMatchesExplicitPolicy"])),
+            ("auth-query", auth(14004, lambda e: e["instructionsRequest"]["queryCredentialMatches"])),
+            ("auth-passthrough", auth(14005, lambda e: e["instructionsRequest"]["passthroughMatches"])),
+            ("auth-public-discover-protected-tools", auth(14006, lambda e: not e["authorizationPresent"])),
+            ("incomplete-preserves-existing-path", incomplete), ("main-route-retry", retry),
+            ("main-route-timeout", timeout), ("later-filter-denial", later_filter),
+            ("current-request-no-cache-isolation", current_request), ("disconnect-late-callback", disconnect),
+        ]
+    for name, callback in cases:
+        record(name, callback)
+    snapshot = {"mode": "instructions-focused", "variant": variant, "expectedCases": [name for name, _ in cases],
+                "defaults": defaults, "cases": RESULTS, "exchanges": EXCHANGES, "backendFinal": backend_state()}
+    (EVIDENCE / f"instructions-{variant}.json").write_text(json.dumps(snapshot, indent=2, sort_keys=True))
+    return 1 if any(result["status"] != "PASS" for result in RESULTS) else 0
+
+
 def main():
+    if os.environ.get("RUNTIME_VERIFY_INSTRUCTIONS") == "1":
+        return instructions_verification()
     if DESCRIPTOR_SELF_TEST:
         return descriptor_self_test()
     if GENERATION_TRANSITION:

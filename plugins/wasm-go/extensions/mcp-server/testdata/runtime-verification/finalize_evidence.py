@@ -26,6 +26,44 @@ if os.environ.get("RUNTIME_DESCRIPTOR_SELF_TEST") == "1":
     sys.exit(0 if canonical_json_sha256(self_test_actual) == self_test_expected else DESCRIPTOR_MISMATCH_EXIT)
 
 
+
+if os.environ.get("RUNTIME_VERIFY_INSTRUCTIONS") == "1":
+    focused = {"mode": "instructions-focused", "sourceSha": os.environ["SOURCE_SHA"],
+               "sourceTreeClean": os.environ.get("SOURCE_TREE_CLEAN") == "true",
+               "baselineSha": os.environ["INSTRUCTIONS_BASELINE_SHA"],
+               "pluginSha256": os.environ["PLUGIN_SHA256"],
+               "baselinePluginSha256": os.environ["INSTRUCTIONS_BASELINE_PLUGIN_SHA256"],
+               "historicalFullMatrixVerified": False, "variants": {}, "checksums": {}}
+    passed = focused["sourceTreeClean"]
+    for variant in ("baseline", "candidate"):
+        snapshot = json.loads((root / f"instructions-{variant}.json").read_text())
+        expected = snapshot["expectedCases"]
+        rows = snapshot["cases"]
+        complete = (bool(expected) and len(expected) == len(set(expected)) and
+                    Counter(row["case"] for row in rows) == Counter(expected) and
+                    all(row["status"] == "PASS" for row in rows))
+        log = (root / f"gateway-instructions-{variant}.log").read_text(errors="replace")
+        accesses = Counter(re.findall(r"access request_id=(\S+) listener=", log))
+        ledger_complete = bool(snapshot["exchanges"]) and all(
+            accesses[exchange["accessRequestId"]] == 1 for exchange in snapshot["exchanges"])
+        # Pin completeness independently of the verifier's emitted list.
+        expected_count = 2 if variant == "baseline" else 29
+        complete = complete and len(expected) == expected_count
+        focused["variants"][variant] = {"cases": len(rows), "complete": complete,
+                                        "accessLedgerComplete": ledger_complete}
+        passed = passed and complete and ledger_complete
+    cleanup = (root / "cleanup-proof.txt").read_text().startswith("PASS no containers remain")
+    focused["cleanupComplete"] = cleanup
+    passed = passed and cleanup
+    for path in sorted(root.iterdir()):
+        if path.is_file() and path.suffix != ".wasm" and path.name != "instructions-manifest.json":
+            focused["checksums"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    focused["passed"] = passed
+    (root / "instructions-manifest.json").write_text(json.dumps(focused, indent=2, sort_keys=True))
+    print(f"instructions-focused runtime evidence: {'PASS' if passed else 'FAIL'}")
+    sys.exit(0 if passed else 1)
+
+
 matrix_path = root / "matrix.json"
 matrix = json.loads(matrix_path.read_text()) if matrix_path.exists() else {"cases": []}
 

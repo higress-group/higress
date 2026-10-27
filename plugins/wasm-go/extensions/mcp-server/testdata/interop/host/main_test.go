@@ -131,3 +131,40 @@ func TestProbeCheckerRejectsEarlierUnexpectedBusinessCallout(t *testing.T) {
 	// the same checker run.sh uses, even if an SDK swallowed the earlier 500.
 	runProbeChecker(t, server.URL, 42, "interop fixture recorded a failure")
 }
+
+func TestInstructionsClientWithoutDiscovery(t *testing.T) {
+	// A modern client may already know the protocol version and send business
+	// requests directly. Enabling optional discovery must not add a handshake.
+	server := httptest.NewServer(&pluginHandler{})
+	defer server.Close()
+	for _, method := range []string{"tools/list", "tools/call"} {
+		params := `"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"without-discovery","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}`
+		if method == "tools/call" {
+			params += `,"name":"get_weather","arguments":{"location":"New York"}`
+		}
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":"without-discovery","method":%q,"params":{%s}}`, method, params)
+		request, err := http.NewRequest(http.MethodPost, server.URL+"/proxy-instructions", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json,text/event-stream")
+		request.Header.Set("MCP-Protocol-Version", modernVersion)
+		request.Header.Set("Mcp-Method", method)
+		if method == "tools/call" {
+			request.Header.Set("Mcp-Name", "get_weather")
+		}
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != 200 || gjson.GetBytes(data, "error").Exists() || gjson.GetBytes(data, "result.instructions").Exists() {
+			t.Fatalf("%s before discover: status=%d body=%s", method, response.StatusCode, data)
+		}
+	}
+}
