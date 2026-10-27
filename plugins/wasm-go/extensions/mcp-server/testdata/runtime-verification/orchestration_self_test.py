@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused fault-injection checks for runtime lifecycle polling and fixtures."""
 
+import io
 import json
 import os
 import subprocess
@@ -9,6 +10,7 @@ import socket
 import tempfile
 import threading
 import urllib.request
+from http.client import parse_headers
 from pathlib import Path
 
 import backend
@@ -136,6 +138,27 @@ def check_partial_corpus_diagnostic():
 
 
 
+def check_instructions_disconnect_request():
+    head, separator, body = verify.instructions_disconnect_request().partition(b"\r\n\r\n")
+    require(separator, "disconnect request lacks the HTTP header/body delimiter")
+    request_line, _, header_lines = head.partition(b"\r\n")
+    require(request_line == b"POST /mcp HTTP/1.1", "disconnect request does not enter the MCP endpoint")
+    headers = parse_headers(io.BytesIO(header_lines + b"\r\n\r\n"))
+    # Missing Accept caused real Envoy to return 406 before reaching RouteCall.
+    # Guard protocol negotiation rather than relaxing the backend assertion.
+    require({"application/json", "text/event-stream"}.issubset(
+        {value.strip() for value in headers.get("Accept", "").split(",")}),
+        "disconnect request cannot negotiate the normal modern media types")
+    require(headers.get("Content-Type") == "application/json" and
+            headers.get("MCP-Protocol-Version") == verify.MODERN and
+            headers.get("Mcp-Method") == "server/discover", "disconnect request fails modern protocol admission")
+    require(headers.get("Origin") == "http://" + headers.get("Host", ""), "disconnect origin does not match the fixture host")
+    require(int(headers["Content-Length"]) == len(body), "disconnect body framing is incomplete")
+    request = json.loads(body)
+    require(request["id"] == "disconnect" and request["method"] == "server/discover" and
+            request["params"]["_meta"] == verify.modern_meta(), "disconnect request changed the validated envelope")
+
+
 def check_instructions_fixture():
     with tempfile.TemporaryDirectory() as directory:
         original_out = generate_envoy.OUT
@@ -210,6 +233,11 @@ def check_instructions_evidence_rejects_incomplete_runs():
             require(manifest["historicalFullMatrixVerified"] is False, "focused evidence certified full regressions")
             return result.returncode, manifest["passed"]
         require(finalize() == (0, True), "complete focused evidence was rejected")
+        access_path = root / "gateway-instructions-candidate.log"
+        single_access = access_path.read_text()
+        access_path.write_text(single_access * 2)
+        require(finalize() == (1, False), "reused request correlation accepted despite repeated access records")
+        access_path.write_text(single_access)
         candidate = snapshots["candidate"]
         candidate["cases"].pop()
         (root / "instructions-candidate.json").write_text(json.dumps(candidate))
@@ -226,6 +254,7 @@ if __name__ == "__main__":
     check_rejection_poll_classification()
     check_corpus_get_fixture()
     check_partial_corpus_diagnostic()
+    check_instructions_disconnect_request()
     check_instructions_fixture()
     check_instructions_evidence_rejects_incomplete_runs()
     print("runtime orchestration fault-injection self-tests passed")

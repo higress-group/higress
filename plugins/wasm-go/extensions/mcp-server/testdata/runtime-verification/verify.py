@@ -818,6 +818,17 @@ def auth_and_isolation():
 
 
 
+def instructions_disconnect_request():
+    # The raw socket bypasses urllib's header construction. Keep the same
+    # modern media negotiation as modern_rpc before observing cancellation.
+    body = json.dumps({"jsonrpc": "2.0", "id": "disconnect", "method": "server/discover", "params": {"_meta": modern_meta()}}).encode()
+    return (b"POST /mcp HTTP/1.1\r\nHost: mcp.runtime.test\r\nOrigin: http://mcp.runtime.test\r\n"
+            b"Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n"
+            b"MCP-Protocol-Version: 2026-07-28\r\nMcp-Method: server/discover\r\n"
+            b"X-Instructions-Mode: slow\r\nX-Request-ID: rv-instructions-disconnect\r\nContent-Length: "
+            + str(len(body)).encode() + b"\r\n\r\n" + body)
+
+
 def instructions_verification():
     # This mode is deliberately separate evidence from the historical full matrix.
     from concurrent.futures import ThreadPoolExecutor
@@ -885,9 +896,9 @@ def instructions_verification():
     def auth(port, predicate):
         def case():
             backend_reset()
-            rpc_id = f"instructions-normal-{port}"
+            rpc_id = f"instructions-auth-{port}"
             headers = {"Authorization": "Bearer instructions-client"} if port == 14005 else {}
-            local(discover(port, headers=headers), "Use the weather tool. 天气", rpc_id, port)
+            local(discover(port, headers=headers, rpc_id=rpc_id), "Use the weather tool. 天气", rpc_id, port)
             events = backend_state()["events"]
             check(len(events) == 1 and predicate(events[0]), f"auth policy changed: {events}")
             return {"backendEvents": events}
@@ -954,11 +965,7 @@ def instructions_verification():
 
     def disconnect():
         backend_reset()
-        body = json.dumps({"jsonrpc": "2.0", "id": "disconnect", "method": "server/discover", "params": {"_meta": modern_meta()}}).encode()
-        request = (b"POST /mcp HTTP/1.1\r\nHost: mcp.runtime.test\r\nContent-Type: application/json\r\n"
-                   b"MCP-Protocol-Version: 2026-07-28\r\nMcp-Method: server/discover\r\n"
-                   b"X-Instructions-Mode: slow\r\nX-Request-ID: rv-instructions-disconnect\r\nContent-Length: "
-                   + str(len(body)).encode() + b"\r\n\r\n" + body)
+        request = instructions_disconnect_request()
         with socket.create_connection((GATEWAY_HOST, 14000), timeout=5) as connection:
             connection.sendall(request)
             deadline = time.monotonic() + 5
