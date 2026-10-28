@@ -11,6 +11,7 @@ from pathlib import Path
 
 from typed_canonical import DESCRIPTOR_MISMATCH_EXIT, canonical_json_sha256, loads_typed
 from verify_auto import EXPLICIT_CASE_NAMES, explicit_baseline_matches
+from instructions_contract import focused_evidence
 
 
 root = Path(os.environ["RUNTIME_EVIDENCE"])
@@ -38,21 +39,10 @@ if os.environ.get("RUNTIME_VERIFY_INSTRUCTIONS") == "1":
     passed = focused["sourceTreeClean"]
     for variant in ("baseline", "candidate"):
         snapshot = json.loads((root / f"instructions-{variant}.json").read_text())
-        expected = snapshot["expectedCases"]
-        rows = snapshot["cases"]
-        complete = (bool(expected) and len(expected) == len(set(expected)) and
-                    Counter(row["case"] for row in rows) == Counter(expected) and
-                    all(row["status"] == "PASS" for row in rows))
         log = (root / f"gateway-instructions-{variant}.log").read_text(errors="replace")
-        accesses = Counter(re.findall(r"access request_id=(\S+) listener=", log))
-        ledger_complete = bool(snapshot["exchanges"]) and all(
-            accesses[exchange["accessRequestId"]] == 1 for exchange in snapshot["exchanges"])
-        # Pin completeness independently of the verifier's emitted list.
-        expected_count = 2 if variant == "baseline" else 29
-        complete = complete and len(expected) == expected_count
-        focused["variants"][variant] = {"cases": len(rows), "complete": complete,
-                                        "accessLedgerComplete": ledger_complete}
-        passed = passed and complete and ledger_complete
+        checks = focused_evidence(snapshot, variant, log)
+        focused["variants"][variant] = checks
+        passed = passed and checks["complete"] and checks["exchangeLedgerComplete"] and checks["accessLedgerComplete"]
     cleanup = (root / "cleanup-proof.txt").read_text().startswith("PASS no containers remain")
     focused["cleanupComplete"] = cleanup
     passed = passed and cleanup

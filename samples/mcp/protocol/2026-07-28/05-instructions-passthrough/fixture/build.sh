@@ -12,9 +12,14 @@ fi
 output=${MCP_DEMO_EVIDENCE:-$MCP_DEMO_RUNTIME/instructions}
 mkdir -p "$output"
 image=localhost/mcp-demo/instructions-sdk:1.0.0
+builder_image=docker.io/library/golang:1.25.0-alpine
+# BuildKit may keep FROM layers only in its own cache, outside image inspect.
+if [[ "$MCP_DEMO_CONTAINER_ENGINE" == docker ]]; then
+  "$MCP_DEMO_CONTAINER_ENGINE" pull "$builder_image"
+fi
 "$MCP_DEMO_CONTAINER_ENGINE" build -t "$image" -f "$CASE_DIR/fixture/Dockerfile" "$CASE_DIR"
 "$MCP_DEMO_CONTAINER_ENGINE" image inspect "$image" --format '{{.Id}}' >"$output/fixture-image-id.txt"
-"$MCP_DEMO_CONTAINER_ENGINE" image inspect docker.io/library/golang:1.25.0-alpine --format '{{.Id}} {{json .RepoDigests}}' >"$output/fixture-builder-image.txt"
+"$MCP_DEMO_CONTAINER_ENGINE" image inspect "$builder_image" --format '{{.Id}} {{json .RepoDigests}}' >"$output/fixture-builder-image.txt"
 if [[ "$MCP_DEMO_CONTAINER_ENGINE" == podman ]]; then
   archive="$output/instructions-sdk-image.tar"
   podman save --format docker-archive -o "$archive" "$image"

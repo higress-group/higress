@@ -15,6 +15,7 @@ from pathlib import Path
 
 import backend
 import generate_envoy
+from instructions_self_test import valid_evidence
 import verify
 
 
@@ -219,12 +220,10 @@ def check_instructions_evidence_rejects_incomplete_runs():
                            SOURCE_SHA="1" * 40, SOURCE_TREE_CLEAN="true", INSTRUCTIONS_BASELINE_SHA="2" * 40,
                            PLUGIN_SHA256="3" * 64, INSTRUCTIONS_BASELINE_PLUGIN_SHA256="4" * 64)
         snapshots = {}
-        for variant, count in (("baseline", 2), ("candidate", 29)):
-            names = [f"case-{index}" for index in range(count)]
-            snapshots[variant] = {"expectedCases": names, "cases": [{"case": name, "status": "PASS"} for name in names],
-                                  "exchanges": [{"accessRequestId": f"request-{variant}"}]}
+        for variant in ("baseline", "candidate"):
+            snapshots[variant], log = valid_evidence(variant)
             (root / f"instructions-{variant}.json").write_text(json.dumps(snapshots[variant]))
-            (root / f"gateway-instructions-{variant}.log").write_text(f"access request_id=request-{variant} listener=fixture code=200\n")
+            (root / f"gateway-instructions-{variant}.log").write_text(log)
         (root / "cleanup-proof.txt").write_text("PASS no containers remain")
         def finalize():
             result = subprocess.run([sys.executable, str(Path(__file__).with_name("finalize_evidence.py"))],
@@ -244,7 +243,7 @@ def check_instructions_evidence_rejects_incomplete_runs():
         require(finalize() == (1, False), "missing focused case accepted")
         (root / "instructions-candidate.json").write_text(json.dumps(snapshots["baseline"]))
         require(finalize() == (1, False), "baseline-only evidence accepted as candidate matrix")
-        (root / "instructions-candidate.json").write_text(json.dumps({**candidate, "cases": candidate["cases"] + [{"case": "case-28", "status": "PASS"}]}))
+        (root / "instructions-candidate.json").write_text(json.dumps({**candidate, "cases": candidate["cases"] + [{"case": "disconnect-late-callback", "status": "PASS"}]}))
         (root / "gateway-instructions-candidate.log").write_text("")
         require(finalize() == (1, False), "missing route access evidence accepted")
 

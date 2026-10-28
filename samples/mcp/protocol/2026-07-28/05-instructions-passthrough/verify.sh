@@ -67,44 +67,36 @@ wait_gateway_access() {
 }
 
 cleanup() {
-  status=$?
+  entry_status=$?
+  status=$entry_status
   trap - EXIT INT TERM
   set +e
-  curl -fsS "$admin/__state" >"$MCP_DEMO_EVIDENCE/final-upstream-state.json"
-  kubectl -n mcp-demo logs deployment/instructions-mcp >"$MCP_DEMO_EVIDENCE/upstream.log" 2>&1
+  curl -fsS "$admin/__state" >"$MCP_DEMO_EVIDENCE/final-upstream-state.json" || status=1
+  kubectl -n mcp-demo logs deployment/instructions-mcp >"$MCP_DEMO_EVIDENCE/upstream.log" 2>&1 || status=1
   if [[ "$status" == 0 ]]; then
     wait_gateway_access || status=1
   else
-    kubectl -n higress-system logs deployment/higress-gateway --since=15m >"$MCP_DEMO_EVIDENCE/gateway.log" 2>&1
+    kubectl -n higress-system logs deployment/higress-gateway --since=15m >"$MCP_DEMO_EVIDENCE/gateway.log" 2>&1 || status=1
   fi
   if [[ "$restore_needed" == 1 ]]; then
     if kubectl apply -f "$restore_file" >"$MCP_DEMO_EVIDENCE/restore.log" 2>&1 &&
        kubectl -n mcp-demo rollout restart deployment/instructions-mcp >>"$MCP_DEMO_EVIDENCE/restore.log" 2>&1 &&
        kubectl -n mcp-demo rollout status deployment/instructions-mcp --timeout=180s >>"$MCP_DEMO_EVIDENCE/restore.log" 2>&1; then
-      python3 - "$restore_file" <<'PY' >"$MCP_DEMO_EVIDENCE/restored-instructions.txt"
+      python3 - "$restore_file" <<'PY' >"$MCP_DEMO_EVIDENCE/restored-instructions.txt" || status=1
 import json,sys
 sys.stdout.write(json.load(open(sys.argv[1]))["data"]["instructions.txt"])
 PY
-      kubectl -n mcp-demo exec deployment/instructions-mcp -- cat /config/instructions.txt >"$MCP_DEMO_EVIDENCE/restored-pod-instructions.txt"
+      kubectl -n mcp-demo exec deployment/instructions-mcp -- cat /config/instructions.txt >"$MCP_DEMO_EVIDENCE/restored-pod-instructions.txt" || status=1
       cmp "$MCP_DEMO_EVIDENCE/restored-instructions.txt" "$MCP_DEMO_EVIDENCE/restored-pod-instructions.txt" || status=1
     else
       status=1
     fi
   fi
-  stop_port_forward instructions-upstream
-  printf 'exit=%s; case port-forward stopped; see restore.log; case resources retained for manual repeat\n' "$status" >"$MCP_DEMO_EVIDENCE/completion.txt"
-  python3 - "$MCP_DEMO_EVIDENCE" "$status" <<'PY_SUMMARY'
-import hashlib,json,sys
-from pathlib import Path
-root=Path(sys.argv[1])
-phases={}
-for phase in ("direct","on","off","changed"):
-    path=root/(phase+".json")
-    if path.exists() and path.stat().st_size:
-        phases[phase]=json.loads(path.read_text())
-(root/"summary.json").write_text(json.dumps({"exitCode":int(sys.argv[2]),"phases":phases},ensure_ascii=False,indent=2)+"\n")
-(root/"SHA256SUMS").write_text("".join(hashlib.sha256(p.read_bytes()).hexdigest()+"  "+p.name+"\n" for p in sorted(root.iterdir()) if p.is_file() and p.name not in ("SHA256SUMS","verify.log")))
-PY_SUMMARY
+  stop_port_forward instructions-upstream || status=1
+  if [[ "$entry_status" != 0 ]]; then status=$entry_status; fi
+  evidence_status=0
+  python3 "$CASE_DIR/finish_evidence.py" "$MCP_DEMO_EVIDENCE" "$status" || evidence_status=$?
+  if [[ "$status" == 0 && "$evidence_status" != 0 ]]; then status=$evidence_status; fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -164,4 +156,4 @@ forward_upstream
   --instructions-file "$CASE_DIR/fixture/instructions-changed.txt" >"$MCP_DEMO_EVIDENCE/changed.json"
 kubectl -n mcp-demo get ingress mcp-2026-instructions-on mcp-2026-instructions-off -o yaml >"$MCP_DEMO_EVIDENCE/ingress.yaml"
 kubectl -n higress-system get wasmplugin mcp-2026-instructions -o yaml >"$MCP_DEMO_EVIDENCE/wasmplugin.yaml"
-printf 'PASS direct S / gateway on S / gateway off absent and no upstream discover / fresh client S-prime\n'
+printf 'SDK phase assertions passed; final evidence and restoration are evaluated during exit cleanup.\n'

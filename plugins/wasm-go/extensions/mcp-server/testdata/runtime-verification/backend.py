@@ -44,6 +44,7 @@ def safe_event(handler, body):
         "authorizationMatchesExplicitPolicy": headers.get("Authorization") == EXPECTED_AUTH,
         "cookiePresent": truthy_header(headers, "Cookie"),
         "sessionPresent": truthy_header(headers, "Mcp-Session-Id"),
+        "fixtureSessionPresent": headers.get("Mcp-Session-Id") == "fixture-upstream-session",
         "lastEventIDPresent": truthy_header(headers, "Last-Event-ID"),
         "internalRoutePresent": truthy_header(headers, "x-envoy-allow-mcp-tools"),
         "unrelatedCredentialPresent": truthy_header(headers, "x-unrelated-credential"),

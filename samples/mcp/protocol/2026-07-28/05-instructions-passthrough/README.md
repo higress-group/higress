@@ -62,6 +62,8 @@ access log 可能缓冲，脚本最多轮询60次等待本次运行的记录，�
 
 health、`/__state` 和 `POST /__reset` 仅作辅助观察和分阶段清空 ledger，不实现 MCP 协议。生成的客户端二进制、SDK 输出、源码/插件/镜像身份、ConfigMap 快照与校验和均写入外部 `MCP_DEMO_EVIDENCE`，不写入 Git。`verify.sh` 不运行 Inspector。
 
+退出清理完成后才写入最终 `summary.json`、`completion.txt` 与 `SHA256SUMS`。阶段 JSON 无效或证据文件写入失败都会使脚本失败，同时继续恢复配置、停止端口转发，并保留原有非零退出码。校验和不包含自身及仍在写入的 `verify.log`。本地可运行 `python3 -m unittest finish_evidence_test cleanup_test` 检查这些故障路径，无需集群。
+
 ## Step 3：手工重复 SDK 调用
 
 `verify.sh` 已将上游配置恢复。重新建立本例端口转发：

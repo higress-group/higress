@@ -97,6 +97,7 @@ def exchange(url, body=None, headers=None, method="POST"):
                 "sessionPresent": "mcp-session-id" in request_headers,
                 "lastEventIDPresent": "last-event-id" in request_headers,
                 "futureParamPresent": "mcp-param-future" in request_headers,
+                **({"instructionsMode": request_headers["x-instructions-mode"]} if "x-instructions-mode" in request_headers else {}),
             },
             "response": {
                 "status": status,
@@ -746,21 +747,36 @@ def modern_proxy():
     return {"upstreamSequence": [event["rpcMethod"] for event in events], "singleStatelessRPC": True, "backendEvents": {"backend-primary": events}}
 
 
+
+def check_modern_to_legacy_events(events):
+    methods = [event["rpcMethod"] for event in events]
+    check(methods == ["initialize", "notifications/initialized", "tools/list", "initialize", "notifications/initialized", "tools/call"], f"legacy exchange not isolated: {events}")
+    for event in events:
+        check(event["cookiePresent"] and event["unrelatedCredentialPresent"], f"ordinary legacy header lost: {event}")
+        check(event["futureParam"] is None, f"modern Mcp-Param crossed legacy boundary: {event}")
+        check(not any(event[key] for key in ("lastEventIDPresent", "internalRoutePresent", "authorizationPresent")), f"controlled legacy header leaked: {event}")
+    sessions = [False, True, True, False, True, True]
+    check([event["sessionPresent"] for event in events] == sessions and
+          [event["fixtureSessionPresent"] for event in events] == sessions,
+          f"legacy handshake did not replace the downstream session: {events}")
+
+
 def modern_to_legacy():
     backend_reset()
+    fixture_headers = {"Cookie": "ordinary-cookie", "x-unrelated-credential": "ordinary-business",
+                       "Authorization": "Bearer downstream-not-policy", "Mcp-Session-Id": "downstream-session",
+                       "Last-Event-ID": "downstream-event", "x-envoy-allow-mcp-tools": "proxy_echo",
+                       "Mcp-Param-Future": "must-not-cross-era"}
     for rpc_method, rpc_id, name, arguments in (
         ("tools/list", "bridge-list", None, None),
         ("tools/call", "bridge-call", "proxy_echo", {"value": "bridge"}),
     ):
-        status, _, response = modern_rpc(10004, rpc_method, rpc_id, name, arguments, {"Mcp-Param-Future": "must-not-cross-era"})
+        status, _, response = modern_rpc(10004, rpc_method, rpc_id, name, arguments, fixture_headers)
         check(status == 200, f"modern-to-legacy failed: {status} {response}")
         result_contract(response, ttl=rpc_method == "tools/list")
     events = backend_state()["events"]
     methods = [event["rpcMethod"] for event in events]
-    check(methods == ["initialize", "notifications/initialized", "tools/list", "initialize", "notifications/initialized", "tools/call"], f"legacy exchange not isolated: {events}")
-    for event in events:
-        check(event["futureParam"] is None, f"modern Mcp-Param crossed legacy boundary: {event}")
-        check(not any(event[key] for key in ("cookiePresent", "lastEventIDPresent", "internalRoutePresent", "unrelatedCredentialPresent", "authorizationPresent")), f"sensitive header leaked: {event}")
+    check_modern_to_legacy_events(events)
     return {"upstreamSequence": methods, "isolatedHandshakes": 2, "backendEvents": {"backend-primary": events}}
 
 
@@ -821,6 +837,19 @@ def auth_and_isolation():
     check(not any(secondary[0][key] for key in ("authorizationPresent", "cookiePresent", "sessionPresent", "lastEventIDPresent", "internalRoutePresent", "unrelatedCredentialPresent")), f"state/header leaked to other origin: {secondary}")
     return {"explicitAuth": True, "preservedStatuses": [401, 403], "postFailureOrigin": "secondary", "backendEvents": {"backend-primary": backend_state()["events"], "backend-secondary": secondary}}
 
+
+
+
+def check_instructions_failure(status, body, mode):
+    if mode in ("http401", "http403"):
+        check(status == int(mode[4:]), f"auth status changed: {status} {body}")
+    else:
+        check(status != 200 or "error" in body, f"failure became local success: {status} {body}")
+    if mode == "rpc-error":
+        check(isinstance(body, dict) and "error" in body and "result" not in body,
+              f"RPC error must exclude result: {body}")
+    check(not isinstance(body, dict) or body.get("result", {}).get("instructions") != "must not extract",
+          "error instructions leaked")
 
 
 def instructions_disconnect_request():
@@ -913,12 +942,7 @@ def instructions_verification():
         def case():
             backend_reset()
             status, _, body = discover(mode=mode)
-            if mode in ("http401", "http403"):
-                check(status == int(mode[4:]), f"auth status changed: {status} {body}")
-            else:
-                check(status != 200 or "error" in body, f"failure became local success: {status} {body}")
-            check(not isinstance(body, dict) or body.get("result", {}).get("instructions") != "must not extract",
-                  "error instructions leaked")
+            check_instructions_failure(status, body, mode)
             check(len(backend_state()["events"]) == 1, "failure path submitted more than once")
             return {"backendEvents": backend_state()["events"]}
         return case
@@ -977,6 +1001,13 @@ def instructions_verification():
             while not backend_state()["events"] and time.monotonic() < deadline:
                 time.sleep(0.01)
             check(len(backend_state()["events"]) == 1, "disconnect request did not reach main route")
+        EXCHANGES.append({"case": CURRENT_CASE, "accessRequestId": "rv-instructions-disconnect",
+                          "transport": "raw-disconnect", "rawRequest": request.decode("utf-8"),
+                          "rawRequestSha256": hashlib.sha256(request).hexdigest(),
+                          "request": {"listenerPort": 14000, "httpMethod": "POST", "path": "/mcp",
+                                      "rpcMethod": "server/discover", "rpcId": "disconnect", "mcpMethod": "server/discover",
+                                      "protocolVersion": MODERN, "instructionsMode": "slow"},
+                          "response": {"status": "client_disconnected"}})
         time.sleep(1.1)
         local(discover(rpc_id="after-disconnect"), "Use the weather tool. 天气", "after-disconnect")
         check(len(backend_state()["events"]) == 2, "late callback affected subsequent request")

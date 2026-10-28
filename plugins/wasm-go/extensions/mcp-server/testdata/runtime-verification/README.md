@@ -37,6 +37,17 @@ a fresh request. Configured Envoy retries are counted separately from a single
 plugin route submission. The disconnect case observes the existing lifecycle;
 it does not assert a new active upstream reset guarantee.
 
+[`instructions_contract.py`](./instructions_contract.py) independently pins the
+baseline's 2 cases/2 exchanges and candidate's 29 cases/33 exchanges. Finalization
+requires every case's exact request IDs and count, matching case/global exchange
+ledgers, and one matching access record per request. The raw disconnect retains
+its submitted HTTP bytes and hash plus Envoy's `code=0 flags=DC` observation; it
+does not invent an HTTP response. Missing, duplicated or substituted cases,
+exchanges and access records fail. RPC-error cases require an error with no
+`result`, even when a mixed upstream envelope contains valid instructions.
+[`instructions_self_test.py`](./instructions_self_test.py) exercises these
+negative controls and ordinary/controlled header checks for the legacy bridge.
+
 `instructions-baseline.json`, `instructions-candidate.json`, access logs,
 image/tool versions, cleanup proof and `instructions-manifest.json` identify
 this as **focused** evidence. Its manifest explicitly does not certify the

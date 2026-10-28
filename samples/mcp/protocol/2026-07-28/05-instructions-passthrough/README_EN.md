@@ -62,6 +62,8 @@ Access logs may be buffered. The script polls up to 60 times for this run's reco
 
 Health, `GET /__state` and `POST /__reset` are auxiliary observation/reset endpoints; they do not implement MCP. The binary, SDK results, source/plugin/image identities, ConfigMap snapshots and checksums go to external `MCP_DEMO_EVIDENCE`. Do not commit them. `verify.sh` does not run Inspector.
 
+Final `summary.json`, `completion.txt` and `SHA256SUMS` are written after exit cleanup. Invalid phase JSON or a failed evidence write makes the script fail while configuration restoration and port-forward cleanup still run; an existing nonzero task exit is preserved. Checksums exclude themselves and the still-open `verify.log`. Run `python3 -m unittest finish_evidence_test cleanup_test` locally to exercise these failure paths without a cluster.
+
 ## Step 3: Repeat an SDK call manually
 
 After `verify.sh` restores the upstream configuration, restart this case's port-forward:
