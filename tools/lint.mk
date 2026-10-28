@@ -14,7 +14,7 @@ lint: ## Run all linter of code sources, including golint, yamllint, whitenoise 
 .PHONY: lint-deps
 lint-deps: ## Everything necessary to lint
 
-GOLANGCI_LINT_FLAGS ?= $(if $(GITHUB_ACTION),--out-format=github-actions)
+GOLANGCI_LINT_FLAGS ?=
 .PHONY: lint.vet
 lint.vet: prebuild
 	go vet ./cmd/... ./pkg/... ./registry/...
