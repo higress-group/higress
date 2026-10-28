@@ -2,12 +2,16 @@ package mcp_session
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-session/common"
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
+	"github.com/stretchr/testify/require"
 )
 
 // Mock implementation of CommonCAPI for testing
@@ -721,4 +725,134 @@ func TestEncodeDataFromSSEUpstream_FragmentedNonEndpointEvent(t *testing.T) {
 	if got != want {
 		t.Errorf("expected client to receive the complete message %q, got %q", want, got)
 	}
+}
+
+// redisCapture is a tiny RESP server that records the raw bytes of every
+// command it receives and answers with ":0". It lets a test observe which Redis
+// backend a publication was sent to without running a real Redis server.
+type redisCapture struct {
+	listener net.Listener
+	mu       sync.Mutex
+	received string
+}
+
+func newRedisCapture(t *testing.T) *redisCapture {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	capture := &redisCapture{listener: listener}
+	go capture.serve()
+	t.Cleanup(func() { _ = listener.Close() })
+	return capture
+}
+
+func (c *redisCapture) Addr() string {
+	return c.listener.Addr().String()
+}
+
+func (c *redisCapture) Received() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.received
+}
+
+func (c *redisCapture) serve() {
+	for {
+		conn, err := c.listener.Accept()
+		if err != nil {
+			return
+		}
+		go c.handle(conn)
+	}
+}
+
+func (c *redisCapture) handle(conn net.Conn) {
+	defer conn.Close()
+	buffer := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buffer)
+		if n > 0 {
+			c.mu.Lock()
+			c.received += string(buffer[:n])
+			c.mu.Unlock()
+			if _, writeErr := conn.Write([]byte(":0\r\n")); writeErr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// newTestSessionRedisClient builds a RedisClient for the mcp-session filter
+// pointing at the given address. The address does not have to be a real Redis
+// server; these tests only care about which backend a publication is routed to.
+func newTestSessionRedisClient(t *testing.T, addr string) *common.RedisClient {
+	t.Helper()
+	redisConfig, err := common.ParseRedisConfig(map[string]interface{}{"address": addr})
+	require.NoError(t, err)
+	client, err := common.NewRedisClient(redisConfig)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+// TestResolveSessionRedisClientKeepsLiveSessionOnItsOwnBackend covers the
+// selection rule: a session with a live SSE subscription keeps using the client
+// that opened the subscription even after mcpServer.redis was hot-updated,
+// while sessions without a subscription use the configured client.
+func TestResolveSessionRedisClientKeepsLiveSessionOnItsOwnBackend(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	configuredClient := newTestSessionRedisClient(t, "127.0.0.1:6390")
+	sessionClient := newTestSessionRedisClient(t, "127.0.0.1:6391")
+
+	f := &filter{config: &config{redisClient: configuredClient}}
+
+	const sessionID = "live-session"
+	common.GlobalSessionRegistry.Register(sessionID, sessionClient)
+	t.Cleanup(func() { common.GlobalSessionRegistry.Unregister(sessionID) })
+
+	require.Same(t, sessionClient, f.resolveSessionRedisClient(sessionID))
+	require.Same(t, configuredClient, f.resolveSessionRedisClient("unknown-session"))
+	require.Nil(t, f.resolveSessionRedisClient(""))
+}
+
+// TestEncodeDataFromRestUpstreamPublishesOnThePinnedBackend reproduces the
+// reported scenario end to end: the session is established against backend A,
+// the configuration is then switched to backend B, and the response of a POST
+// carrying the same sessionId must still be published on backend A.
+func TestEncodeDataFromRestUpstreamPublishesOnThePinnedBackend(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	backendA := newRedisCapture(t)
+	backendB := newRedisCapture(t)
+	sessionClient := newTestSessionRedisClient(t, backendA.Addr())
+	configuredClient := newTestSessionRedisClient(t, backendB.Addr())
+
+	const sessionID = "session-after-hot-update"
+	common.GlobalSessionRegistry.Register(sessionID, sessionClient)
+	t.Cleanup(func() { common.GlobalSessionRegistry.Unregister(sessionID) })
+
+	proxyURL, err := url.Parse("https://example.com/mcp?sessionId=" + sessionID)
+	require.NoError(t, err)
+
+	f := &filter{
+		needProcess: true,
+		matchedRule: common.MatchRule{UpstreamType: common.RestUpstream},
+		config:      &config{redisClient: configuredClient},
+		proxyURL:    proxyURL,
+	}
+
+	buffer := &testBuffer{data: []byte(`{"jsonrpc":"2.0","id":1,"result":"ok"}`)}
+	require.Equal(t, api.Continue, f.EncodeData(buffer, true))
+
+	// Redis command names are case insensitive, so compare the command without
+	// depending on the casing the client happens to use, and check the session
+	// channel separately.
+	receivedA := backendA.Received()
+	require.Contains(t, strings.ToUpper(receivedA), "PUBLISH")
+	require.Contains(t, receivedA, "mcp-server-sse:"+sessionID)
+	require.NotContains(t, strings.ToUpper(backendB.Received()), "PUBLISH")
 }
