@@ -637,6 +637,18 @@ REST-to-MCP 功能使用 [GJSON Template](https://github.com/higress-group/gjson
 用于构造 HTTP 请求 URL、头部和正文：
 - 访问配置值：`.config.字段名`
 - 访问工具参数：`.args.参数名`
+- 访问已解析的上游请求：`.request.method`、`.request.url`、`.request.uri`、`.request.path`、`.request.query`、`.request.scheme`、`.request.host`
+
+`.request` 仅在 `headers` 和 `body` 模板中可用；`url` 模板本身用于生成这些值，不能引用 `.request`。其中 `.request.uri` 是包含路径和查询参数的请求目标，适合作为上游 HMAC 等签名机制的 canonical URI；`.request.url` 是路径和查询参数解析后的完整目标 URL（尚未包含传输层安全方案追加的查询参数）。
+
+```yaml
+requestTemplate:
+  url: "https://api.example.com/items/{id}?fixed=1"
+  method: POST
+  headers:
+  - key: X-Upstream-URI
+    value: "{{.request.uri}}"
+```
 
 模板还提供以下 IP 地址函数：
 

@@ -629,6 +629,18 @@ The REST-to-MCP feature uses the [GJSON Template](https://github.com/higress-gro
 Used to construct HTTP request URLs, headers, and bodies:
 - Access configuration values: `.config.fieldName`
 - Access tool parameters: `.args.paramName`
+- Access the resolved outgoing request: `.request.method`, `.request.url`, `.request.uri`, `.request.path`, `.request.query`, `.request.scheme`, and `.request.host`
+
+The `.request` object is available in header and body templates only; the URL template creates these values and therefore cannot reference them. `.request.uri` contains the escaped path and query string and is suitable as the canonical URI for upstream signing schemes such as HMAC. `.request.url` is the complete target URL after path/query resolution, before transport-level security adds any query parameters.
+
+```yaml
+requestTemplate:
+  url: "https://api.example.com/items/{id}?fixed=1"
+  method: POST
+  headers:
+  - key: X-Upstream-URI
+    value: "{{.request.uri}}"
+```
 
 Templates also provide the following IP address functions:
 
