@@ -170,7 +170,11 @@ func cloneDescriptorValue(value reflect.Value, raw json.RawMessage) any {
 			}
 			cloned.SetMapIndex(key, copy)
 		}
-		return cloned.Interface()
+		// A later Marshaler may rename sibling keys without changing map size.
+		// Keep the captured JSON if the reconstructed Go map no longer matches.
+		if encoded, err := json.Marshal(cloned.Interface()); err == nil && bytes.Equal(encoded, raw) {
+			return cloned.Interface()
+		}
 	case reflect.Slice, reflect.Array:
 		if value.Kind() == reflect.Slice && value.IsNil() {
 			return reflect.Zero(value.Type()).Interface()

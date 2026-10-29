@@ -939,7 +939,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config McpServerConfig, body []b
 		if request != nil {
 			id = request.Envelope.ID
 			ctx.SetContext(utils.CtxJsonRpcClientID, id)
-			ctx.SetContext(utils.CtxJsonRpcNotification, request.Era == protocol.EraModern && request.Envelope.Notification)
+			// Identity and framing failures are rejected before notification policy.
+			// Unknown ordinary methods retain the existing empty acknowledgement.
+			ctx.SetContext(utils.CtxJsonRpcNotification, request.Era == protocol.EraModern && request.Envelope.Notification && protocolError.Code == protocol.CodeMethodNotFound)
 		}
 		utils.SendProtocolError(ctx, id, protocolError, "mcp_modern_request_rejected")
 		return types.ActionContinue

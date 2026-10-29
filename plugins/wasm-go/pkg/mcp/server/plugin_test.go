@@ -921,6 +921,43 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		}
 	}
 
+	for _, test := range []struct {
+		name, method, nameHeader, params string
+		status                           uint32
+		code                             int
+	}{
+		{"body version", "tools/list", "", `{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-03-26"}}`, 400, protocol.CodeUnsupportedVersion},
+		{"missing metadata", "tools/list", "", `{}`, 400, protocol.CodeHeaderMismatch},
+		{"method conflict", "tools/call", "echo", `{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`, 400, protocol.CodeHeaderMismatch},
+		{"name conflict", "tools/call", "different", `{"name":"echo","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`, 400, protocol.CodeHeaderMismatch},
+		{"unknown method", "ordinary/unknown", "", `{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`, 202, 0},
+		{"cancel notification", "notifications/cancelled", "", `{"requestId":1,"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`, 202, 0},
+	} {
+		t.Run("notification admission/"+test.name, func(t *testing.T) {
+			host := newHost(t)
+			headers := append(commonHeaders(), [2]string{protocol.HeaderProtocolVersion, "2026-07-28"}, [2]string{protocol.HeaderMethod, test.method})
+			if test.nameHeader != "" {
+				headers = append(headers, [2]string{protocol.HeaderName, test.nameHeader})
+			}
+			method := test.method
+			if test.name == "method conflict" {
+				method = "tools/list"
+			}
+			body := []byte(`{"jsonrpc":"2.0","method":"` + method + `","params":` + test.params + `}`)
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+			host.CallOnHttpRequestBody(body)
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			assert.Equal(t, test.status, response.StatusCode)
+			if test.status == 202 {
+				assert.Empty(t, response.Data)
+			} else {
+				assert.Equal(t, int64(test.code), gjson.GetBytes(response.Data, "error.code").Int())
+			}
+			assert.Empty(t, host.GetHttpCalloutAttributes(), "admission must not dispatch upstream")
+		})
+	}
+
 	t.Run("large legacy marker string remains legacy", func(t *testing.T) {
 		host := newHost(t)
 		action := host.CallOnHttpRequestHeaders(commonHeaders())

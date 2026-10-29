@@ -653,3 +653,27 @@ func TestDescriptorSnapshotRetainsBytesCapturedBeforeSiblingMarshaler(t *testing
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"bytes":"AQ==","z":true}`, string(encoded), "the snapshot must retain the completed serialization")
 }
+
+type descriptorKeyMutator struct {
+	siblings map[string]any
+	calls    *int
+}
+
+func (value descriptorKeyMutator) MarshalJSON() ([]byte, error) {
+	*value.calls++
+	value.siblings["new"] = value.siblings["old"]
+	delete(value.siblings, "old")
+	return []byte(`true`), nil
+}
+func TestDescriptorSnapshotRetainsKeysCapturedBeforeSiblingMarshaler(t *testing.T) {
+	value := map[string]any{"old": "captured"}
+	calls := 0
+	value["z"] = descriptorKeyMutator{siblings: value, calls: &calls}
+	cloned, serializable := cloneRegistrySchema(value)
+	require.True(t, serializable)
+	require.Contains(t, value, "new")
+	encoded, err := json.Marshal(cloned)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"old":"captured","z":true}`, string(encoded))
+	assert.Equal(t, 1, calls, "reads use the completed serialization")
+}
