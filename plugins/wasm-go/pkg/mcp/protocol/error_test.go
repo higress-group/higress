@@ -46,12 +46,6 @@ func TestModernErrorDataSerialization(t *testing.T) {
 				Sampling: &SamplingCapabilities{Tools: &JSONObject{}},
 			}},
 		},
-		{
-			name:          "schema validation unavailable",
-			protocolError: SchemaValidationUnavailable(),
-			wantCode:      CodeInternalError,
-			wantData:      ErrorData{Reason: "schema_validation_unavailable"},
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

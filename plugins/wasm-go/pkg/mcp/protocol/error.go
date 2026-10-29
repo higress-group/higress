@@ -98,15 +98,6 @@ func MethodNotAllowed() *Error {
 	return newError(405, CodeInvalidRequest, "HTTP method not supported on this MCP endpoint")
 }
 
-// SchemaValidationUnavailable reports that a safely published tool descriptor
-// cannot be compiled by the server's bounded validator. Tool execution has not
-// started, so this is a handled JSON-RPC server error rather than a tool result.
-func SchemaValidationUnavailable() *Error {
-	protocolError := newError(200, CodeInternalError, "tool input schema validation is unavailable")
-	protocolError.Data = &ErrorData{Reason: "schema_validation_unavailable"}
-	return protocolError
-}
-
 func UnsupportedMediaType() *Error {
 	return newError(415, CodeInvalidRequest, "unsupported Content-Type")
 }

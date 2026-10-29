@@ -55,7 +55,6 @@ func (cs *ComposedMCPServer) GetMCPTools() map[string]Tool {
 				inputSchema:             toolInfo.InputSchema,
 				inputSchemaSerializable: toolInfo.inputSchemaSerializable,
 				outputSchema:            toolInfo.OutputSchema, // New field for MCP Protocol Version 2025-06-18
-				legacyOnly:              toolInfo.LegacyOnly,
 			}
 		}
 	}
@@ -95,7 +94,6 @@ type DescriptiveTool struct {
 	inputSchema             map[string]any
 	inputSchemaSerializable bool
 	outputSchema            map[string]any // New field for MCP Protocol Version 2025-06-18
-	legacyOnly              bool
 }
 
 // Create for DescriptiveTool should not be called.
@@ -107,7 +105,6 @@ func (dt *DescriptiveTool) Create(params []byte) Tool {
 		inputSchema:             dt.inputSchema,
 		inputSchemaSerializable: dt.inputSchemaSerializable,
 		outputSchema:            dt.outputSchema,
-		legacyOnly:              dt.legacyOnly,
 	}
 }
 
@@ -134,8 +131,4 @@ func (dt *DescriptiveTool) capturedInputSchema() (map[string]any, bool) {
 // OutputSchema returns the tool's output schema (MCP Protocol Version 2025-06-18).
 func (dt *DescriptiveTool) OutputSchema() map[string]any {
 	return dt.outputSchema
-}
-
-func (dt *DescriptiveTool) legacyOnlyInputSchema() bool {
-	return dt.legacyOnly
 }

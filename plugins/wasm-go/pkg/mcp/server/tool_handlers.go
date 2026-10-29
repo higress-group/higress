@@ -14,201 +14,69 @@
 package server
 
 import (
-	"fmt"
+	"bytes"
+	"encoding"
+	"encoding/json"
+	"reflect"
 	"sort"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
-)
-
-type directToolSchemaState uint8
-
-const (
-	directToolSchemaValidated directToolSchemaState = iota
-	directToolSchemaValidationUnavailable
-	directToolSchemaExplicitLegacyOnly
+	"github.com/tidwall/gjson"
 )
 
 type directToolEntry struct {
 	name         string
 	description  string
 	inputSchema  map[string]any
-	validator    *compiledInputSchema
-	schemaState  directToolSchemaState
+	outputSchema map[string]any
 	serializable bool
 	tool         Tool
 }
 
-// directToolSnapshot binds discovery and invocation to one analyzed tool
-// generation. It is immutable after configuration publication.
+// directToolSnapshot owns descriptors for one published generation. Tool
+// execution continues to use the server's historical lookup/Create/Call path.
 type directToolSnapshot struct {
-	ordered    []directToolEntry
-	byName     map[string]directToolEntry
-	legacyOnly map[string]string
-	degraded   []directToolDiagnostic
-}
-
-type directToolDiagnostic struct {
-	name   string
-	reason schemaDiagnosticReason
-	detail string
+	ordered []directToolEntry
 }
 
 type capturedInputSchemaTool interface {
 	capturedInputSchema() (map[string]any, bool)
 }
 
-func compileDirectToolSnapshot(server Server) directToolSnapshot {
+func captureDirectToolSnapshot(server Server) directToolSnapshot {
 	entries := snapshotTools(server)
-	snapshot := directToolSnapshot{
-		ordered:    make([]directToolEntry, 0, len(entries)),
-		byName:     make(map[string]directToolEntry, len(entries)),
-		legacyOnly: make(map[string]string),
-	}
+	snapshot := directToolSnapshot{ordered: make([]directToolEntry, 0, len(entries))}
 	for _, entry := range entries {
-		var descriptor map[string]any
+		var input map[string]any
 		var serializable bool
-		var validator *compiledInputSchema
-		var preparationErr error
 		if captured, ok := entry.tool.(capturedInputSchemaTool); ok {
-			descriptor, serializable = captured.capturedInputSchema()
+			input, serializable = captured.capturedInputSchema()
 			if serializable {
-				descriptor, serializable, validator, preparationErr = prepareToolInputSchema(descriptor)
-			} else {
-				preparationErr = schemaCompileError(schemaDiagnosticSerializationFailure, "input schema is not JSON-compatible")
+				input, serializable = cloneRegistrySchema(input)
 			}
 		} else {
-			descriptor, serializable, validator, preparationErr = prepareToolInputSchema(entry.tool.InputSchema())
+			input, serializable = cloneRegistrySchema(entry.tool.InputSchema())
 		}
-		if compatibility, ok := entry.tool.(legacySchemaCompatibleTool); ok && compatibility.legacyOnlyInputSchema() {
-			reason := "configured as legacy-only"
-			if preparationErr != nil {
-				reason = preparationErr.Error()
-			}
-			snapshot.legacyOnly[entry.name] = reason
-			explicit := directToolEntry{
-				name:         entry.name,
-				description:  entry.tool.Description(),
-				inputSchema:  descriptor,
-				validator:    validator,
-				schemaState:  directToolSchemaExplicitLegacyOnly,
-				serializable: serializable,
-				tool:         entry.tool,
-			}
-			snapshot.ordered = append(snapshot.ordered, explicit)
-			snapshot.byName[entry.name] = explicit
-			continue
+		var output map[string]any
+		if tool, ok := entry.tool.(ToolWithOutputSchema); ok {
+			var outputSerializable bool
+			output, outputSerializable = cloneRegistrySchema(tool.OutputSchema())
+			serializable = serializable && outputSerializable
 		}
-		state := directToolSchemaValidated
-		var reason schemaDiagnosticReason
-		if preparationErr != nil {
-			state = directToolSchemaValidationUnavailable
-			reason = schemaPreparationDiagnosticReason(preparationErr)
-		}
-		validated := directToolEntry{
-			name:         entry.name,
-			description:  entry.tool.Description(),
-			inputSchema:  descriptor,
-			validator:    validator,
-			schemaState:  state,
-			serializable: serializable,
-			tool:         entry.tool,
-		}
-		snapshot.ordered = append(snapshot.ordered, validated)
-		snapshot.byName[entry.name] = validated
-		if state == directToolSchemaValidationUnavailable {
-			snapshot.degraded = append(snapshot.degraded, directToolDiagnostic{
-				name:   entry.name,
-				reason: reason,
-				detail: boundedSchemaDiagnosticField(preparationErr.Error(), maxSchemaDiagnosticDetailRunes),
-			})
-		}
+		snapshot.ordered = append(snapshot.ordered, directToolEntry{
+			name: entry.name, description: entry.tool.Description(), inputSchema: input,
+			outputSchema: output, serializable: serializable, tool: entry.tool,
+		})
 	}
 	return snapshot
 }
 
-const (
-	maxSchemaDiagnosticRecords       = 8
-	maxSchemaDiagnosticServerRunes   = 128
-	maxSchemaDiagnosticToolNameRunes = 128
-	maxSchemaDiagnosticDetailRunes   = 256
-	maxSchemaDiagnosticWarningRunes  = 8192
-)
-
-func boundedSchemaDiagnosticToolName(name string) string {
-	return boundedSchemaDiagnosticField(name, maxSchemaDiagnosticToolNameRunes)
-}
-
-func boundedSchemaDiagnosticField(value string, limit int) string {
-	clean := strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
-			return ' '
-		}
-		return r
-	}, value)
-	runes := []rune(clean)
-	if len(runes) <= limit {
-		return clean
-	}
-	return string(runes[:limit]) + "..."
-}
-
-func quoteSchemaDiagnosticField(value string) string {
-	// The bounded fields contain no control characters. Quote the two remaining
-	// delimiters so one tool cannot make another record ambiguous.
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
-}
-
-func (snapshot directToolSnapshot) degradedPublicationWarning(serverName string) string {
-	return snapshot.degradedPublicationWarningWithin(serverName, maxSchemaDiagnosticWarningRunes)
-}
-
-func (snapshot directToolSnapshot) degradedPublicationWarningWithin(serverName string, warningRuneLimit int) string {
-	if len(snapshot.degraded) == 0 {
-		return ""
-	}
-	diagnostics := append([]directToolDiagnostic(nil), snapshot.degraded...)
-	sort.Slice(diagnostics, func(i, j int) bool {
-		if diagnostics[i].name != diagnostics[j].name {
-			return diagnostics[i].name < diagnostics[j].name
-		}
-		if diagnostics[i].reason != diagnostics[j].reason {
-			return diagnostics[i].reason < diagnostics[j].reason
-		}
-		return diagnostics[i].detail < diagnostics[j].detail
-	})
-	recordCount := min(len(diagnostics), maxSchemaDiagnosticRecords)
-	records := make([]string, 0, recordCount)
-	for _, diagnostic := range diagnostics[:recordCount] {
-		tool := boundedSchemaDiagnosticToolName(diagnostic.name)
-		detail := boundedSchemaDiagnosticField(diagnostic.detail, maxSchemaDiagnosticDetailRunes)
-		records = append(records, fmt.Sprintf("{tool=%s reason=%s detail=%s}",
-			quoteSchemaDiagnosticField(tool), diagnostic.reason.String(), quoteSchemaDiagnosticField(detail)))
-	}
-	server := boundedSchemaDiagnosticField(serverName, maxSchemaDiagnosticServerRunes)
-	warning := fmt.Sprintf("Direct tools published without local schema validation: server=%s total=%d records=[%s] omitted=%d; modern tools/call will be rejected; legacy calls remain available",
-		quoteSchemaDiagnosticField(server), len(diagnostics), strings.Join(records, ","), len(diagnostics)-recordCount)
-	if utf8.RuneCountInString(warning) <= warningRuneLimit {
-		return warning
-	}
-	// This defensive fallback preserves the aggregate signal if future format
-	// changes accidentally outgrow the complete-line budget.
-	return fmt.Sprintf("Direct tools published without local schema validation: server=%s total=%d records=[] omitted=%d; modern tools/call will be rejected; legacy calls remain available",
-		quoteSchemaDiagnosticField(server), len(diagnostics), len(diagnostics))
-}
-
-type legacySchemaCompatibleTool interface {
-	legacyOnlyInputSchema() bool
-}
-
-func (snapshot directToolSnapshot) buildModernToolList(effectiveAllowTools *map[string]struct{}) []map[string]any {
+func (snapshot directToolSnapshot) buildToolList(effectiveAllowTools *map[string]struct{}) []map[string]any {
 	tools := make([]map[string]any, 0, len(snapshot.ordered))
 	for _, entry := range snapshot.ordered {
-		if entry.schemaState == directToolSchemaExplicitLegacyOnly || !entry.serializable {
+		if !entry.serializable {
 			continue
 		}
 		if effectiveAllowTools != nil {
@@ -216,14 +84,140 @@ func (snapshot directToolSnapshot) buildModernToolList(effectiveAllowTools *map[
 				continue
 			}
 		}
-		tool := map[string]any{
-			"name":        entry.name,
-			"description": entry.description,
-			"inputSchema": entry.inputSchema,
+		input, _ := cloneRegistrySchema(entry.inputSchema)
+		tool := map[string]any{"name": entry.name, "description": entry.description, "inputSchema": input}
+		if len(entry.outputSchema) > 0 {
+			tool["outputSchema"], _ = cloneRegistrySchema(entry.outputSchema)
 		}
 		tools = append(tools, tool)
 	}
 	return tools
+}
+
+// cloneRegistrySchema uses normal JSON serialization to define what can be
+// published. The copy preserves plain Go values for existing registry callers;
+// custom/opaque values freeze to their serialized JSON instead of sharing state.
+func cloneRegistrySchema(schema map[string]any) (map[string]any, bool) {
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return nil, false
+	}
+	if schema == nil {
+		return nil, true
+	}
+	if cloned, ok := cloneDescriptorValue(reflect.ValueOf(schema), raw).(map[string]any); ok {
+		return cloned, true
+	}
+	// A Marshaler may change its source containers while encoding. Preserve
+	// the completed JSON even when its original Go shape no longer matches.
+	members, _ := protocol.DecodeBusinessJSONObject(raw)
+	cloned := make(map[string]any, len(members))
+	for name, value := range members {
+		cloned[name] = json.RawMessage(bytes.Clone(value))
+	}
+	return cloned, true
+}
+
+func cloneDescriptorValue(value reflect.Value, raw json.RawMessage) any {
+	for value.IsValid() && value.Kind() == reflect.Interface {
+		value = value.Elem()
+	}
+	if !value.IsValid() {
+		return nil
+	}
+	if _, ok := value.Interface().(json.Marshaler); ok {
+		return json.RawMessage(bytes.Clone(raw))
+	}
+	if _, ok := value.Interface().(encoding.TextMarshaler); ok {
+		return json.RawMessage(bytes.Clone(raw))
+	}
+	if value.CanAddr() {
+		if _, ok := value.Addr().Interface().(json.Marshaler); ok {
+			return json.RawMessage(bytes.Clone(raw))
+		}
+		if _, ok := value.Addr().Interface().(encoding.TextMarshaler); ok {
+			return json.RawMessage(bytes.Clone(raw))
+		}
+	}
+	switch value.Kind() {
+	case reflect.Map:
+		if value.Type().Key().Kind() != reflect.String {
+			break
+		}
+		if value.IsNil() {
+			return reflect.Zero(value.Type()).Interface()
+		}
+		keys := value.MapKeys()
+		sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+		// Match encoding/json's string-key order. Looking up normalized key
+		// strings would lose distinct Go keys containing invalid UTF-8 bytes.
+		children := make([]json.RawMessage, 0, len(keys))
+		gjson.ParseBytes(raw).ForEach(func(_, child gjson.Result) bool {
+			children = append(children, raw[child.Index:child.Index+len(child.Raw)])
+			return true
+		})
+		if len(children) != len(keys) {
+			break
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		for index, key := range keys {
+			copy := reflect.ValueOf(cloneDescriptorValue(value.MapIndex(key), children[index]))
+			if !copy.IsValid() {
+				copy = reflect.Zero(value.Type().Elem())
+			}
+			if !copy.Type().AssignableTo(value.Type().Elem()) {
+				return json.RawMessage(bytes.Clone(raw))
+			}
+			cloned.SetMapIndex(key, copy)
+		}
+		return cloned.Interface()
+	case reflect.Slice, reflect.Array:
+		if value.Kind() == reflect.Slice && value.IsNil() {
+			return reflect.Zero(value.Type()).Interface()
+		}
+		// JSON encodes byte slices as strings, which must remain byte slices in
+		// Go views. RawMessage was already frozen through its Marshaler above.
+		if value.Kind() == reflect.Slice && value.Type().Elem().Kind() == reflect.Uint8 {
+			cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+			reflect.Copy(cloned, value)
+			return cloned.Interface()
+		}
+		var cloned reflect.Value
+		if value.Kind() == reflect.Array {
+			cloned = reflect.New(value.Type()).Elem()
+		} else {
+			cloned = reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		}
+		index, compatible := 0, true
+		gjson.ParseBytes(raw).ForEach(func(_, child gjson.Result) bool {
+			if index >= value.Len() {
+				compatible = false
+				return false
+			}
+			copy := reflect.ValueOf(cloneDescriptorValue(value.Index(index), raw[child.Index:child.Index+len(child.Raw)]))
+			if !copy.IsValid() {
+				copy = reflect.Zero(value.Type().Elem())
+			}
+			if !copy.Type().AssignableTo(value.Type().Elem()) {
+				compatible = false
+				return false
+			}
+			cloned.Index(index).Set(copy)
+			index++
+			return true
+		})
+		if compatible && index == value.Len() {
+			return cloned.Interface()
+		}
+	case reflect.Bool, reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr, reflect.Float32, reflect.Float64:
+		if encoded, err := json.Marshal(value.Interface()); err == nil && bytes.Equal(encoded, raw) {
+			return value.Interface()
+		}
+	}
+	// Serialization succeeded already. Unusual Go shapes need no special
+	// visitor support and must never become a new descriptor admission gate.
+	return json.RawMessage(bytes.Clone(raw))
 }
 
 func installDirectToolResultAdapter(ctx wrapper.HttpContext, serverName string) {
@@ -238,21 +232,4 @@ func installDirectToolResultAdapter(ctx wrapper.HttpContext, serverName string) 
 			ResultType: resultTypeComplete,
 		})
 	})
-}
-
-func sendToolExecutionError(ctx wrapper.HttpContext, err error, debugInfo string) {
-	utils.OnMCPToolCallError(ctx, err, debugInfo)
-}
-
-func sendSchemaValidationUnavailable(ctx wrapper.HttpContext) {
-	request, modern := ModernRequestContext(ctx)
-	if !modern {
-		return
-	}
-	utils.SendProtocolError(
-		ctx,
-		request.Envelope.ID,
-		protocol.SchemaValidationUnavailable(),
-		"schema_validation_unavailable",
-	)
 }

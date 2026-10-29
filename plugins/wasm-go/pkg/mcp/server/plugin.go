@@ -37,16 +37,10 @@ import (
 )
 
 const (
-	DefaultMaxBodyBytes        = protocol.LegacyMaxBodyBytes
-	GlobalToolRegistryKey      = "GlobalToolRegistry"
-	schemaValidationMetricsKey = "SchemaValidationMetrics"
-	DefaultServerVersion       = "1.0.0"
+	DefaultMaxBodyBytes   = protocol.LegacyMaxBodyBytes
+	GlobalToolRegistryKey = "GlobalToolRegistry"
+	DefaultServerVersion  = "1.0.0"
 )
-
-type schemaValidationMetrics struct {
-	degradedPublished proxywasm.MetricCounter
-	modernCallBlocked proxywasm.MetricCounter
-}
 
 // SupportedMCPVersions contains all supported MCP protocol versions
 var SupportedMCPVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
@@ -196,7 +190,7 @@ type ToolInfo struct {
 	InputSchema             map[string]any
 	inputSchemaSerializable bool
 	OutputSchema            map[string]any // New field for MCP Protocol Version 2025-06-18
-	LegacyOnly              bool           // Explicitly unavailable to modern direct-tool profiles
+	LegacyOnly              bool           // Deprecated: accepted for source compatibility; ignored at runtime
 	ServerName              string         // Original server name
 	Tool                    Tool           // The actual tool instance for cloning
 }
@@ -215,14 +209,6 @@ func (r *GlobalToolRegistry) Initialize() {
 	r.serverTools = make(map[string]map[string]ToolInfo)
 }
 
-// cloneRegistrySchema owns bounded JSON container data without changing the
-// concrete Go types of primitive values. Arbitrary marshalers, pointers, and
-// structs are deliberately not traversed.
-func cloneRegistrySchema(schema map[string]any) (map[string]any, bool) {
-	cloned, err := cloneSchemaSnapshot(schema)
-	return cloned, err == nil
-}
-
 // RegisterTool registers a tool into the global registry.
 func (r *GlobalToolRegistry) RegisterTool(serverName string, toolName string, tool Tool) {
 	inputSchema, inputSchemaSerializable := cloneRegistrySchema(tool.InputSchema())
@@ -238,16 +224,14 @@ func (r *GlobalToolRegistry) RegisterTool(serverName string, toolName string, to
 	if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
 		toolInfo.OutputSchema, _ = cloneRegistrySchema(toolWithSchema.OutputSchema())
 	}
-	if compatibility, ok := tool.(legacySchemaCompatibleTool); ok {
-		toolInfo.LegacyOnly = compatibility.legacyOnlyInputSchema()
-	}
+
 	r.registerToolInfo(toolInfo)
 }
 
-// registerPreparedTool publishes the descriptor already captured for the
-// direct generation. It must not call Description or InputSchema again: those
-// getters may be stateful and their returned maps remain caller-owned.
-func (r *GlobalToolRegistry) registerPreparedTool(serverName string, entry directToolEntry) {
+// registerCapturedTool publishes the descriptor already captured for the
+// direct generation. It must not call descriptor getters again: they may be
+// stateful and their returned maps remain caller-owned.
+func (r *GlobalToolRegistry) registerCapturedTool(serverName string, entry directToolEntry) {
 	inputSchema := entry.inputSchema
 	inputSchemaSerializable := entry.serializable
 	if inputSchemaSerializable {
@@ -258,13 +242,10 @@ func (r *GlobalToolRegistry) registerPreparedTool(serverName string, entry direc
 		Description:             entry.description,
 		InputSchema:             inputSchema,
 		inputSchemaSerializable: inputSchemaSerializable,
-		LegacyOnly:              entry.schemaState == directToolSchemaExplicitLegacyOnly,
 		ServerName:              serverName,
 		Tool:                    entry.tool,
 	}
-	if toolWithSchema, ok := entry.tool.(ToolWithOutputSchema); ok {
-		toolInfo.OutputSchema, _ = cloneRegistrySchema(toolWithSchema.OutputSchema())
-	}
+	toolInfo.OutputSchema, _ = cloneRegistrySchema(entry.outputSchema)
 	r.registerToolInfo(toolInfo)
 }
 
@@ -302,10 +283,6 @@ func onPluginStartOrReload(context wrapper.PluginContext) error {
 	toolRegistry := &GlobalToolRegistry{}
 	toolRegistry.Initialize()
 	context.SetContext(GlobalToolRegistryKey, toolRegistry)
-	context.SetContext(schemaValidationMetricsKey, &schemaValidationMetrics{
-		degradedPublished: proxywasm.DefineCounterMetric("mcp_server_schema_validation_unavailable_published_total"),
-		modernCallBlocked: proxywasm.DefineCounterMetric("mcp_server_schema_validation_unavailable_call_blocked_total"),
-	})
 	context.EnableRuleLevelConfigIsolation()
 	return nil
 }
@@ -377,7 +354,6 @@ type McpServerConfig struct {
 	toolSet        *ToolSetConfig // Parsed toolset configuration
 	isComposed     bool
 	directTools    directToolSnapshot
-	schemaMetrics  *schemaValidationMetrics
 }
 
 // GetServerName returns the server name for external access
@@ -456,31 +432,6 @@ func computeEffectiveAllowToolsFromHeader(configAllowTools *map[string]struct{},
 		}
 		return &intersection
 	}
-}
-
-func buildToolList(server Server, effectiveAllowTools *map[string]struct{}, includeOutputSchema bool) []map[string]any {
-	var listedTools []map[string]any
-	for _, entry := range snapshotTools(server) {
-		if effectiveAllowTools != nil {
-			if _, allow := (*effectiveAllowTools)[entry.name]; !allow {
-				continue
-			}
-		}
-		toolDef := map[string]any{
-			"name":        entry.name,
-			"description": entry.tool.Description(),
-			"inputSchema": entry.tool.InputSchema(),
-		}
-		if includeOutputSchema {
-			if toolWithSchema, ok := entry.tool.(ToolWithOutputSchema); ok {
-				if outputSchema := toolWithSchema.OutputSchema(); len(outputSchema) > 0 {
-					toolDef["outputSchema"] = outputSchema
-				}
-			}
-		}
-		listedTools = append(listedTools, toolDef)
-	}
-	return listedTools
 }
 
 // parseConfigCore contains the core config parsing logic with dependency injection
@@ -625,7 +576,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				if serverInstance, exist := opts.Servers[config.serverName]; exist {
 					clonedServer := serverInstance.Clone()
 					clonedServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
-					directTools := compileDirectToolSnapshot(clonedServer)
+					directTools := captureDirectToolSnapshot(clonedServer)
 					config.server = clonedServer
 					config.directTools = directTools
 				} else {
@@ -637,19 +588,17 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		return errors.New("either 'server' or 'toolSet' field must be present in the configuration")
 	}
 
-	// Proxy descriptors remain upstream-owned and transparent. Direct tools use
-	// one analyzed snapshot for modern discovery and invocation. Every
-	// schema-derived preparation failure retains an explicit
-	// validation-unavailable state and cannot reject configuration publication.
+	// Proxy descriptors remain upstream-owned. Both direct profiles publish the
+	// same isolated JSON descriptor generation without schema admission gates.
 	if config.server != nil {
-		if _, isProxy := config.server.(*McpProxyServer); !isProxy && config.directTools.byName == nil {
-			config.directTools = compileDirectToolSnapshot(config.server)
+		if _, isProxy := config.server.(*McpProxyServer); !isProxy && config.directTools.ordered == nil {
+			config.directTools = captureDirectToolSnapshot(config.server)
 		}
 		if _, isProxy := config.server.(*McpProxyServer); !isProxy && !config.isComposed {
 			// Publish direct tools to the shared registry only after the complete
-			// generation snapshot has captured each tool's validation state.
+			// generation snapshot has captured each tool descriptor.
 			for _, entry := range config.directTools.ordered {
-				opts.ToolRegistry.registerPreparedTool(config.serverName, entry)
+				opts.ToolRegistry.registerCapturedTool(config.serverName, entry)
 			}
 		}
 	}
@@ -723,7 +672,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			utils.OnMCPResponseError(ctx, errors.New("method not found:server/discover"), utils.ErrMethodNotFound, fmt.Sprintf("mcp:%s:server/discover:legacy", currentServerNameForHandlers))
 			return nil
 		}
-		toolsAvailable := modernMethodPolicy(*config, "tools/list").Available &&
+		toolsAvailable := !config.isComposed && modernMethodPolicy(*config, "tools/list").Available &&
 			modernMethodPolicy(*config, "tools/call").Available
 		result := ShapeResult(request, currentServerNameForHandlers, DiscoveryResult(toolsAvailable))
 		if proxyServer, ok := config.server.(*McpProxyServer); ok && proxyServer.passthroughInstructions {
@@ -748,15 +697,8 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		config.methodHandlers["tools/list"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
 			// Compute effective allowTools using helper function
 			effectiveAllowTools := computeEffectiveAllowTools(allowTools)
-			request, modern := ModernRequestContext(ctx)
-			var tools []map[string]any
-			if modern {
-				// The modern descriptor comes from the same analyzed snapshot used by
-				// tools/call and deliberately omits unvalidated outputSchema.
-				tools = config.directTools.buildModernToolList(effectiveAllowTools)
-			} else {
-				tools = buildToolList(config.server, effectiveAllowTools, true)
-			}
+			request, _ := ModernRequestContext(ctx)
+			tools := config.directTools.buildToolList(effectiveAllowTools)
 			semantic := protocol.SemanticResult{
 				Value: map[string]any{
 					"tools": tools,
@@ -797,45 +739,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				}
 			}
 
-			var toolToCall Tool
-			var ok bool
-			if _, modern := ModernRequestContext(ctx); modern {
-				validatedTool, exists := config.directTools.byName[toolName]
-				if exists {
-					if validatedTool.schemaState == directToolSchemaExplicitLegacyOnly {
-						reason := config.directTools.legacyOnly[toolName]
-						sendToolExecutionError(
-							ctx,
-							fmt.Errorf("tool %q is unavailable in the modern profile because its input schema cannot be validated: %s", toolName, reason),
-							fmt.Sprintf("mcp:%s:tools/call:legacy_only_schema", currentServerNameForHandlers),
-						)
-						return nil
-					}
-					if validatedTool.schemaState == directToolSchemaValidationUnavailable {
-						if config.schemaMetrics != nil {
-							config.schemaMetrics.modernCallBlocked.Increment(1)
-						}
-						sendSchemaValidationUnavailable(ctx)
-						return nil
-					}
-					if validatedTool.schemaState != directToolSchemaValidated || validatedTool.validator == nil {
-						utils.OnMCPResponseError(ctx, errors.New("tool validation state is invalid"), utils.ErrInternalError, fmt.Sprintf("mcp:%s:tools/call:invalid_validation_state", currentServerNameForHandlers))
-						return nil
-					}
-					if err := validatedTool.validator.validateArguments(args.Raw); err != nil {
-						sendToolExecutionError(
-							ctx,
-							fmt.Errorf("invalid arguments for tool %q: %w", toolName, err),
-							fmt.Sprintf("mcp:%s:tools/call:invalid_arguments", currentServerNameForHandlers),
-						)
-						return nil
-					}
-					toolToCall = validatedTool.tool
-					ok = true
-				}
-			} else {
-				toolToCall, ok = config.server.GetMCPTools()[toolName]
-			}
+			toolToCall, ok := config.server.GetMCPTools()[toolName]
 			if !ok {
 				utils.OnMCPResponseError(ctx, fmt.Errorf("unknown tool: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:invalid_tool_name", currentServerNameForHandlers))
 				return nil
@@ -857,7 +761,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				unregisterCancellation()
 			}
 			if err != nil {
-				sendToolExecutionError(ctx, err, fmt.Sprintf("mcp:%s:tools/call:error", currentServerNameForHandlers))
+				utils.OnMCPToolCallError(ctx, err, fmt.Sprintf("mcp:%s:tools/call:error", currentServerNameForHandlers))
 				return nil
 			}
 			return nil
@@ -887,20 +791,7 @@ func parseConfig(context wrapper.PluginContext, configJson gjson.Result, config 
 		ToolRegistry: registry,
 	}
 
-	// Publish diagnostics only after the complete generation has compiled.
-	if err := parseConfigCore(configJson, config, opts); err != nil {
-		return err
-	}
-	if metrics, ok := context.GetContext(schemaValidationMetricsKey).(*schemaValidationMetrics); ok {
-		config.schemaMetrics = metrics
-		if count := len(config.directTools.degraded); count > 0 {
-			metrics.degradedPublished.Increment(uint64(count))
-		}
-	}
-	if warning := config.directTools.degradedPublicationWarning(config.serverName); warning != "" {
-		log.Warn(warning)
-	}
-	return nil
+	return parseConfigCore(configJson, config, opts)
 }
 
 func Load(options ...CtxOption) {
@@ -1066,12 +957,6 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config McpServerConfig, body []b
 }
 
 func modernMethodPolicy(config McpServerConfig, method string) protocol.MethodPolicy {
-	if method == "server/discover" {
-		return protocol.MethodPolicy{Available: config.methodHandlers[method] != nil}
-	}
-	if config.isComposed && method == "tools/call" {
-		return protocol.MethodPolicy{}
-	}
 	return protocol.MethodPolicy{Available: config.methodHandlers[method] != nil}
 }
 

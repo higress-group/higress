@@ -223,25 +223,24 @@ func TestGlobalToolRegistryMarksCyclicSchemaNonSerializable(t *testing.T) {
 	assert.Nil(t, info.InputSchema)
 }
 
-func TestGlobalToolRegistryDoesNotTraverseOpaqueSchemaValues(t *testing.T) {
-	marshalCalls := 0
-	opaque := opaqueSchemaValue{values: []string{"original"}, calls: &marshalCalls}
-	cycle := &hiddenCycleSchemaMarshaler{calls: &marshalCalls}
-	cycle.next = cycle
+func TestGlobalToolRegistryFreezesCustomMarshalerOutput(t *testing.T) {
+	calls := 0
+	state := map[string]any{"value": "original"}
 	r := &GlobalToolRegistry{}
 	r.Initialize()
-
-	require.NotPanics(t, func() {
-		r.RegisterTool("srv", "opaque", &stubTool{desc: "d", input: map[string]any{
-			"type": "object", "opaque": opaque, "cycle": cycle,
-		}})
-	})
-	opaque.values[0] = "mutated"
+	r.RegisterTool("srv", "opaque", &stubTool{desc: "d", input: map[string]any{
+		"type": "object", "opaque": descriptorMarshaler{state: state, calls: &calls},
+	}})
+	require.Equal(t, 1, calls)
+	state["value"] = "mutated"
 	info, ok := r.GetToolInfo("srv", "opaque")
 	require.True(t, ok)
-	assert.False(t, info.inputSchemaSerializable)
-	assert.Nil(t, info.InputSchema)
-	assert.Zero(t, marshalCalls, "registry snapshotting must not execute custom MarshalJSON")
+	require.True(t, info.inputSchemaSerializable)
+	encoded, err := json.Marshal(info.InputSchema)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"value":"original"`)
+	assert.NotContains(t, string(encoded), "mutated")
+	assert.Equal(t, 1, calls, "reads use captured JSON instead of calling the source again")
 }
 
 func TestGlobalToolRegistry_RegisterTool_PlainToolHasNoOutputSchema(t *testing.T) {
@@ -253,7 +252,7 @@ func TestGlobalToolRegistry_RegisterTool_PlainToolHasNoOutputSchema(t *testing.T
 	assert.Nil(t, info.OutputSchema)
 }
 
-func TestGlobalToolRegistry_RegisterTool_CapturesLegacyOnlyCompatibility(t *testing.T) {
+func TestGlobalToolRegistry_RegisterTool_IgnoresDeprecatedLegacyOnly(t *testing.T) {
 	r := &GlobalToolRegistry{}
 	r.Initialize()
 	r.RegisterTool("rest", "legacy", &RestMCPTool{
@@ -272,7 +271,7 @@ func TestGlobalToolRegistry_RegisterTool_CapturesLegacyOnlyCompatibility(t *test
 
 	info, ok := r.GetToolInfo("rest", "legacy")
 	require.True(t, ok)
-	assert.True(t, info.LegacyOnly)
+	assert.False(t, info.LegacyOnly)
 }
 
 func TestGlobalToolRegistry_GetToolInfo_Misses(t *testing.T) {
@@ -852,8 +851,8 @@ func TestModernMethodPolicyEnablesMCPProxyHandlers(t *testing.T) {
 		isComposed:     true,
 		methodHandlers: utils.MethodHandlers{"tools/call": handler},
 	}
-	assert.False(t, modernMethodPolicy(composedConfig, "tools/call").Available,
-		"modern requests must not enter the legacy composed tools/call handler")
+	assert.True(t, modernMethodPolicy(composedConfig, "tools/call").Available,
+		"both profiles use the historical composed handler rejection")
 }
 
 func TestProductionEntryModernBoundary(t *testing.T) {
@@ -963,7 +962,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		assert.Equal(t, int64(protocol.CodeInvalidRequest), gjson.GetBytes(response.Data, "error.code").Int())
 	})
 
-	t.Run("composed tools call uses modern unavailable mapping", func(t *testing.T) {
+	t.Run("composed tools call retains historical handler policy", func(t *testing.T) {
 		host := newHost(t)
 		headers := append(commonHeaders(),
 			[2]string{protocol.HeaderProtocolVersion, string(protocol.Version20260728)},
@@ -978,7 +977,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		require.Equal(t, types.ActionContinue, action)
 		response := host.GetLocalResponse()
 		require.NotNil(t, response)
-		assert.Equal(t, uint32(404), response.StatusCode)
+		assert.Equal(t, uint32(200), response.StatusCode)
 		assert.Equal(t, int64(protocol.CodeMethodNotFound), gjson.GetBytes(response.Data, "error.code").Int())
 	})
 }
