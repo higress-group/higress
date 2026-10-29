@@ -198,3 +198,21 @@ Higress would not be possible without the valuable open-source work of projects 
         ↑ Back to Top ↑
     </a>
 </p>
+
+<a name="wujie-customization"></a>
+## Wujie 定制分支说明（wujieai-master）
+
+本仓库 `wujieai-master` 分支是无界（wujie）平台维护的定制分支：在此分支上进行的网关插件改造（`plugins/wasm-go/extensions/` 下的 ai-proxy 协议桥、ai-token-report、ext-auth-ent 等）服务于 wujie 托管计费与企业模型网关，**采用直推分支的协作惯例**。
+
+### GitHub PR 与无界 Issue 的自动关联
+
+本组织（8btc-OnePiece）安装了无界平台的 GitHub App（`wujie-integration`）。安装覆盖的仓库里，凡是 **PR 标题、正文或分支名** 中引用了无界 Issue 编号（形如 `OPE-1234`），平台会自动把该 PR 关联到对应 Issue 的详情页，无需手工登记：
+
+| 引用方式 | 效果 |
+|---|---|
+| PR 标题含 `OPE-1234`（如 `fix: xxx (OPE-1234)`） | 自动关联到 Issue |
+| 分支名含 `ope-1234`（如 `fix/ope-1234-xxx`） | 自动关联到 Issue |
+| 正文写 `Closes OPE-1234` / `Fixes OPE-1234` / `Resolves OPE-1234` | 关联 + PR 合并后 Issue 自动推进 |
+| 正文仅顺带提及（如 `Related to OPE-1234`） | 记录为弱引用，不在 Issue 页面展示 |
+
+> 说明：关联由 GitHub webhook 驱动，App 只需要 Pull requests / Checks 只读权限；本集成不涉及任何密钥或凭据信息，App 凭据由无界平台侧配置管理。
