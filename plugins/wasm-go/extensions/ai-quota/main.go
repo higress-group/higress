@@ -23,6 +23,7 @@ import (
 const (
 	pluginName           = "ai-quota"
 	ctxKeyQuotaDeducted  = "quotaDeducted"
+	ctxKeySseFramer      = "sseFramer"
 	streamingContentType = "text/event-stream"
 )
 
@@ -273,14 +274,34 @@ func processResponseUsage(ctx wrapper.HttpContext, config QuotaConfig, data []by
 	if !ok || chatMode != ChatModeCompletion {
 		return
 	}
-	if usage := tokenusage.GetTokenUsage(ctx, data); usage.TotalToken > 0 {
-		ctx.SetContext(tokenusage.CtxKeyInputToken, usage.InputToken)
-		ctx.SetContext(tokenusage.CtxKeyOutputToken, usage.OutputToken)
+
+	// Reassemble SSE events before GetTokenUsage so a usage field split across
+	// streaming callbacks is recovered (same approach as ai-statistics).
+	framer, ok := ctx.GetContext(ctxKeySseFramer).(*sseFramer)
+	if !ok || framer == nil {
+		framer = &sseFramer{}
+		ctx.SetContext(ctxKeySseFramer, framer)
+	}
+	recordUsage := func(chunk []byte) {
+		if usage := tokenusage.GetTokenUsage(ctx, chunk); usage.TotalToken > 0 {
+			ctx.SetContext(tokenusage.CtxKeyInputToken, usage.InputToken)
+			ctx.SetContext(tokenusage.CtxKeyOutputToken, usage.OutputToken)
+		}
+	}
+	for _, event := range framer.frameCallback(data) {
+		recordUsage(event)
 	}
 
 	// chat completion mode
 	if !endOfStream {
 		return
+	}
+
+	if tail := framer.incompleteEvent(); len(tail) > 0 {
+		recordUsage(wrapper.UnifySSEChunk(tail))
+	}
+	if overflowCount := framer.drain(); overflowCount > 0 {
+		log.Debugf("ai-quota: sse framer discarded %d oversized incomplete event(s)", overflowCount)
 	}
 
 	inputToken, inputTokenOK := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)

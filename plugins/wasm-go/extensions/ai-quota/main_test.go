@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -451,6 +452,24 @@ func TestProcessResponseUsage(t *testing.T) {
 			config := QuotaConfig{RedisKeyPrefix: "chat_quota:", redisClient: redisClient}
 
 			processResponseUsage(ctx, config, body, false)
+			require.Empty(t, redisClient.decrements)
+			processResponseUsage(ctx, config, []byte("data: [DONE]\n\n"), true)
+
+			require.Equal(t, []redisDecrement{{key: "chat_quota:consumer1", delta: 25}}, redisClient.decrements)
+		})
+
+		t.Run("split SSE usage event still decrements after framing", func(t *testing.T) {
+			redisClient := &recordingRedisClient{}
+			ctx := newRecordingHTTPContext(ChatModeCompletion, "consumer1")
+			config := QuotaConfig{RedisKeyPrefix: "chat_quota:", redisClient: redisClient}
+
+			usage := []byte("data: {\"model\":\"gpt-4\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":15,\"total_tokens\":25}}\n\n")
+			split := bytes.Index(usage, []byte(`"usage"`)) + 4
+			require.Greater(t, split, 0)
+
+			processResponseUsage(ctx, config, usage[:split], false)
+			require.Empty(t, redisClient.decrements)
+			processResponseUsage(ctx, config, usage[split:], false)
 			require.Empty(t, redisClient.decrements)
 			processResponseUsage(ctx, config, []byte("data: [DONE]\n\n"), true)
 
