@@ -3,6 +3,8 @@ package provider
 import (
 	"testing"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -20,10 +22,16 @@ func newMapCtx() *mapCtx {
 	return &mapCtx{kv: make(map[string]interface{})}
 }
 
-func (m *mapCtx) SetContext(key string, value interface{})          { m.kv[key] = value }
-func (m *mapCtx) GetContext(key string) interface{}                 { return m.kv[key] }
-func (m *mapCtx) GetBoolContext(key string, def bool) bool          { return def }
-func (m *mapCtx) GetStringContext(key, def string) string           { return def }
+func (m *mapCtx) SetContext(key string, value interface{}) { m.kv[key] = value }
+func (m *mapCtx) GetContext(key string) interface{}        { return m.kv[key] }
+func (m *mapCtx) GetBoolContext(key string, def bool) bool { return def }
+func (m *mapCtx) GetStringContext(key, def string) string {
+	value, ok := m.kv[key].(string)
+	if !ok {
+		return def
+	}
+	return value
+}
 func (m *mapCtx) GetByteSliceContext(key string, def []byte) []byte { return def }
 func (m *mapCtx) Scheme() string                                    { return "" }
 func (m *mapCtx) Host() string                                      { return "" }
@@ -134,4 +142,37 @@ func TestOnRequestFailed_offlineBranches(t *testing.T) {
 		act := c.OnRequestFailed(stubProviderType{}, ctx, "only", []string{"only"}, "503")
 		assert.Equal(t, types.ActionContinue, act)
 	})
+}
+
+func TestApiKeyAffinityRetryStatusDoesNotMaskLegacyStatus(t *testing.T) {
+	// OnRequestFailed intercepts only key-level failures; 5xx responses continue to retryOnFailure.
+	assert.False(t, isAffinityRetryStatus("503"))
+	assert.True(t, isAffinityRetryStatus("429"))
+}
+
+func TestApiKeyAffinityDoesNotMaskLegacyRetryWithoutConsumer(t *testing.T) {
+	host, reset := proxytest.NewHostEmulator(proxytest.NewEmulatorOption().WithHttpContext(func(uint32) types.HttpContext {
+		return &types.DefaultHttpContext{}
+	}))
+	defer reset()
+	contextID := host.InitializeHttpContext()
+	require.NoError(t, proxywasm.SetEffectiveContext(contextID))
+
+	var c ProviderConfig
+	c.FromJson(gjson.Parse(`{
+		"type":"openai",
+		"apiTokens":["only"],
+		"apiKeyAffinity":{
+			"enabled":true,
+			"redis":{"serviceName":"redis.dns"}
+		},
+		"retryOnFailure":{"enabled":true,"retryOnStatus":["429"]}
+	}`))
+	ctx := newMapCtx()
+	ctx.SetContext(CtxKeyApiName, ApiNameChatCompletion)
+
+	act := c.OnRequestFailed(stubProviderType{}, ctx, "only", []string{"only"}, "429")
+
+	assert.Equal(t, types.ActionContinue, act)
+	assert.Equal(t, 1, ctx.GetContext(ctxRetryCount), "requests without a consumer should keep the existing retry policy")
 }

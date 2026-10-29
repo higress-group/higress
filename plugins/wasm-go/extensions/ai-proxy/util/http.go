@@ -25,13 +25,8 @@ const (
 	// its presence at the wasm boundary is a usable signal that the current
 	// filter-chain pass is an internal_redirect re-entry within this gateway.
 	//
-	// SAFETY DEPENDENCY: this header is NOT spoofing-proof unless the listener
-	// lists it in internal_only_headers. An upstream gateway that is itself in
-	// the middle of an internal_redirect chain may forward this header through
-	// to this gateway, causing this gateway's first hop to be misclassified as
-	// a re-entry. Operators relying on cascaded ai-proxy gateways should add
-	// `x-higress-fallback-from` and `x-hi-original-auth` to the listener's
-	// internal_only_headers list as defense-in-depth.
+	// This header is an internal coordination signal, not an authentication
+	// credential. Cascaded gateways must not forward it to another gateway.
 	//
 	// Note: x-envoy-original-url (which Envoy sets on every internal_redirect
 	// in router.cc) is NOT usable here, because Envoy's recreateStream re-runs
@@ -39,6 +34,14 @@ const (
 	// from the hardcoded "headers to be stripped from edge AND intermediate-hop
 	// external requests" list — so wasm filters never see it on a redirect.
 	HeaderHigressFallbackFrom = "x-higress-fallback-from"
+
+	// Affinity control headers are internal to custom_response re-entry and never contain plaintext keys.
+	HeaderApiKeyAffinityRetry              = "x-higress-ai-proxy-key-retry"
+	HeaderApiKeyAffinityRetryCount         = "x-higress-ai-proxy-key-retry-count"
+	HeaderApiKeyAffinityFailedFingerprints = "x-higress-ai-proxy-failed-key-fingerprints"
+	HeaderApiKeyAffinityRetryStartedAt     = "x-higress-ai-proxy-key-retry-started-at"
+	HeaderEnvoyUpstreamRequestTimeout      = "x-envoy-upstream-rq-timeout-ms"
+	ApiKeyAffinityFallbackSource           = "ai-proxy-key-affinity"
 
 	MimeTypeTextPlain       = "text/plain"
 	MimeTypeApplicationJson = "application/json"
