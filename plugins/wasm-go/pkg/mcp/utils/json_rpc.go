@@ -35,15 +35,16 @@ import (
 )
 
 const (
-	CtxJsonRpcID           = "jsonRpcID"
-	CtxJsonRpcClientID     = "jsonRpcClientID"
-	CtxNeedPause           = "needPause" // Context key to signal if the handler needs to pause
-	CtxJsonRpcNotification = "jsonRpcNotification"
-	CtxJsonRpcResponded    = "jsonRpcResponded"
-	JError                 = "error"
-	JCode                  = "code"
-	JMessage               = "message"
-	JResult                = "result"
+	CtxJsonRpcID              = "jsonRpcID"
+	CtxJsonRpcClientID        = "jsonRpcClientID"
+	CtxNeedPause              = "needPause" // Context key to signal if the handler needs to pause
+	CtxJsonRpcNotification    = "jsonRpcNotification"
+	CtxJsonRpcResponded       = "jsonRpcResponded"
+	CtxJsonRpcResponsePending = "jsonRpcResponsePending" // An asynchronous handler owns the response after main-route continuation.
+	JError                    = "error"
+	JCode                     = "code"
+	JMessage                  = "message"
+	JResult                   = "result"
 
 	ErrParseError     = -32700
 	ErrInvalidRequest = -32600
@@ -90,8 +91,24 @@ func WriteHTTPResponse(ctx wrapper.HttpContext, code uint32, detail string, head
 	makeHttpResponse(ctx, code, detail, headers, body)
 }
 
+// WriteJsonRpcResponse restores request-owned client identity even when the
+// upstream operation used a different correlation ID or a Legacy default.
+func WriteJsonRpcResponse(ctx wrapper.HttpContext, code uint32, detail string, headers [][2]string, body []byte) {
+	if isNotification(ctx) {
+		acknowledgeNotification(ctx)
+		return
+	}
+	id, hasLegacyID := ctx.GetContext(CtxJsonRpcID).(JsonRpcID)
+	_, hasClientID := ctx.GetContext(CtxJsonRpcClientID).(protocol.ID)
+	if hasLegacyID || hasClientID {
+		body, _ = sjson.SetRawBytes(body, "id", ClientResponseID(ctx, id))
+	}
+	makeHttpResponse(ctx, code, detail, headers, body)
+}
+
 func makeHttpResponse(ctx wrapper.HttpContext, code uint32, debugInfo string, headers [][2]string, body []byte) {
 	ctx.SetContext(CtxJsonRpcResponded, true)
+	ctx.SetContext(CtxJsonRpcResponsePending, false)
 	phase := ctx.GetExecutionPhase()
 	if phase < iface.EncodeHeader {
 		proxywasm.SendHttpResponseWithDetail(code, debugInfo, headers, body, -1)
@@ -221,6 +238,7 @@ func OnJsonRpcResponseError(ctx wrapper.HttpContext, err error, errorCode int, d
 func HandleJsonRpcMethod(ctx wrapper.HttpContext, body []byte, handles MethodHandlers) types.Action {
 	ctx.SetContext(CtxJsonRpcNotification, false)
 	ctx.SetContext(CtxJsonRpcResponded, false)
+	ctx.SetContext(CtxJsonRpcResponsePending, false)
 	idResult := gjson.GetBytes(body, "id")
 	captureClientID(ctx, idResult)
 	id := NewJsonRpcIDFromGjson(idResult)
@@ -263,6 +281,7 @@ func HandleModernJsonRpcMethod(ctx wrapper.HttpContext, request *protocol.Reques
 	ctx.SetContext(CtxJsonRpcID, id)
 	ctx.SetContext(CtxJsonRpcNotification, request.Envelope.Notification)
 	ctx.SetContext(CtxJsonRpcResponded, false)
+	ctx.SetContext(CtxJsonRpcResponsePending, false)
 	ctx.SetContext(CtxNeedPause, false)
 
 	handle := handles[request.Envelope.Method]
@@ -281,7 +300,8 @@ func HandleModernJsonRpcMethod(ctx wrapper.HttpContext, request *protocol.Reques
 	}
 	if request.Envelope.Notification {
 		responded, _ := ctx.GetContext(CtxJsonRpcResponded).(bool)
-		if !responded {
+		pending, _ := ctx.GetContext(CtxJsonRpcResponsePending).(bool)
+		if !responded && !pending {
 			acknowledgeNotification(ctx)
 		}
 	}

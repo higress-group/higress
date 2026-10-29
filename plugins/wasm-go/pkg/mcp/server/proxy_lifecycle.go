@@ -121,6 +121,7 @@ func routeProxyBusiness(ctx wrapper.HttpContext, target string, headers [][2]str
 		}
 	})
 	if err != nil {
+		ctx.SetContext(utils.CtxJsonRpcResponsePending, false)
 		return errors.New("failed to prepare routed MCP request")
 	}
 	e.mu.Lock()
@@ -129,6 +130,7 @@ func routeProxyBusiness(ctx wrapper.HttpContext, target string, headers [][2]str
 		return errors.New("MCP request cancelled before submission")
 	}
 	e.submitted = true
+	ctx.SetContext(utils.CtxJsonRpcResponsePending, true)
 	ctx.SetContext(utils.CtxNeedPause, false)
 	return nil
 }

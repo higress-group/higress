@@ -16,7 +16,6 @@ import (
 	"sync"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
-	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -136,7 +135,7 @@ func (h *McpProtocolHandler) eligibleAuto(ctx wrapper.HttpContext) bool {
 }
 
 func (h *McpProtocolHandler) startAuto(ctx wrapper.HttpContext, auth *ProxyAuthInfo) error {
-	prepared, err := h.prepareAutoRequest(ctx, auth)
+	prepared, err := h.prepareProxyRequest(ctx, auth)
 	if err != nil {
 		return err
 	}
@@ -305,61 +304,25 @@ func (e *AutoExchange) dispatchBusiness(h *McpProtocolHandler) error {
 	if !ok {
 		return nil
 	}
-	body := step.prepared.raw
-	if step.profile == ProtocolStrategyLegacy {
-		params := map[string]json.RawMessage{}
-		keys := []string{"cursor"}
-		if step.prepared.method == string(OpToolsCall) {
-			keys = []string{"name", "arguments"}
-		}
-		for _, key := range keys {
-			if value, exists := step.prepared.params[key]; exists {
-				params[key] = value
-			}
-		}
-		body, _ = json.Marshal(map[string]any{"jsonrpc": "2.0", "id": step.prepared.id, "method": step.prepared.method, "params": params})
-	}
 	op := OutboundOperation{method: step.prepared.method, version: step.version, session: step.session}
-	err := routeProxyBusiness(step.ctx, step.prepared.url, step.prepared.headers(op), body, func(status int, headers [][2]string, body []byte) {
-		r := autoHTTPResponse{status: status, headers: headers, body: body}
-		current, ok := e.take(autoDispatching, autoResponding)
-		if !ok {
+	body, err := step.prepared.body(op)
+	if err != nil {
+		e.fail(autoDispatching, gatewayAutoFailure("invalid_business_request"))
+		return nil
+	}
+	err = routeProxyBusiness(step.ctx, step.prepared.url, step.prepared.headers(op), body, func(status int, headers [][2]string, body []byte) {
+		if _, ok := e.take(autoDispatching, autoResponding); !ok {
 			sendProxyCancelled(step.ctx)
 			return
 		}
-		envelope, err := decodeAutoResponse(r, current.prepared.id)
-		if err != nil || r.status < 200 || (r.status >= 300 && r.status < 400) {
-			failure := operationalAutoFailure(r)
-			if failure == nil {
-				failure = gatewayAutoFailure("invalid_business_response")
-			}
-			e.fail(autoResponding, failure)
-			return
-		}
-		if envelope.result != nil && r.status != http.StatusOK {
-			e.fail(autoResponding, gatewayAutoFailure("invalid_business_status"))
-			return
-		}
-		// Only the winner of completion may access context, emit a response or
-		// clean it. Cancellation callbacks do none of these operations.
+		// Arbitration remains exchange-scoped, while business responses use
+		// the historical codec/status policy independently of strict controls.
 		completed, ok := e.terminate(autoResponding, "completed")
 		if !ok {
 			sendProxyCancelled(step.ctx)
 			return
 		}
-		if envelope.result != nil {
-			result, _ := decodeBackendJSONObject(envelope.members["result"])
-			if completed.prepared.method == string(OpToolsList) {
-				result = h.applyAllowToolsFilter(completed.ctx, result)
-			}
-			result = adaptProxyResult(completed.ctx, completed.profile == ProtocolStrategyModern, result)
-			envelope.members["result"], _ = json.Marshal(result)
-		}
-		// Rebind even a permitted no-ID HTTP error to the original business ID.
-		envelope.members["id"] = completed.prepared.id
-		responseBody, _ := json.Marshal(envelope.members)
-		utils.WriteHTTPResponse(completed.ctx, uint32(r.status), "mcp-proxy:auto:business", safeAutoResponseHeaders(r.headers), responseBody)
-		finishProxyRequest(completed.ctx)
+		h.handleBusinessResponse(completed.ctx, completed.prepared.method, completed.profile == ProtocolStrategyModern, status, headers, body)
 	})
 	if err != nil {
 		e.fail(autoDispatching, gatewayAutoFailure("dispatch_failed"))

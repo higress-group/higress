@@ -129,7 +129,9 @@ func TestInstructionsRoutedSuccessAndFieldIsolation(t *testing.T) {
 			host := newInstructionsHost(t, `,"passthroughInstructions":true`, "")
 			startInstructions(t, host)
 			req := routedRequest(t, host)
-			require.Equal(t, instructionsBody(), req.Body)
+			require.Equal(t, `"original-discover"`, gjson.GetBytes(req.Body, "id").Raw)
+			require.Equal(t, "Higress-mcp-proxy", gjson.GetBytes(req.Body, `params._meta.io\.modelcontextprotocol/clientInfo.name`).String())
+			require.True(t, gjson.GetBytes(req.Body, `params._meta.example\.com/opaque.preserve`).Bool())
 			require.Equal(t, "server/discover", mustHeaderValue(t, req.Headers, protocol.HeaderMethod))
 			for _, name := range []string{"Mcp-Session-Id", "Mcp-Name", "Mcp-Param-Secret"} {
 				_, exists := findHeader(req.Headers, name)

@@ -161,17 +161,6 @@ func baseOutboundHeaders(ctx wrapper.HttpContext, modern bool, method, toolName 
 	}
 	if modern {
 		version := string(protocol.Version20260728)
-		if request, ok := ModernRequestContext(ctx); ok {
-			if request.Transport.ProtocolVersion != "" {
-				version = request.Transport.ProtocolVersion
-			}
-			if request.Envelope.Method != "" {
-				method = request.Envelope.Method
-			}
-			if method == string(OpToolsCall) && request.Transport.MCPName != "" {
-				toolName = request.Transport.MCPName
-			}
-		}
 		headers = append(headers,
 			[2]string{protocol.HeaderProtocolVersion, version},
 			[2]string{protocol.HeaderMethod, method},
@@ -186,6 +175,7 @@ func baseOutboundHeaders(ctx wrapper.HttpContext, modern bool, method, toolName 
 }
 
 func finishProxyRequest(ctx wrapper.HttpContext) {
+	ctx.SetContext(utils.CtxJsonRpcResponsePending, false)
 	if e, ok := ctx.GetContext(CtxMcpProxyCancel).(*proxyExchange); ok {
 		e.finish()
 	}
@@ -279,20 +269,15 @@ func sendUpstreamAuthFailure(ctx wrapper.HttpContext, statusCode int, responseHe
 	if statusCode != http.StatusUnauthorized && statusCode != http.StatusForbidden {
 		return false
 	}
-	id, _ := ctx.GetContext(utils.CtxJsonRpcID).(utils.JsonRpcID)
-	idValue := any(id.IntValue)
-	if id.IsString {
-		idValue = id.StringValue
-	}
 	body, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
-		"id":      idValue,
+		"id":      nil,
 		"error": map[string]any{
 			"code":    utils.ErrInternalError,
 			"message": "upstream authorization failed",
 		},
 	})
-	utils.WriteHTTPResponse(ctx, uint32(statusCode), "mcp-proxy:"+operation+":upstream_auth", upstreamAuthHeaders(responseHeaders), body)
+	utils.WriteJsonRpcResponse(ctx, uint32(statusCode), "mcp-proxy:"+operation+":upstream_auth", upstreamAuthHeaders(responseHeaders), body)
 	finishProxyRequest(ctx)
 	return true
 }
@@ -490,120 +475,32 @@ func (h *McpProtocolHandler) ForwardToolsList(ctx wrapper.HttpContext, cursor *s
 
 // executeToolsList executes the actual tools/list request
 func (h *McpProtocolHandler) executeToolsList(ctx wrapper.HttpContext) error {
+	return h.executeBusiness(ctx, string(OpToolsList))
+}
+
+func (h *McpProtocolHandler) executeBusiness(ctx wrapper.HttpContext, operation string) error {
 	if h.auto != nil {
 		return h.auto.dispatchBusiness(h)
 	}
-	var cursor *string
-	if cursorVal := ctx.GetContext(CtxMcpProxyCursor); cursorVal != nil {
-		cursorStr := cursorVal.(string)
-		cursor = &cursorStr
-	}
-
-	var requestBody []byte
-	var err error
-	modernUpstream := h.strategy == ProtocolStrategyModern
-	if modernUpstream {
-		request, modern := ModernRequestContext(ctx)
-		if !modern {
+	version := protocol.Version20250326
+	if h.strategy == ProtocolStrategyModern {
+		if _, modern := ModernRequestContext(ctx); !modern {
 			return errors.New("legacy downstream cannot target a modern-only upstream")
 		}
-		requestBody = append([]byte(nil), request.Envelope.Raw...)
-	} else {
-		requestBody, err = json.Marshal(h.createToolsListRequest(cursor))
-		if err != nil {
-			return fmt.Errorf("failed to marshal tools/list request: %v", err)
-		}
+		version = protocol.Version20260728
 	}
-	headers := baseOutboundHeaders(ctx, modernUpstream, string(OpToolsList), "", h.sessionID)
-
-	// Start with the original backend URL
-	finalURL := h.backendURL
-
-	// Apply authentication if auth info was provided
-	if authInfoCtx := ctx.GetContext(CtxMcpProxyAuthInfo); authInfoCtx != nil {
-		if authInfo, ok := authInfoCtx.(*ProxyAuthInfo); ok {
-			if authInfo.ForwardAuthorization != "" && authInfo.SecuritySchemeID == "" {
-				ensureHeader(&headers, "Authorization", authInfo.ForwardAuthorization)
-			}
-			if authInfo.SecuritySchemeID == "" {
-				goto listRequestReady
-			}
-			// Apply authentication using shared utilities
-			modifiedURL, err := h.applyProxyAuthentication(authInfo.Server, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &headers)
-			if err != nil {
-				return fmt.Errorf("failed to apply proxy authentication: %v", err)
-			}
-			finalURL = modifiedURL
-		}
+	auth, _ := ctx.GetContext(CtxMcpProxyAuthInfo).(*ProxyAuthInfo)
+	prepared, err := h.prepareProxyRequest(ctx, auth)
+	if err != nil {
+		return err
 	}
-
-listRequestReady:
-	return routeProxyBusiness(ctx, finalURL, headers, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
-		if sendUpstreamAuthFailure(ctx, statusCode, responseHeaders, "tools/list") {
-			return
-		}
-		if statusCode != 200 {
-			log.Errorf("Tools/list request failed with status %d", statusCode)
-			utils.OnMCPResponseError(ctx, fmt.Errorf("backend tools/list failed"), utils.ErrInternalError, "mcp-proxy:tools/list:backend_error")
-			finishProxyRequest(ctx)
-			return
-		}
-
-		// Determine response content type and parse accordingly
-		var jsonResponseBody []byte
-		var contentType string
-
-		// Find content-type header
-		for _, header := range responseHeaders {
-			if strings.ToLower(header[0]) == "content-type" {
-				contentType = strings.ToLower(header[1])
-				break
-			}
-		}
-
-		// Parse response based on content type
-		if strings.Contains(contentType, "text/event-stream") {
-			// Handle SSE format
-			log.Debugf("Processing SSE response for tools/list request")
-			parsedJSON, err := parseSSEResponse(responseBody)
-			if err != nil {
-				log.Errorf("Failed to parse SSE response: %v", err)
-				utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:tools/list:sse_parse_error")
-				finishProxyRequest(ctx)
-				return
-			}
-			jsonResponseBody = parsedJSON
-		} else {
-			// Handle JSON format (default)
-			log.Debugf("Processing JSON response for tools/list request")
-			jsonResponseBody = responseBody
-		}
-
-		// Parse response and forward to client without rounding opaque numbers.
-		response, err := decodeBackendJSONObject(jsonResponseBody)
-		if err != nil {
-			log.Errorf("Failed to parse tools/list response: %v", err)
-			utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:tools/list:parse_error")
-			finishProxyRequest(ctx)
-			return
-		}
-
-		// Forward the tools/list result with allowTools filtering
-		if result, hasResult := response["result"]; hasResult {
-			if resultMap, ok := result.(map[string]interface{}); ok {
-				// Apply allowTools filtering if needed
-				filteredResult := h.applyAllowToolsFilter(ctx, resultMap)
-				filteredResult = adaptProxyResult(ctx, modernUpstream, filteredResult)
-				utils.OnMCPResponseSuccess(ctx, filteredResult, "mcp-proxy:tools/list:success")
-				finishProxyRequest(ctx)
-			} else {
-				utils.OnMCPResponseError(ctx, fmt.Errorf("invalid tools/list result type"), utils.ErrInternalError, "mcp-proxy:tools/list:invalid_type")
-				finishProxyRequest(ctx)
-			}
-		} else {
-			utils.OnMCPResponseError(ctx, fmt.Errorf("invalid tools/list response"), utils.ErrInternalError, "mcp-proxy:tools/list:invalid_response")
-			finishProxyRequest(ctx)
-		}
+	op := OutboundOperation{method: operation, version: version, session: h.sessionID}
+	body, err := prepared.body(op)
+	if err != nil {
+		return err
+	}
+	return routeProxyBusiness(ctx, prepared.url, prepared.headers(op), body, func(status int, headers [][2]string, body []byte) {
+		h.handleBusinessResponse(ctx, operation, version == protocol.Version20260728, status, headers, body)
 	})
 }
 
@@ -653,133 +550,7 @@ func (h *McpProtocolHandler) ForwardToolsCall(ctx wrapper.HttpContext, toolName 
 
 // executeToolsCall executes the actual tools/call request
 func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
-	if h.auto != nil {
-		return h.auto.dispatchBusiness(h)
-	}
-	toolName := ctx.GetContext(CtxMcpProxyToolName).(string)
-	arguments := ctx.GetContext(CtxMcpProxyToolArgs).(map[string]interface{})
-
-	var requestBody []byte
-	var err error
-	modernUpstream := h.strategy == ProtocolStrategyModern
-	if modernUpstream {
-		request, modern := ModernRequestContext(ctx)
-		if !modern {
-			return errors.New("legacy downstream cannot target a modern-only upstream")
-		}
-		requestBody = append([]byte(nil), request.Envelope.Raw...)
-	} else {
-		requestBody, err = json.Marshal(h.createToolsCallRequest(toolName, arguments))
-		if err != nil {
-			return fmt.Errorf("failed to marshal tools/call request: %v", err)
-		}
-	}
-	headers := baseOutboundHeaders(ctx, modernUpstream, string(OpToolsCall), toolName, h.sessionID)
-
-	// Start with the original backend URL
-	finalURL := h.backendURL
-
-	// Apply authentication if auth info was provided
-	if authInfoCtx := ctx.GetContext(CtxMcpProxyAuthInfo); authInfoCtx != nil {
-		if authInfo, ok := authInfoCtx.(*ProxyAuthInfo); ok {
-			if authInfo.ForwardAuthorization != "" && authInfo.SecuritySchemeID == "" {
-				ensureHeader(&headers, "Authorization", authInfo.ForwardAuthorization)
-			}
-			if authInfo.SecuritySchemeID == "" {
-				goto callRequestReady
-			}
-			// Apply authentication using shared utilities
-			modifiedURL, err := h.applyProxyAuthentication(authInfo.Server, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &headers)
-			if err != nil {
-				return fmt.Errorf("failed to apply proxy authentication: %v", err)
-			}
-			finalURL = modifiedURL
-		}
-	}
-
-callRequestReady:
-	return routeProxyBusiness(ctx, finalURL, headers, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
-		if sendUpstreamAuthFailure(ctx, statusCode, responseHeaders, "tools/call") {
-			return
-		}
-		if statusCode != 200 {
-			log.Errorf("Tools/call request failed with status %d", statusCode)
-			utils.OnMCPResponseError(ctx, fmt.Errorf("backend tools/call failed"), utils.ErrInternalError, "mcp-proxy:tools/call:backend_error")
-			finishProxyRequest(ctx)
-			return
-		}
-
-		// Determine response content type and parse accordingly
-		var jsonResponseBody []byte
-		var contentType string
-
-		// Find content-type header
-		for _, header := range responseHeaders {
-			if strings.ToLower(header[0]) == "content-type" {
-				contentType = strings.ToLower(header[1])
-				break
-			}
-		}
-
-		// Parse response based on content type
-		if strings.Contains(contentType, "text/event-stream") {
-			// Handle SSE format
-			log.Debugf("Processing SSE response for tools/call request")
-			parsedJSON, err := parseSSEResponse(responseBody)
-			if err != nil {
-				log.Errorf("Failed to parse SSE response: %v", err)
-				utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:tools/call:sse_parse_error")
-				finishProxyRequest(ctx)
-				return
-			}
-			jsonResponseBody = parsedJSON
-		} else {
-			// Handle JSON format (default)
-			log.Debugf("Processing JSON response for tools/call request")
-			jsonResponseBody = responseBody
-		}
-
-		// Parse response and check for backend errors (single unmarshal)
-		parsedResponse, isError, errorType := ParseBackendResponse(jsonResponseBody)
-		if parsedResponse == nil {
-			log.Errorf("Failed to parse tools/call response")
-			utils.OnMCPResponseError(ctx, fmt.Errorf("invalid JSON response"), utils.ErrInternalError, "mcp-proxy:tools/call:parse_error")
-			finishProxyRequest(ctx)
-			return
-		}
-
-		// Log backend errors for observability
-		if isError {
-			log.Warnf("Backend reported %s for %s", errorType, toolName)
-		}
-
-		// Forward the tools/call result (pass through both success and error responses)
-		if result, hasResult := parsedResponse["result"]; hasResult {
-			if resultMap, ok := result.(map[string]interface{}); ok {
-				resultMap = adaptProxyResult(ctx, modernUpstream, resultMap)
-				utils.OnMCPResponseSuccess(ctx, resultMap, "mcp-proxy:tools/call:success")
-				finishProxyRequest(ctx)
-			} else {
-				utils.OnMCPResponseError(ctx, fmt.Errorf("invalid tools/call result type"), utils.ErrInternalError, "mcp-proxy:tools/call:invalid_type")
-				finishProxyRequest(ctx)
-			}
-		} else if errorField, hasError := parsedResponse["error"]; hasError {
-			// Pass through JSON-RPC error as MCP error
-			if errorMap, ok := errorField.(map[string]interface{}); ok {
-				errorMsg := "Backend error"
-				if msg, hasMsg := errorMap["message"]; hasMsg {
-					errorMsg = fmt.Sprintf("%v", msg)
-				}
-				utils.OnMCPResponseError(ctx, fmt.Errorf("%s", errorMsg), utils.ErrInternalError, "mcp-proxy:tools/call:backend_error")
-			} else {
-				utils.OnMCPResponseError(ctx, fmt.Errorf("backend error"), utils.ErrInternalError, "mcp-proxy:tools/call:backend_error")
-			}
-			finishProxyRequest(ctx)
-		} else {
-			utils.OnMCPResponseError(ctx, fmt.Errorf("invalid tools/call response"), utils.ErrInternalError, "mcp-proxy:tools/call:invalid_response")
-			finishProxyRequest(ctx)
-		}
-	})
+	return h.executeBusiness(ctx, string(OpToolsCall))
 }
 
 // sendMcpRequest sends an MCP request to the backend server using POST method
@@ -969,39 +740,10 @@ func (h *McpProtocolHandler) sendInitializedNotification(ctx wrapper.HttpContext
 	}
 }
 
-// createToolsListRequest creates a tools/list request
-func (h *McpProtocolHandler) createToolsListRequest(cursor *string) map[string]interface{} {
-	request := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      2,
-		"method":  "tools/list",
-		"params":  map[string]interface{}{},
-	}
-
-	if cursor != nil && *cursor != "" {
-		request["params"].(map[string]interface{})["cursor"] = *cursor
-	}
-
-	return request
-}
-
-// createToolsCallRequest creates a tools/call request
-func (h *McpProtocolHandler) createToolsCallRequest(toolName string, arguments map[string]interface{}) map[string]interface{} {
-	return map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      3,
-		"method":  "tools/call",
-		"params": map[string]interface{}{
-			"name":      toolName,
-			"arguments": arguments,
-		},
-	}
-}
-
 // ParseBackendResponse parses the response body and checks if it's a backend error
 // Returns the parsed response, whether it's an error, and the error type
 func ParseBackendResponse(responseBody []byte) (response map[string]interface{}, isError bool, errorType string) {
-	response, err := decodeBackendJSONObject(responseBody)
+	response, err := decodeBusinessJSONObject(responseBody)
 	if err != nil {
 		return nil, false, ""
 	}

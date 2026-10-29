@@ -124,7 +124,7 @@ func (id ID) CorrelationID(internalID string) json.RawMessage {
 		if id.raw[0] == '"' {
 			return id.Raw()
 		}
-		if !bytes.ContainsAny(id.raw, ".eE") {
+		if !bytes.Equal(id.raw, []byte("-0")) && !bytes.ContainsAny(id.raw, ".eE") {
 			if _, err := strconv.ParseInt(string(id.raw), 10, 64); err == nil {
 				return id.Raw()
 			}

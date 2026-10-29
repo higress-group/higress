@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime"
 	"slices"
 	"strconv"
@@ -176,6 +177,85 @@ func decodeAutoResponse(r autoHTTPResponse, id []byte) (*autoEnvelope, error) {
 		return nil, errors.New("missing_final_response")
 	}
 	return final, nil
+}
+
+// decodeBusinessJSONValue matches the oracle's map decoding (last duplicate
+// recursively), with UseNumber as the numeric-fidelity exception.
+func decodeBusinessJSONValue(body []byte) (any, error) {
+	var value any
+	err := decodeBusinessJSON(body, &value)
+	return value, err
+}
+
+func decodeBusinessJSONObject(body []byte) (map[string]any, error) {
+	var object map[string]any
+	err := decodeBusinessJSON(body, &object)
+	return object, err
+}
+
+func decodeBusinessJSON(body []byte, target any) error {
+	if !json.Valid(body) {
+		// Keep the oracle's Unmarshal syntax errors, including trailing input,
+		// while valid opaque numbers are never decoded through float64.
+		return json.Unmarshal(body, new(json.RawMessage))
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	return decoder.Decode(target)
+}
+
+func (h *McpProtocolHandler) handleBusinessResponse(ctx wrapper.HttpContext, operation string, modernUpstream bool, status int, headers [][2]string, body []byte) {
+	defer finishProxyRequest(ctx)
+	if sendUpstreamAuthFailure(ctx, status, headers, operation) {
+		return
+	}
+	prefix := "mcp-proxy:" + operation
+	if status != 200 {
+		utils.OnMCPResponseError(ctx, fmt.Errorf("backend %s failed", operation), utils.ErrInternalError, prefix+":backend_error")
+		return
+	}
+	if contentType, _ := autoHeader(headers, "content-type"); strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		var err error
+		body, err = parseSSEResponse(body)
+		if err != nil {
+			utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, prefix+":sse_parse_error")
+			return
+		}
+	}
+	response, err := decodeBusinessJSONObject(body)
+	if err != nil || (operation == string(OpToolsCall) && response == nil) {
+		if operation == string(OpToolsCall) {
+			err = errors.New("invalid JSON response")
+		}
+		utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, prefix+":parse_error")
+		return
+	}
+	if value, hasResult := response["result"]; hasResult {
+		result, ok := value.(map[string]any)
+		if !ok {
+			utils.OnMCPResponseError(ctx, fmt.Errorf("invalid %s result type", operation), utils.ErrInternalError, prefix+":invalid_type")
+			return
+		}
+		if operation == string(OpToolsList) {
+			result = h.applyAllowToolsFilter(ctx, result)
+		}
+		utils.OnMCPResponseSuccess(ctx, adaptProxyResult(ctx, modernUpstream, result), prefix+":success")
+		return
+	}
+	if operation == string(OpToolsCall) {
+		if value, hasError := response["error"]; hasError {
+			message := "backend error"
+			if rpcError, ok := value.(map[string]any); ok {
+				message = "Backend error"
+				if text, present := rpcError["message"]; present {
+					message = fmt.Sprint(text)
+				}
+			}
+			utils.OnMCPResponseError(ctx, errors.New(message), utils.ErrInternalError, prefix+":backend_error")
+			return
+		}
+	}
+	utils.OnMCPResponseError(ctx, fmt.Errorf("invalid %s response", operation), utils.ErrInternalError, prefix+":invalid_response")
 }
 
 type autoFailure struct {
@@ -513,7 +593,7 @@ func sendAutoFailure(ctx wrapper.HttpContext, id []byte, phase string, failure *
 	if headers == nil {
 		headers = safeAutoResponseHeaders(nil)
 	}
-	utils.WriteHTTPResponse(ctx, uint32(failure.status), "mcp-proxy:auto:"+phase+":"+failure.reason, headers, body)
+	utils.WriteJsonRpcResponse(ctx, uint32(failure.status), "mcp-proxy:auto:"+phase+":"+failure.reason, headers, body)
 }
 
 func autoHeader(headers [][2]string, name string) (string, bool) {

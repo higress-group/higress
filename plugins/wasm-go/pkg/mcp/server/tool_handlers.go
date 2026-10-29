@@ -180,7 +180,10 @@ func cloneDescriptorValue(value reflect.Value, raw json.RawMessage) any {
 		if value.Kind() == reflect.Slice && value.Type().Elem().Kind() == reflect.Uint8 {
 			cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 			reflect.Copy(cloned, value)
-			return cloned.Interface()
+			if encoded, err := json.Marshal(cloned.Interface()); err == nil && bytes.Equal(encoded, raw) {
+				return cloned.Interface()
+			}
+			break
 		}
 		var cloned reflect.Value
 		if value.Kind() == reflect.Array {

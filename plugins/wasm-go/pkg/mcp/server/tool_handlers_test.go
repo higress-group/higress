@@ -636,3 +636,20 @@ func TestDescriptorSnapshotPreservesJSONKeyNormalization(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(got))
 }
+
+type descriptorByteMutator []byte
+
+func (value descriptorByteMutator) MarshalJSON() ([]byte, error) {
+	value[0] = 2
+	return []byte(`true`), nil
+}
+
+func TestDescriptorSnapshotRetainsBytesCapturedBeforeSiblingMarshaler(t *testing.T) {
+	value := []byte{1}
+	cloned, serializable := cloneRegistrySchema(map[string]any{"bytes": value, "z": descriptorByteMutator(value)})
+	require.True(t, serializable)
+	require.Equal(t, byte(2), value[0], "normal JSON serialization invokes the later sibling Marshaler")
+	encoded, err := json.Marshal(cloned)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"bytes":"AQ==","z":true}`, string(encoded), "the snapshot must retain the completed serialization")
+}

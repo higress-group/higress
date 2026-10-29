@@ -12,6 +12,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
@@ -21,27 +22,22 @@ const maxDiscoveryInstructionsBytes = 32 * 1024
 // forwardDiscovery adds only an optional field on the existing HTTP proxy path.
 // RouteCall continues to own routing, buffering, timeout/retry and lifecycle.
 func (s *McpProxyServer) forwardDiscovery(ctx wrapper.HttpContext, localResult map[string]any) error {
-	request, modern := ModernRequestContext(ctx)
+	_, modern := ModernRequestContext(ctx)
 	if !modern || s.GetProtocolStrategy() != ProtocolStrategyModern || s.GetTransport() != TransportHTTP {
 		return errors.New("instructions passthrough requires modern HTTP discovery")
 	}
 	auth := s.prepareServerProxyAuth(ctx)
 	handler := NewMcpProtocolHandler(s.GetMcpServerURL(), s.GetTimeout())
-	headers := baseOutboundHeaders(ctx, true, "server/discover", "", "")
-	finalURL := s.GetMcpServerURL()
-	if auth != nil {
-		if auth.SecuritySchemeID != "" {
-			var err error
-			finalURL, err = handler.applyProxyAuthentication(s, auth.SecuritySchemeID, auth.PassthroughCredential, &headers)
-			if err != nil {
-				return err
-			}
-		} else if auth.ForwardAuthorization != "" {
-			ensureHeader(&headers, "Authorization", auth.ForwardAuthorization)
-		}
+	prepared, err := handler.prepareProxyRequest(ctx, auth)
+	if err != nil {
+		return err
 	}
-	body := append([]byte(nil), request.Envelope.Raw...)
-	err := routeProxyBusiness(ctx, finalURL, headers, body, func(status int, responseHeaders [][2]string, responseBody []byte) {
+	op := OutboundOperation{method: "server/discover", version: protocol.Version20260728}
+	body, err := prepared.body(op)
+	if err != nil {
+		return err
+	}
+	err = routeProxyBusiness(ctx, prepared.url, prepared.headers(op), body, func(status int, responseHeaders [][2]string, responseBody []byte) {
 		if sendUpstreamAuthFailure(ctx, status, responseHeaders, "server/discover") {
 			return
 		}

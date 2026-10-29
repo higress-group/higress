@@ -9,7 +9,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,7 +16,9 @@ import (
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
+	"github.com/tidwall/gjson"
 )
 
 // PreparedProxyRequest belongs to one exchange. All outgoing authentication and
@@ -27,7 +28,6 @@ type PreparedProxyRequest struct {
 	url            string
 	authHeaders    [][2]string
 	forwardHeaders [][2]string
-	raw            json.RawMessage
 	id             json.RawMessage
 	params         map[string]json.RawMessage
 	method         string
@@ -70,13 +70,45 @@ func (p *PreparedProxyRequest) headers(op OutboundOperation) [][2]string {
 	return headers
 }
 
-func (h *McpProtocolHandler) prepareAutoRequest(ctx wrapper.HttpContext, auth *ProxyAuthInfo) (*PreparedProxyRequest, error) {
-	request, modern := ModernRequestContext(ctx)
-	if !modern {
-		return nil, errors.New("auto detection requires a modern request")
+func (h *McpProtocolHandler) prepareProxyRequest(ctx wrapper.HttpContext, auth *ProxyAuthInfo) (*PreparedProxyRequest, error) {
+	p := &PreparedProxyRequest{params: make(map[string]json.RawMessage), timeout: uint32(h.timeout), probeTimeout: h.autoDetection.ProbeTimeoutMs}
+	if request, modern := ModernRequestContext(ctx); modern {
+		p.id = request.Envelope.ID.Raw()
+		p.method, p.toolNameHeader = request.Envelope.Method, request.Transport.MCPName
+		var err error
+		p.params, err = protocol.DecodeBusinessJSONObject(request.Envelope.Params)
+		if err != nil {
+			return nil, errors.New("invalid proxy request parameters")
+		}
+	} else {
+		if id, ok := ctx.GetContext(utils.CtxJsonRpcClientID).(protocol.ID); ok {
+			p.id = id.Raw()
+		}
+		operation, _ := ctx.GetContext(CtxMcpProxyOperation).(McpProxyOperation)
+		p.method = string(operation)
 	}
-	p := &PreparedProxyRequest{raw: bytes.Clone(request.Envelope.Raw), id: request.Envelope.ID.Raw(), method: request.Envelope.Method,
-		toolNameHeader: request.Transport.MCPName, timeout: uint32(h.timeout), probeTimeout: h.autoDetection.ProbeTimeoutMs}
+	// These are the effective fields already selected by the historical
+	// handlers. Argument maps retain their recursive last-key/UseNumber reads.
+	if p.method == string(OpToolsCall) {
+		if name, ok := ctx.GetContext(CtxMcpProxyToolName).(string); ok {
+			p.params["name"], _ = json.Marshal(name)
+		}
+		if arguments, ok := ctx.GetContext(CtxMcpProxyToolArgs).(map[string]any); ok {
+			p.params["arguments"], _ = json.Marshal(arguments)
+		}
+		if _, present := p.params["arguments"]; !present {
+			p.params["arguments"] = json.RawMessage(`{}`)
+		}
+	} else if p.method == string(OpToolsList) {
+		cursor := gjson.ParseBytes(p.params["cursor"]).String()
+		if selected, ok := ctx.GetContext(CtxMcpProxyCursor).(string); ok {
+			cursor = selected
+		}
+		delete(p.params, "cursor")
+		if cursor != "" {
+			p.params["cursor"], _ = json.Marshal(cursor)
+		}
+	}
 	if p.timeout == 0 {
 		p.timeout = 5000
 	}
@@ -85,9 +117,6 @@ func (h *McpProtocolHandler) prepareAutoRequest(ctx wrapper.HttpContext, auth *P
 	}
 	if p.probeTimeout > p.timeout {
 		p.probeTimeout = p.timeout
-	}
-	if err := json.Unmarshal(request.Envelope.Params, &p.params); err != nil {
-		return nil, errors.New("invalid proxy request parameters")
 	}
 	if headers, ok := ctx.GetContext(CtxMcpProxyHeaders).([][2]string); ok {
 		p.forwardHeaders = append([][2]string(nil), headers...)
@@ -106,7 +135,7 @@ func (h *McpProtocolHandler) prepareAutoRequest(ctx wrapper.HttpContext, auth *P
 	}
 	for _, header := range p.authHeaders {
 		name := strings.ToLower(header[0])
-		if strings.HasPrefix(name, "mcp-param-") || name == "mcp-name" || name == "mcp-method" || name == "mcp-protocol-version" || name == "mcp-session-id" || name == "last-event-id" || name == "x-envoy-allow-mcp-tools" {
+		if reservedProxyHeader(name) {
 			return nil, errors.New("upstream authentication conflicts with MCP protocol headers")
 		}
 	}
@@ -114,6 +143,48 @@ func (h *McpProtocolHandler) prepareAutoRequest(ctx wrapper.HttpContext, auth *P
 	p.url = finalURL
 	p.target, err = resolveProxyTarget(finalURL)
 	return p, err
+}
+
+// body serializes the selected operation independently of the client's loose
+// envelope. Only proxy boundaries decode argument maps; direct tools keep Raw.
+func (p *PreparedProxyRequest) body(op OutboundOperation) ([]byte, error) {
+	params := make(map[string]any)
+	modern := op.version == protocol.Version20260728
+	for name, raw := range p.params {
+		if !modern && ((op.method == string(OpToolsList) && name != "cursor") ||
+			(op.method == string(OpToolsCall) && name != "name" && name != "arguments")) {
+			continue
+		}
+		value, err := decodeBusinessJSONValue(raw)
+		if err != nil {
+			return nil, errors.New("invalid proxy request parameters")
+		}
+		params[name] = value
+	}
+	if modern {
+		meta, _ := params["_meta"].(map[string]any)
+		if meta == nil {
+			meta = make(map[string]any)
+		}
+		meta[protocol.MetaProtocolVersion] = string(op.version)
+		meta[protocol.MetaClientCapabilities] = map[string]any{}
+		meta[protocol.MetaClientInfo] = map[string]any{"name": "Higress-mcp-proxy", "version": serverImplementationVersion}
+		params["_meta"] = meta
+	}
+	clientID, protocolError := protocol.ParseID(p.id)
+	if protocolError != nil {
+		return nil, protocolError
+	}
+	id := clientID.CorrelationID("higress-proxy-" + op.method)
+	if !modern {
+		// Legacy operations keep their historical internal IDs. Neither these
+		// nor a Modern correlation replacement become the downstream identity.
+		id = json.RawMessage("2")
+		if op.method == string(OpToolsCall) {
+			id = json.RawMessage("3")
+		}
+	}
+	return json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": op.method, "params": params})
 }
 
 func resolveProxyTarget(finalURL string) (proxyTarget, error) {
