@@ -125,6 +125,12 @@ func reservedProxyHeader(name string) bool {
 	return false
 }
 
+func proxyAuthHeaderConflicts(name string) bool {
+	// Client proxy credentials are removed during inheritance, but an explicitly
+	// configured upstream Proxy-Authorization retains its existing precedence.
+	return name != "proxy-authorization" && reservedProxyHeader(name)
+}
+
 func captureForwardHeaders(ctx wrapper.HttpContext, includeModernParams bool) [][2]string {
 	requestHeaders, err := proxywasm.GetHttpRequestHeaders()
 	if err != nil {

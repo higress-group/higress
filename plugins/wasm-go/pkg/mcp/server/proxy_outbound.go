@@ -135,7 +135,7 @@ func (h *McpProtocolHandler) prepareProxyRequest(ctx wrapper.HttpContext, auth *
 	}
 	for _, header := range p.authHeaders {
 		name := strings.ToLower(header[0])
-		if reservedProxyHeader(name) {
+		if proxyAuthHeaderConflicts(name) {
 			return nil, errors.New("upstream authentication conflicts with MCP protocol headers")
 		}
 	}

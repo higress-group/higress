@@ -484,3 +484,60 @@ func TestNotificationAuthenticationExceptionAcrossHTTPStages(t *testing.T) {
 		}
 	}
 }
+
+func TestExplicitProxyAuthorizationOverridesRemovedClientCopies(t *testing.T) {
+	for _, mode := range []string{"modern", "legacy", "auto-modern", "auto-legacy", "discovery"} {
+		for _, explicit := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/explicit=%t", mode, explicit), func(t *testing.T) {
+				saved := globalContext
+				globalContext = Context{servers: make(map[string]Server)}
+				Initialize()
+				t.Cleanup(func() { globalContext = saved })
+				strategy, method, extra := mode, string(OpToolsList), ""
+				if strings.HasPrefix(mode, "auto-") {
+					strategy = "auto"
+				}
+				if mode == "discovery" {
+					strategy, method, extra = "modern", "server/discover", `,"passthroughInstructions":true`
+				}
+				if explicit {
+					extra += `,"securitySchemes":[{"id":"up","type":"apiKey","in":"header","name":"Proxy-Authorization","defaultCredential":"synthetic-configured"}],"defaultUpstreamSecurity":{"id":"up"}`
+				}
+				host := newValidationHost(t, json.RawMessage(`{"server":{"name":"proxy","type":"mcp-proxy","transport":"http","protocolStrategy":`+strconv.Quote(strategy)+`,"mcpServerURL":"http://backend.example/mcp"`+extra+`}}`))
+				headers, body := looseProxyRequest(true, method, `1.50`)
+				headers = append(headers, [2]string{"Proxy-Authorization", "synthetic-client-first"}, [2]string{"pRoXy-aUtHoRiZaTiOn", "synthetic-client-second"})
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+				host.CallOnHttpRequestBody(body)
+				assertCredential := func(headers [][2]string) {
+					t.Helper()
+					if explicit {
+						assert.Equal(t, 1, countHeader(headers, "Proxy-Authorization"))
+						assert.Equal(t, "synthetic-configured", mustHeaderValue(t, headers, "Proxy-Authorization"))
+					} else {
+						assert.Zero(t, countHeader(headers, "Proxy-Authorization"))
+					}
+				}
+				for len(host.GetHttpCalloutAttributes()) > 0 {
+					call := calloutAt(t, host, 0)
+					assertCredential(call.Headers)
+					switch gjson.GetBytes(call.Body, "method").String() {
+					case "server/discover":
+						if mode == "auto-legacy" {
+							completeCallout(host, call, "404", nil, nil)
+						} else {
+							completeAutoResult(host, call, validAutoDiscoverResult)
+						}
+					case "initialize":
+						completeAutoResult(host, call, validAutoInitResult)
+					case "notifications/initialized":
+						completeCallout(host, call, "202", nil, nil)
+					default:
+						t.Fatal("unexpected sidecall")
+					}
+				}
+				assert.Nil(t, host.GetLocalResponse())
+				assertCredential(routedRequest(t, host).Headers)
+			})
+		}
+	}
+}

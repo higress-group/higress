@@ -251,7 +251,7 @@ func prepareSSEUpstreamRequest(server *McpProxyServer, authInfo *ProxyAuthInfo, 
 		authHeaders = append(authHeaders, [2]string{"Authorization", authInfo.ForwardAuthorization})
 	}
 	for _, header := range authHeaders {
-		if reservedProxyHeader(strings.ToLower(header[0])) {
+		if proxyAuthHeaderConflicts(strings.ToLower(header[0])) {
 			return "", errors.New("upstream authentication conflicts with MCP protocol headers")
 		}
 		ensureHeader(headers, header[0], header[1])

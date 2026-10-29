@@ -195,6 +195,8 @@ func TestSSEEndpointSelectedAuthorityReceivesOnlyExistingCredentials(t *testing.
 		{"static-bearer", `,"securitySchemes":[{"id":"up","type":"http","scheme":"bearer","defaultCredential":"synthetic-static"}],"defaultUpstreamSecurity":{"id":"up"}`, "Authorization", "Bearer synthetic-static", "", [][2]string{{"Authorization", "Bearer synthetic-downstream"}}},
 		{"forward-authorization", `,"passthroughAuthHeader":true`, "Authorization", "Bearer synthetic-forward", "", [][2]string{{"Authorization", "Bearer synthetic-forward"}}},
 		{"removed-authorization", ``, "", "", "", [][2]string{{"Authorization", "Bearer synthetic-removed"}}},
+		{"removed-proxy-authorization", ``, "", "", "", [][2]string{{"Proxy-Authorization", "synthetic-removed"}}},
+		{"explicit-proxy-authorization", `,"securitySchemes":[{"id":"up","type":"apiKey","in":"header","name":"Proxy-Authorization","defaultCredential":"synthetic-static"}],"defaultUpstreamSecurity":{"id":"up"}`, "Proxy-Authorization", "synthetic-static", "", [][2]string{{"Proxy-Authorization", "synthetic-old"}, {"Proxy-Authorization", "synthetic-duplicate"}}},
 		{"header-api-key", `,"securitySchemes":[{"id":"up","type":"apiKey","in":"header","name":"X-Upstream-Key","defaultCredential":"synthetic-static"}],"defaultUpstreamSecurity":{"id":"up"}`, "X-Upstream-Key", "synthetic-static", "", [][2]string{{"X-Upstream-Key", "synthetic-old"}, {"X-Upstream-Key", "synthetic-duplicate"}}},
 		{"query-api-key", `,"securitySchemes":[{"id":"up","type":"apiKey","in":"query","name":"key","defaultCredential":"synthetic-query"}],"defaultUpstreamSecurity":{"id":"up"}`, "", "", "key=synthetic-query", nil},
 		{"passthrough-credential", `,"securitySchemes":[{"id":"down","type":"apiKey","in":"header","name":"X-Client-Key"},{"id":"up","type":"http","scheme":"bearer"}],"defaultDownstreamSecurity":{"id":"down","passthrough":true},"defaultUpstreamSecurity":{"id":"up"}`, "Authorization", "Bearer synthetic-pass", "", [][2]string{{"X-Client-Key", "synthetic-pass"}}},
@@ -218,6 +220,10 @@ func TestSSEEndpointSelectedAuthorityReceivesOnlyExistingCredentials(t *testing.
 				}
 				_, clientKey := findHeader(headers, "X-Client-Key")
 				assert.False(t, clientKey, "removed downstream credentials must never be restored")
+				if item.header != "Proxy-Authorization" {
+					_, inherited := findHeader(headers, "Proxy-Authorization")
+					assert.False(t, inherited)
+				}
 				if item.header != "" {
 					assert.Equal(t, item.value, mustHeaderValue(t, headers, item.header))
 					assert.Equal(t, 1, countHeader(headers, item.header), "explicit credentials replace inherited duplicates")
