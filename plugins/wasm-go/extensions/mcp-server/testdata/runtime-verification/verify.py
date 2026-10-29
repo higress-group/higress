@@ -920,7 +920,8 @@ def instructions_verification():
             check(event["rpcId"] == rpc_id and event["rpcMethod"] == "server/discover"
                   and event["mcpMethod"] == "server/discover" and event["protocolVersion"] == MODERN,
                   f"request identity/protocol changed: {event}")
-            check(request["meta"] == modern_meta() and request["tenant"] == "tenant-a" and event["cookiePresent"],
+            upstream_meta = {**modern_meta(), "io.modelcontextprotocol/clientInfo": {"name": "Higress-mcp-proxy", "version": "1.0.0"}}
+            check(request["meta"] == upstream_meta and request["tenant"] == "tenant-a" and event["cookiePresent"],
                   f"metadata/ordinary headers changed: {event}")
             check(not any(event[key] for key in ("sessionPresent", "lastEventIDPresent", "internalRoutePresent", "futureParam")),
                   f"reserved header leaked: {event}")

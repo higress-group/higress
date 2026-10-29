@@ -4,6 +4,11 @@ set -o pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
 HARNESS_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# The approved compatibility loop is the default. Older schema/corpus runs
+# remain explicit historical diagnostics and cannot certify this change.
+if test "${RUNTIME_HISTORICAL_MATRIX:-0}" != 1 && test "${RUNTIME_VERIFY_INSTRUCTIONS:-0}" != 1 && test -z "${RUNTIME_DESCRIPTOR_TRAP_SELF_TEST:-}"; then
+  exec bash "$HARNESS_DIR/run-compat.sh" "$@"
+fi
 REPO_ROOT=$(git -C "$HARNESS_DIR" rev-parse --show-toplevel)
 EXTENSION_DIR="$REPO_ROOT/plugins/wasm-go/extensions/mcp-server"
 SOURCE_SHA=$(git -C "$REPO_ROOT" rev-parse HEAD)

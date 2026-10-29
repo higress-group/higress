@@ -2,6 +2,7 @@
 """Deterministic observable REST and MCP backend for Envoy runtime verification."""
 
 import auto_backend
+import compat_backend
 import json
 import os
 import threading
@@ -75,10 +76,10 @@ def safe_event(handler, body):
     return parsed
 
 
-def read_request_body(handler):
+def read_request_body(handler, errors="replace"):
     length = int(handler.headers.get("Content-Length", "0"))
     if length:
-        return handler.rfile.read(length).decode("utf-8", "replace")
+        return handler.rfile.read(length).decode("utf-8", errors)
     if handler.headers.get("Transfer-Encoding", "").lower() != "chunked":
         return ""
     chunks = []
@@ -91,7 +92,7 @@ def read_request_body(handler):
             break
         chunks.append(handler.rfile.read(size))
         handler.rfile.read(2)
-    return b"".join(chunks).decode("utf-8", "replace")
+    return b"".join(chunks).decode("utf-8", errors)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -168,6 +169,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         global SEQ
+        if compat_backend.get(self):
+            return
         parsed_url = urlparse(self.path)
         if parsed_url.path == "/__state":
             with LOCK:
@@ -188,14 +191,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         global EVENTS, SEQ
         parsed_url = urlparse(self.path)
-        body = read_request_body(self)
+        try:
+            body = read_request_body(self, errors="strict" if parsed_url.path.startswith("/unified/") else "replace")
+        except UnicodeDecodeError:
+            compat_backend.record(self, b"", rejection="invalid UTF-8")
+            return compat_backend.raw_response(self, 400)
         if parsed_url.path == "/__reset":
+            compat_backend.reset()
             with LOCK:
                 EVENTS = []
                 SEQ = 0
             return self.send_json(200, {"reset": True, "origin": ORIGIN})
 
         if auto_backend.control(self, parsed_url.path, body):
+            return
+        if compat_backend.post(self, body):
             return
         request = safe_event(self, body)
         if parsed_url.path == "/instructions":

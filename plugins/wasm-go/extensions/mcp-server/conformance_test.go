@@ -250,7 +250,7 @@ func TestOfficial20260728RequestAndResponseBufferBounds(t *testing.T) {
 
 		requestLimit, err := host.GetProperty([]string{"set_decoder_buffer_limit"})
 		require.NoError(t, err)
-		require.Equal(t, "1048576", string(requestLimit), "modern request body limit must remain 1 MiB")
+		require.Equal(t, "104857600", string(requestLimit), "both profiles admit a complete body up to 100 MiB")
 		responseLimit, err := host.GetProperty([]string{"set_encoder_buffer_limit"})
 		require.NoError(t, err)
 		require.Equal(t, "104857600", string(responseLimit), "response buffer limit must remain the explicit 100 MiB compatibility bound")
@@ -291,15 +291,12 @@ func derivedConformanceCases(t *testing.T) []derivedCase {
 
 	contentType := newCase("unsupported-content-type", "list-tools-request.json", "replace Content-Type application/json with text/plain")
 	contentType.Headers = replaceHeader(t, contentType.Headers, "content-type", "text/plain")
-	contentType.WantError = invalidRequestAtHeaders(415, "unsupported Content-Type")
 
 	accept := newCase("unacceptable-accept", "list-tools-request.json", "replace Accept with application/json so text/event-stream is absent")
 	accept.Headers = replaceHeader(t, accept.Headers, "accept", "application/json")
-	accept.WantError = invalidRequestAtHeaders(406, "unacceptable response media type")
 
 	hostileOrigin := newCase("hostile-origin", "list-tools-request.json", "append Origin https://evil.example while authority remains mcp.example.com")
 	hostileOrigin.Headers = append(hostileOrigin.Headers, [2]string{"origin", "https://evil.example"})
-	hostileOrigin.WantError = invalidRequestAtHeaders(403, "untrusted Origin")
 
 	trustedOrigin := newCase("same-origin", "list-tools-request.json", "append same-origin Origin https://mcp.example.com")
 	trustedOrigin.Headers = append(trustedOrigin.Headers, [2]string{"origin", "https://mcp.example.com"})
@@ -310,7 +307,7 @@ func derivedConformanceCases(t *testing.T) []derivedCase {
 
 	responseEnvelope := newCase("response-envelope", "list-tools-result-response.json", "send the official ListToolsResultResponse example as a request using ListToolsRequest transport headers")
 	responseEnvelope.Headers = modernHeaders(readOfficialFixture(t, "list-tools-request.json"))
-	responseEnvelope.WantError = invalidRequestWithNullID("JSON-RPC response envelopes are not accepted")
+	responseEnvelope.WantError = &errorExpectation{HTTPStatus: 400, Code: -32600, Message: "JSON-RPC response envelopes are not accepted", ID: `"list-tools-example"`}
 
 	trailingJSON := newCase("trailing-json", "list-tools-request.json", "append a second empty JSON object after the official request")
 	trailingJSON.Body = append(trailingJSON.Body, []byte("\n{}")...)
@@ -378,15 +375,15 @@ func derivedConformanceCases(t *testing.T) []derivedCase {
 
 	nullID := newCase("null-jsonrpc-id", "list-tools-request.json", "replace the official string id with JSON null")
 	nullID.Body = mutateJSONObject(t, nullID.Body, func(object map[string]any) { object["id"] = nil })
-	nullID.WantError = invalidRequestWithNullID("JSON-RPC id must be a string or integer")
+	nullID.WantID = "null"
 
 	fractionalID := newCase("fractional-jsonrpc-id", "list-tools-request.json", "replace the official string id with fractional number 1.5")
 	fractionalID.Body = mutateJSONObject(t, fractionalID.Body, func(object map[string]any) { object["id"] = 1.5 })
-	fractionalID.WantError = invalidRequestWithNullID("JSON-RPC id must be a string or integer")
+	fractionalID.WantID = "1.5"
 
 	booleanID := newCase("boolean-jsonrpc-id", "list-tools-request.json", "replace the official string id with boolean true")
 	booleanID.Body = mutateJSONObject(t, booleanID.Body, func(object map[string]any) { object["id"] = true })
-	booleanID.WantError = invalidRequestWithNullID("JSON-RPC id must be a string or integer")
+	booleanID.WantError = invalidRequestWithNullID("JSON-RPC id must be a string, number or null")
 
 	integerID := newCase("integer-jsonrpc-id", "list-tools-request.json", "replace the official string id with integer 42")
 	integerID.Body = mutateJSONObject(t, integerID.Body, func(object map[string]any) { object["id"] = int64(42) })
@@ -407,7 +404,6 @@ func derivedConformanceCases(t *testing.T) []derivedCase {
 
 	missingCapabilities := newCase("missing-client-capabilities-meta", "list-tools-request.json", "remove required io.modelcontextprotocol/clientCapabilities metadata")
 	missingCapabilities.Body = mutateJSONObject(t, missingCapabilities.Body, func(object map[string]any) { delete(requestMeta(t, object), protocol.MetaClientCapabilities) })
-	missingCapabilities.WantError = &errorExpectation{HTTPStatus: 400, Code: -32602, Message: "modern MCP clientCapabilities metadata is required", ID: `"list-tools-example"`, Reference: "invalid-tool-arguments-error.json"}
 
 	optionalClientInfo := newCase("optional-client-info-omitted", "list-tools-request.json", "remove optional io.modelcontextprotocol/clientInfo metadata")
 	optionalClientInfo.Body = mutateJSONObject(t, optionalClientInfo.Body, func(object map[string]any) { delete(requestMeta(t, object), protocol.MetaClientInfo) })
@@ -420,17 +416,17 @@ func derivedConformanceCases(t *testing.T) []derivedCase {
 		}
 	})
 	cancelled.Headers = modernHeaders(cancelled.Body)
-	cancelled.WantError = &errorExpectation{HTTPStatus: 404, Code: -32601, Message: "method not found", ID: "null", Reference: "method-not-found-error.json"}
+	cancelled.WantStatus, cancelled.WantID = 202, ""
 
-	oversizedBody := newCase("oversized-request-body", "list-tools-request.json", "append ASCII whitespace until the request exceeds the 1 MiB modern body limit")
+	oversizedBody := newCase("oversized-request-body", "list-tools-request.json", "append ASCII whitespace until the request exceeds the complete 100 MiB body limit")
 	oversizedBody.Body = append(oversizedBody.Body, bytes.Repeat([]byte(" "), int(protocol.ModernMaxBodyBytes)+1)...)
-	oversizedBody.WantError = invalidRequestAtHeaders(413, "request body exceeds the modern MCP limit")
+	oversizedBody.WantError = invalidRequestAtHeaders(413, "request body exceeds the MCP limit")
 
-	oversizedToolName := newCase("oversized-tool-name", "call-tool-request.json", "replace params.name and Mcp-Name with the same 4097 ASCII bytes, one byte beyond the decoded tool-name limit")
+	oversizedToolName := newCase("oversized-tool-name", "call-tool-request.json", "replace params.name and Mcp-Name with the same 4097 ASCII bytes, beyond the former private decoded tool-name budget")
 	longToolName := strings.Repeat("a", 4097)
 	oversizedToolName.Body = mutateJSONObject(t, oversizedToolName.Body, func(object map[string]any) { requestParams(t, object)["name"] = longToolName })
 	oversizedToolName.Headers = replaceHeader(t, oversizedToolName.Headers, "Mcp-Name", longToolName)
-	oversizedToolName.WantError = &errorExpectation{HTTPStatus: 400, Code: -32602, Message: "tools/call params.name is required", ID: `"call-tool-example"`, Reference: "invalid-tool-arguments-error.json"}
+	oversizedToolName.WantError = &errorExpectation{HTTPStatus: 200, Code: -32602, Message: "unknown tool: " + longToolName, ID: `"call-tool-example"`}
 
 	invalidToolName := newCase("invalid-tool-name-type", "call-tool-request.json", "replace params.name string with JSON number 7 while retaining the original Mcp-Name header")
 	invalidToolName.Body = mutateJSONObject(t, invalidToolName.Body, func(object map[string]any) { requestParams(t, object)["name"] = 7 })

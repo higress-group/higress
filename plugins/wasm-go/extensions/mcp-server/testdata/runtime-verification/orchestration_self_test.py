@@ -249,6 +249,8 @@ def check_instructions_evidence_rejects_incomplete_runs():
 
 
 if __name__ == "__main__":
+    from compat_self_test import main as compatibility_self_tests
+    compatibility_self_tests()
     check_transient_lds_publish_timeout()
     check_rejection_poll_classification()
     check_corpus_get_fixture()

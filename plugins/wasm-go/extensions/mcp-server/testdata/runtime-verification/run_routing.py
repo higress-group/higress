@@ -18,7 +18,7 @@ import time
 import uuid
 
 HERE = Path(__file__).resolve().parent
-ROOT = Path(subprocess.check_output(["git", "-C", str(HERE), "rev-parse", "--show-toplevel"], text=True).strip())
+ROOT = Path(os.environ.get("RUNTIME_SOURCE_ROOT") or subprocess.check_output(["git", "-C", str(HERE), "rev-parse", "--show-toplevel"], text=True).strip())
 
 
 def sha(path):
@@ -68,12 +68,16 @@ def recorded_run(command, log, *, cwd=None, env=None, allow_failure=False, targe
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ("oracle", "affected", "candidate", "gateway-image", "output"):
+    for name in ("oracle", "candidate", "gateway-image", "output"):
         parser.add_argument("--" + name, required=True)
+    parser.add_argument("--affected")
+    parser.add_argument("--skip-affected", action="store_true", help="Use only the approved business oracle and candidate in the focused compatibility loop")
     parser.add_argument("--review-baseline", help="Optional pre-review routing fix; expects synthetic payloads at INFO and inherited proxy credentials")
     parser.add_argument("--backend-image", default=os.environ.get("ROUTING_BACKEND_IMAGE", "docker.io/library/python:3.12-alpine"))
     parser.add_argument("--engine", default=os.environ.get("CONTAINER_ENGINE", "podman" if shutil.which("podman") else "docker"))
     args = parser.parse_args()
+    if not args.skip_affected and not args.affected:
+        parser.error("--affected is required unless --skip-affected is selected")
     out = Path(args.output).resolve()
     out.mkdir(parents=True, exist_ok=False)
     # Every subprocess and container consumes this immutable invocation copy.
@@ -106,7 +110,7 @@ def main():
         gateway, backend = pinned(args.gateway_image), pinned(args.backend_image)
         manifest["toolchain"] = run(["go", "version"]).stdout.strip()
         manifest["engine"] = run([args.engine, "version"]).stdout
-        variants = ["oracle", "affected"] + (["review-baseline"] if args.review_baseline else []) + ["candidate"]
+        variants = ["oracle"] + ([] if args.skip_affected else ["affected"]) + (["review-baseline"] if args.review_baseline else []) + ["candidate"]
         for variant in variants:
             revision = getattr(args, variant.replace("-", "_"))
             revision = run(["git", "rev-parse", revision + "^{commit}"], cwd=ROOT).stdout.strip()

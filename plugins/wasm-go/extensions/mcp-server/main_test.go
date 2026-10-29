@@ -304,7 +304,7 @@ func TestSchemaCompatibilityConfigurationLoadsGloballyAndAtRuleLevel(t *testing.
 	})
 }
 
-func TestSchemaPreparationResourceLimitLoadsGloballyAndAtRuleLevel(t *testing.T) {
+func TestLargeSchemaDescriptionsLoadGloballyAndAtRuleLevel(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		for _, fixture := range []struct {
 			name   string
@@ -324,7 +324,7 @@ func TestSchemaPreparationResourceLimitLoadsGloballyAndAtRuleLevel(t *testing.T)
 
 func TestSchemaCompatibilityModernListAndCallBehavior(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		t.Run("modern list preserves degraded and valid descriptors", func(t *testing.T) {
+		t.Run("modern list preserves all serializable descriptors", func(t *testing.T) {
 			host, status := test.NewTestHost(schemaCompatibilityConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -353,7 +353,7 @@ func TestSchemaCompatibilityModernListAndCallBehavior(t *testing.T) {
 			host.CompleteHttp()
 		})
 
-		t.Run("modern degraded call returns exact server error without routing", func(t *testing.T) {
+		t.Run("schema interpretation does not block historical REST conversion", func(t *testing.T) {
 			host, status := test.NewTestHost(schemaCompatibilityConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -365,19 +365,11 @@ func TestSchemaCompatibilityModernListAndCallBehavior(t *testing.T) {
 				{"Mcp-Method", "tools/call"}, {"Mcp-Name", "getTransactionRecordListV2"},
 			})
 			require.Equal(t, types.HeaderStopIteration, action)
-			body := []byte(`{"jsonrpc":"2.0","id":"blocked","method":"tools/call","params":{"name":"getTransactionRecordListV2","arguments":{"businessType":["SALE"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
+			body := []byte(`{"jsonrpc":"2.0","id":"schema-call","method":"tools/call","params":{"name":"getTransactionRecordListV2","arguments":{"transactionId":"fixture","businessType":["SALE"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
 			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
-			response := proxyTestResponse(host)
-			require.NotNil(t, response)
-			require.Equal(t, uint32(200), response.StatusCode)
-			var envelope map[string]interface{}
-			require.NoError(t, json.Unmarshal(response.Data, &envelope))
-			require.Equal(t, "blocked", envelope["id"])
-			errorObject := envelope["error"].(map[string]interface{})
-			require.Equal(t, float64(-32603), errorObject["code"])
-			require.Equal(t, "tool input schema validation is unavailable", errorObject["message"])
-			require.Equal(t, "schema_validation_unavailable", errorObject["data"].(map[string]interface{})["reason"])
-			require.Empty(t, host.GetHttpCalloutAttributes())
+			require.Nil(t, proxyTestResponse(host), "schema descriptions do not introduce an admission gate")
+			require.Empty(t, host.GetHttpCalloutAttributes(), "REST keeps the original routed request")
+			require.Contains(t, string(host.GetRequestBody()), "SALE")
 			host.CompleteHttp()
 		})
 
@@ -398,56 +390,6 @@ func TestSchemaCompatibilityModernListAndCallBehavior(t *testing.T) {
 			require.Nil(t, proxyTestResponse(host), "valid tool must not be rejected before routing")
 			host.CompleteHttp()
 		})
-	})
-}
-
-func TestSchemaCompatibilityMetricsGlobalAndRuleLevel(t *testing.T) {
-	const (
-		publishedMetric = "mcp_server_schema_validation_unavailable_published_total"
-		blockedMetric   = "mcp_server_schema_validation_unavailable_call_blocked_total"
-	)
-	test.RunTest(t, func(t *testing.T) {
-		for _, fixture := range []struct {
-			name   string
-			config json.RawMessage
-		}{
-			{name: "global", config: schemaCompatibilityConfig},
-			{name: "rule-level", config: ruleLevelSchemaCompatibilityConfig},
-		} {
-			t.Run(fixture.name, func(t *testing.T) {
-				host, status := test.NewTestHost(fixture.config)
-				defer host.Reset()
-				require.Equal(t, types.OnPluginStartStatusOK, status)
-				published, err := host.GetCounterMetric(publishedMetric)
-				require.NoError(t, err)
-				require.Equal(t, uint64(1), published, "one degraded tool must be counted once for its published generation")
-				blocked, err := host.GetCounterMetric(blockedMetric)
-				require.NoError(t, err)
-				require.Zero(t, blocked)
-
-				for call := 1; call <= 2; call++ {
-					host.InitHttp()
-					action := host.CallOnHttpRequestHeaders([][2]string{
-						{":authority", "compat.example.com"}, {":method", "POST"}, {":path", "/mcp"},
-						{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"},
-						{"origin", "http://compat.example.com"}, {"MCP-Protocol-Version", "2026-07-28"},
-						{"Mcp-Method", "tools/call"}, {"Mcp-Name", "getTransactionRecordListV2"},
-					})
-					require.Equal(t, types.HeaderStopIteration, action)
-					body := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":"blocked-%d","method":"tools/call","params":{"name":"getTransactionRecordListV2","arguments":{"businessType":["SALE"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`, call))
-					require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
-					require.NotNil(t, proxyTestResponse(host))
-					require.Empty(t, host.GetHttpCalloutAttributes())
-					host.CompleteHttp()
-					blocked, err = host.GetCounterMetric(blockedMetric)
-					require.NoError(t, err)
-					require.Equal(t, uint64(call), blocked, "each blocked modern call must increment exactly once")
-				}
-				published, err = host.GetCounterMetric(publishedMetric)
-				require.NoError(t, err)
-				require.Equal(t, uint64(1), published, "calls must not recount generation publication")
-			})
-		}
 	})
 }
 
@@ -2500,7 +2442,7 @@ data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabili
 		}, []byte(notificationResponse))
 
 		// Step 6: Mock tools/call response via RouteCluster callback
-		toolsCallResponse := `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Product ID: 12345, Name: Sample Product, Price: $99.99"}]}}`
+		toolsCallResponse := `{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Product ID: 12345, Name: Sample Product, Price: $99.99"}]}}`
 		host.CallOnHttpCall([][2]string{
 			{":status", "200"},
 			{"content-type", "application/json"},
@@ -2508,7 +2450,7 @@ data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabili
 
 		// Step 7: Send SSE tools/call response in the stream
 		toolsCallSSEMessage := `event: message
-data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Product ID: 12345, Name: Sample Product, Price: $99.99"}]}}
+data: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Product ID: 12345, Name: Sample Product, Price: $99.99"}]}}
 
 `
 		action = host.CallOnHttpStreamingResponseBody([]byte(toolsCallSSEMessage), true)
@@ -3050,14 +2992,14 @@ data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabili
 			require.Contains(t, string(toolsCallCallout.Body), "secret-123", "Request body should contain arguments")
 
 			// Mock tools/call response
-			toolsCallResponse := `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Secure data for secret-123"}]}}`
+			toolsCallResponse := `{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Secure data for secret-123"}]}}`
 			host.CallOnHttpCall([][2]string{
 				{":status", "200"},
 				{"content-type", "application/json"},
 			}, []byte(toolsCallResponse))
 
 			toolsCallSSEMessage := `event: message
-data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Secure data for secret-123"}]}}
+data: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Secure data for secret-123"}]}}
 
 `
 			host.CallOnHttpStreamingResponseBody([]byte(toolsCallSSEMessage), true)

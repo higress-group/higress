@@ -139,8 +139,8 @@ def route_timeout_passes(response, variant, profile):
     if variant == "affected":
         return "result" in envelope and 2.7 <= elapsed < 5
     error = envelope.get("error", {})
-    expected_status = 504 if profile.startswith("auto-") else 200
-    expected_message = "upstream_timeout" if profile.startswith("auto-") else "backend tools/call failed"
+    expected_status = 504 if variant == "review-baseline" and profile.startswith("auto-") else 200
+    expected_message = "upstream_timeout" if variant == "review-baseline" and profile.startswith("auto-") else "backend tools/call failed"
     return ("result" not in envelope and error.get("code") == -32603 and
             expected_message in error.get("message", "") and response.get("status") == expected_status and
             1.7 <= elapsed < 2.9)

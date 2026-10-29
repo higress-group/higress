@@ -16,6 +16,10 @@ from instructions_contract import focused_evidence
 
 root = Path(os.environ["RUNTIME_EVIDENCE"])
 
+if os.environ.get("RUNTIME_VERIFY_COMPAT") == "1":
+    from compat_evidence import finalize
+    sys.exit(finalize(root))
+
 if os.environ.get("RUNTIME_DESCRIPTOR_SELF_TEST") == "1":
     self_test_manifest = json.loads((root / "corpus-manifest.json").read_text())
     self_test_fixture = os.environ["RUNTIME_DESCRIPTOR_FIXTURE"]

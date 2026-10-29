@@ -208,8 +208,8 @@ proxywasm.AddHttpRequestHeader("x-envoy-allow-mcp-tools", "tool1,tool2,tool3")
 | `tools[].requestTemplate.security.id` | string  | 当 `tools[].requestTemplate.security` 配置时必填 | - | 引用在 `server.securitySchemes` 中定义的认证方案 ID。 |
 | `tools[].requestTemplate.security.credential` | string | 选填 | - | REST-to-MCP 的后端凭证，覆盖所引用方案的 `defaultCredential`。启用透传且成功提取到非空凭证时，优先使用透传凭证。 |
 | `tools[].errorResponseTemplate` | string | 选填 | - | HTTP 响应状态码大于等于 300 或小于 200 时使用的错误响应转换模板。 |
-| `tools[].legacyOnly` | boolean | 选填 | `false` | 仅供旧版 MCP 客户端使用。设为 `true` 后，工具不会出现在 MCP `2026-07-28` 的工具列表中，也不能通过该版本调用。 |
-| `tools[].outputSchema` | object | 选填 | - | 工具结构化输出的 JSON Schema。当前旧版工具列表会返回该字段，MCP `2026-07-28` 的工具列表暂不返回；插件不会据此校验输出是否符合 Schema。 |
+| `tools[].legacyOnly` | boolean | 选填 | `false` | 已废弃，仍兼容解析省略、`false` 和 `true`，但不再影响工具可见性或调用。 |
+| `tools[].outputSchema` | object | 选填 | - | 工具结构化输出的 JSON Schema；所有支持的协议版本都会返回。插件不会据此校验输出是否符合 Schema。 |
 
 ### 直接响应
 
@@ -236,7 +236,11 @@ tools:
 
 配置 `outputSchema` 后，如果后端响应为合法 JSON，插件会将后端原始 JSON 同时作为 `structuredContent` 返回；`responseTemplate` 生成的文本不会替换这部分结构化内容。直接响应模式则使用模板生成的合法 JSON 作为结构化内容。
 
-MCP `2026-07-28` 会在调用工具前校验输入参数。如果工具的参数定义无法用于校验，该工具可能仍出现在列表中，但调用会被拒绝。需要暂时保留旧版调用的工具，可设置 `legacyOnly: true`。
+所有支持的协议版本共用历史工具查找、认证、`allowTools`、Create/Call 和 REST 参数转换流程，不在网关处执行 inputSchema 校验、schema 编译或私有 schema 资源门禁。工具描述按正常 JSON 序列化发布，包含 `outputSchema`；工具自身仍负责输入业务约束。
+
+升级前使用 `legacyOnly: true` 的工具现在也会对 Modern 客户端可见、可调用，仍受认证和 `allowTools` 控制。请审阅现有工具授权范围；不再需要用该标记绕过 schema 校验。内置 `mcp-e2bdev` 和 `mcp-firecrawl` 已清理该标记。
+
+Legacy/Modern 的完整 UTF-8 JSON-RPC 请求体上限统一为 **100 MiB**，包含 envelope 和 `_meta`。普通 Content-Type/Accept、非身份元数据、普通重复键、深度和值数量沿历史业务策略；Modern 的原 1 MiB arguments、64 层、65536 值和名称私有限制已移除。合法单对象消息、协议版本/方法/工具名身份冲突及严格探测/协商边界继续保留。代理归一化实际上游请求，并保留客户端 ID token 与精确 JSON 数字；直接工具的原始 Create 输入和 REST 自身的类型转换保持原契约。
 
 ## 协议支持与后端连接
 
@@ -772,6 +776,14 @@ allowTools:
 获取工具列表时使用默认后端密钥；调用 `get-secure-product` 时使用产品工具专用密钥。`allowTools` 将可访问工具限制为指定工具。请将密钥占位符替换为实际凭证。
 
 代理模式下，`tools` 用于工具级配置，不是工具白名单；限制工具访问范围应使用 `allowTools`。
+
+### Origin 与 SSE endpoint 的信任边界
+
+插件恢复历史 Origin 接受策略：缺省、跨域、不同端口及 `null` Origin 均可进入正常处理。插件不再提供这项 Origin 同源拒绝所承担的 DNS rebinding 防护。部署者需在可信网络、网关入口或其他部署边界评估并实施相应防护；CORS 和认证不等价于该防护，升级时必须单独审阅这一取舍。
+
+旧 SSE 的初始 GET 仍复用主请求和既有路由。插件信任配置上游返回的 endpoint，按历史相对/绝对 URL 规则选择后续控制及业务 POST 的 path/query 和 HTTP Authority。完整 endpoint 可以选择不同 Authority；已有静态/透传 Authorization、header/query apiKey 等凭据可能按现有移除和覆盖规则发送给该 Authority。已移除的客户端凭据不会恢复，鉴权失败仍终止后续请求。
+
+实际发送固定在原路由 cluster，endpoint 域名不会新增 DNS 直连或切换 cluster。固定 cluster 不等于固定 HTTP 虚拟主机或全部 TLS 身份：TLS 沿既有 cluster/路由和调用方式。请信任配置的 MCP 上游及其 endpoint，并评估该 cluster 内按 Authority 可达的服务及凭据接收范围。路径配置仍可能产生空 Authority 或 `unknownhost` 等历史失败；插件不会从 cluster 名称猜补 Authority，也不保证所有路径组合可用。
 
 ### MCP 代理服务器示例：使用 SSE 协议
 

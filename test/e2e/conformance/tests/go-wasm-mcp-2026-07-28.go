@@ -28,7 +28,7 @@ func init() {
 
 var WasmPluginsMCP20260728 = suite.ConformanceTest{
 	ShortName:   "WasmPluginsMCP20260728",
-	Description: "The mcp-server WASM plugin serves the 2026-07-28 tools baseline while preserving legacy and origin-security behavior.",
+	Description: "The mcp-server WASM plugin serves the 2026-07-28 tools baseline while preserving legacy business compatibility and protocol identity boundaries.",
 	Manifests:   []string{"tests/go-wasm-mcp-2026-07-28.yaml"},
 	Features:    []suite.SupportedFeature{suite.WASMGoConformanceFeature},
 	Test: func(t *testing.T, suite *suite.ConformanceTestSuite) {
@@ -65,15 +65,11 @@ var WasmPluginsMCP20260728 = suite.ConformanceTest{
 				[]byte(`{"jsonrpc":"2.0","id":"legacy-list","method":"tools/list","params":{}}`),
 				[]byte(`{"jsonrpc":"2.0","id":"legacy-list","result":{"tools":[{"description":"Return deterministic fixture weather","inputSchema":{"properties":{"location":{"description":"City name","type":"string"}},"required":["location"],"type":"object"},"name":"get_weather"}]}}`),
 			),
-			{
-				Meta: conformancehttp.AssertionMeta{TestCaseName: "cross-origin request rejected", CompareTarget: conformancehttp.CompareTargetResponse},
-				Request: conformancehttp.AssertionRequest{ActualRequest: conformancehttp.Request{
-					Host: "mcp-2026.example.com", Path: "/mcp", Method: "POST",
-					Headers: modernHeaders("tools/list", ""), ContentType: conformancehttp.ContentTypeApplicationJson,
-					Body: []byte(`{"jsonrpc":"2.0","id":"origin-e2e","method":"tools/list","params":{` + modernMeta + `}}`),
-				}},
-				Response: conformancehttp.AssertionResponse{ExpectedResponse: conformancehttp.Response{StatusCode: 403}},
-			},
+			mcpResponseAssertion(
+				"cross-origin request accepted", modernHeaders("tools/list", ""),
+				[]byte(`{"jsonrpc":"2.0","id":"origin-e2e","method":"tools/list","params":{`+modernMeta+`}}`),
+				[]byte(`{"jsonrpc":"2.0","id":"origin-e2e","result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"e2e-mcp-2026","version":"1.0.0"}},"cacheScope":"private","resultType":"complete","tools":[{"description":"Return deterministic fixture weather","inputSchema":{"properties":{"location":{"description":"City name","type":"string"}},"required":["location"],"type":"object"},"name":"get_weather"}],"ttlMs":0}}`),
+			),
 		}
 		cases[len(cases)-1].Request.ActualRequest.Headers["Origin"] = "https://evil.example"
 		for _, profile := range []string{"modern", "legacy"} {

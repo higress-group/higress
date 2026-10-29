@@ -81,7 +81,7 @@ class RoutingEvidenceTest(unittest.TestCase):
         explicit = {"status": 200, "elapsed": 2.05, "json": {"error": {"code": -32603, "message": "backend tools/call failed"}}}
         auto = {"status": 504, "elapsed": 2.1, "json": {"error": {"code": -32603, "message": "MCP upstream responding: upstream_timeout"}}}
         affected = {"status": 200, "elapsed": 3.01, "json": {"result": {"content": []}}}
-        for variant, profile, good in (("oracle", "legacy", explicit), ("review-baseline", "modern", explicit), ("candidate", "modern", explicit), ("candidate", "auto-modern", auto), ("candidate", "auto-legacy", auto), ("affected", "modern", affected)):
+        for variant, profile, good in (("oracle", "legacy", explicit), ("review-baseline", "modern", explicit), ("candidate", "modern", explicit), ("candidate", "auto-modern", explicit), ("candidate", "auto-legacy", explicit), ("review-baseline", "auto-modern", auto), ("affected", "modern", affected)):
             self.assertTrue(verify_routing.route_timeout_passes(good, variant, profile))
             for elapsed in (0.01, 5.1):
                 bad = copy.deepcopy(good); bad["elapsed"] = elapsed

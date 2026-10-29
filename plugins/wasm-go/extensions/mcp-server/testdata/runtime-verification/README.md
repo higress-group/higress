@@ -1,815 +1,200 @@
-# MCP server Envoy runtime verification
+# MCP compatibility runtime verification
 
-This directory contains a repeatable runtime regression environment for the
-Higress WASM `mcp-server` plugin. The harness builds `plugin.wasm` from the exact
-checked-out source, loads it into Envoy from the fixed
-`higress/gateway:v2.2.3` image, drives MCP requests through real proxy-Wasm
-listeners, and records sanitized, machine-readable evidence. The full registry
-name and resolved digest are retained in the evidence manifest.
+The default `run.sh` entry delegates to `run-compat.sh`. This loop builds a clean
+exact candidate and two pinned sources, uses the existing Compose backend,
+Envoy renderer, bounded lifecycle helpers and evidence finalizer, then runs the
+existing routing regression runner. It does not certify native, official-client
+or kind acceptance; those checks remain separate verification commands.
 
-A clean exact-head run must pass every enumerated case with **0 FAIL**.
-`expected-main-cases.json` binds the traffic case IDs to the final matrix; a
-missing or duplicate case is a failure, even if all remaining cases pass.
-
-## Focused upstream instructions mode
-
-From `plugins/wasm-go/extensions/mcp-server`, on a clean committed candidate:
+From `plugins/wasm-go/extensions/mcp-server`:
 
 ```bash
-RUNTIME_VERIFY_INSTRUCTIONS=1 \
-INSTRUCTIONS_BASELINE_SHA=36f2f1ac5c7305c5a46c296c617b45d1fbacb7d3 \
-RUNTIME_EVIDENCE=/Users/<user>/instructions-evidence \
-bash testdata/runtime-verification/run.sh
+env -u GH_TOKEN -u GITHUB_TOKEN \
+  COMPAT_PYTHON=/opt/homebrew/bin/python3.12 \
+  bash testdata/runtime-verification/run-compat.sh \
+  --candidate HEAD \
+  --output /Users/<user>/mcp-compat-evidence
 ```
 
-This optional mode uses the same build, pinned images, listener generator,
-backend, exchange ledger, lifecycle helpers and task-owned cleanup as the full
-runner. It builds only the candidate and the pinned pre-feature baseline. Both
-use the candidate harness; the baseline receives configurations that omit the
-new flag. Candidate omitted/false responses are compared to that baseline.
-The remaining cases cover extraction and field omission, decoded UTF-8 byte
-limits, gateway field ownership without whole-result schema validation,
-server-level header/query/passthrough/anonymous authentication, public discover
-with protected tools, failures and incomplete results, ordinary header/metadata
-preservation, main-route retries and timeout, denial by a later filter, current
-request values and concurrent isolation, and a disconnected client followed by
-a fresh request. Configured Envoy retries are counted separately from a single
-plugin route submission. The disconnect case observes the existing lifecycle;
-it does not assert a new active upstream reset guarantee.
+The output directory must be empty and outside the checkout. Python 3.12 or
+newer is required for safe archive extraction. On other hosts select an
+appropriate `COMPAT_PYTHON`; the default is `python3`. Go must support the
+source modules' pinned toolchain. `podman compose` and cached or available
+container images are required. The default gateway image is
+`higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:v2.2.3`; the backend
+and verifier use `docker.io/library/python:3.12-alpine`. The runner resolves and
+records immutable digests before using the same images for every source.
 
-[`instructions_contract.py`](./instructions_contract.py) independently pins the
-baseline's 2 cases/2 exchanges and candidate's 29 cases/33 exchanges. Finalization
-requires every case's exact request IDs and count, matching case/global exchange
-ledgers, and one matching access record per request. The raw disconnect retains
-its submitted HTTP bytes and hash plus Envoy's `code=0 flags=DC` observation; it
-does not invent an HTTP response. Missing, duplicated or substituted cases,
-exchanges and access records fail. RPC-error cases require an error with no
-`result`, even when a mixed upstream envelope contains valid instructions.
-[`instructions_self_test.py`](./instructions_self_test.py) exercises these
-negative controls and ordinary/controlled header checks for the legacy bridge.
+Arguments are `--candidate`, `--output`, `--oracle`, `--control`,
+`--gateway-image`, `--backend-image` and development-only `--skip-routing`.
+`RUNTIME_EVIDENCE` can provide `--output`. The oracle/control arguments must
+match the approved pins. A dirty tree or a candidate other than checkout HEAD
+is rejected. `--skip-routing` deliberately cannot produce a passing manifest.
+Every subprocess inherits an environment with `GH_TOKEN` and `GITHUB_TOKEN`
+unset. The runner only removes resources bearing its generated Compose project
+name; it neither reads provider credentials nor operates on a Kubernetes cluster.
 
-`instructions-baseline.json`, `instructions-candidate.json`, access logs,
-image/tool versions, cleanup proof and `instructions-manifest.json` identify
-this as **focused** evidence. Its manifest explicitly does not certify the
-historical full matrix. Run the existing default `run.sh` and `run-routing.sh`
-separately for those regressions; their fixed baselines and assertions remain
-unchanged. The normal dirty-tree development override is not acceptance
-verification.
+## Source roles
 
-## Purpose and validation boundary
+| Source | Exact revision | Role |
+| --- | --- | --- |
+| Business oracle | `958b5e7f8e0062d1e26963d008e7be4b707fa715` | Corresponding historical Legacy business path |
+| Control/scope baseline | `bde990b4bfc7ecb581338e2d0ae858aaedb2fd69` | Retained probe/handshake/cancellation and instructions scope |
+| Candidate | Clean checkout HEAD | Independent acceptance assertions and corresponding business comparison |
 
-This harness verifies the MCP 2026 Tools Baseline at the Envoy data-plane
-boundary:
+The control binary also runs five explicitly labelled diagnostic red cases:
+Modern full body above 1 MiB, schema-gated call, `legacyOnly: true`, cross-Origin
+request and fractional client ID. These reproduce the removed gates/defects;
+they are not normative business expectations. The candidate's matching positive
+cases are independently enumerated in `compat_contract.registry`.
 
-- the built WASM module can be loaded by Envoy's real proxy-Wasm runtime;
-- modern `2026-07-28` requests and the supported legacy protocol versions take
-  the expected registered, REST, composed, and proxy paths;
-- modern response contracts, legacy compatibility, proxy handshakes, error
-  behavior, and header isolation hold at runtime;
-- each main-matrix client exchange has exactly one flushed Envoy access record;
-- evidence records the source, plugin, container-image, tool, result, and
-  cleanup identities needed to reproduce and compare a run;
-- the v2.0.0 oracle `39ec41aab6eb1d40499bed2847085696de0ebb96` accepts
-  the compatibility descriptor and constructs the historical REST request,
-  while affected revision `c55d9825c90868f50edbff9764a6b3cf2eb13162`
-  rejects it;
-- an independent malformed URL-template control is rejected by the oracle,
-  affected, and candidate revisions; and
-- a ten-fixture representative corpus records the oracle, affected, and
-  candidate acceptance matrix for semantic and bounded-resource failures,
-  including mixed and rule-level configurations;
-- one candidate Wasm is exercised against successive valid,
-  validation-unavailable, and valid file-backed LDS generations in one Envoy
-  process.
+Each source archive builds a plain Wasm. The **same unchanged bytes** of
+`registered_fixture.go.txt` are appended to a second build for every source.
+The fixture supplies serializable RawMessage/custom-Marshaler/outputSchema
+values, long names, raw Create length/hash results and execution counters.
+Plain REST and proxy listeners do not load it. Source, fixture, module/toolchain,
+harness and plain/registered Wasm hashes are recorded separately. Oracle
+production files are never edited. The actual e2bdev and firecrawl YAMLs are
+exported with their descriptors/arguments intact; only test server identity,
+external request target/method and vendor response templates are adapted to the
+observable local backend. Their source and derived fixture hashes and exact
+adaptations are recorded in `builtin-manifest.json`.
 
-The environment is intentionally narrower than a complete Higress deployment.
-It uses static Envoy configuration, deterministic Python fixtures, and direct
-JSON-RPC requests. It does not exercise the Higress control plane, Helm, kind,
-production services, persistent sessions, or deferred MCP capabilities. The
-standalone composed endpoint verifies `tools/list` but rejects `tools/call`:
-successful composed calls require the separate `mcp-router` routing layer. That
-is an architecture boundary, not an `mcp-server` runtime defect.
+## Independent cases and observability
 
-The generation-transition gateway uses file-backed LDS in one Envoy process.
-The verifier atomically replaces the watched DiscoveryResponse with valid,
-validation-unavailable, and valid versions, waits for each version in Envoy's
-config dump, then sends discovery and invocation traffic through the updated
-listener. The harness records the gateway container ID, PID, and start time
-before and after the sequence and requires them to remain identical. This is a
-real same-process Envoy/proxy-Wasm configuration transition; it does not claim
-to exercise the Higress control plane or Kubernetes delivery path.
+`compat_contract.py` enumerates unique case IDs and expected per-case downstream
+exchange counts before traffic runs. Missing/duplicate expected or observed IDs,
+client exchanges or access records fail finalization. `verify_compat.py` writes
+a snapshot after each case, so an interrupted prefix cannot appear complete.
 
-GitHub Actions currently runs Go tests, official SDK interoperability tests,
-and an explicit WASM build, but it does **not** run this real Envoy environment
-or upload/save its evidence directory. CI unit-test, coverage, interoperability,
-or WASM-build artifacts are not substitutes for runtime evidence produced by
-this harness.
+The sequential body cases use full UTF-8 JSON-RPC bodies above 1 MiB, 10 MiB,
+100 MiB minus one byte, exactly 100 MiB with metadata padding, and 100 MiB plus
+one byte with metadata padding. Envelope and `_meta` bytes count toward the
+limit. The tool returns only raw argument length/SHA-256; evidence stores body
+lengths/hashes rather than large payloads. Depth 70, 65537 values, long ASCII and
+encoded UTF-8 names, ordinary duplicates, invalid/concatenated/batch messages,
+schema mismatch and `allowTools` denial have separate IDs. Large requests and
+source variants execute sequentially; elapsed times are diagnostic, with no
+performance SLO.
 
-## Architecture and data flow
+Before/after direct-tool counters include a fixture-only VM generation and a
+positive Create/Call increment. A VM recycle between observations fails the
+zero-effect proof instead of being mistaken for unchanged zero counters. Denied
+and invalid candidate requests must not execute Create/Call. The old oracle did
+not enforce JSON framing; malformed, concatenated and batch results are observed
+and classified only as the named retained basic-message-boundary exception.
+Candidate 400/error/zero-side-effect assertions remain mandatory. No other
+business differences receive that exception.
 
-```mermaid
-flowchart LR
-    R["run.sh on the host"] --> W["Candidate, affected, and v2.0.0 oracle Wasm builds"]
-    R --> G["Generated static and file-backed LDS configs"]
-    W --> E["Higress gateway image / Envoy / proxy-Wasm"]
-    G --> E
-    V["Python verifier"] -->|"main, generation, auto and differential corpus traffic"| E
-    E --> P["Deterministic primary backend"]
-    E --> S["Deterministic secondary backend"]
-    P --> V
-    S --> V
-    E --> L["Gateway access and runtime logs"]
-    V --> M["Matrix, exchange ledger, backend events"]
-    L --> F["Evidence finalizer"]
-    M --> F
-    F --> O["Manifest, checksums, coverage, cleanup proof"]
-```
+The backend ledger separately records transport GET, probe, control and business
+attempts, request acceptance, exact ID token, typed parameter/argument hashes,
+Authority/path/query recipient, backend origin and synthetic credential match
+booleans. It never includes real credentials. A strict peer rejects duplicates
+throughout the JSON tree, duplicate protocol/media headers, invalid method/name/
+version/media, unsupported capability claims and IDs unacceptable to a strict
+upstream. It understands canonical `=?base64?...?=` names. Ordinary repeated
+headers remain legal. Numeric observations use `typed_canonical.JSONNumber`,
+never a float-based comparison.
 
-The run proceeds as follows:
+Joint strict-upstream and local-error cases cover string, both sides of 2^53, overflow integer,
+decimal, exponent, `-0`, explicit null and missing Legacy IDs on tools/list and
+tools/call success/error paths. Candidate client tokens and presence/default
+semantics are asserted independently. The oracle's named numeric/null ID and
+opaque result-number defects are recorded and excluded only at those fields.
+Modern ordinary notifications require HTTP 202 with no JSON-RPC body; the
+specific HTTP 401/403 authentication exception retains status and
+`WWW-Authenticate` while still suppressing the body.
 
-The first exact-head attempt for source
-`1e0ba0f5730db174ffaa4ab3859f1167b012b33a` is retained read-only at
-`/Users/xiao/projects/go/higress-mcp-verify.G2NOis/evidence` as diagnostic,
-not acceptance, evidence. It exposed three harness failures: the mixed valid
-sibling called an unimplemented backend GET route; three concurrent corpus
-Envoys starved LDS/admin progress on a 4 GiB Podman VM; and the baseline plus
-three malformed controls were sampled after a fixed two-second sleep while
-their logs had only reached `loading 1 listener(s)`. A repaired authoritative
-run must use a new clean worktree and a fresh external evidence directory; the
-failed directory must not be reused, modified, or deleted.
+HTTP and SSE business cases cover ordinary/custom/missing media, results above the probe limit, duplicate/deep
+results, RPC errors and HTTP failures. They use corresponding historical error,
+status, data and header policies. Authentication fidelity and preserved SSE
+ordinary-header multiplicity are named later fixes and independently asserted.
+Probe/body budgets, control identity/correlation, terminal failures and zero
+business attempts remain separate. `verify_auto.cases` supplies the existing
+control, concurrency, cancellation, no-replay, route-deadline and phase counters;
+its complete independently generated case registry is checked for both control
+and candidate binaries.
 
-1. [`run.sh`](./run.sh) resolves the repository root and source SHA, requires a
-   clean tree by default, and creates or accepts an evidence directory outside
-   the worktree.
-2. Go builds the checked-out `mcp-server` module plus archives of affected
-   revision `c55d9825c90868f50edbff9764a6b3cf2eb13162` and v2.0.0 oracle
-   `39ec41aab6eb1d40499bed2847085696de0ebb96` for `wasip1/wasm` with
-   `-trimpath`. It also builds a corpus variant of each revision with the same
-   hashed registered-tool fixture needed to represent a bounded `json.Number`
-   that REST JSON decoding cannot preserve. The script records all six Wasm
-   SHA256 values. A seventh Wasm from auto pre-change revision
-   `dc0999326b1a8df4269c13d0cf6ee2b725259f6e` proves only that auto is rejected.
-   An eighth Wasm from `36f2f1ac5c7305c5a46c296c617b45d1fbacb7d3` independently
-   checks the five existing explicit/default profiles against the accepted
-   pre-instructions RouteCall behavior. These baselines have separate source,
-   Wasm and configuration identities in the manifest. All temporary archived
-   source trees are removed before startup.
-3. [`generate_envoy.py`](./generate_envoy.py) writes the main static Envoy
-   configuration with positive auto listeners, an unknown-strategy negative
-   control, and isolated auto pre-change rejection and explicit-strategy
-   differential configurations. Before any image pull or runtime traffic,
-   [`run.sh`](./run.sh) necessarily runs the descriptor oracle's positive cases
-   and asserts that both verifier and finalizer return non-zero for deleted
-   fields, truncated arrays, and numeric-token-to-string tampering. Descriptor
-   mismatch has the dedicated exit code `42`; exit `0` means a false acceptance
-   and any other non-zero status means the checker itself failed. Temporary
-   self-test inputs are deleted immediately and never enter final evidence;
-   the EXIT/INT/TERM cleanup path removes them after success, failure, or
-   interruption and is safe to invoke repeatedly.
-4. Podman Compose starts two deterministic Python backends. Every Envoy uses
-   one worker, and static rejection controls plus the candidate, affected, and
-   oracle corpus gateways run sequentially as start -> verify -> stop -> log.
-   Before each isolated phase the primary ledger is reset; rejection phases
-   wait for both their specific historical error and `plugin start failed`,
-   capture a zero-event ledger, and treat premature exit or timeout as a
-   harness failure. Backend health and reset operations are bounded and
-   retried. Every phase uses an inspected stop gate: a non-zero stop command is
-   tolerated only when container inspection proves the service is no longer
-   running, and logs are captured only after that gate. This keeps the maximum
-   live Wasm footprint bounded on a 4 GiB Podman VM. Main listeners select
-   registered, REST, composed, explicit proxy and auto configurations.
-5. [`verify.py`](./verify.py) first drives the candidate Wasm through valid ->
-   validation-unavailable -> valid file-backed LDS generations in one Envoy
-   process, then sends the main matrix traffic. The backends record safe event
-   fields so upstream routing,
-   protocol metadata, authentication policy, and isolation can be asserted.
-6. The gateways are stopped before their logs are collected, ensuring buffered
-   access records are flushed. Compose resources are then removed.
-7. [`finalize_evidence.py`](./finalize_evidence.py) adds the affected rejection,
-   v2.0.0 oracle, malformed-control, generation-transition, unknown-strategy,
-   auto pre-change rejection and explicit-strategy differential results, checks
-   case completeness and access-log coverage, writes the manifest and checksums, and
-   returns non-zero for any failed matrix or coverage assertion.
-8. A completed run deletes all eight temporary Wasm files. Build artifacts must
-   never be committed.
+SSE cases retain the initial main GET and existing control/business POST stages.
+They cover relative, absolute, cross-Authority and externally named endpoints,
+full/path-only configuration, configured Host rewrite, original custom route
+cluster, ordinary headers, query/header/passthrough/removed credentials, and
+GET/initialize/initialized 401/403 with and without downstream IDs. The original
+route targets the same actual backend even when Authority changes; endpoint DNS
+is not used directly. Path-only empty-Authority/unknownhost failures are observed
+against the oracle instead of inventing a new resolution rule. This does not
+claim a fixed TLS identity. Native mocks coalesce added GET headers; actual
+network GET header and Host rewrite evidence belongs to runtime verification.
 
-## Directory components
+The existing instructions registry adds omitted/false local behavior, opt-in
+single Modern HTTP discovery, success/error ID restoration, field isolation,
+32768/32769 decoded UTF-8 bytes, auth, downstream filters, retries/deadlines,
+concurrent isolation and disconnection. Its 2 baseline/2 exchange and 29
+candidate/33 exchange registries and matching access records remain unchanged.
+The new core also checks explicit discovery IDs against the strict peer.
 
-- [`run.sh`](./run.sh) orchestrates source checks, compilation, image pulls,
-  Compose lifecycle, log sanitization, evidence finalization, and cleanup.
-- [`compose.yaml`](./compose.yaml) defines the two backends, isolated gateway
-  services, and verifier container.
-- [`backend.py`](./backend.py) implements deterministic REST, modern MCP, and
-  legacy MCP responses and exposes safe observable event state.
-- [`orchestration_self_test.py`](./orchestration_self_test.py) injects transient
-  and permanent admin failures, distinguishes rejection from checker failure,
-  and proves the mixed-fixture GET route records exactly one backend event.
-- [`lifecycle.sh`](./lifecycle.sh) provides the bounded backend readiness/reset
-  and inspected service-stop gates plus injectable static/corpus phase runners;
-  [`lifecycle_self_test.sh`](./lifecycle_self_test.sh) fault-injects transient
-  and permanent backend failures, stop-command/container-state disagreement,
-  and asserts recorded start/verify/stop/log order including early termination
-  after a failed stop.
-- [`compose_config_self_test.py`](./compose_config_self_test.py) parses the
-  provider-resolved Compose JSON and requires the explicit set of fifteen Envoy command
-  arrays to contain the independent tokens `--concurrency` and `1`.
-- [`generate_envoy.py`](./generate_envoy.py) generates listeners, routes,
-  clusters, plugin configuration, and isolated negative/baseline configurations.
-- [`typed_canonical.py`](./typed_canonical.py) defines the shared type-tagged
-  JSON canonical form, including the numeric lexeme wrapper.
-- [`descriptor_self_test.py`](./descriptor_self_test.py) creates and removes
-  the positive and intentionally tampered inputs exercised by `run.sh`.
-- [`descriptor_gate.sh`](./descriptor_gate.sh) requires exact exit code `42`
-  for every tampered input and rejects false acceptance or checker failure.
-- [`verify_auto.py`](./verify_auto.py) supplies named auto success, failure,
-  isolation, cancellation, and no-replay cases; [`auto_backend.py`](./auto_backend.py)
-  supplies the safe ledger, public credential aliases and phase barriers.
-  [`auto_self_test.py`](./auto_self_test.py) checks these barriers and proves that
-  the fixture records execution before deliberately closing the response.
-  Session checks compare each initialized/business request with the exact
-  session issued to that request, exposing only a boolean in evidence. The
-  concurrent legacy case holds both Alice and Bob at the initialized barrier
-  before either can execute business, then requires each request's four-step
-  sequence and one execution. The self-test sends swapped sessions and an
-  extra business request over HTTP and requires the same oracle to reject them.
-- [`verify.py`](./verify.py) executes the existing and auto traffic cases and writes
-  the client ledger, case matrix, and final backend snapshots.
-- [`finalize_evidence.py`](./finalize_evidence.py) adds the isolated and corpus
-  configuration/generation cases, verifies access coverage, and writes the
-  manifest and SHA256 inventory.
-- [`.gitignore`](./.gitignore) excludes local runtime-evidence and Python cache
-  artifacts if they are accidentally created in this directory.
+## Evidence and failure handling
 
-## Prerequisites
+- `compat-inputs.json`: exact source pins, clean-tree/token attestations, image
+  inspections/digests, Go/module identities, separate fixture/harness/Wasm hashes,
+  verifier exit state and project-owned cleanup result.
+- `compat-{oracle,control,candidate}.json`: independent `expectedCases`, exactly
+  one result per case, bounded request/response summaries and unique client
+  exchange IDs. Case detail includes independent assertions, comparable business
+  projections and phase-separated backend ledgers.
+- `controls-{control,candidate}.json` and `instructions-{baseline,candidate}.json`:
+  reused mechanism/scope results and exchange ledgers. Gateway logs retain all
+  access records; finalization selects each explicitly named registry's records.
+- `routing/manifest.json`: existing route/header/auth/log/deadline regression
+  evidence, including the historical HTTP 200 business-timeout mapping for auto
+  business while preserving strict control 504 behavior.
+- `commands.jsonl`, build/module/tool logs, resolved Compose/Envoy configurations
+  and gateway logs: reproducibility and diagnostics. Configs use synthetic keys.
+- `compat-manifest.json`: A1–A12 coverage, classified exceptions, unclassified
+  differences, failure reasons and final checksums. It cannot pass with a red,
+  partial, duplicated, stale-source, missing-hash or uncleaned run. The finalizer
+  command row and `finalize.log` are written before checksums are sealed, avoiding
+  a self-recording hash mismatch. `nativeAndKindAcceptanceClaimed` stays false.
 
-Run the harness from a Unix-like shell with:
+The loop stops/removes each variant gateway using existing bounded lifecycle
+helpers and verifies no project containers remain. Failed runs retain the first
+case failure, command exit results and available backend/access diagnostics.
+Generated Wasm, evidence and temporary sources are not committed.
 
-- Git and Bash;
-- Go with `GOOS=wasip1` and `GOARCH=wasm` support (Go 1.24 or later for this
-  plugin tree);
-- host Python 3 for configuration generation and evidence finalization;
-- Podman with a running Podman machine or native Podman service;
-- `podman compose` backed by `podman-compose` or another compatible external
-  Compose provider; and
-- network access to download Go modules and pull the fixed gateway and Python
-  images when they are not already cached.
+## Facility self-tests and other entries
 
-Check the local tools before a run:
+CI's existing orchestration self-test invokes `compat_self_test.py`. It covers
+strict peer negative controls (including nested opaque fields and repeated
+headers), encoded names, exact numeric tokens, UTF-8 body accounting, registry
+omissions/duplicates, real backend rejection/ledger recording, fixed-cluster
+fixtures, incomplete evidence, Wasm hashes and post-finalizer checksum mutation.
+The existing checks remain executable:
 
 ```bash
-git --version
-bash --version
-go version
-python3 --version
-podman version
-podman compose version
-podman info
+env -u GH_TOKEN -u GITHUB_TOKEN python3 orchestration_self_test.py
+env -u GH_TOKEN -u GITHUB_TOKEN python3 auto_self_test.py
+env -u GH_TOKEN -u GITHUB_TOKEN python3 instructions_self_test.py
+env -u GH_TOKEN -u GITHUB_TOKEN python3 routing_self_test.py
+env -u GH_TOKEN -u GITHUB_TOKEN python3 compose_config_self_test.py /path/to/resolved-compose.json
+env -u GH_TOKEN -u GITHUB_TOKEN bash lifecycle_self_test.sh
 ```
 
-### macOS Podman bind mounts
-
-Podman machine can normally bind-mount shared paths under `/Users`, but it
-cannot bind-mount an arbitrary host `/tmp` directory. The default evidence
-directory is therefore a sibling of the repository, outside the worktree and
-under the same macOS user path.
-
-When setting `RUNTIME_EVIDENCE`, use an absolute, new or empty directory that is
-shared with the Podman machine. Do not point it at an arbitrary host `/tmp`
-path. A bind-mount error usually means the chosen path is not visible inside the
-Podman VM.
-
-## Quick run from a clean exact head
-
-Commit the intended source first, then run from the repository root:
-
-```bash
-git status --short
-git rev-parse HEAD
-./plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/run.sh
-```
-
-The descriptor-only negative stage can also be reproduced before Podman is
-started. After generating an evidence directory and running
-`descriptor_self_test.py prepare`, this command must print `PASS`; substitute
-`finalize_evidence.py` to exercise the second consumer. `run.sh` performs both
-consumers and all three tamper cases automatically.
-
-```bash
-RUNTIME_EVIDENCE=$(mktemp -d)
-RUNTIME_OUT="$RUNTIME_EVIDENCE" \
-  python3 ./plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/generate_envoy.py
-python3 ./plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/descriptor_self_test.py \
-  prepare "$RUNTIME_EVIDENCE"
-if RUNTIME_EVIDENCE="$RUNTIME_EVIDENCE" RUNTIME_DESCRIPTOR_SELF_TEST=1 \
-  RUNTIME_DESCRIPTOR_FIXTURE=numeric-comparison-limit \
-  RUNTIME_DESCRIPTOR_ACTUAL="$RUNTIME_EVIDENCE/.descriptor-selftest-number-as-string.json" \
-  python3 ./plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/verify.py; then
-  checker_status=0
-else
-  checker_status=$?
-fi
-case "$checker_status" in
-  42) echo "PASS: numeric string tamper was rejected" ;;
-  0) echo "FAIL: numeric string tamper was accepted"; exit 1 ;;
-  *) echo "FAIL: descriptor checker failed with $checker_status"; exit 1 ;;
-esac
-python3 ./plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/descriptor_self_test.py \
-  cleanup "$RUNTIME_EVIDENCE"
-```
-
-`git status --short` must print nothing. The final JSON line must report
-`"fail": 0` and `"access_coverage": "PASS"`, and the command must exit with status 0.
-The verifier prints an intermediate summary before the finalizer adds isolated,
-differential and completeness cases. Accept the named case set, not a historical
-pass count. Access coverage must match every recorded client request ID exactly;
-backend sequences and execution counters are asserted separately per scenario.
-
-### Choose the evidence directory
-
-Use a fresh absolute path outside the repository for a named or retained run:
-
-```bash
-RUNTIME_EVIDENCE=/Users/your-name/higress-mcp-runtime-baseline \
-  ./plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/run.sh
-```
-
-The harness does not clear a caller-provided directory. Reusing a directory can
-mix stale and current files, so use a new or empty location for every evidence
-set.
-
-### Dirty-tree development runs
-
-For local iteration only, bypass the clean-tree guard explicitly:
-
-```bash
-RUNTIME_ALLOW_DIRTY=1 \
-  RUNTIME_EVIDENCE=/Users/your-name/higress-mcp-runtime-development \
-  ./plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/run.sh
-```
-
-Such a manifest records `source_tree_clean: false`. A dirty-tree run is useful
-for debugging but is not final exact-head evidence and should not be used as a
-review, release, or regression baseline.
-
-When both fixed images already exist locally, `RUNTIME_SKIP_PULL=1` uses those
-cached images and still records their resolved digests. This explicit override
-requires `RUNTIME_ALLOW_DIRTY=1`; neither option changes the independently
-measured `source_tree_clean` value. Acceptance evidence must have an actually
-clean committed tree, record both options and the cached image identities, and
-pass the complete required matrix. The default run refreshes both tags.
-
-## Runtime matrix
-
-The final matrix retains the following existing cases. The first eleven are driven
-through the main gateway:
-
-1. **Registered modern discover/list/call** verifies a compiled-in Amap tool,
-   its tools-only discovery contract, and exactly one real backend call.
-2. **REST modern discover/list/call** verifies deterministic REST argument
-   mapping and exactly one backend call.
-3. **REST invalid arguments and hostile Origin** verifies a tool execution
-   error without an upstream request and HTTP 403 Origin rejection.
-4. **Composed list and router boundary** verifies deterministic composed tool
-   publication and rejects standalone calls that require `mcp-router`.
-5. **Three legacy REST versions** runs initialize, initialized, list, and call
-   for `2024-11-05`, `2025-03-26`, and `2025-06-18`, while checking that modern
-   result fields do not leak into legacy responses.
-6. **REST schema compatibility** publishes the pinned array/string-enum
-   descriptor to modern and legacy discovery, blocks modern invocation with
-   the exact `schema_validation_unavailable` JSON-RPC error and zero affected
-   upstream calls, keeps an unrelated valid tool callable before and after the
-   blocked call, and preserves the legacy method, path, query, header,
-   conversion, and JSON-body mapping for all three retained legacy versions.
-7. **Modern-to-modern proxy** verifies one stateless upstream RPC per downstream
-   RPC, modern metadata and scoped `Mcp-Param-*` forwarding. It independently
-   requires ordinary `Cookie` and fixture `x-unrelated-credential` headers to
-   survive, while `Authorization`, MCP session, `Last-Event-ID` and the internal
-   route header are absent under this fixture's policy.
-8. **Modern-to-legacy proxy** verifies an isolated
-   initialize -> initialized -> target-RPC handshake for each list or call and
-   exactly six backend events in total.
-9. **Default proxy strategy is legacy** verifies all three legacy downstream
-   versions, request-scoped upstream handshakes, `/legacy` routing, and exactly
-   18 backend events.
-10. **Legacy-to-modern remains unsupported** verifies the deferred bridge is
-   rejected without upstream probing, fallback, or retry.
-11. **Authentication, error, and cross-origin isolation** verifies explicit
-    bearer policy, preservation of 401/403 and `WWW-Authenticate`, and no state
-    or header leakage from the primary backend to the secondary backend.
-12. **Affected revision rejection** builds revision `c55d9825...`, loads the same
-    affected descriptor, records the baseline Wasm hash and compiler rejection,
-    and proves zero upstream activity.
-13. **v2.0.0 compatibility oracle** builds `39ec41aa...`, loads the identical
-    descriptor, lists it, invokes it, and asserts the historical method, path,
-    query, header conversion, JSON body, and one upstream call.
-14. **Malformed non-Schema control** loads an invalid URL template with all
-    three revisions and requires each plugin configuration to be rejected with
-    zero upstream activity.
-15-24. **Representative schema corpus** runs unsupported and contradictory
-    semantics, byte/depth/node/collection/enum/numeric-comparison bounds,
-    mixed valid plus invalid tools, and rule-level configuration against the
-    same oracle, affected, and candidate revisions. Each fixture records its
-    expected and actual acceptance. Candidate modern discovery and candidate/
-    oracle legacy discovery must match an independently generated full
-    input-schema SHA256 for every fixture; replacing the schema with `{}`,
-    truncating an array, or deleting a field therefore fails the run. Candidate
-    traffic must list the original descriptor and block modern invocation with
-    `-32603` and zero upstream
-    activity; the mixed fixture also requires the complete modern success
-    result contract (`resultType=complete`, server metadata, non-empty content,
-    and `isError=false`) plus exactly
-    one `GET /corpus/valid` backend event from its valid sibling, and the rule-level
-    fixture verifies the unaffected global fallback. Oracle and candidate
-    legacy discovery must succeed; the nine REST
-    fixtures also prove method, path, query, header, JSON body, and exactly one
-    upstream call per revision. The affected revision must retain a distinct
-    logged rejection for every fixture. The numeric fixture uses the same
-    hashed registered-tool source overlay for each revision because Go's normal
-    REST JSON unmarshal converts numbers to `float64` before schema preparation.
-    Descriptor hashes encode a type-tagged UTF-8 JSON tree with lexically sorted
-    object keys. Integer and floating tokens are tagged as numbers and retain
-    their source lexeme, while strings use a different tag; therefore numeric
-    `json.Number("1e5000")` is stable across Python and Go revisions but cannot
-    collide with the JSON string `"1e5000"`.
-25. **Same-process dynamic generation transition** atomically updates a
-    file-backed LDS source in one Envoy process and proves validated ->
-    validation-unavailable -> validated descriptors, call behavior, and backend
-    counts of 1 -> 0 -> 1. Container ID, PID, and start time must remain stable.
-26. **Unknown strategy rejection** verifies that an unrecognized
-    `protocolStrategy` is rejected before any upstream request.
-
-Auto adds two isolated baseline cases and one case-completeness gate. Their
-baselines serve distinct purposes:
-
-| Baseline | Fixed source | Module / configuration | Required proof |
-| --- | --- | --- | --- |
-| `AUTO_BASELINE_SHA` | `dc0999326b1a8df4269c13d0cf6ee2b725259f6e` | `auto-baseline-plugin.wasm` / `envoy-auto-baseline.yaml` | Reject auto before any backend request. |
-| `EXPLICIT_BASELINE_SHA` | `36f2f1ac5c7305c5a46c296c617b45d1fbacb7d3` | `explicit-baseline-plugin.wasm` / `envoy-auto-explicit-baseline.yaml` | Match the candidate's five explicit/default profiles using real requests, normalized results, backend sequences and complete access ledgers. |
-
-The existing `gateway-auto-explicit-baseline` Compose service and evidence
-filenames are retained. Its module comes from the independent explicit-profile
-baseline, not the older auto-rejection revision. Missing or duplicate cases,
-result/request/header/status changes, changed backend sequences, and missing,
-duplicate or unexpected access IDs still fail the comparison. Existing REST
-schema baseline/oracle and routing oracle/affected phases remain independent.
-
-The named auto traffic cases in `verify_auto.py` cover modern 2-call and legacy
-4-call success, selected 2025-06-18 headers, ordinary HTTP fallback, JSON/SSE
-framing, malformed/oversized discovery, authentication/rate-limit/network/errors,
-initialize/notification failures, per-request capability changes, concurrent
-requests, user/tool authentication and session isolation, local discovery and
-allowTools, continuation rejection, cursor errors, and business execution before
-response loss without replay. Every scenario includes its backend operation
-ledger; failure before business requires zero `tools/call` events.
-
-Cancellation is tested at discover, initialize, initialized notification, and
-business using a backend phase barrier. The verifier disconnects the downstream,
-waits for its active-request gauge to reach zero, releases the backend, waits
-for both backend response completion and the upstream active-request gauge to
-reach zero, then uses a local discover on the same listener as an event-loop
-fence. Only then does it assert the terminal ledger. A callout already submitted
-may execute; no hostcall cancellation API or fixed sleep is assumed.
-
-Successful modern results are also checked for `resultType: complete`, effective
-server identity, and the applicable `ttlMs: 0` / `cacheScope: private` fields.
-Discovery must advertise only implemented versions and tools capabilities.
-
-### Historical proxy fallthrough regression guard
-
-An older revision at `3c5819ed` exposed a request-resume fallthrough bug and
-produced **9 PASS / 2 FAIL**. Modern-to-legacy traffic emitted eight backend
-events instead of six, while the default-legacy flows emitted 24 instead of 18;
-the extra requests forwarded the original downstream RPC after the completed
-legacy proxy callout.
-
-The pre-compatibility clean exact-head baseline was **11 PASS / 0 FAIL**. The strict
-six-event and 18-event assertions remain intentionally in place as regression
-guards. Duplicate RPCs, extra `/mcp` requests, or cross-era
-`Mcp-Param-Future` forwarding must not be accepted as a new baseline.
-
-## Evidence artifacts
-
-A completed evidence directory contains:
-
-- `manifest.json`: top-level source, build, image, tool-version, matrix, access,
-  sanitization, and cleanup identity.
-- `matrix.json`: all case statuses and details, including sanitized per-case
-  backend event snapshots and client exchanges.
-- `expected-main-cases.json`: the exact main case ID set, checked for omissions
-  and duplicates before finalization.
-- `client-exchanges.json`: the complete main ledger with stable request IDs,
-  selected request metadata, selected response headers, response bodies, and a
-  canonical response-body SHA256.
-- `access-coverage.json`: the recorded-exchange and Envoy-access counts plus any
-  missing, duplicate, or unexpected request IDs.
-- `backend-primary-final.json` and `backend-secondary-final.json`: final safe
-  event state for each deterministic backend.
-- `backend-auto-state.json`: proof that the unknown-strategy configuration made
-  no upstream request.
-- `backend-auto-baseline-state.json` and `gateway-auto-baseline.log`: pre-change
-  auto rejection with zero upstream events.
-- `auto-explicit-baseline.json` and `gateway-auto-explicit-baseline.log`: exact
-  accepted pre-instructions explicit/default responses, backend ledger and
-  access log from the independent `36f2f1ac...` compatibility module.
-- `backend-baseline-state.json` and `gateway-baseline.log`: affected-revision
-  zero-upstream and compiler-rejection proof.
-- `oracle-verification.json`, `backend-oracle-state.json`, and
-  `gateway-oracle.log`: v2.0.0 list, descriptor, REST mapping, backend, and
-  plugin-start proof.
-- `backend-control-*-state.json`, the aggregate `backend-control-state.json`,
-  and `gateway-control-*.log`: per-revision historical malformed URL-template
-  rejection and zero-upstream proof.
-- `corpus-manifest.json`, `corpus-*.json`, `gateway-corpus-*.log`,
-  `envoy-corpus-*.yaml`, and `lds-corpus-*.yaml`: per-fixture, per-revision
-  acceptance, protocol behavior, REST mapping, LDS rejection, and configuration
-  identity for the representative corpus.
-- `generation-transition.json`, `generation-process-*.txt`, and
-  `gateway-generation.log`: per-generation descriptors, responses, backend
-  events, exchanges, runtime log, and stable process identity.
-- `envoy.yaml`, `envoy-auto.yaml`, `envoy-auto-baseline.yaml`,
-  `envoy-auto-explicit-baseline.yaml`, `envoy-baseline.yaml`, `envoy-oracle.yaml`,
-  `envoy-control-*.yaml`, `envoy-generation.yaml`, and
-  `lds-generation-*.yaml`: the exact static and dynamic Envoy configurations.
-- `compose-config.yaml` and `compose-config.json`: the provider-resolved Compose
-  configuration with fixture credentials redacted; the JSON form is the input
-  to the structured Envoy concurrency check.
-- `gateway.log` and `gateway-auto.log`: sanitized Envoy runtime and access logs,
-  collected after the gateways stop.
-- `podman-version.txt` and `compose-version.txt`: host runtime tool identities.
-- `gateway-image-digests.txt` and `backend-image-digests.txt`: resolved image
-  digests for the pulled tags.
-- `cleanup-proof.txt`: the post-cleanup check for the exact Compose project.
-- `lifecycle-diagnostics.log`: bounded stop/backend lifecycle errors; empty for
-  a successful run and retained when a lifecycle gate fails.
-- `SHA256SUMS`: SHA256 values for every retained evidence file except itself.
-
-The main `manifest.json` fields have these meanings:
-
-- `source_sha` and `source_tree_clean` identify the committed code under test.
-- `plugin_sha256` identifies the exact temporary WASM bytes loaded by Envoy.
-- `auto_baseline_source_sha`, `auto_baseline_plugin_sha256`,
-  `auto_baseline_config_sha256` and `auto_baseline_role` identify the separately
-  built pre-auto rejection module and its actual configuration.
-- `explicit_baseline_source_sha`, `explicit_baseline_plugin_sha256`,
-  `explicit_baseline_config_sha256` and `explicit_baseline_role` identify the
-  independent accepted explicit/default compatibility module and configuration.
-- `baseline_source_sha` and `baseline_plugin_sha256` identify the independently
-  built pinned rejection baseline.
-- `oracle_source_sha` and `oracle_plugin_sha256` identify the independently
-  built v2.0.0 acceptance oracle.
-- `corpus_fixture_sha256` and `corpus_plugin_sha256` bind the common registered
-  numeric fixture source and all three derived corpus Wasm modules.
-- `corpus-manifest.json.expectedInputSchemaSha256` binds each fixture to its
-  generator-owned canonical descriptor rather than hashing the observed
-  `tools/list` response as its own oracle.
-- `gateway_image`, `backend_image`, and their resolved digest arrays identify
-  the container inputs; compare digests because tags can move.
-- `podman_version` and `compose_version` identify the local orchestration tools.
-- `client_exchange_count` and `access_coverage` bind the client ledger to the
-  flushed Envoy access log.
-- `sanitization` records the evidence redaction policy.
-- `cleanup` embeds the cleanup-proof result.
-
-The three main/oracle/affected Wasm files, three `corpus-plugin-*.wasm` files,
-and two independent auto-rejection/explicit-compatibility modules are temporary.
-Their SHA256 values are calculated before containers start and recorded in
-`manifest.json`; the completed run deletes all eight and excludes
-them from `SHA256SUMS`. If the script exits before finalization, delete any
-partial artifact after diagnosis and never add it to Git.
-
-## Verify a completed evidence set
-
-Set the absolute path printed by the finalizer:
-
-```bash
-EVIDENCE_DIR=/absolute/path/to/higress-mcp-runtime-evidence
-```
-
-First verify that none of the retained files changed after finalization:
-
-```bash
-if command -v sha256sum >/dev/null 2>&1; then
-  (cd "$EVIDENCE_DIR" && sha256sum -c SHA256SUMS)
-else
-  (cd "$EVIDENCE_DIR" && shasum -a 256 -c SHA256SUMS)
-fi
-```
-
-Then verify source identity, complete case coverage, the main access ledger,
-plugin/image identities, and cleanup proof:
-
-```bash
-python3 - "$EVIDENCE_DIR" "$(git rev-parse HEAD)" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-root = Path(sys.argv[1])
-expected_source = sys.argv[2]
-manifest = json.loads((root / "manifest.json").read_text())
-matrix = json.loads((root / "matrix.json").read_text())
-coverage = json.loads((root / "access-coverage.json").read_text())
-cleanup = (root / "cleanup-proof.txt").read_text().strip()
-
-backend_events = sum(
-    len(events)
-    for case in matrix["cases"]
-    for events in case.get("detail", {}).get("backendEvents", {}).values()
-    if isinstance(events, list)
-)
-
-assert manifest["source_sha"] == expected_source
-assert manifest["source_tree_clean"] is True
-assert manifest["baseline_source_sha"] == "c55d9825c90868f50edbff9764a6b3cf2eb13162"
-assert manifest["oracle_source_sha"] == "39ec41aab6eb1d40499bed2847085696de0ebb96"
-assert manifest["auto_baseline_source_sha"] == "dc0999326b1a8df4269c13d0cf6ee2b725259f6e"
-assert manifest["explicit_baseline_source_sha"] == "36f2f1ac5c7305c5a46c296c617b45d1fbacb7d3"
-assert matrix["summary"] == {"pass": len(matrix["cases"]), "fail": 0}
-expected_main = json.loads((root / "expected-main-cases.json").read_text())
-case_names = [case["case"] for case in matrix["cases"]]
-assert len(case_names) == len(set(case_names))
-assert set(expected_main).issubset(case_names)
-assert all(case["status"] == "PASS" for case in matrix["cases"])
-assert coverage["status"] == "PASS"
-exchanges = json.loads((root / "client-exchanges.json").read_text())["exchanges"]
-assert coverage["recordedClientExchangeCount"] == len(exchanges)
-assert coverage["accessRecordCount"] == len(exchanges)
-assert not coverage["missingRequestIds"]
-assert not coverage["duplicateRequestIds"]
-assert not coverage["unexpectedRequestIds"]
-assert len(manifest["plugin_sha256"]) == 64
-assert len(manifest["baseline_plugin_sha256"]) == 64
-assert len(manifest["auto_baseline_plugin_sha256"]) == 64
-assert len(manifest["explicit_baseline_plugin_sha256"]) == 64
-assert len(manifest["auto_baseline_config_sha256"]) == 64
-assert len(manifest["explicit_baseline_config_sha256"]) == 64
-assert len(manifest["oracle_plugin_sha256"]) == 64
-assert len(manifest["corpus_fixture_sha256"]) == 64
-assert all(len(value) == 64 for value in manifest["corpus_plugin_sha256"].values())
-assert manifest["gateway_resolved_digests"]
-assert manifest["backend_resolved_digests"]
-assert cleanup.startswith("PASS no containers remain")
-
-print(json.dumps({
-    "source_sha": manifest["source_sha"],
-    "plugin_sha256": manifest["plugin_sha256"],
-    "baseline_plugin_sha256": manifest["baseline_plugin_sha256"],
-    "oracle_plugin_sha256": manifest["oracle_plugin_sha256"],
-    "corpus_plugin_sha256": manifest["corpus_plugin_sha256"],
-    "gateway_digests": manifest["gateway_resolved_digests"],
-    "backend_digests": manifest["backend_resolved_digests"],
-    "matrix": matrix["summary"],
-    "access": [coverage["recordedClientExchangeCount"],
-               coverage["accessRecordCount"]],
-    "backend_events": backend_events,
-    "cleanup": cleanup,
-}, indent=2, sort_keys=True))
-PY
-```
-
-The `SHA256SUMS` check proves retained-file integrity within one evidence set.
-The manifest's source, plugin, image, and tool identities establish what ran;
-the matrix and ledgers establish behavior. None of those signals alone replaces
-the others.
-
-## Re-run and compare regressions
-
-For a future regression check:
-
-1. Start from a clean committed candidate head.
-2. Use a fresh evidence directory and retain the previous accepted evidence
-   directory unchanged.
-3. Verify `SHA256SUMS` independently in both directories.
-4. Compare source and plugin SHA values, resolved image digests, Podman/Compose
-   versions, matrix summaries, per-case backend events, client responses, access
-   coverage, and cleanup proof.
-5. Review structured JSON before comparing logs. Container prefixes and log
-   ordering can vary even when the protocol behavior is unchanged.
-
-For example:
-
-```bash
-OLD_EVIDENCE=/absolute/path/to/accepted-evidence
-NEW_EVIDENCE=/absolute/path/to/candidate-evidence
-
-diff -u "$OLD_EVIDENCE/manifest.json" "$NEW_EVIDENCE/manifest.json"
-diff -u "$OLD_EVIDENCE/matrix.json" "$NEW_EVIDENCE/matrix.json"
-diff -u "$OLD_EVIDENCE/client-exchanges.json" \
-  "$NEW_EVIDENCE/client-exchanges.json"
-diff -u "$OLD_EVIDENCE/access-coverage.json" \
-  "$NEW_EVIDENCE/access-coverage.json"
-```
-
-An expected source or plugin SHA change is not itself a regression. Investigate
-behavioral differences case by case, and first account for image-digest or tool
-version changes. Never weaken strict RPC, event-count, header-isolation, or
-access-ledger assertions merely to make a changed run pass.
-
-## Cleanup and troubleshooting
-
-`run.sh` installs a cleanup trap and removes containers, networks, anonymous
-volumes, and orphans for its unique Compose project. A successful cleanup writes
-`PASS no containers remain ...` to `cleanup-proof.txt`. If a run is interrupted,
-inspect only the exact Compose project before removing leftovers; do not remove
-unrelated Podman resources.
-
-Common failure boundaries are:
-
-- exit 2: the worktree is dirty and `RUNTIME_ALLOW_DIRTY=1` was not set;
-- exit 3: WASM build, Envoy generation, image pull, or identity capture failed;
-- exit 4: backend/gateway startup, state capture, stop, or log collection failed;
-- exit 1: a matrix assertion, access-coverage check, cleanup check, or evidence
-  finalization failed.
-
-For startup and runtime failures:
-
-- confirm `podman info` succeeds and `podman compose version` finds its provider;
-- confirm the evidence path is absolute, shared with the Podman machine, and
-  writable by the host;
-- check image-pull and Go-module network access;
-- inspect `gateway.log`, `gateway-auto.log`, `gateway-baseline.log`,
-  `gateway-generation.log`, `matrix.json`, and the case's
-  `backendEvents` / `clientExchanges` before rerunning;
-- treat missing or duplicate access IDs as an incomplete or duplicated Envoy
-  exchange, not merely a logging cosmetic; and
-- use a new evidence directory after a partial run.
-
-## Security and redaction boundary
-
-All configured credentials are deterministic fake fixture values. The harness
-redacts those known values from textual Compose and gateway logs. Backend events
-store presence or policy-match booleans for credentials and session headers,
-not their raw values. The client ledger similarly stores presence flags instead
-of Authorization, Cookie, session, or Last-Event-ID values.
-
-This is targeted fixture sanitization, not a general secret scanner. Do not put
-real credentials, production endpoints, tenant data, or sensitive request
-payloads into this environment. Evidence includes response bodies, request
-metadata, backend routing facts, and logs; inspect it before sharing. Keep
-evidence outside the repository, do not commit generated files, and use
-`RUNTIME_ALLOW_DIRTY=1` only for disposable development diagnosis.
-
-## Routing compatibility (#4597)
-
-The independent `run-routing.sh` suite is **manual evidence tooling, not executed by CI**.
-CI runs `routing_self_test.py` to check its fixtures, timeout/logging oracles, and
-nonempty assertions/subprocess failure handling; this does not run Envoy or replace
-the manual evidence. The paired kind test runs route header and timeout regressions
-in the existing conformance CI. The manual suite leaves the REST schema and auto regression
-baselines untouched. It builds three immutable Git snapshots with the same local
-Go toolchain, fixture files and pinned gateway/Python images. Containers run
-sequentially in invocation-owned networks; failure still retains evidence and
-removes only those containers/networks. The output directory must not exist.
-
-```bash
-./run-routing.sh \
-  --oracle 958b5e7f8e0062d1e26963d008e7be4b707fa715 \
-  --affected bda81f1067e1285775e650644a20a635f51b0a6d \
-  --candidate "$(git rev-parse HEAD)" \
-  --gateway-image "$ROUTING_GATEWAY_IMAGE_DIGEST" \
-  --backend-image "$ROUTING_BACKEND_IMAGE_DIGEST" \
-  --engine podman \
-  --output "$VERIFY_OUTPUT/routing"
-```
-
-Use a clean committed candidate; uncommitted changes are not built. Docker can be
-selected with `--engine docker`. Python images supplied as tags are resolved to
-immutable digests before running any variant; pass digests to reproduce a run.
-The gateway must provide the Higress header-phase body-injection extension.
-Only synthetic credentials/parameters are used. Candidate SafeLog keeps payloads
-out of INFO but deliberately retains them at DEBUG. The optional pre-review
-baseline is intentionally unsafe and is expected to log those synthetic payloads
-at INFO; never use real credentials with either fixture.
-
-Add `--review-baseline 2e7c9b47d49cbec3450af9788e0e2e4e92bcad84` to build a fourth
-snapshot that already restores routing but predates the security review fixes.
-All snapshots use identical fixtures. Header assertions require inherited
-Proxy-Authorization on the old oracle/review baseline and its absence on the
-affected/candidate versions. Candidate and review baseline also run the same
-synthetic URL, query, header, argument, response-header and result log probes.
-The dedicated log-probe listener omits Envoy access logging (which SafeLog does
-not control); ordinary routing listeners retain access logs. The runner captures `gateway-info.log`, changes that disposable gateway to DEBUG
-through its admin endpoint, and captures only the subsequent bytes in
-`gateway-debug.log`. It checks both RouteCall start and asynchronous end events;
-`assertions-logs.json` records the expected INFO red/green and DEBUG visibility.
-
-`manifest.json` records source/harness, Go, module, image, Wasm and configuration
-identities, hashes all raw evidence and records cleanup. `commands.jsonl` records
-exact commands, durations and exit codes. Each variant saves backend `ledger.jsonl`,
-HTTP bodies/headers/hashes, machine assertions and full gateway/backend logs.
-Compatibility assertions explicitly expect red on affected and green on oracle
-and candidate. Protocol response assertions compare affected/candidate only;
-modern and auto are never attributed to the legacy oracle. No payload fields are
-normalized: IDs, numbers and bodies are compared directly; the 2s route/3s backend check requires the existing profile-specific JSON-RPC
-error and a 1.7–2.9s response, while affected must succeed after 2.7–5s. Header names are case-insensitive.
-
-Coverage includes control versus business counts, earlier/later filter headers
-and later rejection, ordinary headers and removed Authorization, fixed routing,
-route rewrite/hash, 6-second business versus the old 5-second callout timeout,
-2-second route timeout, 503 retry versus no retry, response status/body phases,
-fragmented JSON/SSE, twenty disconnects per HTTP profile, and the legacy SSE
-GET/POST ledger. Native/race tests supply deterministic duplicate-callback and
-cancellation arbitration cases that external clients cannot schedule reliably.
-Run the existing interop suite and MCP package tests as separate regression
-checks. The paired kind test is `GoWasmMcpProxyRoutingCompatibility`; plugin VERSION
-ends in `-alpha` so the CI batch builder includes its Wasm.
+Run these from this directory. `descriptor_self_test.py prepare|cleanup DIR`
+continues to check typed descriptor hashes against generated corpus fixtures.
+The default compatibility loop uses `run_routing.py --oracle <958b pin>
+--skip-affected --candidate <exact HEAD> --output DIR`; standalone
+`run-routing.sh` retains its explicit affected-revision diagnostic mode.
+
+For separate legacy instructions investigation, `RUNTIME_VERIFY_INSTRUCTIONS=1
+INSTRUCTIONS_BASELINE_SHA=<revision> bash run.sh` retains its existing focused
+entry. `RUNTIME_HISTORICAL_MATRIX=1 bash run.sh` exposes the older schema/corpus
+investigation only. Its v2.0.0 oracle `39ec...` and old schema-gate assertions are
+not the approved business oracle or current acceptance matrix.
+
+The official kind entry remains `go test -tags conformance
+./test/e2e/e2e_test.go`. Test-only `--gateway-address` populates
+`Suite.GatewayAddress` and defaults to `localhost`; a high-port forward can use
+`--gateway-address=127.0.0.1:18080`. This adds no production configuration.
+Use existing `WasmPluginsMCP20260728` and
+`GoWasmMcpProxyRoutingCompatibility` cases through the entry's `--execute-tests`
+filter. Keep kubeconfig credentials outside evidence uploads.
