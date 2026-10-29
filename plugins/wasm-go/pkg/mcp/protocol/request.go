@@ -171,9 +171,6 @@ func PrepareRequest(transport Transport, body []byte, methodAvailable func(strin
 }
 
 func PrepareRequestWithPolicy(transport Transport, body []byte, policyLookup MethodPolicyLookup) (*RequestContext, *Error) {
-	if protocolError := ValidateOrigin(transport); protocolError != nil {
-		return nil, protocolError
-	}
 	if len(body) > int(MaxBodyBytes) {
 		return nil, RequestTooLarge()
 	}

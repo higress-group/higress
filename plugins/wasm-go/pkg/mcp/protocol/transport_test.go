@@ -25,8 +25,6 @@ func TestValidateModernTransportMappings(t *testing.T) {
 	}{
 		{"GET", func(v *Transport) { v.Method = "GET" }, 405, CodeInvalidRequest},
 		{"DELETE", func(v *Transport) { v.Method = "DELETE" }, 405, CodeInvalidRequest},
-		{"cross-origin host", func(v *Transport) { v.Origin = "https://evil.example" }, 403, CodeInvalidRequest},
-		{"opaque origin", func(v *Transport) { v.Origin = "null" }, 403, CodeInvalidRequest},
 		{"ambiguous identity header", func(v *Transport) { v.AmbiguousModernHeader = true }, 400, CodeHeaderMismatch},
 	}
 	for _, test := range tests {
@@ -54,8 +52,8 @@ func TestModernTransportUsesLegacyMethodAndMediaPolicy(t *testing.T) {
 	}
 }
 
-func TestValidateModernTransportAcceptsSameOriginAndNoOrigin(t *testing.T) {
-	for _, origin := range []string{"", "https://mcp.example.com", "https://mcp.example.com:443"} {
+func TestValidateModernTransportAcceptsHistoricalOriginForms(t *testing.T) {
+	for _, origin := range []string{"", "https://mcp.example.com", "https://mcp.example.com:443", "https://other.example", "https://mcp.example.com:8443", "null", "invalid origin"} {
 		transport := modernTransport("tools/list", "")
 		transport.Origin = origin
 		if protocolError := ValidateModernTransport(transport); protocolError != nil {

@@ -201,6 +201,7 @@ func clearProxyRequestState(ctx wrapper.HttpContext) {
 		CtxSSEProxyRequestID,
 		CtxSSEProxyFirstChunk,
 		CtxSSEProxyJsonRpcID,
+		CtxSSEProxyPrepared,
 		"mcp_proxy_server",
 		"mcp_proxy_effective_allow_tools",
 	} {
@@ -1083,25 +1084,11 @@ func handleSSEToolsList(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjso
 	ctx.SetContext("mcp_proxy_server", server)
 	ctx.SetContext("mcp_proxy_effective_allow_tools", effectiveAllowTools)
 
-	// Prepare request body for tools/list
-	listRequest := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      2,
-		"method":  "tools/list",
-		"params":  map[string]interface{}{},
+	ctx.SetContext(CtxMcpProxyOperation, OpToolsList)
+	if cursor := params.Get("cursor"); cursor.Exists() {
+		ctx.SetContext(CtxMcpProxyCursor, cursor.String())
 	}
-
-	if cursorResult := params.Get("cursor"); cursorResult.Exists() {
-		listRequest["params"].(map[string]interface{})["cursor"] = cursorResult.String()
-	}
-
-	requestBody, err := json.Marshal(listRequest)
-	if err != nil {
-		return fmt.Errorf("failed to marshal tools/list request: %v", err)
-	}
-
-	// Use common function to handle SSE request
-	return handleSSERequest(ctx, id, requestBody, server, server.GetDefaultDownstreamSecurity(), server.GetDefaultUpstreamSecurity())
+	return handleSSERequest(ctx, id, server, server.GetDefaultDownstreamSecurity(), server.GetDefaultUpstreamSecurity())
 }
 
 // handleSSEToolsCall handles tools/call request for SSE transport
@@ -1142,22 +1129,9 @@ func handleSSEToolsCall(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjso
 
 	log.Debugf("Tool call [%s] on proxy server [%s]", toolName, server.Name)
 
-	// Prepare request body for tools/call
-	// Use id: 2 because initialize uses id: 1, and we only send one tool request (list or call)
-	callRequest := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      2,
-		"method":  "tools/call",
-		"params": map[string]interface{}{
-			"name":      toolName,
-			"arguments": arguments,
-		},
-	}
-
-	requestBody, err := json.Marshal(callRequest)
-	if err != nil {
-		return fmt.Errorf("failed to marshal tools/call request: %v", err)
-	}
+	ctx.SetContext(CtxMcpProxyOperation, OpToolsCall)
+	ctx.SetContext(CtxMcpProxyToolName, toolName)
+	ctx.SetContext(CtxMcpProxyToolArgs, arguments)
 
 	// Get tool config for tool-level security
 	toolConfig, _ := server.GetToolConfig(toolName)
@@ -1178,19 +1152,18 @@ func handleSSEToolsCall(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjso
 	}
 
 	// Use common function to handle SSE request
-	return handleSSERequest(ctx, id, requestBody, server, downstreamSecurity, upstreamSecurity)
+	return handleSSERequest(ctx, id, server, downstreamSecurity, upstreamSecurity)
 }
 
 // handleSSERequest is the common function to handle SSE requests for tools/list and tools/call
-func handleSSERequest(ctx wrapper.HttpContext, id utils.JsonRpcID, requestBody []byte, server *McpProxyServer, downstreamSecurity SecurityRequirement, upstreamSecurity SecurityRequirement) error {
+func handleSSERequest(ctx wrapper.HttpContext, id utils.JsonRpcID, server *McpProxyServer, downstreamSecurity SecurityRequirement, upstreamSecurity SecurityRequirement) error {
 	if proxyRequestCancelled(ctx) {
 		return errors.New("proxy request cancelled")
 	}
 	// Store JSON-RPC ID in context
 	ctx.SetContext(CtxSSEProxyJsonRpcID, id)
 
-	// Store request body in context for later use
-	ctx.SetContext(CtxSSEProxyRequestBody, requestBody)
+	registerProxyCancellation(ctx)
 
 	// Handle downstream security first (to extract and remove credentials before copying headers)
 	passthroughCredential := ""
@@ -1231,14 +1204,39 @@ func handleSSERequest(ctx wrapper.HttpContext, id utils.JsonRpcID, requestBody [
 	// Store auth info in context (headers will be copied directly in response phase)
 	ctx.SetContext(CtxSSEProxyAuthInfo, authInfo)
 
+	// Snapshot the original route cluster before rewriting the main GET. The
+	// endpoint may later choose a different Authority, never a different cluster.
+	handler := NewMcpProtocolHandler(server.GetMcpServerURL(), server.GetTimeout())
+	prepared, err := handler.prepareProxyRequest(ctx, nil)
+	if err != nil {
+		finishProxyRequest(ctx)
+		return err
+	}
+	operation, _ := ctx.GetContext(CtxMcpProxyOperation).(McpProxyOperation)
+	if operation == OpToolsList {
+		// Unlike HTTP forwarding, the historical SSE list request retained an
+		// explicitly supplied empty cursor as an empty string.
+		if cursor, present := ctx.GetContext(CtxMcpProxyCursor).(string); present {
+			prepared.params["cursor"], _ = json.Marshal(cursor)
+		}
+	}
+	requestBody, err := prepared.body(OutboundOperation{method: string(operation), version: protocol.Version20250326})
+	if err != nil {
+		finishProxyRequest(ctx)
+		return err
+	}
+	ctx.SetContext(CtxSSEProxyPrepared, prepared)
+	ctx.SetContext(CtxSSEProxyRequestBody, requestBody)
+
 	// Convert current request to SSE GET request
 	// The request will continue through the filter chain and be routed to backend
 	// The response will be handled by onHttpResponseHeaders and onHttpStreamingResponseBody
-	err := initiateSSEChannelInRequestPhase(ctx, server, authInfo)
+	err = initiateSSEChannelInRequestPhase(ctx, server, authInfo)
 	if err != nil {
-		log.Errorf("Failed to convert request to SSE GET: %v", err)
+		finishProxyRequest(ctx)
 		return err
 	}
+	ctx.SetContext(utils.CtxJsonRpcResponsePending, true)
 
 	// Explicitly set to NOT pause - let the request continue to establish SSE channel
 	ctx.SetContext(utils.CtxNeedPause, false)

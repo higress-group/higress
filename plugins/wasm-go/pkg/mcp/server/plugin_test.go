@@ -883,7 +883,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		}
 	}
 
-	t.Run("origin rejection precedes version disclosure", func(t *testing.T) {
+	t.Run("Origin does not suppress version validation", func(t *testing.T) {
 		host := newHost(t)
 		headers := append(commonHeaders(),
 			[2]string{"origin", "https://evil.example"},
@@ -894,9 +894,32 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 		response := host.GetLocalResponse()
 		require.NotNil(t, response)
-		assert.Equal(t, uint32(403), response.StatusCode)
-		assert.Equal(t, int64(protocol.CodeInvalidRequest), gjson.GetBytes(response.Data, "error.code").Int())
+		assert.Equal(t, uint32(400), response.StatusCode)
+		assert.Equal(t, int64(protocol.CodeUnsupportedVersion), gjson.GetBytes(response.Data, "error.code").Int())
 	})
+
+	for index, origin := range []string{"", "https://mcp.example.com", "https://other.example", "https://mcp.example.com:8443", "null"} {
+		for _, modern := range []bool{false, true} {
+			t.Run(fmt.Sprintf("Origin acceptance/%d/modern=%t", index, modern), func(t *testing.T) {
+				host := newHost(t)
+				headers := commonHeaders()
+				body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+				if modern {
+					headers = modernProxyListHeaders()
+					body = modernProxyListBody(1)
+				}
+				if origin != "" {
+					headers = append(headers, [2]string{"Origin", origin})
+				}
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+				response := host.GetLocalResponse()
+				require.NotNil(t, response)
+				assert.Equal(t, uint32(200), response.StatusCode)
+				assert.True(t, gjson.GetBytes(response.Data, "result.tools").Exists())
+			})
+		}
+	}
 
 	t.Run("large legacy marker string remains legacy", func(t *testing.T) {
 		host := newHost(t)

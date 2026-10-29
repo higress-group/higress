@@ -885,11 +885,6 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 	proxywasm.RemoveHttpRequestHeader(protocol.HeaderMethod)
 	proxywasm.RemoveHttpRequestHeader(protocol.HeaderName)
 
-	if protocolError := protocol.ValidateOrigin(transport); protocolError != nil {
-		utils.SendProtocolError(ctx, protocol.ID{}, protocolError, "mcp_request_origin_rejected")
-		return types.HeaderStopAllIterationAndWatermark
-	}
-
 	if protocol.HasModernIdentityHeaders(transport) {
 		if transport.ProtocolVersion != "" &&
 			!protocol.IsLegacyVersion(protocol.Version(transport.ProtocolVersion)) &&
@@ -980,6 +975,20 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config McpServerConfig) type
 	// Check if this request initiated SSE channel (tools/list or tools/call with SSE transport)
 	// Only these requests need special SSE streaming response processing
 	if ctx.GetContext(CtxSSEProxyState) != nil {
+		if ctx.GetContext(CtxSSEProxyState) == SSEStateComplete {
+			return types.HeaderStopAllIterationAndWatermark
+		}
+		responseHeaders, _ := proxywasm.GetHttpResponseHeaders()
+		status, _ := autoHeader(responseHeaders, ":status")
+		if status == "401" || status == "403" {
+			code := 401
+			if status == "403" {
+				code = 403
+			}
+			sendUpstreamAuthFailure(ctx, code, responseHeaders, "sse")
+			ctx.SetContext(CtxSSEProxyState, SSEStateComplete)
+			return types.HeaderStopAllIterationAndWatermark
+		}
 		// Check if response has a body
 		if ctx.HasResponseBody() {
 			// Pause streaming response for processing
@@ -989,6 +998,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config McpServerConfig) type
 		} else {
 			// No body, return error
 			utils.OnMCPResponseError(ctx, fmt.Errorf("no response body in SSE response"), utils.ErrInternalError, "mcp-proxy:sse:no_body")
+			finishSSERequest(ctx)
 			return types.HeaderStopAllIterationAndWatermark
 		}
 	}

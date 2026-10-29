@@ -229,21 +229,39 @@ func TestModernOnlyHeadersCannotDowngradeToLegacy(t *testing.T) {
 
 	transport.Origin = "https://evil.example"
 	_, protocolError = PrepareRequest(transport, []byte(`{"deeply":"malformed"`), available)
-	if protocolError == nil || protocolError.HTTPStatus != 403 {
-		t.Fatalf("cross-origin modern candidate error = %+v, want HTTP 403 before body parsing", protocolError)
+	if protocolError == nil || protocolError.HTTPStatus != 400 {
+		t.Fatalf("cross-origin malformed candidate error = %+v, want HTTP 400", protocolError)
 	}
 }
 
-func TestOriginPrecedesVersionAndBodyClassification(t *testing.T) {
+func TestOriginDoesNotPrecedeVersionAndBodyClassification(t *testing.T) {
 	transport := modernTransport("tools/list", "")
 	transport.ProtocolVersion = "2025-11-25"
 	transport.Origin = "https://evil.example"
 	_, protocolError := PrepareRequest(transport, []byte(`{"malformed":`), func(string) bool {
-		t.Fatal("method lookup must not run for an untrusted Origin")
+		t.Fatal("method lookup must not run before version/body validation")
 		return true
 	})
-	if protocolError == nil || protocolError.HTTPStatus != 403 || protocolError.Code != CodeInvalidRequest {
-		t.Fatalf("origin-first error = %+v, want HTTP 403/code %d", protocolError, CodeInvalidRequest)
+	if protocolError == nil || protocolError.HTTPStatus != 400 || protocolError.Code != CodeParseError {
+		t.Fatalf("body error = %+v, want HTTP 400/code %d", protocolError, CodeParseError)
+	}
+}
+
+func TestRequestProfilesAcceptHistoricalOriginForms(t *testing.T) {
+	for _, origin := range []string{"", "https://mcp.example.com", "https://other.example", "https://mcp.example.com:8443", "null"} {
+		for _, modern := range []bool{false, true} {
+			transport := modernTransport("tools/list", "")
+			body := []byte(modernListRequest)
+			if !modern {
+				transport.ProtocolVersion, transport.MCPMethod = "", ""
+				body = []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+			}
+			transport.Origin = origin
+			request, protocolError := PrepareRequest(transport, body, available)
+			if protocolError != nil || request == nil {
+				t.Fatalf("modern=%t Origin %q rejected: %v", modern, origin, protocolError)
+			}
+		}
 	}
 }
 

@@ -385,7 +385,8 @@ func TestProxyNotificationsSuppressBusinessAuthAndControlErrors(t *testing.T) {
 				}
 				response := proxyTestResponse(host)
 				require.NotNil(t, response)
-				assert.Equal(t, uint32(202), response.StatusCode)
+				assert.Equal(t, uint32(401), response.StatusCode)
+				assert.Equal(t, "Bearer realm=upstream", mustHeaderValue(t, response.Headers, "WWW-Authenticate"))
 				assert.Empty(t, response.Data)
 				assert.Empty(t, host.GetHttpCalloutAttributes())
 			})
@@ -429,4 +430,57 @@ func TestPreparedLegacyBusinessDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "2", gjson.GetBytes(body, "id").Raw)
 	assert.Equal(t, "{}", gjson.GetBytes(body, "params").Raw)
+}
+
+func TestNotificationAuthenticationExceptionAcrossHTTPStages(t *testing.T) {
+	for _, stage := range []string{"business", "discovery", "auto-discover", "auto-initialize", "auto-initialized"} {
+		for _, status := range []string{"401", "403"} {
+			t.Run(stage+"/"+status, func(t *testing.T) {
+				var host wasmtest.TestHost
+				method := string(OpToolsList)
+				switch stage {
+				case "business":
+					host = newProxyBridgeHost(t, ProtocolStrategyModern)
+				case "discovery":
+					host = newInstructionsHost(t, `,"passthroughInstructions":true`, "")
+					method = "server/discover"
+				default:
+					host = newAutoTestHost(t, "")
+				}
+				headers, body := looseProxyRequest(true, method, "")
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+				host.CallOnHttpRequestBody(body)
+				responseHeaders := [][2]string{{"WWW-Authenticate", "Bearer realm=upstream"}}
+				if strings.HasPrefix(stage, "auto-") {
+					call := calloutAt(t, host, 0)
+					if stage != "auto-discover" {
+						completeCallout(host, call, "404", nil, nil)
+						call = calloutAt(t, host, 0)
+					}
+					if stage == "auto-initialized" {
+						completeAutoResult(host, call, validAutoInitResult)
+						call = calloutAt(t, host, 0)
+					}
+					completeCallout(host, call, status, responseHeaders, nil)
+				} else {
+					routedRequest(t, host)
+					host.RegisterForeignFunction("inject_encoded_data_to_filter_chain_on_header", func(raw []byte) []byte {
+						args := &pb.InjectEncodedDataToFilterChainArguments{}
+						require.NoError(t, proto.Unmarshal(raw, args))
+						require.True(t, args.Endstream)
+						require.Empty(t, args.Body)
+						return []byte{0}
+					})
+					host.CallOnHttpResponseHeaders(append([][2]string{{":status", status}}, responseHeaders...), wasmtest.WithEndOfStream(true))
+				}
+				response := proxyTestResponse(host)
+				require.NotNil(t, response)
+				code, _ := strconv.Atoi(status)
+				assert.Equal(t, uint32(code), response.StatusCode)
+				assert.Equal(t, "Bearer realm=upstream", mustHeaderValue(t, response.Headers, "WWW-Authenticate"))
+				assert.Empty(t, response.Data)
+				assert.Empty(t, host.GetHttpCalloutAttributes(), "authentication failures never advance to another control/business call")
+			})
+		}
+	}
 }

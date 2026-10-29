@@ -95,6 +95,12 @@ func WriteHTTPResponse(ctx wrapper.HttpContext, code uint32, detail string, head
 // upstream operation used a different correlation ID or a Legacy default.
 func WriteJsonRpcResponse(ctx wrapper.HttpContext, code uint32, detail string, headers [][2]string, body []byte) {
 	if isNotification(ctx) {
+		// HTTP authentication failures retain their status/challenge exception,
+		// while notifications still suppress the JSON-RPC response envelope.
+		if code == 401 || code == 403 {
+			makeHttpResponse(ctx, code, detail, headers, nil)
+			return
+		}
 		acknowledgeNotification(ctx)
 		return
 	}

@@ -14,11 +14,7 @@
 
 package protocol
 
-import (
-	"net"
-	"net/url"
-	"strings"
-)
+import "strings"
 
 const (
 	HeaderProtocolVersion = "MCP-Protocol-Version"
@@ -113,9 +109,6 @@ func HasModernIdentityHeaders(transport Transport) bool {
 // ValidateModernTransport performs checks which do not depend on the JSON-RPC
 // envelope and therefore can run before request-body processing.
 func ValidateModernTransport(transport Transport) *Error {
-	if protocolError := ValidateOrigin(transport); protocolError != nil {
-		return protocolError
-	}
 	if transport.AmbiguousModernHeader {
 		return HeaderMismatch()
 	}
@@ -125,55 +118,8 @@ func ValidateModernTransport(transport Transport) *Error {
 	return nil
 }
 
-// ValidateOrigin is intentionally independent of protocol-era classification.
-// A hostile Origin is rejected before version disclosure or body parsing.
-func ValidateOrigin(transport Transport) *Error {
-	if !trustedOrigin(transport.Origin, transport.Authority) {
-		return UntrustedOrigin()
-	}
+// ValidateOrigin retains source compatibility with existing protocol consumers.
+// Deprecated: Origin follows the historical acceptance policy for both profiles.
+func ValidateOrigin(Transport) *Error {
 	return nil
-}
-
-func trustedOrigin(origin, authority string) bool {
-	if origin == "" {
-		return true
-	}
-	if strings.ContainsAny(origin, ", ") || authority == "" {
-		return false
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.User != nil || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return false
-	}
-	originHost, originPort, ok := normalizedHostPort(parsed.Host, parsed.Scheme)
-	if !ok {
-		return false
-	}
-	authorityHost, authorityPort, ok := normalizedHostPort(authority, parsed.Scheme)
-	return ok && strings.EqualFold(originHost, authorityHost) && originPort == authorityPort
-}
-
-func normalizedHostPort(value, scheme string) (string, string, bool) {
-	host := value
-	port := ""
-	if parsedHost, parsedPort, err := net.SplitHostPort(value); err == nil {
-		host, port = parsedHost, parsedPort
-	} else if strings.Count(value, ":") > 1 && !strings.HasPrefix(value, "[") {
-		return "", "", false
-	}
-	if host == "" {
-		return "", "", false
-	}
-	if port == "" {
-		switch scheme {
-		case "http":
-			port = "80"
-		case "https":
-			port = "443"
-		}
-	}
-	return strings.Trim(host, "[]"), port, true
 }

@@ -24,7 +24,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -42,102 +41,78 @@ const (
 	CtxSSEProxyRequestID   = "sse_proxy_request_id"
 	CtxSSEProxyFirstChunk  = "sse_proxy_first_chunk"
 	CtxSSEProxyJsonRpcID   = "sse_proxy_jsonrpc_id"
+	CtxSSEProxyPrepared    = "sse_proxy_prepared"
 
 	// SSE proxy state values
 	SSEStateWaitingEndpoint   = "waiting_endpoint"
 	SSEStateWaitingInitResp   = "waiting_init_resp"
 	SSEStateWaitingNotifyResp = "waiting_notify_resp"
 	SSEStateWaitingToolResp   = "waiting_tool_resp"
+	SSEStateComplete          = "complete"
 
 	// Buffer size limit: 100MB
 	MaxSSEBufferSize = 100 * 1024 * 1024
 )
 
-// injectSSEResponseSuccess injects a successful JSON-RPC response in streaming response body phase
-func injectSSEResponseSuccess(ctx wrapper.HttpContext, result map[string]any) {
-	if request, modern := ModernRequestContext(ctx); modern {
-		result = ShapeResult(request, authServerName(ctx), protocol.SemanticResult{Value: result, ResultType: resultTypeComplete})
-	}
-	// Get JSON-RPC ID from context
-	jsonRpcIDRaw := ctx.GetContext(CtxSSEProxyJsonRpcID)
-	if jsonRpcIDRaw == nil {
+// SSE responses keep the existing streaming injection mechanism. Only the
+// response identity and notification decision are shared with other transports.
+func injectSSEResponse(ctx wrapper.HttpContext, extras map[string]any) {
+	id, ok := ctx.GetContext(CtxSSEProxyJsonRpcID).(utils.JsonRpcID)
+	if !ok {
 		log.Errorf("JSON-RPC ID not found in context for SSE response")
 		return
 	}
-	jsonRpcID, ok := jsonRpcIDRaw.(utils.JsonRpcID)
-	if !ok {
-		log.Errorf("Invalid JSON-RPC ID type in context for SSE response")
-		return
+	if exchange, ok := ctx.GetContext(CtxMcpProxyCancel).(*proxyExchange); ok {
+		exchange.mu.Lock()
+		if exchange.cancelled && !exchange.closed {
+			exchange.mu.Unlock()
+			finishSSERequest(ctx)
+			return
+		}
+		if exchange.closed || exchange.responding {
+			exchange.mu.Unlock()
+			return
+		}
+		exchange.responding = true
+		exchange.mu.Unlock()
 	}
-
-	var body []byte
-	var err error
-	if jsonRpcID.IsString {
-		body, err = json.Marshal(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      jsonRpcID.StringValue,
-			"result":  result,
-		})
-	} else {
-		body, err = json.Marshal(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      jsonRpcID.IntValue,
-			"result":  result,
-		})
+	response := map[string]any{"jsonrpc": "2.0", "id": utils.ClientResponseID(ctx, id)}
+	for key, value := range extras {
+		response[key] = value
 	}
-
+	body, err := json.Marshal(response)
 	if err != nil {
-		log.Errorf("Failed to marshal JSON-RPC success response: %v", err)
+		log.Errorf("Failed to marshal SSE JSON-RPC response")
 		return
 	}
-
+	if notification, _ := ctx.GetContext(utils.CtxJsonRpcNotification).(bool); notification {
+		body = nil
+		status, _ := proxywasm.GetHttpResponseHeader(":status")
+		if status != "401" && status != "403" {
+			proxywasm.ReplaceHttpResponseHeader(":status", "202")
+		}
+	}
+	ctx.SetContext(utils.CtxJsonRpcResponded, true)
 	proxywasm.InjectEncodedDataToFilterChain(body, true)
-	finishProxyRequest(ctx)
+	finishSSERequest(ctx)
 }
 
-// injectSSEResponseError injects an error JSON-RPC response in streaming response body phase
+func injectSSEResponseSuccess(ctx wrapper.HttpContext, result map[string]any) {
+	injectSSEResponse(ctx, map[string]any{"result": adaptProxyResult(ctx, false, result)})
+}
+
 func injectSSEResponseError(ctx wrapper.HttpContext, err error, errorCode int) {
-	// Get JSON-RPC ID from context
-	jsonRpcIDRaw := ctx.GetContext(CtxSSEProxyJsonRpcID)
-	if jsonRpcIDRaw == nil {
-		log.Errorf("JSON-RPC ID not found in context for SSE error response")
-		return
+	if err == nil {
+		err = errors.New("internal error")
 	}
-	jsonRpcID, ok := jsonRpcIDRaw.(utils.JsonRpcID)
-	if !ok {
-		log.Errorf("Invalid JSON-RPC ID type in context for SSE error response")
-		return
-	}
+	injectSSEResponse(ctx, map[string]any{"error": map[string]any{"code": errorCode, "message": err.Error()}})
+}
 
-	var body []byte
-	var marshalErr error
-	if jsonRpcID.IsString {
-		body, marshalErr = json.Marshal(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      jsonRpcID.StringValue,
-			"error": map[string]any{
-				"code":    errorCode,
-				"message": err.Error(),
-			},
-		})
-	} else {
-		body, marshalErr = json.Marshal(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      jsonRpcID.IntValue,
-			"error": map[string]any{
-				"code":    errorCode,
-				"message": err.Error(),
-			},
-		})
-	}
-
-	if marshalErr != nil {
-		log.Errorf("Failed to marshal JSON-RPC error response: %v", marshalErr)
-		return
-	}
-
-	proxywasm.InjectEncodedDataToFilterChain(body, true)
+func finishSSERequest(ctx wrapper.HttpContext) {
 	finishProxyRequest(ctx)
+	// Keep a stream-local terminal marker so later chunks are discarded rather
+	// than exposed as raw SSE after the other request-owned state is cleared.
+	ctx.SetContext(CtxSSEProxyState, SSEStateComplete)
 }
 
 func handleSSEUpstreamAuthFailure(ctx wrapper.HttpContext, statusCode int, responseHeaders [][2]string) bool {
@@ -234,9 +209,6 @@ func ParseSSEMessage(data []byte) (*SSEMessage, []byte, error) {
 func ExtractEndpointURL(endpointData string, baseURL string) (string, error) {
 	// Case 1: endpointData is a full URL
 	if strings.HasPrefix(endpointData, "http://") || strings.HasPrefix(endpointData, "https://") {
-		if err := validateSSEEndpointOrigin(endpointData, baseURL); err != nil {
-			return "", err
-		}
 		return endpointData, nil
 	}
 
@@ -261,64 +233,76 @@ func ExtractEndpointURL(endpointData string, baseURL string) (string, error) {
 	return endpointData, nil
 }
 
-func validateSSEEndpointOrigin(endpointURL, configuredURL string) error {
-	endpoint, err := url.Parse(endpointURL)
-	if err != nil {
-		return errors.New("failed to parse SSE endpoint URL")
-	}
-	if endpoint.Scheme == "" && endpoint.Host == "" {
-		return nil
-	}
-	configured, err := url.Parse(configuredURL)
-	if err != nil {
-		return errors.New("failed to parse configured MCP server URL")
-	}
-	endpointScheme, endpointHost, endpointPort, endpointOK := normalizedHTTPOrigin(endpoint)
-	configuredScheme, configuredHost, configuredPort, configuredOK := normalizedHTTPOrigin(configured)
-	if !endpointOK || !configuredOK || endpointScheme != configuredScheme || endpointHost != configuredHost || endpointPort != configuredPort {
-		return errors.New("SSE endpoint origin does not match configured MCP server origin")
-	}
-	return nil
-}
-
-func normalizedHTTPOrigin(parsedURL *url.URL) (scheme, host, port string, ok bool) {
-	scheme = strings.ToLower(parsedURL.Scheme)
-	host = strings.ToLower(parsedURL.Hostname())
-	if (scheme != "http" && scheme != "https") || host == "" {
-		return "", "", "", false
-	}
-	port = parsedURL.Port()
-	if port == "" {
-		if scheme == "http" {
-			port = "80"
-		} else {
-			port = "443"
-		}
-	}
-	return scheme, host, port, true
-}
-
 func prepareSSEUpstreamRequest(server *McpProxyServer, authInfo *ProxyAuthInfo, headers *[][2]string, targetURL string) (string, error) {
-	if err := validateSSEEndpointOrigin(targetURL, server.GetMcpServerURL()); err != nil {
-		return "", err
-	}
 	if authInfo == nil {
 		return targetURL, nil
 	}
+	var authHeaders [][2]string
 	if authInfo.SecuritySchemeID != "" {
-		modifiedURL, err := applyProxyAuthenticationForSSE(server, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, headers, targetURL)
+		modifiedURL, err := applyProxyAuthenticationForSSE(server, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &authHeaders, targetURL)
 		if err != nil {
 			return "", fmt.Errorf("failed to apply proxy authentication: %v", err)
 		}
-		return modifiedURL, nil
-	}
-	if authInfo.ForwardAuthorization != "" {
+		targetURL = modifiedURL
+	} else if authInfo.ForwardAuthorization != "" {
 		if strings.ContainsAny(authInfo.ForwardAuthorization, "\r\n") {
 			return "", errors.New("invalid forwarded authorization header")
 		}
-		ensureHeader(headers, "Authorization", authInfo.ForwardAuthorization)
+		authHeaders = append(authHeaders, [2]string{"Authorization", authInfo.ForwardAuthorization})
+	}
+	for _, header := range authHeaders {
+		if reservedProxyHeader(strings.ToLower(header[0])) {
+			return "", errors.New("upstream authentication conflicts with MCP protocol headers")
+		}
+		ensureHeader(headers, header[0], header[1])
 	}
 	return targetURL, nil
+}
+
+// SSE POSTs retain the original route cluster while the old endpoint URL rules
+// choose Authority/path/query. No endpoint-domain DNS client is introduced.
+func postSSEUpstream(ctx wrapper.HttpContext, targetURL string, headers [][2]string, body []byte, callback func(int, [][2]string, []byte)) error {
+	prepared, ok := ctx.GetContext(CtxSSEProxyPrepared).(*PreparedProxyRequest)
+	if !ok {
+		return errors.New("missing SSE proxy request")
+	}
+	target, err := resolveProxyTarget(targetURL)
+	if err != nil {
+		return err
+	}
+	target.cluster = prepared.target.cluster
+	exchange, _ := ctx.GetContext(CtxMcpProxyCancel).(*proxyExchange)
+	if exchange == nil {
+		return errors.New("missing SSE proxy exchange")
+	}
+	exchange.mu.Lock()
+	closed, cancelled := exchange.closed, exchange.cancelled
+	exchange.mu.Unlock()
+	if closed {
+		return nil
+	}
+	if cancelled {
+		finishSSERequest(ctx)
+		return nil
+	}
+	completed := false
+	return dispatchPreparedMCP(target, prepared.timeout, headers, body, 0, func(response autoHTTPResponse) {
+		exchange.mu.Lock()
+		closed, cancelled, duplicate := exchange.closed, exchange.cancelled, completed
+		completed = true
+		exchange.mu.Unlock()
+		if closed || duplicate {
+			return
+		}
+		if cancelled {
+			finishSSERequest(ctx)
+			return
+		}
+		if response.status == 0 {
+			response.status = http.StatusBadGateway
+		}
+		callback(response.status, response.headers, response.body)
+	})
 }
 
 // sendSSEInitialize sends the initialize request for SSE protocol
@@ -329,13 +313,7 @@ func sendSSEInitialize(ctx wrapper.HttpContext, endpointURL string, authInfo *Pr
 		"method":  "initialize",
 		"params": map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities": map[string]any{
-				"roots": map[string]any{
-					"listChanged": true,
-				},
-				"sampling":    map[string]any{},
-				"elicitation": map[string]any{},
-			},
+			"capabilities":    map[string]any{},
 			"clientInfo": map[string]any{
 				"name":    "Higress-mcp-proxy",
 				"title":   "Higress MCP Proxy",
@@ -354,8 +332,9 @@ func sendSSEInitialize(ctx wrapper.HttpContext, endpointURL string, authInfo *Pr
 
 	// Override required headers for SSE initialize
 	ensureHeader(&finalHeaders, "Content-Type", "application/json")
+	ensureHeader(&finalHeaders, "Accept", "application/json,text/event-stream")
 
-	// Validate the endpoint origin before applying explicit authentication.
+	// Apply the existing credential policy to the endpoint-selected URL.
 	finalURL, err := prepareSSEUpstreamRequest(proxyServer, authInfo, &finalHeaders, endpointURL)
 	if err != nil {
 		return err
@@ -366,13 +345,9 @@ func sendSSEInitialize(ctx wrapper.HttpContext, endpointURL string, authInfo *Pr
 
 	// Store state for tracking
 	ctx.SetContext(CtxSSEProxyState, SSEStateWaitingInitResp)
-	ctx.SetContext(CtxSSEProxyRequestID, 1)
+	ctx.SetContext(CtxSSEProxyRequestID, json.RawMessage(`1`))
 
-	return postMCPUpstream(finalURL, proxyServer.GetTimeout(), finalHeaders, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
-		if proxyRequestCancelled(ctx) {
-			finishProxyRequest(ctx)
-			return
-		}
+	return postSSEUpstream(ctx, finalURL, finalHeaders, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		if handleSSEUpstreamAuthFailure(ctx, statusCode, responseHeaders) {
 			return
 		}
@@ -407,8 +382,9 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, authInfo *
 
 	// Override required headers for SSE notification
 	ensureHeader(&finalHeaders, "Content-Type", "application/json")
+	ensureHeader(&finalHeaders, "Accept", "application/json,text/event-stream")
 
-	// Validate the endpoint origin before applying explicit authentication.
+	// Apply the existing credential policy to the endpoint-selected URL.
 	finalURL, err := prepareSSEUpstreamRequest(proxyServer, authInfo, &finalHeaders, endpointURL)
 	if err != nil {
 		return err
@@ -420,11 +396,7 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, authInfo *
 	// Store state for tracking
 	ctx.SetContext(CtxSSEProxyState, SSEStateWaitingNotifyResp)
 
-	return postMCPUpstream(finalURL, proxyServer.GetTimeout(), finalHeaders, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
-		if proxyRequestCancelled(ctx) {
-			finishProxyRequest(ctx)
-			return
-		}
+	return postSSEUpstream(ctx, finalURL, finalHeaders, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		if handleSSEUpstreamAuthFailure(ctx, statusCode, responseHeaders) {
 			return
 		}
@@ -479,9 +451,10 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, authInfo *
 			}
 		}
 
-		// Parse to get request ID
-		reqID := gjson.GetBytes(requestBody, "id").Int()
-		if err := sendSSEToolRequest(ctx, endpointURL, authInfo, proxyServer, requestBody, int(reqID)); err != nil {
+		if ctx.GetContext(CtxSSEProxyState) != SSEStateWaitingNotifyResp {
+			return
+		}
+		if err := sendSSEToolRequest(ctx, endpointURL, authInfo, proxyServer, requestBody); err != nil {
 			log.Errorf("Failed to send SSE tool request: %v", err)
 			injectSSEResponseError(ctx, err, utils.ErrInternalError)
 		}
@@ -489,14 +462,15 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, authInfo *
 }
 
 // sendSSEToolRequest sends the tools/list or tools/call request for SSE protocol
-func sendSSEToolRequest(ctx wrapper.HttpContext, endpointURL string, authInfo *ProxyAuthInfo, proxyServer *McpProxyServer, requestBody []byte, requestID int) error {
+func sendSSEToolRequest(ctx wrapper.HttpContext, endpointURL string, authInfo *ProxyAuthInfo, proxyServer *McpProxyServer, requestBody []byte) error {
 	// Copy headers from current request (now supported in response phase by Envoy)
 	finalHeaders := copyHeadersForSSERequest(ctx)
 
 	// Override required headers for SSE tool request
 	ensureHeader(&finalHeaders, "Content-Type", "application/json")
+	ensureHeader(&finalHeaders, "Accept", "application/json,text/event-stream")
 
-	// Validate the endpoint origin before applying explicit authentication.
+	// Apply the existing credential policy to the endpoint-selected URL.
 	finalURL, err := prepareSSEUpstreamRequest(proxyServer, authInfo, &finalHeaders, endpointURL)
 	if err != nil {
 		return err
@@ -507,13 +481,9 @@ func sendSSEToolRequest(ctx wrapper.HttpContext, endpointURL string, authInfo *P
 
 	// Store state for tracking
 	ctx.SetContext(CtxSSEProxyState, SSEStateWaitingToolResp)
-	ctx.SetContext(CtxSSEProxyRequestID, requestID)
+	ctx.SetContext(CtxSSEProxyRequestID, json.RawMessage(gjson.GetBytes(requestBody, "id").Raw))
 
-	return postMCPUpstream(finalURL, proxyServer.GetTimeout(), finalHeaders, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
-		if proxyRequestCancelled(ctx) {
-			finishProxyRequest(ctx)
-			return
-		}
+	return postSSEUpstream(ctx, finalURL, finalHeaders, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		if handleSSEUpstreamAuthFailure(ctx, statusCode, responseHeaders) {
 			return
 		}
@@ -594,6 +564,13 @@ func applyProxyAuthenticationForSSE(server *McpProxyServer, schemeID string, pas
 
 // handleSSEStreamingResponse handles the streaming SSE response
 func handleSSEStreamingResponse(ctx wrapper.HttpContext, config McpServerConfig, data []byte, endOfStream bool) []byte {
+	if ctx.GetContext(CtxSSEProxyState) == SSEStateComplete {
+		return []byte{}
+	}
+	if proxyRequestCancelled(ctx) {
+		finishSSERequest(ctx)
+		return []byte{}
+	}
 	// Get the first chunk flag
 	isFirstChunk := ctx.GetBoolContext(CtxSSEProxyFirstChunk, true)
 	if isFirstChunk {
@@ -759,10 +736,7 @@ func handleWaitingEndpoint(ctx wrapper.HttpContext, config McpServerConfig, buff
 
 // handleWaitingInitResp processes SSE messages waiting for initialize response
 func handleWaitingInitResp(ctx wrapper.HttpContext, config McpServerConfig, buffer *[]byte) []byte {
-	requestID := ctx.GetContext(CtxSSEProxyRequestID)
-	if requestID == nil {
-		requestID = 1
-	}
+	requestID, _ := ctx.GetContext(CtxSSEProxyRequestID).(json.RawMessage)
 
 	for {
 		msg, remaining, err := ParseSSEMessage(*buffer)
@@ -785,79 +759,66 @@ func handleWaitingInitResp(ctx wrapper.HttpContext, config McpServerConfig, buff
 		// Check for message event
 		if msg.Event == "message" {
 			// Parse JSON-RPC response
+			// This explicit Legacy control path historically used Unmarshal,
+			// independently of the strict auto probe/handshake envelope decoder.
 			var jsonRpcResp map[string]any
-			if err := json.Unmarshal([]byte(msg.Data), &jsonRpcResp); err != nil {
+			err := decodeBusinessJSON([]byte(msg.Data), &jsonRpcResp)
+			if err != nil {
 				log.Errorf("Failed to parse JSON-RPC response: %v", err)
 				continue
 			}
 
 			// Check if this is the initialize response
-			respID := jsonRpcResp["id"]
-			if respID != nil {
-				reqID, ok := requestID.(int)
+			respID, _ := json.Marshal(jsonRpcResp["id"])
+			if sameRPCID(respID, requestID) {
+				// Check for errors
+				if _, hasError := jsonRpcResp["error"]; hasError {
+					log.Errorf("Backend initialize returned a JSON-RPC error")
+					injectSSEResponseError(ctx, fmt.Errorf("backend initialize failed"), utils.ErrInternalError)
+					return []byte{}
+				}
+
+				log.Debugf("Received initialize response, sending notification")
+
+				// Get endpoint URL and auth info
+				endpointURL, ok := ctx.GetContext(CtxSSEProxyEndpointURL).(string)
 				if !ok {
-					log.Errorf("Invalid request ID type in context")
-					injectSSEResponseError(ctx, fmt.Errorf("internal error: invalid request ID"), utils.ErrInternalError)
+					log.Errorf("Endpoint URL not found in context during init response handling")
+					injectSSEResponseError(ctx, fmt.Errorf("internal error: missing endpoint URL"), utils.ErrInternalError)
 					return []byte{}
 				}
-				var idMatch bool
-				switch v := respID.(type) {
-				case float64:
-					idMatch = int(v) == reqID
-				case int:
-					idMatch = v == reqID
+				authInfoRaw := ctx.GetContext(CtxSSEProxyAuthInfo)
+				proxyServerRaw := ctx.GetContext("mcp_proxy_server")
+
+				var authInfo *ProxyAuthInfo
+				if authInfoRaw != nil {
+					authInfo, ok = authInfoRaw.(*ProxyAuthInfo)
+					if !ok {
+						log.Errorf("Invalid auth info type in context")
+						injectSSEResponseError(ctx, fmt.Errorf("internal error: invalid auth info"), utils.ErrInternalError)
+						return []byte{}
+					}
 				}
 
-				if idMatch {
-					// Check for errors
-					if _, hasError := jsonRpcResp["error"]; hasError {
-						log.Errorf("Backend initialize returned a JSON-RPC error")
-						injectSSEResponseError(ctx, fmt.Errorf("backend initialize failed"), utils.ErrInternalError)
-						return []byte{}
-					}
-
-					log.Debugf("Received initialize response, sending notification")
-
-					// Get endpoint URL and auth info
-					endpointURL, ok := ctx.GetContext(CtxSSEProxyEndpointURL).(string)
-					if !ok {
-						log.Errorf("Endpoint URL not found in context during init response handling")
-						injectSSEResponseError(ctx, fmt.Errorf("internal error: missing endpoint URL"), utils.ErrInternalError)
-						return []byte{}
-					}
-					authInfoRaw := ctx.GetContext(CtxSSEProxyAuthInfo)
-					proxyServerRaw := ctx.GetContext("mcp_proxy_server")
-
-					var authInfo *ProxyAuthInfo
-					if authInfoRaw != nil {
-						authInfo, ok = authInfoRaw.(*ProxyAuthInfo)
-						if !ok {
-							log.Errorf("Invalid auth info type in context")
-							injectSSEResponseError(ctx, fmt.Errorf("internal error: invalid auth info"), utils.ErrInternalError)
-							return []byte{}
-						}
-					}
-
-					proxyServer, ok := proxyServerRaw.(*McpProxyServer)
-					if !ok {
-						log.Errorf("Invalid proxy server type in context")
-						injectSSEResponseError(ctx, fmt.Errorf("internal error: invalid proxy server"), utils.ErrInternalError)
-						return []byte{}
-					}
-
-					// Send notification
-					// The notification callback will send the tool request after notification succeeds
-					if err := sendSSENotification(ctx, endpointURL, authInfo, proxyServer); err != nil {
-						log.Errorf("Failed to send SSE notification: %v", err)
-						injectSSEResponseError(ctx, err, utils.ErrInternalError)
-						return []byte{}
-					}
-
-					// State has been changed to SSEStateWaitingNotifyResp in sendSSENotification
-					// The tool request will be sent in the notification callback
-					// Return immediately to allow next chunk to be processed in the new state
+				proxyServer, ok := proxyServerRaw.(*McpProxyServer)
+				if !ok {
+					log.Errorf("Invalid proxy server type in context")
+					injectSSEResponseError(ctx, fmt.Errorf("internal error: invalid proxy server"), utils.ErrInternalError)
 					return []byte{}
 				}
+
+				// Send notification
+				// The notification callback will send the tool request after notification succeeds
+				if err := sendSSENotification(ctx, endpointURL, authInfo, proxyServer); err != nil {
+					log.Errorf("Failed to send SSE notification: %v", err)
+					injectSSEResponseError(ctx, err, utils.ErrInternalError)
+					return []byte{}
+				}
+
+				// State has been changed to SSEStateWaitingNotifyResp in sendSSENotification
+				// The tool request will be sent in the notification callback
+				// Return immediately to allow next chunk to be processed in the new state
+				return []byte{}
 			}
 		}
 
@@ -878,119 +839,45 @@ func handleWaitingNotifyResp(ctx wrapper.HttpContext, config McpServerConfig, bu
 
 // handleWaitingToolResp processes SSE messages waiting for tool response
 func handleWaitingToolResp(ctx wrapper.HttpContext, config McpServerConfig, buffer *[]byte) []byte {
-	requestID := ctx.GetContext(CtxSSEProxyRequestID)
-	if requestID == nil {
-		log.Errorf("Request ID not found in context")
+	requestID, ok := ctx.GetContext(CtxSSEProxyRequestID).(json.RawMessage)
+	if !ok {
 		injectSSEResponseError(ctx, errors.New("internal error"), utils.ErrInternalError)
 		return []byte{}
 	}
-
 	for {
 		msg, remaining, err := ParseSSEMessage(*buffer)
 		if err != nil {
-			log.Errorf("Failed to parse SSE message: %v", err)
 			injectSSEResponseError(ctx, err, utils.ErrInternalError)
 			return []byte{}
 		}
-
-		if msg == nil {
-			// No complete message yet
-			*buffer = remaining
-			return []byte{}
-		}
-
-		// Update buffer
 		*buffer = remaining
 		ctx.SetContext(CtxSSEProxyBuffer, *buffer)
-
-		// Check for message event
-		if msg.Event == "message" {
-			// Parse JSON-RPC response
-			var jsonRpcResp map[string]any
-			if err := json.Unmarshal([]byte(msg.Data), &jsonRpcResp); err != nil {
-				log.Errorf("Failed to parse JSON-RPC response: %v", err)
-				continue
-			}
-
-			// Check if this is the expected response
-			respID := jsonRpcResp["id"]
-			if respID != nil {
-				reqID, ok := requestID.(int)
-				if !ok {
-					log.Errorf("Invalid request ID type in context")
-					injectSSEResponseError(ctx, fmt.Errorf("internal error: invalid request ID"), utils.ErrInternalError)
-					return []byte{}
-				}
-				var idMatch bool
-				switch v := respID.(type) {
-				case float64:
-					idMatch = int(v) == reqID
-				case int:
-					idMatch = v == reqID
-				}
-
-				if idMatch {
-					// Check for errors
-					if _, hasError := jsonRpcResp["error"]; hasError {
-						log.Errorf("Backend tool returned a JSON-RPC error")
-						injectSSEResponseError(ctx, fmt.Errorf("backend tool call failed"), utils.ErrInternalError)
-						return []byte{}
-					}
-
-					// Extract result and return to client
-					if result, hasResult := jsonRpcResp["result"]; hasResult {
-						if resultMap, ok := result.(map[string]any); ok {
-							// Apply allowTools filtering if this is a tools/list response
-							filteredResult := resultMap
-							if _, hasTools := resultMap["tools"]; hasTools {
-								// Get pre-computed effective allowTools from context
-								if allowToolsCtx := ctx.GetContext("mcp_proxy_effective_allow_tools"); allowToolsCtx != nil {
-									if effectiveAllowTools, ok := allowToolsCtx.(*map[string]struct{}); ok && effectiveAllowTools != nil {
-										// Apply filtering
-										if tools, hasToolsArray := resultMap["tools"]; hasToolsArray {
-											if toolsArray, ok := tools.([]any); ok {
-												filteredTools := make([]any, 0)
-												for _, tool := range toolsArray {
-													if toolMap, ok := tool.(map[string]any); ok {
-														if name, hasName := toolMap["name"]; hasName {
-															if toolName, ok := name.(string); ok {
-																if _, allow := (*effectiveAllowTools)[toolName]; allow {
-																	filteredTools = append(filteredTools, tool)
-																}
-															}
-														}
-													}
-												}
-												// Create filtered result
-												filteredResult = make(map[string]any)
-												for k, v := range resultMap {
-													filteredResult[k] = v
-												}
-												filteredResult["tools"] = filteredTools
-											}
-										}
-									}
-								}
-							}
-
-							injectSSEResponseSuccess(ctx, filteredResult)
-							// Clear buffer as we've processed the response
-							*buffer = []byte{}
-							ctx.SetContext(CtxSSEProxyBuffer, *buffer)
-							return []byte{}
-						}
-					}
-
-					log.Errorf("Invalid tool response format")
-					injectSSEResponseError(ctx, errors.New("invalid response format"), utils.ErrInternalError)
-					return []byte{}
-				}
-			}
+		if msg == nil {
+			return []byte{}
 		}
-
-		// Skip other message types (like ping) while waiting for tool response
-		// Continue to process next message in buffer
-		log.Debugf("Skipping SSE message with event '%s' while waiting for tool response", msg.Event)
-		continue
+		if msg.Event != "message" {
+			continue
+		}
+		response, err := decodeBusinessJSONObject([]byte(msg.Data))
+		if err != nil {
+			continue
+		}
+		responseID, _ := json.Marshal(response["id"])
+		if !sameRPCID(responseID, requestID) {
+			continue
+		}
+		if _, hasError := response["error"]; hasError {
+			injectSSEResponseError(ctx, errors.New("backend tool call failed"), utils.ErrInternalError)
+			return []byte{}
+		}
+		if result, ok := response["result"].(map[string]any); ok {
+			// The SSE oracle filtered any result carrying tools, independently
+			// of the requested method. Reuse the existing effective ACL helper.
+			handler := &McpProtocolHandler{}
+			injectSSEResponseSuccess(ctx, handler.applyAllowToolsFilter(ctx, result))
+			return []byte{}
+		}
+		injectSSEResponseError(ctx, errors.New("invalid response format"), utils.ErrInternalError)
+		return []byte{}
 	}
 }
