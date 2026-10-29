@@ -18,6 +18,7 @@ import compat_contract as c
 import compat_evidence as evidence
 import compat_fixture
 import verify_auto
+from verify_compat import Compatibility
 from instructions_self_test import valid_evidence
 
 
@@ -64,6 +65,84 @@ def strict_peer_checks():
     rejected(lambda: c.strict_request(raw, h, True))
     # Both request and result numeric tokens avoid float conversion.
     require(c.unique_json(b'{"n":900719925474099312345,"e":1E+03}')["e"].lexeme == "1E+03", "numeric token rounded")
+
+
+
+def sse_correlation_checks():
+    # Exercise the real case verifier with recorded upstream/downstream values.
+    # The old SSE call ID is 2; the candidate deliberately separates list/call.
+    expected_arguments = c.unique_json(b'{"number":900719925474099312345,"decimal":1.50,"exponent":1E+03,"choice":2,"nested":{"x":2}}')
+    from typed_canonical import canonical_json_sha256
+    successful_projections = {}
+    for variant, method, expected_id in (("oracle", "tools/list", "2"), ("oracle", "tools/call", "2"),
+                                         ("candidate", "tools/list", "2"), ("candidate", "tools/call", "3")):
+        for response_mode in ("success", "rpc-error"):
+            case = {"kind": "id", "profile": "legacy", "route": "sse", "method": method,
+                    "id_index": 0, "response": response_mode}
+            verifier = Compatibility(variant, ".")
+            def run(internal_id, client_id="client-id", initialize_id="1", result_change=None):
+                response = {"jsonrpc": "2.0", "id": client_id}
+                if response_mode == "success":
+                    response["result"] = c.unique_json(b'{"tools":[{"name":"echo","inputSchema":{"type":"object"}}],"content":[],"value":2,"recipient":"initial.virtual"}')
+                    response["result"]["number"] = c.JSONNumber("900719925474099300000" if variant == "oracle" else "900719925474099312345")
+                    if result_change: result_change(response["result"])
+                else:
+                    response["error"] = {"code": c.JSONNumber("-32603"), "message": "backend tool call failed"}
+                events = [{"kind": "control", "rpcMethod": "initialize", "rpcId": initialize_id,
+                           "accepted": True, "initializeCapabilityKeys": []},
+                          {"kind": "business", "rpcMethod": method, "rpcId": internal_id, "accepted": True, "authority": "initial.virtual",
+                           "argumentsTypedSha256": canonical_json_sha256(expected_arguments)}]
+                verifier.exchange = lambda *args, **kwargs: (200, {}, response)
+                verifier.ledger = lambda: {"events": events, "attempts": {"transport": 1, "probe": 0, "control": 2, "business": 1}}
+                return verifier.proxy_case(case)
+            detail = run(expected_id)
+            require(detail["ledger"]["events"][-1]["rpcId"] == expected_id, "upstream ID evidence was normalized away")
+            for wrong in {"1", "2", "3"} - {expected_id}:
+                rejected(lambda wrong=wrong: run(wrong))
+            rejected(lambda: run(expected_id, client_id="wrong-client"))
+            rejected(lambda: run(expected_id, initialize_id="2"))
+            if response_mode == "success":
+                if variant == "oracle": successful_projections[method] = detail["projection"]
+                else: require(detail["projection"] == successful_projections[method], "approved precision normalization did not compare corresponding business results")
+                wrapped = run(expected_id, result_change=lambda result: result.update(resultType="complete", ttlMs=c.JSONNumber("0"), cacheScope="private", _meta={"io.modelcontextprotocol/serverInfo": {"name": "gateway"}}))
+                require(wrapped["projection"] == detail["projection"], "protocol envelope normalization changed business projection")
+                rejected(lambda: run(expected_id, result_change=lambda result: result.update(value=c.JSONNumber("1"))))
+                for field in ("tools", "content"):
+                    rejected(lambda field=field: run(expected_id, result_change=lambda result: result.pop(field)))
+                rejected(lambda: run(expected_id, result_change=lambda result: result.update(_meta={"vendor": {"retained": True}})))
+
+
+
+def cleanup_failure_checks():
+    # Drive main's failure/finally path without invoking Podman or a compiler.
+    # Empty container inventory must not hide failed network/volume cleanup.
+    import contextlib
+    import subprocess
+    import sys
+    from unittest.mock import patch
+    import run_compat
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        harness = root / "source-harness"; harness.mkdir()
+        (harness / "registered_fixture.go.txt").write_text("shared fixture")
+        for cleanup_status in (0, 1):
+            output = root / str(cleanup_status)
+            def fake_run(command, log, **options):
+                if command[:3] == ["podman", "image", "inspect"]:
+                    raise RuntimeError("fixture image inspection failure")
+                status = cleanup_status if "down" in command else 0
+                if str(command[-1]).endswith("finalize_evidence.py"):
+                    (output / "compat-manifest.json").write_text(json.dumps({"passed": False, "checksums": {}}))
+                    status = 1
+                if options.get("target"): Path(options["target"]).write_text("")
+                return subprocess.CompletedProcess(command, status, stdout="")
+            with patch.object(run_compat, "HERE", harness), patch.object(run_compat, "source_is_clean", return_value=True), \
+                 patch.object(run_compat.subprocess, "check_output", return_value="a" * 40), \
+                 patch.object(run_compat, "recorded_run", side_effect=fake_run), \
+                 patch.object(sys, "argv", ["run_compat.py", "--output", str(output)]), contextlib.redirect_stdout(io.StringIO()):
+                require(run_compat.main() == 1, "injected runner failure was lost")
+            inputs = json.loads((output / "compat-inputs.json").read_text())
+            require(inputs["cleanupExitCode"] == cleanup_status and inputs["cleanupComplete"] == (cleanup_status == 0), "empty containers masked compose cleanup failure")
 
 
 def registry_and_body_checks():
@@ -190,7 +269,7 @@ def evidence_checks():
 
 
 def main():
-    strict_peer_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
+    strict_peer_checks(); sse_correlation_checks(); cleanup_failure_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
     print("unified compatibility fixture/oracle self-tests passed")
 
 

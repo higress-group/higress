@@ -27,6 +27,22 @@ def integer(value):
     return int(value.lexeme) if isinstance(value, JSONNumber) else value
 
 
+def business_result_sha256(result):
+    # Normalize only protocol-owned envelope fields and the named historical
+    # opaque number defect. Ordinary result fields and metadata remain compared.
+    payload = dict(result)
+    for key in ("number", "resultType", "ttlMs", "cacheScope"):
+        payload.pop(key, None)
+    if isinstance(payload.get("_meta"), dict):
+        metadata = dict(payload["_meta"])
+        metadata.pop("io.modelcontextprotocol/serverInfo", None)
+        if metadata:
+            payload["_meta"] = metadata
+        else:
+            payload.pop("_meta")
+    return canonical_json_sha256(payload)
+
+
 class Compatibility:
     def __init__(self, variant, out):
         self.variant, self.out = variant, Path(out)
@@ -252,6 +268,7 @@ class Compatibility:
             return {"historicalFailureStatus": status, "stages": [{k: row[k] for k in ("kind", "authority", "path", "query")} for row in evidence["events"]]}
         self.identity(response, rpc_id, modern, status, headers)
         mode = case.get("response", "success")
+        business_digest = None
         if mode.startswith("http"):
             expected = int(mode[4:])
             check(status == (expected if expected in (401, 403) else 202 if modern and not rpc_id else 200), "business/auth HTTP policy changed")
@@ -274,7 +291,19 @@ class Compatibility:
                 check("result" in response, "business success rejected")
                 if case["kind"] == "discovery":
                     check(response["result"].get("instructions") == "fixture instructions" and "unimplemented" not in response["result"].get("capabilities", {}), "instructions field isolation changed")
-                elif self.variant != "oracle": check(response["result"]["number"].lexeme == "900719925474099312345", "opaque result number rounded")
+                else:
+                    result = response["result"]
+                    check(isinstance(result.get("number"), JSONNumber), "opaque result number missing")
+                    if self.variant != "oracle": check(result["number"].lexeme == "900719925474099312345", "opaque result number rounded")
+                    expected_result = loads_typed(b'{"tools":[{"name":"echo","inputSchema":{"type":"object"}}],"content":[],"value":2}')
+                    expected_result["recipient"] = next(row["authority"] for row in evidence["events"] if row["kind"] == "business")
+                    if mode == "deep":
+                        deep = JSONNumber("0")
+                        for _ in range(70): deep = [deep]
+                        expected_result["deep"] = deep
+                    if mode == "over-probe-limit": expected_result["padding"] = "x" * ((1 << 20) + 1)
+                    business_digest = business_result_sha256(result)
+                    check(business_digest == canonical_json_sha256(expected_result), "successful business result content changed")
         check(all(row["accepted"] for row in evidence["events"]), "strict peer rejected an outbound request")
         if self.variant != "oracle":
             expected_arguments = loads_typed(b'{"number":900719925474099312345,"decimal":1.50,"exponent":1E+03,"choice":2,"nested":{"x":2}}')
@@ -285,9 +314,12 @@ class Compatibility:
                     if row["kind"] == "business":
                         check(row["ordinaryChoice"] == "2" and row["metaVendorChoice"] == "2", "ordinary/meta carrier selection changed")
         if route.startswith("sse"):
+            # The pinned oracle used 2 for either business operation. Preserve
+            # its evidence while independently requiring candidate list2/call3.
+            expected_business_id = "2" if self.variant == "oracle" or method == "tools/list" else "3"
             for row in evidence["events"]:
                 if row["rpcMethod"] == "initialize": check(row["rpcId"] == "1", "SSE initialize ID changed")
-                if row["kind"] == "business": check(row["rpcId"] == ("2" if method == "tools/list" else "3"), "SSE business/control correlation can collide")
+                if row["kind"] == "business": check(row["rpcId"] == expected_business_id, "SSE business correlation ID changed")
         if case["kind"] not in ("discovery", "sse-stage-auth"):
             check(evidence["attempts"]["business"] == 1, "business attempt count is not exactly one")
         if case["kind"] == "discovery":
@@ -320,6 +352,7 @@ class Compatibility:
             for row in evidence["events"]:
                 check([part.strip() for field in row["ordinaryHeaders"] for part in field.split(",")] == ["first", "second"], "ordinary multivalue headers lost")
         projection = {"status": status, "businessAttempts": evidence["attempts"]["business"]}
+        if business_digest is not None: projection["businessResultSha256"] = business_digest
         if response and "error" in response:
             projection.update(errorCode=token_number(response["error"]["code"]), errorMessage=response["error"]["message"])
         return {"projection": projection, "ledger": evidence,

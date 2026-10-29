@@ -136,9 +136,10 @@ def main():
         failure = str(error)
     finally:
         try:
-            compose("--profile", "verify", "down", "--volumes", "--remove-orphans", allow_failure=True)
+            cleanup = compose("--profile", "verify", "down", "--volumes", "--remove-orphans", allow_failure=True)
             remaining = run(["podman", "ps", "-a", "--filter", "label=com.docker.compose.project=" + project, "--format", "{{.ID}}"], allow_failure=True, target=out / "cleanup-containers.txt")
-            inputs["cleanupComplete"] = remaining.returncode == 0 and not remaining.stdout.strip()
+            inputs["cleanupExitCode"] = cleanup.returncode
+            inputs["cleanupComplete"] = cleanup.returncode == 0 and remaining.returncode == 0 and not remaining.stdout.strip()
         except Exception as error:
             inputs["cleanupComplete"] = False
             failure = failure or str(error)
