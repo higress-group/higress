@@ -75,6 +75,22 @@ func TestRedirectParse(t *testing.T) {
 				Code: defaultPermanentRedirectCode,
 			},
 		},
+		{
+			name: "sslRedirect is ignored on MCP server Ingress",
+			input: Annotations{
+				buildHigressAnnotationKey(sslRedirect):     "true",
+				buildHigressAnnotationKey(enableMcpServer): "true",
+			},
+			expect: nil,
+		},
+		{
+			name: "permanentRedirect is ignored on MCP server Ingress",
+			input: Annotations{
+				buildHigressAnnotationKey(permanentRedirect): "http://www.xxx.org",
+				buildHigressAnnotationKey(enableMcpServer):   "true",
+			},
+			expect: nil,
+		},
 	}
 
 	for _, tt := range testCases {
