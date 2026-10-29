@@ -99,19 +99,20 @@ func TestHeaderlessModernIdentityFailsClosed(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
+		code int
 	}{
-		{"trailing JSON value", modernListRequest + `{}`},
-		{"escaped relevant keys", `{"jsonrpc":"2.0","id":1,"method":"tools/list","p\u0061rams":{"_m\u0065ta":{"io.modelcontextprotocol\/protocol\u0056ersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`},
-		{"unterminated after marker", `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":`},
+		{"trailing JSON value", modernListRequest + `{}`, CodeParseError},
+		{"escaped relevant keys", `{"jsonrpc":"2.0","id":1,"method":"tools/list","p\u0061rams":{"_m\u0065ta":{"io.modelcontextprotocol\/protocol\u0056ersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`, CodeHeaderMismatch},
+		{"unterminated after marker", `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":`, CodeParseError},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request, protocolError := PrepareRequest(headerlessModernMediaTransport(), []byte(test.body), func(string) bool {
+			_, protocolError := PrepareRequest(headerlessModernMediaTransport(), []byte(test.body), func(string) bool {
 				t.Fatal("headerless modern identity must not reach any business method lookup")
 				return true
 			})
-			if request != nil || protocolError == nil || protocolError.Code != CodeHeaderMismatch {
-				t.Fatalf("request=%+v error=%+v, want modern header mismatch", request, protocolError)
+			if protocolError == nil || protocolError.Code != test.code {
+				t.Fatalf("error=%v, want code %d", protocolError, test.code)
 			}
 		})
 	}
@@ -171,8 +172,8 @@ func TestModernMarkerBeforeLexerErrorRemainsModern(t *testing.T) {
 		t.Fatal("headerless modern identity must fail before business method lookup")
 		return true
 	})
-	if request != nil || protocolError == nil || protocolError.Code != CodeHeaderMismatch {
-		t.Fatalf("request=%+v error=%+v, want modern header mismatch", request, protocolError)
+	if request != nil || protocolError == nil || protocolError.Code != CodeParseError {
+		t.Fatalf("request=%+v error=%+v, want parse error", request, protocolError)
 	}
 }
 
@@ -183,7 +184,7 @@ func TestDeepLateModernIdentityHasNoDecoderDepthDowngrade(t *testing.T) {
 	body = append(body, '0')
 	body = append(body, bytes.Repeat([]byte{']'}, depth)...)
 	body = append(body, []byte(`,"padding":"`)...)
-	body = append(body, bytes.Repeat([]byte{'x'}, int(ModernMaxBodyBytes))...)
+	body = append(body, bytes.Repeat([]byte{'x'}, 1024*1024)...)
 	body = append(body, []byte(`","_meta":{"`+MetaProtocolVersion+`":"2026-07-28"}}}`)...)
 
 	if got := classifyRequestBody(body); got != bodyClassificationModern {
@@ -193,8 +194,8 @@ func TestDeepLateModernIdentityHasNoDecoderDepthDowngrade(t *testing.T) {
 		t.Fatal("oversized deep modern request must fail before business method lookup")
 		return true
 	})
-	if request != nil || protocolError == nil || protocolError.HTTPStatus != 413 || protocolError.Code != CodeInvalidRequest {
-		t.Fatalf("request=%+v error=%+v, want HTTP 413 modern failure", request, protocolError)
+	if request == nil || protocolError == nil || protocolError.Code != CodeHeaderMismatch {
+		t.Fatalf("error=%v, want modern identity failure", protocolError)
 	}
 }
 

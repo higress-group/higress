@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/tidwall/gjson"
 )
 
 const maxJSONDepth = 64
@@ -46,7 +48,7 @@ func (id ID) Raw() json.RawMessage {
 	return bytes.Clone(id.raw)
 }
 
-// Envelope is a strict, single JSON-RPC request or notification.
+// Envelope is a single JSON-RPC request or notification.
 type Envelope struct {
 	ID           ID
 	Method       string
@@ -55,95 +57,138 @@ type Envelope struct {
 	Raw          json.RawMessage
 }
 
-type rawEnvelope struct {
-	JSONRPC json.RawMessage `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Method  json.RawMessage `json:"method"`
-	Params  json.RawMessage `json:"params"`
-	Result  json.RawMessage `json:"result"`
-	Error   json.RawMessage `json:"error"`
-}
-
-func decodeEnvelope(body []byte) (Envelope, *Error) {
-	if len(body) == 0 {
+// decodeEnvelope checks message framing independently of the control decoder.
+// Ordinary fields use the same first occurrence as the legacy gjson handlers.
+func decodeEnvelope(body []byte, modern bool) (Envelope, *Error) {
+	if !utf8.Valid(body) || !gjson.ValidBytes(body) {
 		return Envelope{}, ParseError()
 	}
-	if len(body) > int(ModernMaxBodyBytes) {
-		return Envelope{}, RequestTooLarge()
-	}
-	if err := validateUniqueJSON(body); err != nil {
-		return Envelope{}, ParseError()
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	var raw json.RawMessage
-	if err := decoder.Decode(&raw); err != nil {
-		return Envelope{}, ParseError()
-	}
-	var trailing json.RawMessage
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return Envelope{}, InvalidRequest("exactly one JSON-RPC message is required")
-		}
-		return Envelope{}, ParseError()
-	}
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
+	if !isJSONObject(body) {
 		return Envelope{}, InvalidRequest("JSON-RPC batch and non-object envelopes are not supported")
 	}
-	var decoded rawEnvelope
-	if err := json.Unmarshal(trimmed, &decoded); err != nil {
-		return Envelope{}, ParseError()
-	}
-	if len(decoded.Result) != 0 || len(decoded.Error) != 0 {
-		return Envelope{}, InvalidRequest("JSON-RPC response envelopes are not accepted")
-	}
-	var jsonrpc string
-	if err := json.Unmarshal(decoded.JSONRPC, &jsonrpc); err != nil || jsonrpc != "2.0" {
-		return Envelope{}, InvalidRequest("jsonrpc must be 2.0")
-	}
-	var method string
-	if err := json.Unmarshal(decoded.Method, &method); err != nil || strings.TrimSpace(method) == "" {
-		return Envelope{}, InvalidRequest("method must be a non-empty string")
-	}
-	if len(decoded.Params) != 0 && !isJSONObject(decoded.Params) {
-		return Envelope{}, InvalidRequest("params must be an object")
-	}
-	id, protocolError := decodeID(decoded.ID)
+	owned := bytes.Clone(body)
+	// Parameter slices share the request-owned body instead of retaining
+	// another copy of a potentially 100 MiB arguments object.
+	members := businessObjectMembers(owned)
+	id, protocolError := ParseID(members["id"])
+	envelope := Envelope{ID: id, Params: members["params"], Raw: owned}
 	if protocolError != nil {
-		return Envelope{}, protocolError
+		return envelope, protocolError
 	}
-	return Envelope{
-		ID:           id,
-		Method:       method,
-		Params:       bytes.Clone(decoded.Params),
-		Notification: !id.IsPresent(),
-		Raw:          bytes.Clone(trimmed),
-	}, nil
+	if modern && ambiguousModernIdentity(owned) {
+		return envelope, ParseError()
+	}
+	if len(members["result"]) != 0 || len(members["error"]) != 0 {
+		return envelope, InvalidRequest("JSON-RPC response envelopes are not accepted")
+	}
+	if modern {
+		var jsonrpc string
+		if err := json.Unmarshal(members["jsonrpc"], &jsonrpc); err != nil || jsonrpc != "2.0" {
+			return envelope, InvalidRequest("jsonrpc must be 2.0")
+		}
+	}
+	method := gjson.ParseBytes(members["method"])
+	if method.Type != gjson.String || strings.TrimSpace(method.String()) == "" {
+		return envelope, InvalidRequest("method must be a non-empty string")
+	}
+	envelope.Method = method.String()
+	envelope.Notification = !id.IsPresent()
+	return envelope, nil
 }
 
-func decodeID(raw json.RawMessage) (ID, *Error) {
+// ParseID retains an independently owned client token, including explicit null.
+// The legacy handler's int64 view is deliberately separate from this identity.
+func ParseID(raw json.RawMessage) (ID, *Error) {
 	if len(raw) == 0 {
 		return ID{}, nil
 	}
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return ID{}, InvalidRequest("JSON-RPC id must be a string or integer")
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil || !json.Valid(trimmed) {
+		return ID{}, InvalidRequest("JSON-RPC id must be a string, number or null")
 	}
-	if trimmed[0] == '"' {
-		var value string
-		if err := json.Unmarshal(trimmed, &value); err != nil {
-			return ID{}, InvalidRequest("JSON-RPC id must be a string or integer")
-		}
+	switch value.(type) {
+	case nil, string, json.Number:
 		return ID{raw: bytes.Clone(trimmed), present: true}, nil
+	default:
+		return ID{}, InvalidRequest("JSON-RPC id must be a string, number or null")
 	}
-	if strings.ContainsAny(string(trimmed), ".eE") {
-		return ID{}, InvalidRequest("JSON-RPC id must be a string or integer")
+}
+
+// CorrelationID returns an ID accepted by strict upstreams. Callers generate
+// internalID within their existing exchange and retain this ID for the client.
+func (id ID) CorrelationID(internalID string) json.RawMessage {
+	if id.present && len(id.raw) > 0 {
+		if id.raw[0] == '"' {
+			return id.Raw()
+		}
+		if !bytes.ContainsAny(id.raw, ".eE") {
+			if _, err := strconv.ParseInt(string(id.raw), 10, 64); err == nil {
+				return id.Raw()
+			}
+		}
 	}
-	if _, err := strconv.ParseInt(string(trimmed), 10, 64); err != nil {
-		return ID{}, InvalidRequest("JSON-RPC id must be a string or integer")
+	raw, _ := json.Marshal(internalID)
+	return raw
+}
+
+// DecodeBusinessJSONObject validates one UTF-8 JSON object without imposing
+// control-message duplicate/depth rules. Values borrow body and retain exact
+// JSON number tokens; callers must keep the input alive and unchanged.
+func DecodeBusinessJSONObject(body []byte) (JSONObject, error) {
+	if !utf8.Valid(body) || !gjson.ValidBytes(body) {
+		return nil, errors.New("invalid JSON")
 	}
-	return ID{raw: bytes.Clone(trimmed), present: true}, nil
+	if !isJSONObject(body) {
+		return nil, errors.New("JSON-RPC batch and non-object envelopes are not supported")
+	}
+	return businessObjectMembers(body), nil
+}
+
+func businessObjectMembers(body []byte) JSONObject {
+	members := make(JSONObject)
+	gjson.ParseBytes(body).ForEach(func(key, value gjson.Result) bool {
+		if _, exists := members[key.String()]; !exists {
+			members[key.String()] = body[value.Index : value.Index+len(value.Raw)]
+		}
+		return true
+	})
+	return members
+}
+
+func ambiguousModernIdentity(body []byte) bool {
+	methods, versions, names := 0, 0, 0
+	gjson.ParseBytes(body).ForEach(func(key, value gjson.Result) bool {
+		switch key.String() {
+		case "method":
+			methods++
+		case "params":
+			if !value.IsObject() {
+				return true
+			}
+			value.ForEach(func(key, value gjson.Result) bool {
+				switch key.String() {
+				case "name":
+					names++
+				case "_meta":
+					if value.IsObject() {
+						value.ForEach(func(key, _ gjson.Result) bool {
+							if key.String() == MetaProtocolVersion {
+								versions++
+							}
+							return true
+						})
+					}
+				}
+				return true
+			})
+		}
+		return true
+	})
+	method := gjson.GetBytes(body, "method").String()
+	return methods > 1 || versions > 1 || (method == "tools/call" && names > 1)
 }
 
 func isJSONObject(raw json.RawMessage) bool {
@@ -219,7 +264,7 @@ func validateJSONValue(decoder *json.Decoder, depth int) error {
 }
 
 // DecodeSingleJSONObject validates response framing without converting opaque
-// values to float64. It shares the request decoder's duplicate/depth bounds.
+// values to float64. Its strict duplicate/depth rules belong to control flows.
 func DecodeSingleJSONObject(body []byte) (JSONObject, error) {
 	if !utf8.Valid(body) {
 		return nil, errors.New("invalid JSON UTF-8")

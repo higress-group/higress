@@ -23,15 +23,11 @@ func TestValidateModernTransportMappings(t *testing.T) {
 		wantHTTP uint32
 		wantCode int
 	}{
-		{"non-POST", func(v *Transport) { v.Method = "GET" }, 405, CodeInvalidRequest},
-		{"missing Content-Type", func(v *Transport) { v.ContentType = "" }, 415, CodeInvalidRequest},
-		{"wrong Content-Type", func(v *Transport) { v.ContentType = "text/plain" }, 415, CodeInvalidRequest},
-		{"missing Accept", func(v *Transport) { v.Accept = "" }, 406, CodeInvalidRequest},
-		{"Accept omits SSE", func(v *Transport) { v.Accept = "application/json" }, 406, CodeInvalidRequest},
-		{"Accept disables JSON", func(v *Transport) { v.Accept = "application/json;q=0, text/event-stream" }, 406, CodeInvalidRequest},
+		{"GET", func(v *Transport) { v.Method = "GET" }, 405, CodeInvalidRequest},
+		{"DELETE", func(v *Transport) { v.Method = "DELETE" }, 405, CodeInvalidRequest},
 		{"cross-origin host", func(v *Transport) { v.Origin = "https://evil.example" }, 403, CodeInvalidRequest},
 		{"opaque origin", func(v *Transport) { v.Origin = "null" }, 403, CodeInvalidRequest},
-		{"ambiguous header", func(v *Transport) { v.AmbiguousHeader = true }, 400, CodeHeaderMismatch},
+		{"ambiguous identity header", func(v *Transport) { v.AmbiguousModernHeader = true }, 400, CodeHeaderMismatch},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -42,6 +38,19 @@ func TestValidateModernTransportMappings(t *testing.T) {
 				t.Fatalf("error = %+v, want HTTP %d/code %d", protocolError, test.wantHTTP, test.wantCode)
 			}
 		})
+	}
+}
+
+func TestModernTransportUsesLegacyMethodAndMediaPolicy(t *testing.T) {
+	for _, method := range []string{"POST", "PUT", "PATCH", "OPTIONS"} {
+		for _, media := range []string{"", "text/plain", "application/json"} {
+			transport := modernTransport("tools/list", "")
+			transport.Method, transport.ContentType, transport.Accept = method, media, "application/json;q=0"
+			transport.AmbiguousHeader = true // Ordinary duplicate headers are not identity.
+			if err := ValidateModernTransport(transport); err != nil {
+				t.Fatalf("method %s media %q rejected: %v", method, media, err)
+			}
+		}
 	}
 }
 
@@ -64,45 +73,6 @@ func TestNewTransportRejectsDuplicateSensitiveHeaders(t *testing.T) {
 	})
 	if !transport.AmbiguousHeader {
 		t.Fatal("duplicate case-insensitive identity header was not marked ambiguous")
-	}
-}
-
-func TestAcceptQValueGrammar(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-		want  bool
-	}{
-		{"absent defaults to one", "application/json", true},
-		{"zero", "application/json;q=0", false},
-		{"zero dot", "application/json;q=0.", false},
-		{"zero one digit", "application/json;q=0.0", false},
-		{"zero two digits", "application/json;q=0.00", false},
-		{"zero three digits", "application/json;q=0.000", false},
-		{"minimum positive", "application/json;q=0.001", true},
-		{"positive fraction", "application/json;q=0.5", true},
-		{"missing leading zero", "application/json;q=.5", false},
-		{"one", "application/json;q=1", true},
-		{"one dot", "application/json;q=1.", true},
-		{"one three zeros", "application/json;q=1.000", true},
-		{"above one", "application/json;q=1.001", false},
-		{"negative", "application/json;q=-0.1", false},
-		{"exponent", "application/json;q=1e0", false},
-		{"too many digits", "application/json;q=0.0001", false},
-		{"empty", "application/json;q=", false},
-		{"invalid", "application/json;q=high", false},
-		{"quoted", `application/json;q="0.5"`, false},
-		{"uppercase parameter", "application/json;Q=0.5", true},
-		{"uppercase zero", "application/json;Q=0", false},
-		{"later valid duplicate", "application/json;q=1.001, application/json;q=0.5", true},
-		{"later invalid duplicate", "application/json;q=0.5, application/json;q=1.001", true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := accepts(test.value, "application/json"); got != test.want {
-				t.Fatalf("accepts(%q) = %t, want %t", test.value, got, test.want)
-			}
-		})
 	}
 }
 
@@ -130,8 +100,8 @@ func TestNewTransportCombinesAcceptFieldLines(t *testing.T) {
 		{"Accept", "text/event-stream"},
 	})
 	protocolError := ValidateModernTransport(disabledJSON)
-	if protocolError == nil || protocolError.HTTPStatus != 406 {
-		t.Fatalf("cross-line q=0 error = %+v, want HTTP 406", protocolError)
+	if protocolError != nil {
+		t.Fatalf("ordinary Accept header rejected: %v", protocolError)
 	}
 
 	reenabledJSON := NewTransport("POST", "mcp.example.com", [][2]string{
@@ -145,7 +115,7 @@ func TestNewTransportCombinesAcceptFieldLines(t *testing.T) {
 	}
 }
 
-func TestNewTransportStillRejectsDuplicateSingletonHeaders(t *testing.T) {
+func TestNewTransportRecordsDuplicateHeadersSeparatelyFromIdentity(t *testing.T) {
 	tests := []struct {
 		name   string
 		header string

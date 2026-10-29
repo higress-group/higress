@@ -15,7 +15,6 @@
 package protocol
 
 import (
-	"mime"
 	"net"
 	"net/url"
 	"strings"
@@ -26,10 +25,10 @@ const (
 	HeaderMethod          = "Mcp-Method"
 	HeaderName            = "Mcp-Name"
 
-	// ModernMaxBodyBytes bounds a modern single-message exchange without
-	// changing the existing legacy buffer limit.
-	ModernMaxBodyBytes uint32 = 1024 * 1024
-	LegacyMaxBodyBytes uint32 = 100 * 1024 * 1024
+	// MaxBodyBytes covers the complete JSON-RPC body for both profiles.
+	MaxBodyBytes       uint32 = 100 * 1024 * 1024
+	ModernMaxBodyBytes        = MaxBodyBytes
+	LegacyMaxBodyBytes        = MaxBodyBytes
 )
 
 // Transport contains only protocol-relevant request metadata. It intentionally
@@ -51,8 +50,8 @@ type Transport struct {
 }
 
 // NewTransport captures relevant headers without retaining credentials.
-// Accept field lines are combined in receive order as one list; repeated
-// singleton or identity headers are rejected later rather than guessed.
+// Accept field lines are combined in receive order as one list. Repeated
+// protocol identity headers are rejected later rather than guessed.
 func NewTransport(method, authority string, headers [][2]string) Transport {
 	transport := Transport{Method: method, Authority: authority}
 	seen := make(map[string]bool)
@@ -117,18 +116,11 @@ func ValidateModernTransport(transport Transport) *Error {
 	if protocolError := ValidateOrigin(transport); protocolError != nil {
 		return protocolError
 	}
-	if transport.AmbiguousHeader {
+	if transport.AmbiguousModernHeader {
 		return HeaderMismatch()
 	}
-	if transport.Method != "POST" {
+	if transport.Method == "GET" || transport.Method == "DELETE" {
 		return MethodNotAllowed()
-	}
-	mediaType, _, err := mime.ParseMediaType(transport.ContentType)
-	if err != nil || !strings.EqualFold(mediaType, "application/json") {
-		return UnsupportedMediaType()
-	}
-	if !accepts(transport.Accept, "application/json") || !accepts(transport.Accept, "text/event-stream") {
-		return NotAcceptable()
 	}
 	return nil
 }
@@ -140,111 +132,6 @@ func ValidateOrigin(transport Transport) *Error {
 		return UntrustedOrigin()
 	}
 	return nil
-}
-
-func accepts(value, required string) bool {
-	for item := range strings.SplitSeq(value, ",") {
-		item = strings.TrimSpace(item)
-		mediaType, parameters, err := mime.ParseMediaType(item)
-		if err != nil {
-			continue
-		}
-		if quality, ok := parameters["q"]; ok {
-			if hasQuotedQualityParameter(item) || !positiveQValue(quality) {
-				continue
-			}
-		}
-		if strings.EqualFold(mediaType, required) {
-			return true
-		}
-	}
-	return false
-}
-
-// positiveQValue implements the RFC 9110 qvalue grammar and additionally
-// requires a non-zero value for a media range to be acceptable.
-func positiveQValue(value string) bool {
-	if value == "1" || value == "1." {
-		return true
-	}
-	if strings.HasPrefix(value, "1.") {
-		fraction := value[2:]
-		if len(fraction) == 0 || len(fraction) > 3 {
-			return false
-		}
-		for i := range fraction {
-			if fraction[i] != '0' {
-				return false
-			}
-		}
-		return true
-	}
-	if value == "0" || value == "0." {
-		return false
-	}
-	if !strings.HasPrefix(value, "0.") {
-		return false
-	}
-	fraction := value[2:]
-	if len(fraction) == 0 || len(fraction) > 3 {
-		return false
-	}
-	positive := false
-	for i := range fraction {
-		if fraction[i] < '0' || fraction[i] > '9' {
-			return false
-		}
-		positive = positive || fraction[i] != '0'
-	}
-	return positive
-}
-
-func hasQuotedQualityParameter(item string) bool {
-	for i := 0; i < len(item); {
-		if item[i] == '"' {
-			i = skipQuotedHeaderValue(item, i)
-			continue
-		}
-		if item[i] != ';' {
-			i++
-			continue
-		}
-		i++
-		for i < len(item) && (item[i] == ' ' || item[i] == '\t') {
-			i++
-		}
-		nameStart := i
-		for i < len(item) && item[i] != '=' && item[i] != ';' && item[i] != ' ' && item[i] != '\t' {
-			i++
-		}
-		name := item[nameStart:i]
-		for i < len(item) && (item[i] == ' ' || item[i] == '\t') {
-			i++
-		}
-		if i >= len(item) || item[i] != '=' {
-			continue
-		}
-		i++
-		for i < len(item) && (item[i] == ' ' || item[i] == '\t') {
-			i++
-		}
-		if strings.EqualFold(name, "q") {
-			return i < len(item) && item[i] == '"'
-		}
-	}
-	return false
-}
-
-func skipQuotedHeaderValue(value string, quote int) int {
-	for i := quote + 1; i < len(value); i++ {
-		switch value[i] {
-		case '\\':
-			i++
-		case '"':
-			return i + 1
-		}
-	}
-	return len(value)
 }
 
 func trustedOrigin(origin, authority string) bool {

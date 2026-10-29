@@ -1000,7 +1000,6 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 	}
 
 	if protocol.HasModernIdentityHeaders(transport) {
-		ctx.SetRequestBodyBufferLimit(protocol.ModernMaxBodyBytes)
 		if transport.ProtocolVersion != "" &&
 			!protocol.IsLegacyVersion(protocol.Version(transport.ProtocolVersion)) &&
 			!protocol.IsModernVersion(protocol.Version(transport.ProtocolVersion)) {
@@ -1053,6 +1052,8 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config McpServerConfig, body []b
 		id := protocol.ID{}
 		if request != nil {
 			id = request.Envelope.ID
+			ctx.SetContext(utils.CtxJsonRpcClientID, id)
+			ctx.SetContext(utils.CtxJsonRpcNotification, request.Era == protocol.EraModern && request.Envelope.Notification)
 		}
 		utils.SendProtocolError(ctx, id, protocolError, "mcp_modern_request_rejected")
 		return types.ActionContinue

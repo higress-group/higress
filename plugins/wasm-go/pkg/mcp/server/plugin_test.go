@@ -17,7 +17,9 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
@@ -903,7 +905,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		require.Equal(t, types.ActionPause, action)
 
 		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"note":"` + protocol.MetaProtocolVersion + `"},"padding":"`)
-		body = append(body, bytes.Repeat([]byte("x"), int(protocol.ModernMaxBodyBytes)+128)...)
+		body = append(body, bytes.Repeat([]byte("x"), 1024*1024+128)...)
 		body = append(body, []byte(`"}`)...)
 		action = host.CallOnHttpRequestBody(body)
 		require.Equal(t, types.ActionContinue, action)
@@ -925,7 +927,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		response := host.GetLocalResponse()
 		require.NotNil(t, response)
 		assert.Equal(t, uint32(400), response.StatusCode)
-		assert.Equal(t, int64(protocol.CodeHeaderMismatch), gjson.GetBytes(response.Data, "error.code").Int())
+		assert.Equal(t, int64(protocol.CodeParseError), gjson.GetBytes(response.Data, "error.code").Int())
 		assert.False(t, gjson.GetBytes(response.Data, "result").Exists())
 	})
 
@@ -945,7 +947,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		assert.False(t, gjson.GetBytes(response.Data, "result").Exists())
 	})
 
-	t.Run("late direct modern metadata is rejected at modern limit", func(t *testing.T) {
+	t.Run("late direct modern metadata is rejected at shared complete-body limit", func(t *testing.T) {
 		host := newHost(t)
 		action := host.CallOnHttpRequestHeaders(commonHeaders())
 		require.Equal(t, types.ActionPause, action)
@@ -1060,5 +1062,119 @@ func TestModernDisconnectCancelsPendingToolOnce(t *testing.T) {
 	case <-request.Cancellation.Done():
 	default:
 		t.Fatal("modern request cancellation channel was not closed")
+	}
+}
+
+func TestProductionEntryClientIDSemantics(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	for _, modern := range []bool{false, true} {
+		for _, token := range []string{`"client\\id"`, `9007199254740993`, `9223372036854775808`, `1.50`, `1E+03`, `null`, ``} {
+			for _, method := range []string{"tools/list", "unknown"} {
+				name := fmt.Sprintf("modern=%t/id=%s/method=%s", modern, token, method)
+				t.Run(name, func(t *testing.T) {
+					host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+					headers := legacyToolHeaders()
+					meta := ""
+					if modern {
+						headers = modernToolListHeaders()
+						for i := range headers {
+							if headers[i][0] == protocol.HeaderMethod {
+								headers[i][1] = method
+							}
+						}
+						meta = `"_meta":{"` + protocol.MetaProtocolVersion + `":"2026-07-28"}`
+					}
+					idField := ""
+					if token != "" {
+						idField = `,"id":` + token
+					}
+					body := []byte(`{"jsonrpc":"2.0"` + idField + `,"method":"` + method + `","params":{` + meta + `}}`)
+					require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+					require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+					response := host.GetLocalResponse()
+					require.NotNil(t, response)
+					if modern && token == "" {
+						assert.Equal(t, uint32(202), response.StatusCode)
+						assert.Empty(t, response.Data)
+						return
+					}
+					wantID := token
+					if wantID == "" {
+						wantID = "0"
+					}
+					assert.Equal(t, wantID, gjson.GetBytes(response.Data, "id").Raw)
+					assert.Equal(t, method == "unknown", gjson.GetBytes(response.Data, "error").Exists())
+					assert.True(t, json.Valid(response.Data))
+				})
+			}
+		}
+	}
+}
+
+func TestProductionEntryRetainsIDOnEnvelopeError(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	for _, token := range []string{`null`, `1.50`, `1E+03`, `9223372036854775808`} {
+		t.Run(token, func(t *testing.T) {
+			host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+			body := []byte(`{"jsonrpc":"2.0","id":` + token + `,"method":false,"params":{}}`)
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(modernToolListHeaders()))
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			assert.Equal(t, uint32(400), response.StatusCode)
+			assert.Equal(t, token, gjson.GetBytes(response.Data, "id").Raw)
+			assert.Zero(t, counters.create)
+			assert.Zero(t, counters.call)
+		})
+	}
+}
+
+func TestProductionEntryRejectsInvalidMessagesWithoutToolSideEffects(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	for _, modern := range []bool{false, true} {
+		valid := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"count","arguments":{"count":2}}}`
+		headers := legacyToolHeaders()
+		if modern {
+			valid = string(modernToolCallBody("count", `{"count":2}`))
+			headers = modernToolHeaders("count")
+		}
+		for i, body := range []string{valid + `{}`, `[` + valid + `]`, strings.TrimSuffix(valid, "}"), "true"} {
+			t.Run(fmt.Sprintf("modern=%t/case=%d", modern, i), func(t *testing.T) {
+				host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(body)))
+				response := host.GetLocalResponse()
+				require.NotNil(t, response)
+				assert.Equal(t, uint32(400), response.StatusCode)
+				assert.Zero(t, counters.create)
+				assert.Zero(t, counters.call)
+				assert.Empty(t, host.GetHttpCalloutAttributes())
+			})
+		}
+	}
+}
+
+func TestProductionEntryModernUsesLegacyOrdinaryHTTPPolicy(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	for _, method := range []string{"PUT", "PATCH", "OPTIONS"} {
+		t.Run(method, func(t *testing.T) {
+			host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+			headers := [][2]string{
+				{":authority", "mcp.example.com"}, {":method", method}, {":path", "/mcp"},
+				{"content-type", "text/plain"}, {"content-type", "custom/type"}, {"accept", "text/plain"},
+				{protocol.HeaderProtocolVersion, string(protocol.Version20260728)}, {protocol.HeaderMethod, "tools/list"},
+			}
+			body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"` + protocol.MetaProtocolVersion + `":"2026-07-28","` + protocol.MetaClientCapabilities + `":false,"` + protocol.MetaClientInfo + `":null}}}`)
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			assert.Equal(t, uint32(200), response.StatusCode)
+			assert.True(t, gjson.GetBytes(response.Data, "result.tools").IsArray())
+		})
 	}
 }

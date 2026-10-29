@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"net/url"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -42,7 +41,7 @@ type Implementation struct {
 	Icons       []Icon `json:"icons,omitempty"`
 }
 
-// Metadata is required on every modern request. ClientInfo is optional.
+// Metadata holds protocol identity and optional, best-effort client views.
 type Metadata struct {
 	ProtocolVersion    Version
 	ClientCapabilities ClientCapabilities
@@ -162,9 +161,9 @@ type MethodPolicy struct {
 
 type MethodPolicyLookup func(method string) MethodPolicy
 
-// PrepareRequest classifies a request exactly once. Legacy exchanges are
-// passed through unchanged. Modern exchanges complete all transport,
-// envelope, identity, lifecycle, and method validation before being returned.
+// PrepareRequest classifies a request exactly once. Both profiles share message
+// framing and historical business field reads. Modern requests additionally
+// validate protocol identity and the supported method/lifecycle boundary.
 func PrepareRequest(transport Transport, body []byte, methodAvailable func(string) bool) (*RequestContext, *Error) {
 	return PrepareRequestWithPolicy(transport, body, func(method string) MethodPolicy {
 		return MethodPolicy{Available: methodAvailable != nil && methodAvailable(method)}
@@ -175,41 +174,37 @@ func PrepareRequestWithPolicy(transport Transport, body []byte, policyLookup Met
 	if protocolError := ValidateOrigin(transport); protocolError != nil {
 		return nil, protocolError
 	}
+	if len(body) > int(MaxBodyBytes) {
+		return nil, RequestTooLarge()
+	}
 	era, classificationError := classify(transport, body)
 	if classificationError != nil {
 		return nil, classificationError
 	}
+	envelope, envelopeError := decodeEnvelope(body, era == EraModern)
+	request := &RequestContext{
+		Era: era, Version: Version(transport.ProtocolVersion), Transport: transport, Envelope: envelope,
+	}
+	if envelopeError != nil {
+		if envelope.Raw == nil {
+			return nil, envelopeError
+		}
+		return request, envelopeError
+	}
 	if era == EraLegacy {
-		return &RequestContext{
-			Era:       EraLegacy,
-			Version:   Version(transport.ProtocolVersion),
-			Transport: transport,
-			Envelope:  Envelope{Raw: bytes.Clone(body)},
-		}, nil
+		return request, nil
 	}
-	if len(body) > int(ModernMaxBodyBytes) {
-		return nil, RequestTooLarge()
-	}
+	request.Version = Version20260728
 	if transport.ProtocolVersion != "" &&
 		!IsModernVersion(Version(transport.ProtocolVersion)) &&
 		!IsLegacyVersion(Version(transport.ProtocolVersion)) {
-		return nil, UnsupportedVersion(Version(transport.ProtocolVersion), SupportedVersions())
+		return request, UnsupportedVersion(Version(transport.ProtocolVersion), SupportedVersions())
 	}
 	if protocolError := ValidateModernTransport(transport); protocolError != nil {
-		return nil, protocolError
+		return request, protocolError
 	}
 	if !IsModernVersion(Version(transport.ProtocolVersion)) || transport.MCPMethod == "" {
-		return nil, HeaderMismatch()
-	}
-	envelope, protocolError := decodeEnvelope(body)
-	if protocolError != nil {
-		return nil, protocolError
-	}
-	request := &RequestContext{
-		Era:       EraModern,
-		Version:   Version20260728,
-		Transport: transport,
-		Envelope:  envelope,
+		return request, HeaderMismatch()
 	}
 	metadata, protocolError := decodeMetadata(envelope.Params)
 	if protocolError != nil {
@@ -258,147 +253,41 @@ func classify(transport Transport, body []byte) (Era, *Error) {
 }
 
 func decodeMetadata(params json.RawMessage) (Metadata, *Error) {
-	if len(params) == 0 {
+	if !isJSONObject(params) {
 		return Metadata{}, HeaderMismatch()
 	}
-	var decoded struct {
-		Meta map[string]json.RawMessage `json:"_meta"`
-	}
-	if err := json.Unmarshal(params, &decoded); err != nil || decoded.Meta == nil {
+	metaRaw := businessObjectMembers(params)["_meta"]
+	if !isJSONObject(metaRaw) {
 		return Metadata{}, HeaderMismatch()
 	}
+	members := businessObjectMembers(metaRaw)
 	var version string
-	if err := json.Unmarshal(decoded.Meta[MetaProtocolVersion], &version); err != nil || version == "" {
+	if err := json.Unmarshal(members[MetaProtocolVersion], &version); err != nil || version == "" {
 		return Metadata{}, HeaderMismatch()
 	}
-	capabilitiesRaw, ok := decoded.Meta[MetaClientCapabilities]
-	if !ok || !isJSONObject(capabilitiesRaw) {
-		return Metadata{}, InvalidParams("modern MCP clientCapabilities metadata is required")
+	metadata := Metadata{ProtocolVersion: Version(version), Extensions: make(map[string]json.RawMessage)}
+	// Non-identity metadata is descriptive input. Populate compatibility views
+	// when possible; only control-flow decoders require their strict schemas.
+	_ = json.Unmarshal(members[MetaClientCapabilities], &metadata.ClientCapabilities)
+	var clientInfo Implementation
+	if raw, ok := members[MetaClientInfo]; ok && isJSONObject(raw) && json.Unmarshal(raw, &clientInfo) == nil {
+		metadata.ClientInfo = &clientInfo
 	}
-	var capabilities ClientCapabilities
-	if err := json.Unmarshal(capabilitiesRaw, &capabilities); err != nil {
-		return Metadata{}, InvalidParams("modern MCP clientCapabilities metadata is invalid")
-	}
-	metadata := Metadata{
-		ProtocolVersion:    Version(version),
-		ClientCapabilities: capabilities,
-		Extensions:         make(map[string]json.RawMessage),
-	}
-	for name, value := range decoded.Meta {
+	for name, value := range members {
 		if name != MetaProtocolVersion && name != MetaClientCapabilities && name != MetaClientInfo {
 			metadata.Extensions[name] = bytes.Clone(value)
 		}
 	}
-	if clientInfoRaw, ok := decoded.Meta[MetaClientInfo]; ok {
-		if !validImplementationShape(clientInfoRaw) {
-			return Metadata{}, InvalidParams("modern MCP clientInfo metadata is invalid")
-		}
-		var clientInfo Implementation
-		decoder := json.NewDecoder(bytes.NewReader(clientInfoRaw))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&clientInfo); err != nil || !validImplementation(clientInfo) {
-			return Metadata{}, InvalidParams("modern MCP clientInfo metadata is invalid")
-		}
-		metadata.ClientInfo = &clientInfo
-	}
 	return metadata, nil
-}
-
-func validImplementationShape(raw json.RawMessage) bool {
-	members, err := decodeJSONObject(raw)
-	if err != nil || !validRequiredString(members, "name") || !validRequiredString(members, "version") {
-		return false
-	}
-	for _, name := range []string{"title", "description", "websiteUrl"} {
-		if value, ok := members[name]; ok && !validJSONString(value) {
-			return false
-		}
-	}
-	iconsRaw, hasIcons := members["icons"]
-	if !hasIcons {
-		return true
-	}
-	var icons []json.RawMessage
-	if isJSONNull(iconsRaw) || json.Unmarshal(iconsRaw, &icons) != nil || icons == nil {
-		return false
-	}
-	for _, iconRaw := range icons {
-		icon, iconErr := decodeJSONObject(iconRaw)
-		if iconErr != nil || !validRequiredString(icon, "src") {
-			return false
-		}
-		for _, name := range []string{"mimeType", "theme"} {
-			if value, ok := icon[name]; ok && !validJSONString(value) {
-				return false
-			}
-		}
-		if sizesRaw, ok := icon["sizes"]; ok {
-			var sizes []json.RawMessage
-			if isJSONNull(sizesRaw) || json.Unmarshal(sizesRaw, &sizes) != nil || sizes == nil {
-				return false
-			}
-			for _, size := range sizes {
-				if !validJSONString(size) {
-					return false
-				}
-			}
-		}
-	}
-	return true
-}
-
-func validRequiredString(members JSONObject, name string) bool {
-	value, ok := members[name]
-	return ok && validJSONString(value)
-}
-
-func validJSONString(raw json.RawMessage) bool {
-	if isJSONNull(raw) {
-		return false
-	}
-	var value string
-	return json.Unmarshal(raw, &value) == nil
 }
 
 func isJSONNull(raw json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
-func validImplementation(clientInfo Implementation) bool {
-	if clientInfo.Name == "" || clientInfo.Version == "" || len(clientInfo.Name) > 1024 || len(clientInfo.Version) > 1024 {
-		return false
-	}
-	if clientInfo.WebsiteURL != "" {
-		websiteURL, err := url.Parse(clientInfo.WebsiteURL)
-		if err != nil || websiteURL.User != nil || websiteURL.Host == "" || (websiteURL.Scheme != "http" && websiteURL.Scheme != "https") {
-			return false
-		}
-	}
-	for _, icon := range clientInfo.Icons {
-		if icon.Source == "" || len(icon.Source) > 4096 {
-			return false
-		}
-		source, err := url.Parse(icon.Source)
-		if err != nil || !source.IsAbs() {
-			return false
-		}
-		if icon.Theme != "" && icon.Theme != "light" && icon.Theme != "dark" {
-			return false
-		}
-		for _, size := range icon.Sizes {
-			if size == "" {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 const (
-	nameHeaderPrefix  = "=?base64?"
-	nameHeaderSuffix  = "?="
-	maxEncodedNameLen = 8192
-	maxDecodedNameLen = 4096
+	nameHeaderPrefix = "=?base64?"
+	nameHeaderSuffix = "?="
 )
 
 func validateNameHeader(transport Transport, envelope Envelope) *Error {
@@ -409,21 +298,21 @@ func validateNameHeader(transport Transport, envelope Envelope) *Error {
 		}
 		return nil
 	}
-	var params struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(envelope.Params, &params); err != nil || params.Name == "" || len(params.Name) > maxDecodedNameLen {
+	params := businessObjectMembers(envelope.Params)
+	nameRaw := params["name"]
+	var name string
+	if json.Unmarshal(nameRaw, &name) != nil || name == "" {
 		return InvalidParams("tools/call params.name is required")
 	}
 	decodedName, ok := decodeNameHeader(transport.MCPName, hasNameHeader)
-	if !ok || decodedName != params.Name {
+	if !ok || decodedName != name {
 		return HeaderMismatch()
 	}
 	return nil
 }
 
 func decodeNameHeader(value string, present bool) (string, bool) {
-	if !present || value == "" || len(value) > maxEncodedNameLen {
+	if !present || value == "" {
 		return "", false
 	}
 	if strings.HasPrefix(value, nameHeaderPrefix) || strings.HasSuffix(value, nameHeaderSuffix) {
@@ -431,11 +320,11 @@ func decodeNameHeader(value string, present bool) (string, bool) {
 			return "", false
 		}
 		payload := strings.TrimSuffix(strings.TrimPrefix(value, nameHeaderPrefix), nameHeaderSuffix)
-		if payload == "" || len(payload) > base64.StdEncoding.EncodedLen(maxDecodedNameLen) || strings.ContainsAny(payload, "\r\n") {
+		if payload == "" || strings.ContainsAny(payload, "\r\n") {
 			return "", false
 		}
 		decoded, err := base64.StdEncoding.Strict().DecodeString(payload)
-		if err != nil || len(decoded) == 0 || len(decoded) > maxDecodedNameLen || !utf8.Valid(decoded) || base64.StdEncoding.EncodeToString(decoded) != payload {
+		if err != nil || len(decoded) == 0 || !utf8.Valid(decoded) || base64.StdEncoding.EncodeToString(decoded) != payload {
 			return "", false
 		}
 		return string(decoded), true

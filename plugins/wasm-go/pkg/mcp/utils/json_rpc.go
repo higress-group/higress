@@ -15,6 +15,7 @@
 package utils
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ import (
 
 const (
 	CtxJsonRpcID           = "jsonRpcID"
+	CtxJsonRpcClientID     = "jsonRpcClientID"
 	CtxNeedPause           = "needPause" // Context key to signal if the handler needs to pause
 	CtxJsonRpcNotification = "jsonRpcNotification"
 	CtxJsonRpcResponded    = "jsonRpcResponded"
@@ -136,20 +138,34 @@ func makeHttpResponse(ctx wrapper.HttpContext, code uint32, debugInfo string, he
 
 func sendJsonRpcResponse(ctx wrapper.HttpContext, id JsonRpcID, extras map[string]any, debugInfo string) {
 	body := []byte(`{"jsonrpc": "2.0"}`)
-	if id.IsString {
-		body, _ = sjson.SetBytes(body, "id", id.StringValue)
-	} else {
-		body, _ = sjson.SetBytes(body, "id", id.IntValue)
-	}
+	body, _ = sjson.SetRawBytes(body, "id", ClientResponseID(ctx, id))
 	for key, value := range extras {
 		body, _ = sjson.SetBytes(body, key, value)
 	}
 	makeHttpResponse(ctx, 200, debugInfo, [][2]string{{"Content-Type", "application/json; charset=utf-8"}}, body)
 }
 
+// ClientResponseID supplies the original client token independently of legacy
+// handler IDs and proxy correlation IDs. A missing Legacy ID uses its handler's
+// historical fallback; Modern notification suppression is handled separately.
+func ClientResponseID(ctx wrapper.HttpContext, fallback JsonRpcID) json.RawMessage {
+	if id, ok := ctx.GetContext(CtxJsonRpcClientID).(protocol.ID); ok && id.IsPresent() {
+		return id.Raw()
+	}
+	if fallback.IsString {
+		raw, _ := json.Marshal(fallback.StringValue)
+		return raw
+	}
+	return json.RawMessage(strconv.FormatInt(fallback.IntValue, 10))
+}
+
+func captureClientID(ctx wrapper.HttpContext, result gjson.Result) {
+	id, _ := protocol.ParseID(json.RawMessage(result.Raw))
+	ctx.SetContext(CtxJsonRpcClientID, id)
+}
+
 func acknowledgeNotification(ctx wrapper.HttpContext) {
-	ctx.SetContext(CtxJsonRpcResponded, true)
-	proxywasm.SendHttpResponseWithDetail(202, "json_rpc_notification_ack", nil, nil, -1)
+	makeHttpResponse(ctx, 202, "json_rpc_notification_ack", nil, nil)
 }
 
 func isNotification(ctx wrapper.HttpContext) bool {
@@ -206,6 +222,7 @@ func HandleJsonRpcMethod(ctx wrapper.HttpContext, body []byte, handles MethodHan
 	ctx.SetContext(CtxJsonRpcNotification, false)
 	ctx.SetContext(CtxJsonRpcResponded, false)
 	idResult := gjson.GetBytes(body, "id")
+	captureClientID(ctx, idResult)
 	id := NewJsonRpcIDFromGjson(idResult)
 	ctx.SetContext(CtxJsonRpcID, id)
 	method := gjson.GetBytes(body, "method").String()
@@ -241,17 +258,9 @@ func HandleJsonRpcMethod(ctx wrapper.HttpContext, body []byte, handles MethodHan
 // existing handler contract. It never reparses identity fields and suppresses
 // JSON-RPC response envelopes for notifications.
 func HandleModernJsonRpcMethod(ctx wrapper.HttpContext, request *protocol.RequestContext, handles MethodHandlers) types.Action {
-	id := JsonRpcID{}
-	if request.Envelope.ID.IsPresent() {
-		rawID := request.Envelope.ID.Raw()
-		if len(rawID) > 0 && rawID[0] == '"' {
-			id.IsString = true
-			id.StringValue, _ = strconv.Unquote(string(rawID))
-		} else {
-			id.IntValue, _ = strconv.ParseInt(string(rawID), 10, 64)
-		}
-		ctx.SetContext(CtxJsonRpcID, id)
-	}
+	id := NewJsonRpcIDFromGjson(gjson.ParseBytes(request.Envelope.ID.Raw()))
+	ctx.SetContext(CtxJsonRpcClientID, request.Envelope.ID)
+	ctx.SetContext(CtxJsonRpcID, id)
 	ctx.SetContext(CtxJsonRpcNotification, request.Envelope.Notification)
 	ctx.SetContext(CtxJsonRpcResponded, false)
 	ctx.SetContext(CtxNeedPause, false)
@@ -281,6 +290,10 @@ func HandleModernJsonRpcMethod(ctx wrapper.HttpContext, request *protocol.Reques
 
 // SendProtocolError emits the typed modern HTTP/JSON-RPC error mapping.
 func SendProtocolError(ctx wrapper.HttpContext, id protocol.ID, protocolError *protocol.Error, debugInfo string) {
+	if isNotification(ctx) {
+		acknowledgeNotification(ctx)
+		return
+	}
 	makeHttpResponse(
 		ctx,
 		protocolError.HTTPStatus,
@@ -299,6 +312,7 @@ func IsModernRequest(ctx wrapper.HttpContext) bool {
 
 func HandleJsonRpcRequest(ctx wrapper.HttpContext, body []byte, handle JsonRpcRequestHandler) types.Action {
 	idResult := gjson.GetBytes(body, "id")
+	captureClientID(ctx, idResult)
 	id := NewJsonRpcIDFromGjson(idResult)
 	ctx.SetContext(CtxJsonRpcID, id)
 	method := gjson.GetBytes(body, "method").String()

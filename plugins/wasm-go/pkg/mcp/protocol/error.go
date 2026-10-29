@@ -95,7 +95,7 @@ func MethodNotFound() *Error {
 }
 
 func MethodNotAllowed() *Error {
-	return newError(405, CodeInvalidRequest, "modern MCP requires HTTP POST")
+	return newError(405, CodeInvalidRequest, "HTTP method not supported on this MCP endpoint")
 }
 
 // SchemaValidationUnavailable reports that a safely published tool descriptor
@@ -120,7 +120,7 @@ func UntrustedOrigin() *Error {
 }
 
 func RequestTooLarge() *Error {
-	return newError(413, CodeInvalidRequest, "request body exceeds the modern MCP limit")
+	return newError(413, CodeInvalidRequest, "request body exceeds the MCP limit")
 }
 
 type errorObject struct {
