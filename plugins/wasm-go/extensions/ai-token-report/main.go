@@ -253,6 +253,10 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfi
 	} else {
 		ctx.SetContext(CtxStatusCode, statusCode)
 		log.Debugf("ai-token-report: captured response status code: %s", statusCode)
+		if statusCode != "200" {
+			ctx.SetContext(CtxSkipPlugin, true)
+			ctx.DontReadResponseBody()
+		}
 	}
 
 	return types.ActionContinue
@@ -305,7 +309,7 @@ func accumulateChunk(ctx wrapper.HttpContext, data []byte) bool {
 	copy(accumulatedBody, existingBody)
 	copy(accumulatedBody[len(existingBody):], data)
 	ctx.SetContext(CtxAccumulatedBody, accumulatedBody)
-// 	log.Debugf("ai-token-report: accumulated body length=%d", len(accumulatedBody))
+	// 	log.Debugf("ai-token-report: accumulated body length=%d", len(accumulatedBody))
 	return true
 }
 
@@ -402,7 +406,7 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config TokenUsageReportConfig,
 			}
 		}
 
-        log.Debugf("onHttpStreamingBody bodyLen=%d", len(data))
+		log.Debugf("onHttpStreamingBody bodyLen=%d", len(data))
 
 		// Report token usage
 		reportTokenUsageFromContext(ctx, config, data)
@@ -481,7 +485,7 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config TokenUsageReportConfig, 
 		}
 	}
 
-    log.Debugf("onHttpResponseBody bodyLen=%d", len(body))
+	log.Debugf("onHttpResponseBody bodyLen=%d", len(body))
 
 	// Report token usage
 	reportTokenUsageFromContext(ctx, config, body)
@@ -643,6 +647,27 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 	}
 }
 
+// isPendingAsyncResponse recognizes the async acknowledgement, including JSON
+// strings and data envelopes. Inspect only envelope fields, never generated text.
+func isPendingAsyncResponse(body []byte) bool {
+	for depth := 0; depth < 8 && gjson.ValidBytes(body); depth++ {
+		result := gjson.ParseBytes(body)
+		if result.Type == gjson.String {
+			body = []byte(result.String())
+			continue
+		}
+		if !result.IsObject() {
+			return false
+		}
+		if result.Get("accepted").Type == gjson.True &&
+			result.Get("status").String() == "processing_or_existing" {
+			return true
+		}
+		body = []byte(result.Get("data").Raw)
+	}
+	return false
+}
+
 func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageReportConfig, responseBody []byte) {
 	// Add panic recovery to ensure this function never interrupts the main flow
 	defer func() {
@@ -651,8 +676,12 @@ func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageRepor
 		}
 	}()
 
-	// Skip if response status code is not 200
+	// Re-read the current header: another filter may have changed it since the
+	// response-header callback. The saved status remains a fallback.
 	statusCode, ok := ctx.GetContext(CtxStatusCode).(string)
+	if currentStatus, err := proxywasm.GetHttpResponseHeader(":status"); err == nil {
+		statusCode, ok = currentStatus, true
+	}
 	log.Debugf("response status code is %s", statusCode)
 	if !ok || statusCode != "200" {
 		if !ok {
@@ -660,6 +689,14 @@ func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageRepor
 		} else {
 			log.Debugf("response status code is %s (not 200), skipping token usage report", statusCode)
 		}
+		return
+	}
+
+	// An accepted async task is not a completed model result, even when an
+	// adapter wraps the acknowledgement in data or normalizes HTTP 201 to 200.
+	if isPendingAsyncResponse(responseBody) ||
+		isPendingAsyncResponse(ctx.GetByteSliceContext(CtxAccumulatedBody, nil)) {
+		log.Infof("ai-token-report: async task is processing_or_existing, skipping token usage report")
 		return
 	}
 
@@ -692,7 +729,7 @@ func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageRepor
 	outputTokens, _ := convertToUInt(outputTokenVal)
 
 	totalTokens, ok := convertToUInt(totalTokenVal)
-		if !ok {
+	if !ok {
 		// Some models (e.g., image generation) don't return token data in the response.
 		// Check if the response has a "data" field, which indicates a valid non-text response.
 		// For streaming, also check the accumulated body since responseBody may only be the last chunk.
