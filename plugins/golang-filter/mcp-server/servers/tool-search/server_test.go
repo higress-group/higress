@@ -79,17 +79,15 @@ func TestServer(t *testing.T) {
 		embeddingConfig["dimensions"].(int),
 	)
 
-	searchService := NewSearchService(
-		vectorConfig["host"].(string),
-		vectorConfig["port"].(int),
-		vectorConfig["database"].(string),
-		vectorConfig["username"].(string),
-		vectorConfig["password"].(string),
-		vectorConfig["tableName"].(string),
+	searchService, err := NewSearchService(
+		toolSearchConfig.Vector,
 		embeddingClient,
 		embeddingConfig["dimensions"].(int),
 		getEnvOrDefaultInt("TEST_MAX_TOOLS", 1000),
 	)
+	if err != nil {
+		t.Fatalf("Failed to create search service: %v", err)
+	}
 
 	allTools, err := searchService.GetAllTools()
 	if err != nil {

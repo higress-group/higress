@@ -7,12 +7,13 @@ import (
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-server/servers/rag/config"
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-server/servers/rag/schema"
+	"github.com/alibaba/higress/plugins/golang-filter/mcp-server/servers/rag/vectordb"
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
 )
 
 // SearchService handles tool search operations
 type SearchService struct {
-	milvusProvider  *MilvusVectorStoreProvider
+	provider        vectordb.VectorStoreProvider
 	config          *config.VectorDBConfig
 	tableName       string
 	dimensions      int
@@ -21,33 +22,30 @@ type SearchService struct {
 }
 
 // NewSearchService creates a new SearchService instance
-func NewSearchService(host string, port int, database, username, password, tableName string, embeddingClient *EmbeddingClient, dimensions int, maxTools int) *SearchService {
-	// Create Milvus configuration
+func NewSearchService(vector VectorConfig, embeddingClient *EmbeddingClient, dimensions int, maxTools int) (*SearchService, error) {
 	cfg := &config.VectorDBConfig{
-		Provider:   "milvus",
-		Host:       host,
-		Port:       port,
-		Database:   database,
-		Collection: tableName,
-		Username:   username,
-		Password:   password,
+		Provider:   vector.Type,
+		Host:       vector.Host,
+		Port:       vector.Port,
+		Database:   vector.Database,
+		Collection: vector.TableName,
+		Username:   vector.Username,
+		Password:   vector.Password,
 	}
 
-	// Create Milvus provider
-	provider, err := NewMilvusVectorStoreProvider(cfg, dimensions)
+	provider, err := vectordb.NewVectorDBProvider(cfg, dimensions)
 	if err != nil {
-		api.LogErrorf("Failed to create Milvus provider: %v", err)
-		return nil
+		return nil, fmt.Errorf("failed to create vector store provider: %w", err)
 	}
 
 	return &SearchService{
-		milvusProvider:  provider,
+		provider:        provider,
 		config:          cfg,
-		tableName:       tableName,
+		tableName:       vector.TableName,
 		dimensions:      dimensions,
 		maxTools:        maxTools, // 使用写死的值
 		embeddingClient: embeddingClient,
-	}
+	}, nil
 }
 
 // ToolSearchResult represents the result of a tool search
@@ -166,7 +164,6 @@ type ToolRecord struct {
 func (s *SearchService) searchToolsInDB(query string, vector []float32, topK int) ([]ToolRecord, error) {
 	api.LogInfof("Performing vector search for query: '%s', topK: %d", query, topK)
 
-	// For Milvus, we'll perform vector search directly
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -175,7 +172,7 @@ func (s *SearchService) searchToolsInDB(query string, vector []float32, topK int
 		TopK: topK,
 	}
 
-	results, err := s.milvusProvider.SearchDocs(ctx, vector, searchOptions)
+	results, err := s.provider.SearchDocs(ctx, vector, searchOptions)
 	if err != nil {
 		api.LogErrorf("Vector search failed: %v", err)
 		return nil, fmt.Errorf("failed to perform vector search: %w", err)
@@ -210,7 +207,7 @@ func (s *SearchService) getAllToolsFromDB() ([]ToolRecord, error) {
 	defer cancel()
 
 	// Retrieve all documents with limit
-	docs, err := s.milvusProvider.ListAllDocs(ctx, s.maxTools)
+	docs, err := s.provider.ListDocs(ctx, s.maxTools)
 	if err != nil {
 		api.LogErrorf("Failed to list documents: %v", err)
 		return nil, fmt.Errorf("failed to list documents: %w", err)
