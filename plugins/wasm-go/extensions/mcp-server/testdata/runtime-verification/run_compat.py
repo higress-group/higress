@@ -111,7 +111,10 @@ def main():
             if variant == "candidate": shutil.copyfile(out / "plain-candidate.wasm", out / "plugin.wasm")
             run([sys.executable, str(harness / "compat_fixture.py"), str(out), variant])
             shutil.copyfile(out / "envoy.yaml", out / f"envoy-{variant}.yaml")
-            compose("--profile", "verify", "config", "--format", "json", target=out / f"compose-{variant}.json")
+            # Compose providers may print banners on stderr; keep config JSON
+            # pure while retaining those diagnostics in the evidence bundle.
+            compose("--profile", "verify", "config", "--format", "json", target=out / f"compose-{variant}.json",
+                    stderr_target=out / f"compose-{variant}.stderr.log")
             run([sys.executable, str(harness / "compose_config_self_test.py"), str(out / f"compose-{variant}.json")])
             compose("up", "-d", "backend-primary", "backend-secondary")
             lifecycle("reset_primary_backend")

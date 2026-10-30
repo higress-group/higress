@@ -51,6 +51,36 @@ class RoutingEvidenceTest(unittest.TestCase):
             self.assertIn("synthetic-runner-failure", output.read_text())
             with self.assertRaises(RuntimeError): run_routing.validate_verification(result.returncode, output)
 
+    def test_json_capture_preserves_provider_banner_and_failure_status(self):
+        # Match the Compose capture path: machine-readable stdout and an ANSI
+        # external-provider notice on stderr must remain separate artifacts.
+        names = {"gateway", "gateway-auto", "gateway-auto-baseline", "gateway-auto-explicit-baseline",
+                 "gateway-baseline", "gateway-oracle", "gateway-generation"}
+        names.update("gateway-instructions-" + role for role in ("baseline", "candidate"))
+        names.update("gateway-" + kind + "-" + role for kind in ("control", "corpus") for role in ("candidate", "affected", "oracle"))
+        config = {"services": {name: {"entrypoint": ["/usr/local/bin/envoy"], "command": ["--concurrency", "1"]} for name in names}}
+        banner = "\x1b[4m>>>> Executing external compose provider \"fixture-provider\". <<<<\x1b[0m\n"
+        script = "import sys; sys.stderr.write(sys.argv[1]); print(sys.argv[2]); raise SystemExit(int(sys.argv[3]))"
+        with tempfile.TemporaryDirectory() as temporary:
+            output, diagnostics = Path(temporary) / "compose.json", Path(temporary) / "compose.stderr.log"
+            for status in (0, 7):
+                log = io.StringIO()
+                command = [sys.executable, "-c", script, banner, json.dumps(config), str(status)]
+                if status:
+                    with self.assertRaisesRegex(RuntimeError, "fixture-provider"):
+                        run_routing.recorded_run(command, log, target=output, stderr_target=diagnostics)
+                else:
+                    result = run_routing.recorded_run(command, log, target=output, stderr_target=diagnostics)
+                    self.assertEqual(0, result.returncode)
+                    self.assertEqual(banner, result.stderr)
+                    checked = subprocess.run([sys.executable, str(run_routing.HERE / "compose_config_self_test.py"), str(output)], capture_output=True, text=True)
+                    self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+                self.assertEqual(config, json.loads(output.read_text()), "provider diagnostics corrupted config JSON")
+                self.assertEqual(banner, diagnostics.read_text(), "provider diagnostics were discarded")
+                record = json.loads(log.getvalue())
+                self.assertEqual(status, record["exit_code"], "failed provider exit was lost")
+                self.assertEqual(str(diagnostics), record["stderr_file"])
+
     def test_runner_startup_failure_retains_manifest_and_nonzero_exit(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "evidence"
