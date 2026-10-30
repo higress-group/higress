@@ -209,6 +209,16 @@ func (h *McpProtocolHandler) handleBusinessResponse(ctx wrapper.HttpContext, ope
 	if sendUpstreamAuthFailure(ctx, status, headers, operation) {
 		return
 	}
+	// The old main-route business response retained these headers even when
+	// replacing its status/error. Keep them without bypassing response cleanup
+	// for cookies, sessions, encodings or other arbitrary upstream headers.
+	var retained [][2]string
+	for _, header := range headers {
+		if (strings.EqualFold(header[0], "Retry-After") || strings.EqualFold(header[0], "WWW-Authenticate")) && !strings.ContainsAny(header[1], "\r\n") {
+			retained = append(retained, header)
+		}
+	}
+	ctx.SetContext(utils.CtxBusinessResponseHeaders, retained)
 	prefix := "mcp-proxy:" + operation
 	if status != 200 {
 		utils.OnMCPResponseError(ctx, fmt.Errorf("backend %s failed", operation), utils.ErrInternalError, prefix+":backend_error")

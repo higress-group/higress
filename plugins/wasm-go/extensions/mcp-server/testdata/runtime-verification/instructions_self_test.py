@@ -40,6 +40,16 @@ class InstructionsEvidenceTest(unittest.TestCase):
             self.assertEqual(result["exchangeCount"], request_count)
             self.assertTrue(result["complete"] and result["exchangeLedgerComplete"] and result["accessLedgerComplete"])
 
+    def test_only_exact_raw_query_fixture_path_can_be_sanitized(self):
+        snapshot, log = valid_evidence("candidate")
+        raw = log.replace("path=/instructions?api_key=<redacted>", "path=/instructions?api_key=runtime-key")
+        self.assertTrue(focused_evidence(snapshot, "candidate", raw)["accessLedgerComplete"])
+        for wrong in ("/instructions?api_key=other", "/instructions?api_key=runtime-key&extra=1", "/instructions?other=runtime-key"):
+            broken = raw.replace("path=/instructions?api_key=runtime-key", "path=" + wrong)
+            self.assertFalse(focused_evidence(snapshot, "candidate", broken)["accessLedgerComplete"])
+        query_access = next(line for line in raw.splitlines() if "listener=instructions-14004 " in line)
+        self.assertFalse(focused_evidence(snapshot, "candidate", raw + query_access + "\n")["accessLedgerComplete"])
+
     def test_case_substitution_is_rejected_even_with_same_count(self):
         snapshot, log = valid_evidence("candidate")
         snapshot["expectedCases"][0] = "substituted"

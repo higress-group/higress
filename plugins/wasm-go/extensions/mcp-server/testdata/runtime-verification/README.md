@@ -75,11 +75,13 @@ lengths/hashes rather than large payloads. Depth 70, 65537 values, long ASCII an
 encoded UTF-8 names, ordinary duplicates, invalid/concatenated/batch messages,
 schema mismatch and `allowTools` denial have separate IDs. Large requests and
 source variants execute sequentially; elapsed times are diagnostic, with no
-performance SLO.
+performance SLO. Large bodies use a separately named registered-fixture VM,
+so their existing SDK memory recycling cannot reset the small-input counter VM.
 
 Before/after direct-tool counters include a fixture-only VM generation and a
 positive Create/Call increment. A VM recycle between observations fails the
-zero-effect proof instead of being mistaken for unchanged zero counters. Denied
+zero-effect proof instead of being mistaken for unchanged zero counters. Bounded
+counter values and generations are retained in exchange diagnostics. Denied
 and invalid candidate requests must not execute Create/Call. The old oracle did
 not enforce JSON framing; malformed, concatenated and batch results are observed
 and classified only as the named retained basic-message-boundary exception.
@@ -107,7 +109,9 @@ specific HTTP 401/403 authentication exception retains status and
 
 HTTP and SSE business cases cover ordinary/custom/missing media, results above the probe limit, duplicate/deep
 results, RPC errors and HTTP failures. They use corresponding historical error,
-status, data and header policies. Authentication fidelity and preserved SSE
+status, data and header policies. HTTP business Retry-After and WWW-Authenticate
+are compared explicitly; preserving them does not bypass cleanup for cookies,
+sessions, encoding or arbitrary headers, or alter strict controls. Authentication fidelity and preserved SSE
 ordinary-header multiplicity are named later fixes and independently asserted.
 Probe/body budgets, control identity/correlation, terminal failures and zero
 business attempts remain separate. `verify_auto.cases` supplies the existing

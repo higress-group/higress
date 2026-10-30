@@ -110,6 +110,11 @@ def focused_evidence(snapshot, variant, log):
         if expected is None:
             access_ok = False
             continue
+        # Historical runners sanitized this exact fixture credential before
+        # finalization. Validate its raw representation before normalizing it;
+        # unexpected values, extra query fields and other paths still fail.
+        if expected["port"] == 14004 and path == "/instructions?api_key=runtime-key":
+            path = "/instructions?api_key=<redacted>"
         expected_code = "0" if expected["raw"] else str(observed.get("response", {}).get("status"))
         access_ok = access_ok and (listener == f"instructions-{expected['port']}" and method == "POST" and
                                    path == expected["accessPath"] and code == expected_code and

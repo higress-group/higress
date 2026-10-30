@@ -86,6 +86,10 @@ type MethodHandlers map[string]JsonRpcMethodHandler
 // selected response headers may survive the bridge, just as with local replies.
 const CtxRoutedProxyResponse = "mcp_routed_proxy_response"
 
+// CtxBusinessResponseHeaders carries only explicitly retained HTTP business
+// headers across response replacement; control, discovery and SSE do not set it.
+const CtxBusinessResponseHeaders = "mcp_business_response_headers"
+
 // WriteHTTPResponse writes a response in either a request or response callback.
 func WriteHTTPResponse(ctx wrapper.HttpContext, code uint32, detail string, headers [][2]string, body []byte) {
 	makeHttpResponse(ctx, code, detail, headers, body)
@@ -115,6 +119,11 @@ func WriteJsonRpcResponse(ctx wrapper.HttpContext, code uint32, detail string, h
 func makeHttpResponse(ctx wrapper.HttpContext, code uint32, debugInfo string, headers [][2]string, body []byte) {
 	ctx.SetContext(CtxJsonRpcResponded, true)
 	ctx.SetContext(CtxJsonRpcResponsePending, false)
+	if !isNotification(ctx) {
+		if retained, ok := ctx.GetContext(CtxBusinessResponseHeaders).([][2]string); ok && len(retained) > 0 {
+			headers = append(append([][2]string(nil), headers...), retained...)
+		}
+	}
 	phase := ctx.GetExecutionPhase()
 	if phase < iface.EncodeHeader {
 		proxywasm.SendHttpResponseWithDetail(code, debugInfo, headers, body, -1)

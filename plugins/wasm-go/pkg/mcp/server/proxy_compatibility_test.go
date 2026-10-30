@@ -277,7 +277,7 @@ func TestHTTPBusinessResponsePolicyDoesNotInheritControlRestrictions(t *testing.
 					finishProxyControls(t, host, strategy, true, strategy != ProtocolStrategyLegacy)
 					business := routedRequest(t, host)
 					responseBody := autoResult(gjson.GetBytes(business.Body, "id").Raw, `{"tools":[],"content":[],"deep":`+deep+`,"padding":"`+strings.Repeat("x", 1024*1024+1)+`","number":900719925474099312345,"value":1,"value":2}`)
-					responseHeaders := [][2]string{{"Content-Type", "application/x-custom"}, {"Retry-After", "5"}, {"WWW-Authenticate", "Bearer realm=upstream"}}
+					responseHeaders := [][2]string{{"Content-Type", "application/x-custom"}, {"Retry-After", "5"}, {"WWW-Authenticate", "Bearer realm=upstream"}, {"Set-Cookie", "private"}, {"Mcp-Session-Id", "private"}, {"Content-Encoding", "gzip"}, {"X-Upstream-Private", "private"}}
 					completeCallout(host, business, status, responseHeaders, responseBody)
 					response := proxyTestResponse(host)
 					require.NotNil(t, response)
@@ -290,7 +290,15 @@ func TestHTTPBusinessResponsePolicyDoesNotInheritControlRestrictions(t *testing.
 					}
 					assert.Equal(t, wantStatus, response.StatusCode)
 					_, retryAfter := findHeader(response.Headers, "Retry-After")
-					assert.False(t, retryAfter)
+					assert.Equal(t, status != "401" && status != "403", retryAfter)
+					if retryAfter {
+						assert.Equal(t, "5", mustHeaderValue(t, response.Headers, "Retry-After"))
+					}
+					assert.Equal(t, "Bearer realm=upstream", mustHeaderValue(t, response.Headers, "WWW-Authenticate"))
+					for _, name := range []string{"Set-Cookie", "Mcp-Session-Id", "Content-Encoding", "X-Upstream-Private"} {
+						_, present := findHeader(response.Headers, name)
+						assert.False(t, present, name)
+					}
 					if status == "200" {
 						assert.Equal(t, "900719925474099312345", gjson.GetBytes(response.Data, "result.number").Raw)
 						assert.Equal(t, "2", gjson.GetBytes(response.Data, "result.value").Raw)
@@ -539,5 +547,38 @@ func TestExplicitProxyAuthorizationOverridesRemovedClientCopies(t *testing.T) {
 				assertCredential(routedRequest(t, host).Headers)
 			})
 		}
+	}
+}
+
+func TestBusinessResponseHeadersDoNotCrossNotificationOrUnsafeValueBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name, id string
+		headers  [][2]string
+		status   uint32
+	}{
+		{"notification", "", [][2]string{{"Retry-After", "5"}, {"WWW-Authenticate", "Bearer realm=upstream"}}, 202},
+		{"invalid header values", `"client"`, [][2]string{{"Retry-After", "5\r\nX-Injected: bad"}, {"WWW-Authenticate", "Bearer\nInjected"}}, 200},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host := newProxyBridgeHost(t, ProtocolStrategyModern)
+			headers, body := looseProxyRequest(true, string(OpToolsCall), test.id)
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+			host.CallOnHttpRequestBody(body)
+			business := routedRequest(t, host)
+			completeCallout(host, business, "429", test.headers, []byte(`{"error":{"code":-32099,"data":"must-not-pass"}}`))
+			response := proxyTestResponse(host)
+			require.NotNil(t, response)
+			assert.Equal(t, test.status, response.StatusCode)
+			for _, name := range []string{"Retry-After", "WWW-Authenticate", "X-Injected"} {
+				_, present := findHeader(response.Headers, name)
+				assert.False(t, present, name)
+			}
+			if test.status == 202 {
+				assert.Empty(t, response.Data)
+			} else {
+				assert.Equal(t, int64(-32603), gjson.GetBytes(response.Data, "error.code").Int())
+				assert.False(t, gjson.GetBytes(response.Data, "error.data").Exists())
+			}
+		})
 	}
 }

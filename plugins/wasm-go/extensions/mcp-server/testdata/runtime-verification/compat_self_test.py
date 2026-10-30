@@ -145,6 +145,37 @@ def cleanup_failure_checks():
             require(inputs["cleanupExitCode"] == cleanup_status and inputs["cleanupComplete"] == (cleanup_status == 0), "empty containers masked compose cleanup failure")
 
 
+
+def counter_and_legacy_diagnostic_checks():
+    verifier = Compatibility("candidate", ".")
+    def counter_case(before, after):
+        replies = iter(((200, {}, {"result": {}}), (200, {}, {"result": before}),
+                        (400, {}, {"error": {"code": c.JSONNumber("-32700")}}), (200, {}, {"result": after})))
+        verifier.exchanges.clear()
+        def exchange(*args, **kwargs):
+            verifier.exchanges.append({})
+            return next(replies)
+        verifier.exchange = exchange
+        return verifier.input_case({"profile": "legacy", "shape": "invalid"})
+    stable = {"generation": "one", "creates": c.JSONNumber("1"), "calls": c.JSONNumber("1")}
+    require(counter_case(stable, stable)["zeroCreateCall"], "stable negative proof rejected")
+    require(verifier.exchanges[1]["executionCounters"] == {"generation": "one", "creates": 1, "calls": 1}, "counter observations omitted")
+    for after in ({**stable, "generation": "two"}, {**stable, "creates": c.JSONNumber("2")}, {**stable, "calls": c.JSONNumber("2")}):
+        rejected(lambda after=after: counter_case(stable, after))
+    rejected(lambda: counter_case({**stable, "creates": c.JSONNumber("0"), "calls": c.JSONNumber("0")}, stable))
+    verifier = Compatibility("control", ".")
+    message = 'tool "legacy-true" is unavailable in the modern profile because its input schema cannot be validated: configured as legacy-only'
+    result = {"isError": True, "content": [{"type": "text", "text": message}]}
+    def diagnostic(response, attempts=0):
+        verifier.exchange = lambda *args, **kwargs: (200, {}, response)
+        verifier.ledger = lambda: {"attempts": {"business": attempts}}
+        return verifier.red_case({"red": "legacyOnly"})
+    require(diagnostic({"result": result})["diagnosticRedReproduced"], "legacyOnly tool error result rejected")
+    for wrong in ({"error": {"code": -32603}}, {"result": {**result, "isError": False}}, {"result": {"isError": True, "content": []}}):
+        rejected(lambda wrong=wrong: diagnostic(wrong))
+    rejected(lambda: diagnostic({"result": result}, attempts=1))
+
+
 def registry_and_body_checks():
     for role in ("oracle", "control", "candidate"):
         registry = c.registry(role)
@@ -198,6 +229,7 @@ def fixture_checks():
         require("cluster: compat-route" in text and "address: backend-primary" in text, "original custom cluster lost")
         require("host_rewrite_literal: fixed.virtual" in text and "http://initial.virtual/unified/sse" in text, "SSE URL/Host rewrite coverage lost")
         require("registered-candidate.wasm" in text and "plain-candidate.wasm" in text, "fixture/plain paths collapsed")
+        require(text.count("vm_id: unified-registered\n") == 1 and text.count("vm_id: unified-registered-body\n") == 1, "large bodies share the counter VM")
 
 
 def valid_runtime(root):
@@ -269,7 +301,7 @@ def evidence_checks():
 
 
 def main():
-    strict_peer_checks(); sse_correlation_checks(); cleanup_failure_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
+    strict_peer_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
     print("unified compatibility fixture/oracle self-tests passed")
 
 

@@ -99,7 +99,9 @@ class Compatibility:
     def stats(self, port, modern):
         status, _, response = self.exchange(port, contract.envelope(modern, tool="runtime_counters"), modern, tool="runtime_counters")
         check(status == 200 and response and "result" in response, "registered execution counter unavailable")
-        return (response["result"]["generation"], *(integer(response["result"][key]) for key in ("creates", "calls")))
+        observed = {"generation": response["result"]["generation"], **{key: integer(response["result"][key]) for key in ("creates", "calls")}}
+        self.exchanges[-1]["executionCounters"] = observed
+        return tuple(observed[key] for key in ("generation", "creates", "calls"))
 
     def identity(self, response, raw_id, modern, status, headers):
         if modern and not raw_id:
@@ -127,7 +129,7 @@ class Compatibility:
         raw, arguments = contract.sized_body(modern, case["size"], case["location"])
         check(len(raw) == case["size"], "full UTF-8 body size differs from independent case registry")
         raw.decode("utf-8")
-        port = PORTS["http-legacy"] if case["size"] > contract.LIMIT else PORTS["registered"]
+        port = PORTS["http-legacy"] if case["size"] > contract.LIMIT else PORTS["registered-body"]
         status, _, response = self.exchange(port, raw, modern)
         if case["size"] > contract.LIMIT:
             check(status == 413, "complete body above 100 MiB was accepted")
@@ -273,7 +275,9 @@ class Compatibility:
             expected = int(mode[4:])
             check(status == (expected if expected in (401, 403) else 202 if modern and not rpc_id else 200), "business/auth HTTP policy changed")
             if expected in (401, 403): check(headers.get("www-authenticate") == 'Bearer realm="compat"', "auth challenge lost")
-            check("retry-after" not in headers, "business Retry-After widened")
+            retained_business_headers = not route.startswith("sse") and case["kind"] != "discovery" and expected not in (401, 403) and not (modern and not rpc_id)
+            check(headers.get("retry-after") == ("5" if retained_business_headers else None), "corresponding business Retry-After changed")
+            check(headers.get("www-authenticate") == ('Bearer realm="compat"' if retained_business_headers or expected in (401, 403) else None), "corresponding business challenge header changed")
             if not (modern and not rpc_id):
                 check(response and "error" in response and integer(response["error"]["code"]) == -32603 and "data" not in response["error"], "business HTTP error/data mapping changed")
                 if expected not in (401, 403):
@@ -351,7 +355,8 @@ class Compatibility:
         if case["kind"].startswith("sse-") and self.variant != "oracle":
             for row in evidence["events"]:
                 check([part.strip() for field in row["ordinaryHeaders"] for part in field.split(",")] == ["first", "second"], "ordinary multivalue headers lost")
-        projection = {"status": status, "businessAttempts": evidence["attempts"]["business"]}
+        projection = {"status": status, "businessAttempts": evidence["attempts"]["business"],
+                      "responseHeaders": {name: headers[name] for name in ("retry-after", "www-authenticate") if name in headers}}
         if business_digest is not None: projection["businessResultSha256"] = business_digest
         if response and "error" in response:
             projection.update(errorCode=token_number(response["error"]["code"]), errorMessage=response["error"]["message"])
@@ -368,7 +373,13 @@ class Compatibility:
         extra = [("Origin", "https://other.example")] if name == "cross-origin" else []
         status, _, response = self.exchange(port, raw, True, tool="legacy-true" if name == "legacyOnly" else "raw_summary", extra=extra)
         expected = {"modern-over-one-mib": 413, "cross-origin": 403, "fractional-id": 400, "schema-call": 200, "legacyOnly": 200}[name]
-        check(status == expected and (name == "modern-over-one-mib" or response and "error" in response), "pre-fix diagnostic did not reproduce its named gate")
+        if name == "legacyOnly":
+            message = 'tool "legacy-true" is unavailable in the modern profile because its input schema cannot be validated: configured as legacy-only'
+            result = (response or {}).get("result", {})
+            check(status == expected and result.get("isError") is True and result.get("content") == [{"type": "text", "text": message}], "pre-fix legacyOnly tool error result did not reproduce its named gate")
+            check(self.ledger()["attempts"]["business"] == 0, "legacyOnly diagnostic reached business")
+        else:
+            check(status == expected and (name == "modern-over-one-mib" or response and "error" in response), "pre-fix diagnostic did not reproduce its named gate")
         return {"diagnosticRedReproduced": True, "status": status, "notBusinessOracle": True}
 
     def run(self):

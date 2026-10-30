@@ -11,7 +11,7 @@ PORTS = {"registered": 15000, "restricted": 15001, "rest": 15002,
          "sse-rewrite": 15009, "sse-static-header": 15010,
          "sse-static-query": 15011, "sse-forward": 15012,
          "sse-passthrough": 15013, "sse-removed": 15014,
-         "e2bdev": 15015, "firecrawl": 15016, "sse-path-rewrite": 15017, "composed": 15018, "sse-static-authorization": 15019}
+         "e2bdev": 15015, "firecrawl": 15016, "sse-path-rewrite": 15017, "composed": 15018, "sse-static-authorization": 15019, "registered-body": 15020}
 
 
 def proxy(name):
@@ -48,8 +48,8 @@ def configs(out, variant):
                        for state in ("false", "true")]
     entries = []
     for name, port in PORTS.items():
-        config = deepcopy(registered) if name in ("registered", "restricted", "composed") else deepcopy(rest) if name == "rest" else proxy(name)
-        wasm = f"registered-{variant}.wasm" if name in ("registered", "restricted", "composed") else f"plain-{variant}.wasm"
+        config = deepcopy(registered) if name in ("registered", "registered-body", "restricted", "composed") else deepcopy(rest) if name == "rest" else proxy(name)
+        wasm = f"registered-{variant}.wasm" if name in ("registered", "registered-body", "restricted", "composed") else f"plain-{variant}.wasm"
         if name == "composed":
             config["_rules_"] = [{"_match_domain_": ["mcp.runtime.test"], "toolSet": {"name": "compat-composed", "serverTools": [{"serverName": "runtime-schema-fixtures", "tools": ["raw_summary", "numeric_comparison"]}]}}]
         if name == "restricted":

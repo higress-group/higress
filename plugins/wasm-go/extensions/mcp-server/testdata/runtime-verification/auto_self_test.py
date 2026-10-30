@@ -61,6 +61,19 @@ class AutoFixtureTest(unittest.TestCase):
     def state(self):
         return json.loads(self.request("/__state")[2])
 
+    def test_sse_business_uses_historical_data_space_without_changing_probe_frames(self):
+        self.configure("sse")
+        status, headers, probe = self.rpc(verify_auto.PROBE)
+        self.assertEqual(200, status)
+        self.assertIn(b'data:{"jsonrpc":"2.0","method":"notifications/progress"', probe)
+        self.assertIn(b"data: {\r\ndata: ", probe)
+        status, headers, business = self.rpc(verify_auto.CALL)
+        self.assertEqual(200, status)
+        self.assertEqual("text/event-stream", headers["Content-Type"])
+        self.assertTrue(business.startswith(b"data: "))
+        self.assertEqual(900719925474099312345, json.loads(business[len(b"data: "):])["result"]["opaque"])
+        self.assertEqual([verify_auto.PROBE, verify_auto.CALL], [event["rpcMethod"] for event in self.state()["events"]])
+
     def test_required_cases_are_distinct_and_complete(self):
         names = [name for name, _ in verify_auto.cases(SimpleNamespace())]
         self.assertEqual(len(names), len(set(names)))
