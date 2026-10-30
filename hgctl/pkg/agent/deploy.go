@@ -53,6 +53,8 @@ type DeployHandler struct {
 }
 
 func deployAgentCmd() *cobra.Command {
+	var cloud = false
+
 	cmd := &cobra.Command{
 		Use:   "deploy [name]",
 		Short: "Deploy the specified agent locally or to the cloud",
@@ -61,11 +63,14 @@ func deployAgentCmd() *cobra.Command {
 			handler := &DeployHandler{
 				Name: args[0],
 			}
+			if cloud {
+				handler.Type = AgentRun
+			}
+
 			cmdutil.CheckErr(handler.Deploy())
 		},
 	}
 
-	var cloud = false
 	cmd.PersistentFlags().BoolVar(&cloud, "agentrun", false, "deploy agent using agentrun")
 
 	return cmd
@@ -277,6 +282,10 @@ func (h *DeployHandler) getAgentType() error {
 		return err
 	}
 	h.AgentDir = path
+
+	if h.Type != "" {
+		return nil
+	}
 
 	filePath := filepath.Join(h.AgentDir, "requirements.txt")
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
