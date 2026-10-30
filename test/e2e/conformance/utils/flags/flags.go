@@ -24,7 +24,7 @@ var (
 	SupportedFeatures    = flag.String("supported-features", "", "Supported features included in conformance tests suites")
 	ExemptFeatures       = flag.String("exempt-features", "", "Exempt Features excluded from conformance tests suites")
 	ExecuteTests         = flag.String("execute-tests", "", "Execute the specific conformance tests")
-	IsWasmPluginTest     = flag.Bool("isWasmPluginTest", false, "Determine if run wasm plugin conformance test")
+	IsWasmPluginTest     = flag.Bool("isWasmPluginTest", true, "Determine if run wasm plugin conformance test")
 	WasmPluginType       = flag.String("wasmPluginType", "GO", "Define wasm plugin type, currently supports GO, CPP")
 	WasmPluginName       = flag.String("wasmPluginName", "", "Define wasm plugin name")
 	IsEnvoyConfigTest    = flag.Bool("isEnvoyConfigTest", false, "Determine if run envoy config conformance test")
