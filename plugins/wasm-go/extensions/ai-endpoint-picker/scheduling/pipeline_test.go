@@ -124,3 +124,27 @@ func TestPipelineEqualMinMaxScoresOne(t *testing.T) {
 		t.Fatalf("score = %v, want 1", decision.Score)
 	}
 }
+
+// A corrupt KV sample must not be promoted to the maximum score by
+// transformOneMinus: an endpoint whose KV metric is unusable has to lose to one
+// that honestly reports a loaded cache.
+func TestPipelineNegativeKVSampleDoesNotWin(t *testing.T) {
+	corrupt, err := ParseVLLMSignals("# TYPE vllm:kv_cache_usage_perc gauge\nvllm:kv_cache_usage_perc -0.1\n", "model")
+	if err != nil {
+		t.Fatalf("parse corrupt snapshot: %v", err)
+	}
+	busy, err := ParseVLLMSignals("# TYPE vllm:kv_cache_usage_perc gauge\nvllm:kv_cache_usage_perc 0.9\n", "model")
+	if err != nil {
+		t.Fatalf("parse busy snapshot: %v", err)
+	}
+	decision := NewPipeline(testWeights(), fixedRandom(0)).Schedule([]EndpointSnapshot{
+		{Address: "corrupt", Healthy: true, Signals: corrupt},
+		{Address: "busy", Healthy: true, Signals: busy},
+	})
+	if decision.Address != "busy" {
+		t.Fatalf("selected %q (score %v), want busy: a negative KV sample must not win", decision.Address, decision.Score)
+	}
+	if decision.SignalAvailability&SignalAvailabilityKVCache == 0 {
+		t.Fatalf("mask = 0x%x, want the honest endpoint's KV signal present", decision.SignalAvailability)
+	}
+}
