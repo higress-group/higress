@@ -73,13 +73,16 @@ func IsGrayEnabled(requestPath string, grayConfig *config.GrayConfig) bool {
 	if CheckIsHtmlRequest(requestPath) {
 		return true
 	}
+	// 检查header标识，判断是否需要跳过
+	// 该判断必须早于下面的 rewrite.host 分支：README 约定 skippedByHeaders 用于
+	// 指定哪些请求不被本插件处理。若 rewrite.host 先返回 true，配置了重写主机的
+	// 非 HTML 请求就会绕过该过滤，继续被插件改写 :authority。
+	if IsRequestSkippedByHeaders(grayConfig) {
+		return false
+	}
 	// 检查是否存在重写主机
 	if grayConfig.Rewrite != nil && grayConfig.Rewrite.Host != "" {
 		return true
-	}
-	// 检查header标识，判断是否需要跳过
-	if IsRequestSkippedByHeaders(grayConfig) {
-		return false
 	}
 	// 检查是否存在灰度版本配置
 	return len(grayConfig.GrayDeployments) > 0
