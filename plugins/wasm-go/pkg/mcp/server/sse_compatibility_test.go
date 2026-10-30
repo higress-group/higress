@@ -9,6 +9,8 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -465,5 +467,92 @@ func TestSSENotificationOrdinaryFailuresAcknowledgeWithoutRPCBody(t *testing.T) 
 			assert.Empty(t, response.Data)
 			assert.Empty(t, host.GetHttpCalloutAttributes())
 		})
+	}
+}
+
+func TestSSEInitialGETAuthenticationResponseIsolation(t *testing.T) {
+	challenges := []string{`Bearer realm="compat-primary"`, `Basic realm="compat-secondary"`}
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, err := writer.Write([]byte(`{"error":"synthetic-upstream-auth-body"}`))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	for _, profile := range []string{"legacy", "modern", "notification"} {
+		for _, method := range []string{string(OpToolsList), string(OpToolsCall)} {
+			for _, status := range []string{"401", "403"} {
+				for _, headerOnly := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/%s/headerOnly=%t", profile, method, status, headerOnly), func(t *testing.T) {
+						host := newSSECompatibilityHost(t, "http://backend.example/sse", "")
+						id := `"client\u002did"`
+						if profile == "modern" {
+							id = "null"
+							if method == string(OpToolsCall) {
+								id = "1.50"
+							}
+						}
+						if profile == "notification" {
+							id = ""
+						}
+						startSSECompatibility(t, host, profile != "legacy", method, id)
+						writes := 0
+						host.RegisterForeignFunction("inject_encoded_data_to_filter_chain_on_header", func(raw []byte) []byte {
+							writes++
+							args := &pb.InjectEncodedDataToFilterChainArguments{}
+							require.NoError(t, proto.Unmarshal(raw, args))
+							require.True(t, args.Endstream)
+							require.NoError(t, proxywasm.InjectEncodedDataToFilterChain([]byte(args.Body), true))
+							return []byte{0}
+						})
+						headers := [][2]string{{":status", status}, {"Content-Type", "application/json"}, {"Content-Encoding", "gzip"},
+							{"Content-Length", strconv.Itoa(compressed.Len())}, {"Set-Cookie", "synthetic-cookie=private"},
+							{"Mcp-Session-Id", "synthetic-session"}, {"X-Upstream-Private", "synthetic-private"}, {"Retry-After", "7"},
+							{"WWW-Authenticate", challenges[0]}, {"WWW-Authenticate", challenges[1]}}
+						if headerOnly {
+							headers[3][1] = "0"
+						}
+						require.Equal(t, types.HeaderStopAllIterationAndWatermark, host.CallOnHttpResponseHeaders(headers, wasmtest.WithEndOfStream(headerOnly)))
+						response := proxyTestResponse(host)
+						require.NotNil(t, response)
+						code, _ := strconv.Atoi(status)
+						assert.Equal(t, uint32(code), response.StatusCode)
+						for _, name := range []string{"Content-Encoding", "Set-Cookie", "Mcp-Session-Id", "X-Upstream-Private", "Retry-After", "Content-Length"} {
+							_, present := findHeader(response.Headers, name)
+							assert.False(t, present, name)
+						}
+						var retainedChallenges string
+						for _, header := range response.Headers {
+							if strings.EqualFold(header[0], "WWW-Authenticate") {
+								retainedChallenges += header[1]
+							}
+						}
+						// The native mock can coalesce Add values; the real Envoy
+						// regression records raw fields and validates their semantics.
+						for _, challenge := range challenges {
+							assert.Equal(t, 1, strings.Count(retainedChallenges, challenge))
+						}
+						assert.Contains(t, mustHeaderValue(t, response.Headers, "Content-Type"), "application/json")
+						if profile == "notification" {
+							assert.Empty(t, response.Data)
+						} else {
+							require.True(t, json.Valid(response.Data))
+							if profile == "legacy" {
+								assert.Equal(t, "client-id", gjson.GetBytes(response.Data, "id").String())
+							} else {
+								assert.Equal(t, id, gjson.GetBytes(response.Data, "id").Raw)
+							}
+							assert.Equal(t, int64(-32603), gjson.GetBytes(response.Data, "error.code").Int())
+							assert.Equal(t, "upstream authorization failed", gjson.GetBytes(response.Data, "error.message").String())
+							assert.NotContains(t, string(response.Data), "synthetic-upstream-auth-body")
+						}
+						first := bytes.Clone(response.Data)
+						host.CallOnHttpStreamingResponseBody(compressed.Bytes(), true)
+						sendSSEMessage(host, "endpoint", "http://later.example/messages")
+						assert.Empty(t, host.GetHttpCalloutAttributes(), "terminal GET authentication must not dispatch later phases")
+						assert.Equal(t, first, host.GetResponseBody())
+						assert.Equal(t, 1, writes, "late chunks must not write another response")
+					})
+				}
+			}
+		}
 	}
 }

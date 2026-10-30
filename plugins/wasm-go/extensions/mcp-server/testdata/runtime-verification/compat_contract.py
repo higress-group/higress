@@ -182,3 +182,17 @@ def body_record(raw):
 def exchange_count(case):
     """Independent per-case downstream request count, including counter controls."""
     return {"input": 4, "descriptors": 7, "builtin": 2}.get(case["kind"], 1)
+
+
+SSE_GET_AUTH_AFFECTED = "10f72611286e9d81b83094249b1af8787a12a3ac"
+SSE_GET_AUTH_CHALLENGES = ('Bearer realm="compat-primary"', 'Basic realm="compat-secondary"')
+SSE_GET_AUTH_FORBIDDEN = ("content-encoding", "set-cookie", "mcp-session-id", "x-upstream-private", "retry-after")
+SSE_GET_AUTH_BODY = b'{"error":"synthetic-upstream-auth-body"}'
+
+
+def sse_get_auth_cases():
+    """Independent focused registry; no new normative business baseline."""
+    return [{"id": f"sse-get-auth/{profile}/{method}/{status}", "profile": profile, "method": method, "status": status,
+             "rpcId": '\"client\\u002did\"' if profile == "legacy" else "" if profile == "notification" else "null" if method == "tools/list" else "1.50"}
+            for profile in ("legacy", "modern", "notification")
+            for method in ("tools/list", "tools/call") for status in (401, 403)]

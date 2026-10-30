@@ -2,6 +2,8 @@
 """Bounded fixture/oracle fault injection, also run by orchestration_self_test."""
 import base64
 import hashlib
+import gzip
+import copy
 import http.client
 import io
 import json
@@ -18,7 +20,7 @@ import compat_contract as c
 import compat_evidence as evidence
 import compat_fixture
 import verify_auto
-from verify_compat import Compatibility
+from verify_compat import Compatibility, capture_sse_auth_response, inspect_sse_get_auth
 from instructions_self_test import valid_evidence
 
 
@@ -176,6 +178,81 @@ def counter_and_legacy_diagnostic_checks():
     rejected(lambda: diagnostic({"result": result}, attempts=1))
 
 
+
+def sse_get_auth_focused_checks():
+    import verify
+    from unittest.mock import patch
+    cases = c.sse_get_auth_cases()
+    require(len(cases) == 12 and len({case["id"] for case in cases}) == 12, "focused registry missing/duplicated")
+    compressed = gzip.compress(c.SSE_GET_AUTH_BODY, mtime=0)
+    source_headers = [["Content-Type", "application/json"], ["Content-Length", str(len(compressed))], ["Content-Encoding", "gzip"],
+                      ["Set-Cookie", "synthetic-cookie=private"], ["Mcp-Session-Id", "synthetic-session"], ["X-Upstream-Private", "synthetic-private"],
+                      ["Retry-After", "7"], *[["WWW-Authenticate", value] for value in c.SSE_GET_AUTH_CHALLENGES]]
+    fixture = {"headerPairs": source_headers, "rawBodyBase64": base64.b64encode(compressed).decode(), **c.body_record(compressed)}
+    good_headers = [["Content-Type", "application/json"], *[["WWW-Authenticate", value] for value in c.SSE_GET_AUTH_CHALLENGES]]
+    def observations(case, affected):
+        raw = b"" if case["profile"] == "notification" else b'{"jsonrpc":"2.0","id":' + case["rpcId"].encode() + b',"error":{"code":-32603,"message":"upstream authorization failed"}}'
+        headers = good_headers if not affected else [pair for pair in source_headers if pair[0] != "Content-Length" and pair != ["WWW-Authenticate", c.SSE_GET_AUTH_CHALLENGES[0]]]
+        captured, decoded = capture_sse_auth_response(raw, headers)
+        response = c.loads_typed(decoded) if decoded else None
+        exchange = {"case": case["id"], "accessRequestId": "focused-" + case["id"], "httpStatus": case["status"], "rawResponse": captured}
+        event = {"case": case["id"], "kind": "transport", "method": "GET", "path": "/unified/sse", "authority": "initial.virtual", "backendOrigin": "primary", "authFixture": {**fixture, "status": case["status"]}}
+        return exchange, response, {"events": [event], "attempts": {"transport": 1, "probe": 0, "control": 0, "business": 0}}
+    for case in cases:
+        for affected in (False, True):
+            exchange, response, ledger = observations(case, affected)
+            invariant, isolation = inspect_sse_get_auth(case, exchange, response, ledger)
+            require(not invariant and bool(isolation) == affected, "focused red/green misclassified")
+            require(base64.b64decode(exchange["rawResponse"]["rawBodyBase64"]) == (b"" if case["profile"] == "notification" else base64.b64decode(observations(case, False)[0]["rawResponse"]["rawBodyBase64"])), "raw response bytes lost")
+        exchange, response, ledger = observations(case, False)
+        combined = copy.deepcopy(exchange)
+        combined["rawResponse"]["headerPairs"] = [["Content-Type", "application/json"], ["WWW-Authenticate", ", ".join(c.SSE_GET_AUTH_CHALLENGES)]]
+        require(inspect_sse_get_auth(case, combined, response, ledger) == ([], []), "legal challenge field combination rejected")
+        for fault in ("status", "wrong-case", "extra", "fixture"):
+            bad_exchange, bad_response, bad_ledger = observations(case, True)
+            if fault == "status": bad_exchange["httpStatus"] = 500
+            elif fault == "wrong-case": bad_ledger["events"][0]["case"] = "unassociated"
+            elif fault == "extra": bad_ledger["events"].append({"case": "unknown", "kind": "business"})
+            else: bad_ledger["events"][0]["authFixture"] = {}
+            require(bool(inspect_sse_get_auth(case, bad_exchange, bad_response, bad_ledger)[0]), "invalid red accepted: " + fault)
+    # Wrong identity, notification body and an unmodified upstream auth body
+    # must not be accepted as the targeted header-only red reproduction.
+    for case in cases:
+        exchange, response, ledger = observations(case, True)
+        body = b'{}' if case["profile"] == "notification" else b'{"jsonrpc":"2.0","id":"wrong","error":{"code":-32603,"message":"upstream authorization failed"}}'
+        exchange["rawResponse"], _ = capture_sse_auth_response(body, exchange["rawResponse"]["headerPairs"])
+        require(bool(inspect_sse_get_auth(case, exchange, None, ledger)[0]), "wrong identity/body counted as red")
+    with tempfile.TemporaryDirectory() as directory:
+        for variant in ("affected", "candidate"):
+            verifier = Compatibility(variant, directory)
+            state = {}
+            def exchange(port, raw, modern, **options):
+                case = next(case for case in cases if case["id"] == verifier.case)
+                require(port == compat_fixture.PORTS["sse"] and options["capture_response"], "focused transport changed")
+                require(c.loads_typed(raw)["method"] == case["method"] and modern == (case["profile"] != "legacy"), "focused request changed")
+                observed, response, ledger = observations(case, variant == "affected")
+                verifier.exchanges.append(observed); state["events"] = ledger["events"]
+                return case["status"], {}, response
+            verifier.exchange = exchange
+            verifier.backend = lambda reset=False: {"events": []} if reset else state
+            with patch.object(verify, "wait_http", return_value=None):
+                require(verifier.run_sse_get_auth_headers() == (1 if variant == "affected" else 0), "focused exit semantics changed")
+            snapshot = json.loads(Path(directory, f"sse-get-auth-{variant}.json").read_text())
+            require(snapshot["complete"] and snapshot["passed"] == (variant == "candidate") and snapshot["validRedReproduction"] == (variant == "affected"), "focused summary misclassified")
+            verifier.exchanges.pop()
+            require(not verifier.write_sse_get_auth_headers(cases, None)["complete"], "missing observed exchange accepted")
+    with tempfile.TemporaryDirectory() as directory:
+        verifier = Compatibility("affected", directory)
+        with patch.object(verify, "wait_http", side_effect=RuntimeError("fixture startup failure")):
+            require(verifier.run_sse_get_auth_headers() == 1, "startup failure accepted")
+        snapshot = json.loads(Path(directory, "sse-get-auth-affected.json").read_text())
+        require(snapshot["startupError"] and not snapshot["complete"] and not snapshot["validRedReproduction"], "startup failure counted as red")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        compat_fixture.sse_get_auth_config(root); first = (root / "envoy.yaml").read_bytes()
+        compat_fixture.sse_get_auth_config(root); require(first == (root / "envoy.yaml").read_bytes() and b"/runtime/plugin.wasm" in first, "focused renderer depends on role")
+
+
 def registry_and_body_checks():
     for role in ("oracle", "control", "candidate"):
         registry = c.registry(role)
@@ -216,6 +293,14 @@ def backend_checks():
         events = compat_backend.state()["events"]
         require([row["accepted"] for row in events] == [True, False, False], "strict peer ledger lost a rejection")
         require(all(row["kind"] == "business" for row in events), "peer attempt phase lost")
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+        connection.request("GET", "/unified/sse", headers={"X-Compat-Case": "gzip-self-test", "X-Compat-Fail-Stage": "get", "X-Compat-Response": "http401", "X-Compat-Auth-Fixture": "gzip-headers"})
+        response = connection.getresponse(); raw = response.read(); pairs = response.getheaders(); connection.close()
+        require(response.status == 401 and gzip.decompress(raw) == c.SSE_GET_AUTH_BODY, "backend gzip body is not real compressed JSON")
+        captured, decoded = capture_sse_auth_response(raw, pairs)
+        require(decoded == c.SSE_GET_AUTH_BODY and captured["decodeError"] is None, "content encoding decoder ignored actual gzip")
+        event = compat_backend.state()["events"][-1]
+        require(event["case"] == "gzip-self-test" and event["authFixture"]["rawBodyBase64"] == base64.b64encode(raw).decode(), "upstream gzip evidence differs")
     finally:
         server.shutdown(); server.server_close(); thread.join(timeout=2)
 
@@ -301,7 +386,7 @@ def evidence_checks():
 
 
 def main():
-    strict_peer_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
+    strict_peer_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
     print("unified compatibility fixture/oracle self-tests passed")
 
 

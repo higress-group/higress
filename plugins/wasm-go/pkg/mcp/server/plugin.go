@@ -987,6 +987,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config McpServerConfig) type
 			if status == "403" {
 				code = 403
 			}
+			ctx.SetContext(utils.CtxRoutedProxyResponse, true)
 			sendUpstreamAuthFailure(ctx, code, responseHeaders, "sse")
 			ctx.SetContext(CtxSSEProxyState, SSEStateComplete)
 			return types.HeaderStopAllIterationAndWatermark

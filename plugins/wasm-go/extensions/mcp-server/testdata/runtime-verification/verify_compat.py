@@ -5,6 +5,9 @@ No candidate output generates expectations. The registry and corresponding old
 path determine assertions; only named ID/number defects are exempted on oracle.
 """
 import hashlib
+import gzip
+import re
+from collections import Counter
 import base64
 import http.client
 import json
@@ -43,6 +46,77 @@ def business_result_sha256(result):
     return canonical_json_sha256(payload)
 
 
+def capture_sse_auth_response(body, headers):
+    """Capture bytes/fields before decoding; invalid CE never discards red evidence."""
+    captured = {"headerPairs": [list(pair) for pair in headers], "rawBodyBase64": base64.b64encode(body).decode(),
+                **contract.body_record(body), "decodeError": None}
+    encodings = [value.strip().lower() for name, value in headers if name.lower() == "content-encoding"]
+    try:
+        if not encodings: decoded = body
+        elif encodings == ["gzip"]: decoded = gzip.decompress(body)
+        else: raise ValueError("unsupported content encoding")
+    except (OSError, EOFError, ValueError) as error:
+        captured["decodeError"] = type(error).__name__
+        return captured, None
+    captured["decodedBodyBase64"] = base64.b64encode(decoded).decode()
+    captured["decodedBody"] = contract.body_record(decoded)
+    return captured, decoded
+
+
+def auth_challenges(headers):
+    # Fixture realms contain no commas; allow legal combination of its two
+    # challenge schemes without imposing physical HTTP field cardinality.
+    return [part.strip() for name, value in headers if name.lower() == "www-authenticate"
+            for part in re.split(r",\s*(?=(?:Bearer|Basic)\s)", value)]
+
+
+def inspect_sse_get_auth(case, exchange, response, ledger):
+    """Separate invariant failures (invalid red) from the targeted isolation bug."""
+    invariant, isolation = [], []
+    captured = exchange["rawResponse"]
+    raw = base64.b64decode(captured["rawBodyBase64"], validate=True)
+    headers = captured["headerPairs"]
+    if exchange["httpStatus"] != case["status"]: invariant.append("wrong_auth_status")
+    if captured["decodeError"]: isolation.append("content_encoding_decode_failure")
+    for name in contract.SSE_GET_AUTH_FORBIDDEN:
+        if any(key.lower() == name for key, _ in headers): isolation.append("inherited_" + name)
+    if Counter(auth_challenges(headers)) != Counter(contract.SSE_GET_AUTH_CHALLENGES): isolation.append("challenge_loss_or_change")
+    if case["profile"] == "notification":
+        if raw: invariant.append("notification_body")
+    else:
+        # A stale gzip label is the targeted red defect. Validate the original
+        # ID/error from raw JSON only as a diagnostic fallback, never as a pass.
+        if response is None and captured["decodeError"]:
+            try: response = loads_typed(raw)
+            except ValueError: pass
+        wanted_id = loads_typed(case["rpcId"])
+        if not isinstance(response, dict) or response.get("jsonrpc") != "2.0" or "result" in response:
+            invariant.append("invalid_rpc_envelope")
+        else:
+            if "id" not in response or type(response["id"]) is not type(wanted_id) or response["id"] != wanted_id: invariant.append("wrong_client_id")
+            error = response.get("error", {})
+            if not isinstance(error, dict) or integer(error.get("code")) != -32603 or error.get("message") != "upstream authorization failed" or "data" in error:
+                invariant.append("wrong_auth_error")
+    media = [value.split(";", 1)[0].strip().lower() for name, value in headers if name.lower() == "content-type"]
+    if media != ["application/json"]: invariant.append("wrong_gateway_media")
+    lengths = [value for name, value in headers if name.lower() == "content-length"]
+    if lengths and (len(lengths) != 1 or not lengths[0].isdigit() or int(lengths[0]) != len(raw)): invariant.append("invalid_body_framing")
+    events = ledger["events"]
+    if ledger["attempts"] != {"transport": 1, "probe": 0, "control": 0, "business": 0} or len(events) != 1 or events[0].get("method") != "GET" or events[0].get("kind") != "transport" or events[0].get("case") != case["id"] or events[0].get("path") != "/unified/sse" or events[0].get("authority") != "initial.virtual" or events[0].get("backendOrigin") != "primary":
+        invariant.append("unexpected_backend_dispatch")
+    else:
+        fixture = events[0].get("authFixture", {})
+        try:
+            compressed = base64.b64decode(fixture["rawBodyBase64"], validate=True)
+            check(fixture["status"] == case["status"] and contract.body_record(compressed) == {key: fixture[key] for key in ("utf8Bytes", "sha256")}, "fixture identity")
+            check(gzip.decompress(compressed) == contract.SSE_GET_AUTH_BODY, "fixture body")
+            check(auth_challenges(fixture["headerPairs"]) == list(contract.SSE_GET_AUTH_CHALLENGES), "fixture challenges")
+            check([v for k, v in fixture["headerPairs"] if k.lower() == "content-encoding"] == ["gzip"], "fixture encoding")
+            check(all(any(k.lower() == name for k, _ in fixture["headerPairs"]) for name in contract.SSE_GET_AUTH_FORBIDDEN), "fixture headers")
+        except (KeyError, TypeError, ValueError, OSError, EOFError, AssertionError): invariant.append("invalid_upstream_fixture")
+    return invariant, isolation
+
+
 class Compatibility:
     def __init__(self, variant, out):
         self.variant, self.out = variant, Path(out)
@@ -50,7 +124,7 @@ class Compatibility:
         self.exchange_counts = {}
         self.case = "readiness"
 
-    def exchange(self, port, raw, modern, tool="raw_summary", method="tools/call", extra=(), host="gateway"):
+    def exchange(self, port, raw, modern, tool="raw_summary", method="tools/call", extra=(), host="gateway", capture_response=False):
         count = self.exchange_counts.get(self.case, 0) + 1
         self.exchange_counts[self.case] = count
         request_id = "compat-" + hashlib.sha256(self.case.encode()).hexdigest()[:24] + "-" + str(count)
@@ -77,14 +151,16 @@ class Compatibility:
             status = response.status
         finally:
             connection.close()
+        captured, decoded = capture_sse_auth_response(body, response_headers) if capture_response else (None, body)
         try:
-            value = loads_typed(body) if body else None
+            value = loads_typed(decoded) if decoded else None
         except ValueError:
             value = None
         self.exchanges.append({"case": self.case, "accessRequestId": request_id, "port": port, "httpStatus": status,
                                "request": contract.body_record(raw), "response": contract.body_record(body),
                                "responseHeaders": {k.lower(): v for k, v in response_headers if k.lower() in ("content-type", "www-authenticate", "retry-after")},
                                "elapsedSecondsDiagnostic": round(time.monotonic() - begin, 3)})
+        if capture_response: self.exchanges[-1]["rawResponse"] = captured
         return status, {k.lower(): v for k, v in response_headers}, value
 
     def backend(self, reset=False):
@@ -424,6 +500,57 @@ class Compatibility:
             "cases": self.rows, "exchanges": self.exchanges}, indent=2, sort_keys=True) + "\n")
 
 
+    def run_sse_get_auth_headers(self):
+        import verify as existing
+        expected = contract.sse_get_auth_cases()
+        startup_error = None
+        if self.variant not in ("affected", "candidate"): startup_error = "invalid focused variant"
+        try:
+            check(startup_error is None, startup_error)
+            existing.wait_http("http://backend-primary:8080/healthz")
+            existing.wait_http("http://gateway:9901/ready")
+        except Exception as error:
+            startup_error = type(error).__name__ + ": " + str(error)
+        if startup_error is None:
+            for case in expected:
+                self.case = case["id"]
+                row = {"id": self.case, "status": "FAIL", "isolationFailures": [], "invariantFailures": [], "validRedReproduction": False}
+                try:
+                    self.backend(reset=True)
+                    self.exchange(PORTS["sse"], contract.envelope(case["profile"] != "legacy", method=case["method"], tool="echo", rpc_id=case["rpcId"]),
+                                  case["profile"] != "legacy", tool="echo", method=case["method"], capture_response=True,
+                                  extra=(("X-Compat-Fail-Stage", "get"), ("X-Compat-Response", "http" + str(case["status"])), ("X-Compat-Auth-Fixture", "gzip-headers")))
+                    exchange = self.exchanges[-1]
+                    captured = exchange["rawResponse"]
+                    decoded = base64.b64decode(captured["decodedBodyBase64"]) if "decodedBodyBase64" in captured else None
+                    try: response = loads_typed(decoded) if decoded else None
+                    except ValueError: response = None
+                    events = self.backend()["events"]
+                    ledger = {"events": events, "attempts": {kind: sum(event["kind"] == kind for event in events) for kind in ("transport", "probe", "control", "business")}}
+                    invariant, isolation = inspect_sse_get_auth(case, exchange, response, ledger)
+                    row.update(invariantFailures=invariant, isolationFailures=isolation, detail={"ledger": ledger})
+                    row["status"] = "PASS" if not invariant and not isolation else "FAIL"
+                    row["validRedReproduction"] = not invariant and bool(isolation)
+                except Exception as error:
+                    row["invariantFailures"].append("unobserved_or_failed_case: " + type(error).__name__ + ": " + str(error))
+                self.rows.append(row)
+                self.write_sse_get_auth_headers(expected, startup_error)
+        snapshot = self.write_sse_get_auth_headers(expected, startup_error)
+        return 0 if snapshot["passed"] else 1
+
+    def write_sse_get_auth_headers(self, expected, startup_error):
+        access_ids = [row.get("accessRequestId") for row in self.exchanges]
+        complete = (contract.complete(expected, self.rows) and Counter(row["id"] for row in expected) == Counter(row["case"] for row in self.exchanges)
+                    and all(access_ids) and len(access_ids) == len(set(access_ids)))
+        snapshot = {"mode": "sse-get-auth-headers", "variant": self.variant, "affectedSource": contract.SSE_GET_AUTH_AFFECTED,
+                    "expectedCases": expected, "cases": self.rows, "exchanges": self.exchanges, "complete": complete,
+                    "startupError": startup_error,
+                    "passed": not startup_error and complete and all(row["status"] == "PASS" for row in self.rows),
+                    "validRedReproduction": self.variant == "affected" and not startup_error and complete and all(row["status"] == "FAIL" and row["validRedReproduction"] for row in self.rows)}
+        (self.out / f"sse-get-auth-{self.variant}.json").write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
+        return snapshot
+
+
 def token_number(value):
     return value.lexeme if isinstance(value, JSONNumber) else str(value)
 
@@ -449,6 +576,8 @@ def supplements(variant, out):
 if __name__ == "__main__":
     variant = os.environ["COMPAT_VARIANT"]
     out = os.environ.get("RUNTIME_EVIDENCE", "/evidence")
+    if "--sse-get-auth-headers" in sys.argv:
+        raise SystemExit(Compatibility(variant, out).run_sse_get_auth_headers())
     if "--supplements" in sys.argv:
         raise SystemExit(supplements(variant, out))
     raise SystemExit(Compatibility(variant, out).run())

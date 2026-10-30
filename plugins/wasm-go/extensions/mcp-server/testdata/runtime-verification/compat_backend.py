@@ -1,12 +1,14 @@
 """Focused #5281 backend using the existing HTTP server and ledger endpoints."""
 import hashlib
+import base64
+import gzip
 import json
 import queue
 import os
 import threading
 from urllib.parse import parse_qs, quote, urlsplit
 
-from compat_contract import JSONNumber, MODERN, strict_request, token, unique_json
+from compat_contract import JSONNumber, MODERN, strict_request, token, unique_json, SSE_GET_AUTH_BODY, SSE_GET_AUTH_CHALLENGES, body_record
 from typed_canonical import canonical_json_sha256, loads_typed
 
 LOCK = threading.Lock()
@@ -94,9 +96,18 @@ def get(handler):
     # is not a JSON-RPC POST and must not be put through the strict peer decoder.
     from backend import read_request_body
     read_request_body(handler)
-    record(handler, b"")
+    event = record(handler, b"")
     if handler.headers.get("X-Compat-Fail-Stage") == "get":
         status = int(handler.headers.get("X-Compat-Response", "http401")[4:])
+        if handler.headers.get("X-Compat-Auth-Fixture") == "gzip-headers":
+            compressed = gzip.compress(SSE_GET_AUTH_BODY, mtime=0)
+            headers = (("Content-Encoding", "gzip"), ("Set-Cookie", "synthetic-cookie=private"),
+                       ("Mcp-Session-Id", "synthetic-session"), ("X-Upstream-Private", "synthetic-private"),
+                       ("Retry-After", "7"), *(("WWW-Authenticate", value) for value in SSE_GET_AUTH_CHALLENGES))
+            event["authFixture"] = {"status": status, "headerPairs": [["Content-Type", "application/json"], ["Content-Length", str(len(compressed))], *headers],
+                                    "rawBodyBase64": base64.b64encode(compressed).decode(), **body_record(compressed)}
+            raw_response(handler, status, compressed, headers=headers)
+            return True
         raw_response(handler, status, headers=(("WWW-Authenticate", 'Bearer realm="compat"'),))
         return True
     key = handler.headers.get("X-Compat-Case", "unassociated")

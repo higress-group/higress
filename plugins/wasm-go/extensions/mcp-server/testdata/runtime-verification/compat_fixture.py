@@ -80,6 +80,17 @@ def configs(out, variant):
     (out / "envoy.yaml").write_text(rendered)
 
 
+def sse_get_auth_config(out):
+    # One fixed listener/VM and filename keep affected/candidate configs identical.
+    config = base.listener_yaml(PORTS["sse"], "sse-get-auth", "compat-route", proxy("sse"), "plugin.wasm")
+    cluster = base.cluster_yaml("compat-route").replace("address: compat-route,", "address: backend-primary,")
+    Path(out, "envoy.yaml").write_text("admin:\n  address:\n    socket_address: {address: 0.0.0.0, port_value: 9901}\nstatic_resources:\n  listeners:\n" + config + "  clusters:\n" + cluster)
+
+
 if __name__ == "__main__":
     import sys
-    configs(sys.argv[1], sys.argv[2])
+    if "--sse-get-auth-headers" in sys.argv[3:]:
+        if sys.argv[2] not in ("affected", "candidate"): raise SystemExit("focused role must be affected or candidate")
+        sse_get_auth_config(sys.argv[1])
+    else:
+        configs(sys.argv[1], sys.argv[2])

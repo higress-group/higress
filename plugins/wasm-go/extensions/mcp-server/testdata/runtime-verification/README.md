@@ -202,3 +202,47 @@ The official kind entry remains `go test -tags conformance
 Use existing `WasmPluginsMCP20260728` and
 `GoWasmMcpProxyRoutingCompatibility` cases through the entry's `--execute-tests`
 filter. Keep kubeconfig credentials outside evidence uploads.
+
+## Focused initial SSE GET authentication header regression
+
+`compat_fixture.py OUT affected --sse-get-auth-headers` and the corresponding
+`candidate` command render byte-identical single-listener configurations using
+`/runtime/plugin.wasm`. An external recorder supplies each role's plain Wasm,
+fixed images, existing Compose/backend/lifecycle, command hashes and cleanup.
+This mode does not change `run-compat.sh` or its normative baseline roles.
+
+Inside the existing verifier service, run:
+
+```bash
+COMPAT_VARIANT=affected python /harness/verify_compat.py --sse-get-auth-headers
+COMPAT_VARIANT=candidate python /harness/verify_compat.py --sse-get-auth-headers
+```
+
+The independent registry has 12 cases, named
+`sse-get-auth/{legacy|modern|notification}/{tools/list|tools/call}/{401|403}`.
+Legacy uses the escaped string ID `"client\u002did"`; Modern list uses explicit
+null, Modern call uses `1.50`, and notification omits the ID. The opt-in
+`X-Compat-Auth-Fixture: gzip-headers` GET fixture sends deterministic real gzip
+JSON, two challenges and synthetic encoding/cookie/session/private/Retry headers.
+Existing fixture behavior is unchanged without that header.
+
+`sse-get-auth-{variant}.json` contains `expectedCases`, `cases`, `exchanges`,
+`complete`, `passed`, `validRedReproduction` and `startupError`. Each case retains
+`isolationFailures`, `invariantFailures` and the complete post-reset backend
+ledger in `detail.ledger`; no event is filtered by case identity. It requires
+one transport GET with the expected identity/path/Authority/backend and zero
+probe/control/business attempts. Exchange `rawResponse` records raw header pairs,
+raw body base64/length/SHA before content-encoding decoding, plus decoded bytes
+and hashes or a decoding error. Challenges are compared semantically, allowing
+legal combined HTTP field values while preserving the original fields.
+
+Affected `10f72611286e9d81b83094249b1af8787a12a3ac` is a diagnostic red source,
+not a new business oracle. Its rows remain FAIL and the verifier exits nonzero;
+`validRedReproduction` is true only for all 12 observed cases with inherited
+headers, challenge loss/change or content-encoding failure, and no invariant
+failure. Wrong status/ID/error, notification body, invalid upstream gzip fixture,
+startup failure, missing/duplicate exchanges or unintended dispatch cannot count
+as red reproduction. Candidate acceptance requires all 12 PASS and exit zero.
+The external recorder must additionally validate exact sources/hashes, access
+records, successful Wasm loading and cleanup; this focused output does not claim
+the full compatibility matrix or update previous source-scoped results.
