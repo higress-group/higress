@@ -764,7 +764,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				"date": fixedTime,
 			}
 
-			authHeader := generateAuthorizationHeader("ak1", "sk1", "hmac-sha256", "GET", "/api/test", []string{"@request-target"}, headerValues)
+			authHeader := generateAuthorizationHeader("ak1", "sk1", "hmac-sha256", "GET", "/api/test", []string{"@request-target", "date"}, headerValues)
 			action := host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/api/test"},
@@ -801,7 +801,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				"date": fixedTime,
 			}
 
-			authHeader := generateAuthorizationHeader("unknown_ak", "sk", "hmac-sha256", "GET", "/api/test", []string{"@request-target"}, headerValues)
+			authHeader := generateAuthorizationHeader("unknown_ak", "sk", "hmac-sha256", "GET", "/api/test", []string{"@request-target", "date"}, headerValues)
 			action := host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/api/test"},
@@ -842,7 +842,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				"date": fixedTime,
 			}
 
-			authHeader := generateAuthorizationHeader("ak1", "sk1", "hmac-sha256", "GET", "/api/test", []string{"@request-target"}, headerValues)
+			authHeader := generateAuthorizationHeader("ak1", "sk1", "hmac-sha256", "GET", "/api/test", []string{"@request-target", "date"}, headerValues)
 			// 故意修改签名
 			authHeader = strings.Replace(authHeader, "signature=", "signature=wrong", 1)
 			action := host.CallOnHttpRequestHeaders([][2]string{
@@ -890,7 +890,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				"date": fixedTime,
 			}
 
-			authHeader := generateAuthorizationHeader("ak1", "sk1", "hmac-sha256", "GET", "/api/test", []string{"@request-target"}, headerValues)
+			authHeader := generateAuthorizationHeader("ak1", "sk1", "hmac-sha256", "GET", "/api/test", []string{"@request-target", "date"}, headerValues)
 			action := host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/api/test"},
@@ -932,7 +932,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				"date": fixedTime,
 			}
 
-			authHeader := generateAuthorizationHeader("ak2", "sk2", "hmac-sha256", "GET", "/api/test", []string{"@request-target"}, headerValues)
+			authHeader := generateAuthorizationHeader("ak2", "sk2", "hmac-sha256", "GET", "/api/test", []string{"@request-target", "date"}, headerValues)
 			action := host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/api/test"},
@@ -978,6 +978,108 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 	})
 }
 
+func TestSignedHeadersDefault(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		consumers := []map[string]interface{}{
+			{
+				"name":       "consumer1",
+				"access_key": "ak1",
+				"secret_key": "sk1",
+			},
+		}
+		tests := []struct {
+			name                   string
+			configSignedHeaders    []string
+			configureSignedHeaders bool
+			requestSignedHeaders   []string
+			clockSkew              int
+			dateOffset             time.Duration
+			signatureDateOffset    time.Duration
+			expectedError          string
+		}{
+			{
+				name:          "omitted list rejects keyId only with clock skew disabled",
+				clockSkew:     0,
+				expectedError: "headers missing",
+			},
+			{
+				name:                 "omitted list accepts signed date",
+				requestSignedHeaders: []string{"date"},
+				clockSkew:            300,
+			},
+			{
+				name:                 "omitted list rejects tampered date",
+				requestSignedHeaders: []string{"date"},
+				clockSkew:            300,
+				signatureDateOffset:  time.Minute,
+				expectedError:        "Invalid signature",
+			},
+			{
+				name:                 "omitted list rejects expired date",
+				requestSignedHeaders: []string{"date"},
+				clockSkew:            300,
+				dateOffset:           -time.Hour,
+				expectedError:        "Clock skew exceeded",
+			},
+			{
+				name:                   "explicit empty list accepts keyId only",
+				configSignedHeaders:    []string{},
+				configureSignedHeaders: true,
+				clockSkew:              0,
+			},
+			{
+				name:                   "explicit non-empty list remains unchanged",
+				configSignedHeaders:    []string{"@request-target"},
+				configureSignedHeaders: true,
+				requestSignedHeaders:   []string{"@request-target"},
+				clockSkew:              300,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				extra := map[string]interface{}{"clock_skew": tt.clockSkew}
+				if tt.configureSignedHeaders {
+					extra["signed_headers"] = tt.configSignedHeaders
+				}
+				host, status := test.NewTestHost(createConfig(consumers, extra))
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				requestDate := time.Now().UTC().Add(tt.dateOffset)
+				signatureDate := requestDate
+				if tt.signatureDateOffset != 0 {
+					signatureDate = time.Now().UTC().Add(tt.signatureDateOffset)
+				}
+				requestDateString := requestDate.Format("Mon, 02 Jan 2006 15:04:05 GMT")
+				signatureDateString := signatureDate.Format("Mon, 02 Jan 2006 15:04:05 GMT")
+				authHeader := generateAuthorizationHeader(
+					"ak1", "sk1", "hmac-sha256", "GET", "/api/test",
+					tt.requestSignedHeaders, map[string]string{"date": signatureDateString},
+				)
+				action := host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/api/test"},
+					{":method", "GET"},
+					{"authorization", authHeader},
+					{"date", requestDateString},
+				})
+				require.Equal(t, types.ActionContinue, action)
+
+				localResponse := host.GetLocalResponse()
+				if tt.expectedError == "" {
+					require.Nil(t, localResponse)
+				} else {
+					require.NotNil(t, localResponse)
+					require.Equal(t, uint32(401), localResponse.StatusCode)
+					require.Contains(t, string(localResponse.Data), tt.expectedError)
+				}
+				host.CompleteHttp()
+			})
+		}
+	})
+}
+
 func TestCompleteFlow(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		t.Run("complete hmac auth flow", func(t *testing.T) {
@@ -1018,7 +1120,7 @@ func TestCompleteFlow(t *testing.T) {
 				"date": fixedTime,
 			}
 
-			authHeader := generateAuthorizationHeader("ak1", "sk1", "hmac-sha256", "GET", "/api/test", []string{"@request-target"}, headerValues)
+			authHeader := generateAuthorizationHeader("ak1", "sk1", "hmac-sha256", "GET", "/api/test", []string{"@request-target", "date"}, headerValues)
 			action = host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"},
 				{":path", "/api/test"},
