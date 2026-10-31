@@ -1,0 +1,56 @@
+# AgentCert + TrustScore verification via the built-in ext-auth plugin.
+#
+# No code in Higress. The ext-auth plugin (Envoy ext_authz, HTTP) calls the
+# AgentCert TAG verify sidecar, which does the crypto (signature chain +
+# revocation + TrustScore) and answers allow/deny. The gateway stays decoupled:
+# swap or remove the sidecar and nothing in Higress changes.
+#
+# Shadow-mode by default: run the sidecar with TAG_MODE=shadow and it returns
+# 200 on every request (it decides + logs but never blocks). Flip the sidecar to
+# TAG_MODE=enforce when the deny rate looks right — this manifest does not change.
+#
+# Sidecar:  ghcr.io/pdxlab/agentcert-tag/sidecar   (public, MIT)
+# Contract: https://github.com/pdxlab/agentcert-tag/blob/main/docs/ext_authz.md
+#
+# Run it next to Higress (exposes /ext_authz on :8080):
+#   docker run -p 8080:8080 -e TAG_MODE=shadow \
+#     -e TAG_ANCHORS_PEM=/anchors/roots.pem -v $PWD/anchors:/anchors:ro \
+#     ghcr.io/pdxlab/agentcert-tag/sidecar:latest
+#
+# Register the sidecar as a service (McpBridge / ServiceSource) so the FQDN below
+# resolves, e.g. tag-sidecar.default.svc.cluster.local — same as any ext-auth target.
+
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: agentcert-ext-auth
+  namespace: higress-system
+spec:
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ext-auth:2.0.3
+  defaultConfig:
+    http_service:
+      # forward_auth -> the sidecar is always called on a fixed path (/ext_authz),
+      # independent of the client's request path.
+      endpoint_mode: forward_auth
+      endpoint:
+        service_name: tag-sidecar.default.svc.cluster.local
+        service_port: 8080
+        path: /ext_authz
+        request_method: POST
+      timeout: 1000
+      authorization_request:
+        # forward the presented AgentCert headers to the verifier.
+        allowed_headers:
+          - exact: x-agent-cert
+          - exact: x-agent-cert-proof
+          - exact: x-agent-cert-carriage
+          - exact: x-agent-id
+      authorization_response:
+        # surface the verdict + TrustScore onto the upstream request so your own
+        # route policy / logs can see what verification decided.
+        allowed_upstream_headers:
+          - prefix: x-agentcert-
+    # Verifier unreachable or 5xx -> fail open. In shadow this is moot (the sidecar
+    # answers 200 regardless); keep it aligned with the sidecar's TAG_FAIL_MODE when
+    # you move to enforce.
+    failure_mode_allow: true
