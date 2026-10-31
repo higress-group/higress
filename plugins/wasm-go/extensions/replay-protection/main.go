@@ -53,7 +53,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ReplayProtectionCo
 			handleRedisFailure(cfg, true)
 			return
 		}
-		if response.IsNull() {
+		if response.Type() == resp.BulkString && response.IsNull() {
 			log.Warnf("duplicate nonce detected: %s", nonce)
 			proxywasm.SendHttpResponse(cfg.RejectCode, nil, []byte(cfg.RejectMsg), -1)
 			return

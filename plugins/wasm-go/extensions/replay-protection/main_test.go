@@ -23,6 +23,7 @@ import (
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -354,24 +355,44 @@ func configWithFailureMode(raw json.RawMessage, mode string) json.RawMessage {
 	return result
 }
 
+type dispatchErrorRedisClient struct {
+	wrapper.RedisClient
+	calls int
+}
+
+func (c *dispatchErrorRedisClient) SetNX(string, interface{}, int, wrapper.RedisResponseCallback) error {
+	c.calls++
+	return errors.New("dispatch failed")
+}
+
 func TestRedisDispatchFailureModes(t *testing.T) {
-	test.RunTest(t, func(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
 		for _, mode := range []string{pluginconfig.FailureModeFailOpen, pluginconfig.FailureModeFailClosed} {
 			t.Run(mode, func(t *testing.T) {
 				host, status := test.NewTestHost(configWithFailureMode(customConfig, mode))
 				defer host.Reset()
 				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				matchedConfig, err := host.GetMatchConfig()
+				require.NoError(t, err)
+				cfg := matchedConfig.(*pluginconfig.ReplayProtectionConfig)
+				cfg.NonceHeader = "X-Higress-Nonce"
+				client := &dispatchErrorRedisClient{}
+				cfg.Redis.Client = client
+
 				action := host.CallOnHttpRequestHeaders([][2]string{
 					{":authority", "example.com"},
 					{":path", "/test"},
-					{":method", "GET"},
+					{":method", "POST"},
+					{"X-Higress-Nonce", "dGVzdC1ub25jZS12YWx1ZQ=="},
 				})
 				require.Equal(t, types.ActionContinue, action)
+				action = onHttpRequestHeaders(nil, *cfg)
 
-				action = handleRedisDispatchError(pluginconfig.ReplayProtectionConfig{FailureMode: mode}, errors.New("dispatch failed"))
+				require.Equal(t, 1, client.calls)
 				if mode == pluginconfig.FailureModeFailOpen {
 					require.Equal(t, types.ActionContinue, action)
-					require.Nil(t, host.GetLocalResponse())
+					requireFailOpenRequest(t, host)
 				} else {
 					require.Equal(t, types.ActionPause, action)
 					localResponse := host.GetLocalResponse()
@@ -395,6 +416,7 @@ func TestRedisCallbackFailureModes(t *testing.T) {
 			{name: "timeout", status: 1},
 			{name: "protocol error", response: []byte("invalid-resp")},
 			{name: "malformed response", response: test.CreateRedisRespInt(1)},
+			{name: "null array response", response: []byte("*-1\r\n")},
 		}
 		for _, mode := range []string{pluginconfig.FailureModeFailOpen, pluginconfig.FailureModeFailClosed} {
 			for _, tt := range tests {
@@ -412,10 +434,10 @@ func TestRedisCallbackFailureModes(t *testing.T) {
 					require.Equal(t, types.ActionPause, action)
 					host.CallOnRedisCall(tt.status, tt.response)
 
-					localResponse := host.GetLocalResponse()
 					if mode == pluginconfig.FailureModeFailOpen {
-						require.Nil(t, localResponse)
+						requireFailOpenRequest(t, host)
 					} else {
+						localResponse := host.GetLocalResponse()
 						require.NotNil(t, localResponse)
 						require.Equal(t, uint32(503), localResponse.StatusCode)
 					}
@@ -424,6 +446,13 @@ func TestRedisCallbackFailureModes(t *testing.T) {
 			}
 		}
 	})
+}
+
+func requireFailOpenRequest(t *testing.T, host test.TestHost) {
+	t.Helper()
+	require.Nil(t, host.GetLocalResponse())
+	require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+	require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(nil))
 }
 
 func TestNonceResponsesUnaffected(t *testing.T) {
