@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -169,23 +170,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte, log 
 		return types.ActionContinue
 	}
 
-	// covert to schema
-	schema := make(map[string]interface{})
-	err := json.Unmarshal(body, &schema)
-	if err != nil {
-		log.Errorf("unmarshal body failed: %v", err)
-		return types.ActionContinue
-	}
-
-	// convert to json string
-	schemaBytes, err := json.Marshal(schema)
-	if err != nil {
-		log.Errorf("marshal schema failed: %v", err)
-		return types.ActionContinue
-	}
-
-	// validate
-	document := strings.NewReader(string(schemaBytes))
+	document := bytes.NewReader(body)
 	compile, err := config.compiler.Compile(defaultBodySchema)
 	if err != nil {
 		log.Errorf("compile schema failed: %v", err)
