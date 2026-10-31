@@ -8,6 +8,11 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+const (
+	FailureModeFailOpen   = "fail_open"
+	FailureModeFailClosed = "fail_closed"
+)
+
 type ReplayProtectionConfig struct {
 	ForceNonce     bool // Whether to enforce nonce verification
 	NonceTTL       int  // Expiration time of the nonce (in seconds)
@@ -18,6 +23,7 @@ type ReplayProtectionConfig struct {
 	ValidateBase64 bool   // Whether to validate base64 encoding format
 	RejectCode     uint32 // Response code
 	RejectMsg      string // Response body
+	FailureMode    string
 }
 
 type RedisConfig struct {
@@ -101,6 +107,14 @@ func ParseConfig(json gjson.Result, config *ReplayProtectionConfig) error {
 	config.NonceMaxLen = int(json.Get("nonce_max_length").Int())
 	if config.NonceMaxLen == 0 {
 		config.NonceMaxLen = 128
+	}
+
+	config.FailureMode = FailureModeFailClosed
+	if failureMode := json.Get("failure_mode"); failureMode.Exists() {
+		config.FailureMode = failureMode.String()
+	}
+	if config.FailureMode != FailureModeFailOpen && config.FailureMode != FailureModeFailClosed {
+		return fmt.Errorf("invalid failure_mode %q: must be %q or %q", config.FailureMode, FailureModeFailOpen, FailureModeFailClosed)
 	}
 
 	return nil

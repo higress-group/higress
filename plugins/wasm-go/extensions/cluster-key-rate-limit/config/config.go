@@ -43,6 +43,9 @@ const (
 	DefaultRejectedCode uint32 = 429
 	DefaultRejectedMsg  string = "Too many requests"
 
+	FailureModeFailOpen   = "fail_open"
+	FailureModeFailClosed = "fail_closed"
+
 	Second           int64 = 1
 	SecondsPerMinute       = 60 * Second
 	SecondsPerHour         = 60 * SecondsPerMinute
@@ -66,6 +69,7 @@ type ClusterKeyRateLimitConfig struct {
 	ShowLimitQuotaHeader bool             // 响应头中是否显示X-RateLimit-Limit和X-RateLimit-Remaining
 	RejectedCode         uint32           // 当请求超过阈值被拒绝时,返回的HTTP状态码
 	RejectedMsg          string           // 当请求超过阈值被拒绝时,返回的响应体
+	FailureMode          string
 	RedisClient          wrapper.RedisClient
 }
 
@@ -160,6 +164,14 @@ func ParseClusterKeyRateLimitConfig(json gjson.Result, config *ClusterKeyRateLim
 		config.RejectedMsg = rejectedMsg.String()
 	} else {
 		config.RejectedMsg = DefaultRejectedMsg
+	}
+
+	config.FailureMode = FailureModeFailOpen
+	if failureMode := json.Get("failure_mode"); failureMode.Exists() {
+		config.FailureMode = failureMode.String()
+	}
+	if config.FailureMode != FailureModeFailOpen && config.FailureMode != FailureModeFailClosed {
+		return fmt.Errorf("invalid failure_mode %q: must be %q or %q", config.FailureMode, FailureModeFailOpen, FailureModeFailClosed)
 	}
 	return nil
 }

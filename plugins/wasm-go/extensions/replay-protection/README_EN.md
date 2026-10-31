@@ -34,6 +34,7 @@ Plugin execution priority: `800`
 | `reject_code`        | int    | No   | 429        | The status code returned when a request is rejected.             |
 | `reject_msg`         | string | No   | `Replay Attack Detected` | The error message returned when a request is rejected.           |
 | `validate_base64`    | bool    | No   | false | Whether to verify the Base64 encoding format of the nonce. |
+| `failure_mode` | string | No | `fail_closed` | Policy for Redis call failures, timeouts, and invalid responses: `fail_closed` returns a fixed 503; `fail_open` allows the request. Choose `fail_open` only when availability takes priority over temporary nonce deduplication. |
 | `redis` | Object | Yes   | -              | Redis-related configuration |
 
 Description of each configuration field in `redis`
