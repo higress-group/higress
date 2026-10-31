@@ -309,6 +309,8 @@ func TestOnHttpRequestBodyNumberNormalization(t *testing.T) {
 			{name: "negative zero", literal: "-0.0e2", validInt: true, validNumber: true},
 			{name: "integral exponent", literal: "1.5e1", validInt: true, validNumber: true},
 			{name: "fractional exponent", literal: "1e-1", validNumber: true},
+			{name: "underflow to zero", literal: "1e-400", validInt: true, validNumber: true},
+			{name: "negative underflow to zero", literal: "-1e-400", validInt: true, validNumber: true},
 		}
 
 		for _, draft := range drafts {

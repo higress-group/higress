@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -101,6 +102,12 @@ func normalizeJSONNumber(number json.Number) (json.Number, error) {
 	}
 	if rational.IsInt() {
 		return json.Number(rational.Num().String()), nil
+	}
+	// Numeric literals are normalized to their float64 value when the exact literal
+	// cannot be represented as an integer or finite decimal within float64 semantics;
+	// this matches the previous decoding path's semantics.
+	if _, exact := rational.Float64(); !exact && math.Abs(value) < 0x1p-1022 {
+		return json.Number(strconv.FormatFloat(value, 'g', -1, 64)), nil
 	}
 	return number, nil
 }
