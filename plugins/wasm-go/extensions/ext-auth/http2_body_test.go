@@ -125,6 +125,10 @@ func TestExtAuthHTTP2BodyDelivery(t *testing.T) {
 				}, tt.chunks)
 
 				require.Equal(t, types.ActionPause, result.headerAction)
+				require.Len(t, result.bodyActions, len(tt.chunks))
+				for i, action := range result.bodyActions {
+					require.Equal(t, types.ActionPause, action, "unexpected body-phase action for DATA frame %d", i)
+				}
 				callouts := host.GetHttpCalloutAttributes()
 				require.Len(t, callouts, 1)
 				require.Equal(t, payload, callouts[0].Body)
