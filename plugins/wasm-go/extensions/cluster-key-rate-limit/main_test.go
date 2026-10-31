@@ -16,12 +16,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"cluster-key-rate-limit/config"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
@@ -296,6 +298,7 @@ func TestParseConfig(t *testing.T) {
 			require.True(t, parsedConfig.ShowLimitQuotaHeader)
 			require.Equal(t, uint32(429), parsedConfig.RejectedCode)
 			require.Equal(t, "Too many requests", parsedConfig.RejectedMsg)
+			require.Equal(t, config.FailureModeFailOpen, parsedConfig.FailureMode)
 		})
 
 		// 测试基于请求参数的限流配置解析
@@ -416,6 +419,12 @@ func TestParseConfig(t *testing.T) {
 			require.Len(t, parsedConfig.RuleItems[0].ConfigItems, 3)
 			require.Equal(t, config.RegexpType, parsedConfig.RuleItems[0].ConfigItems[0].ConfigType)
 			require.True(t, parsedConfig.ShowLimitQuotaHeader)
+		})
+
+		t.Run("invalid failure mode", func(t *testing.T) {
+			host, status := test.NewTestHost(configWithFailureMode(globalThresholdConfig, "invalid"))
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
 		})
 	})
 }
@@ -812,6 +821,118 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			host.CompleteHttp()
 		})
 	})
+}
+
+func configWithFailureMode(raw json.RawMessage, mode string) json.RawMessage {
+	var value map[string]interface{}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		panic(err)
+	}
+	value["failure_mode"] = mode
+	result, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return result
+}
+
+func TestRedisDispatchFailureModes(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, mode := range []string{config.FailureModeFailOpen, config.FailureModeFailClosed} {
+			t.Run(mode, func(t *testing.T) {
+				host, status := test.NewTestHost(configWithFailureMode(headerLimitConfig, mode))
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				action := host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/api/test"},
+					{":method", "GET"},
+				})
+				require.Equal(t, types.ActionContinue, action)
+
+				action = handleRedisDispatchError(config.ClusterKeyRateLimitConfig{FailureMode: mode}, errors.New("dispatch failed"))
+				if mode == config.FailureModeFailOpen {
+					require.Equal(t, types.ActionContinue, action)
+					require.Nil(t, host.GetLocalResponse())
+				} else {
+					require.Equal(t, types.ActionPause, action)
+					requireFailureResponseWithoutQuotaHeaders(t, host.GetLocalResponse())
+				}
+				host.CompleteHttp()
+			})
+		}
+	})
+}
+
+func TestRedisCallbackFailureModes(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		tests := []struct {
+			name     string
+			status   int32
+			response []byte
+		}{
+			{name: "callback error", response: test.CreateRedisRespError("redis error")},
+			{name: "timeout", status: 1},
+			{name: "protocol error", response: []byte("invalid-resp")},
+			{name: "malformed response", response: test.CreateRedisRespString("unexpected")},
+		}
+		for _, mode := range []string{config.FailureModeFailOpen, config.FailureModeFailClosed} {
+			for _, tt := range tests {
+				t.Run(mode+"/"+tt.name, func(t *testing.T) {
+					host, status := test.NewTestHost(configWithFailureMode(globalThresholdConfig, mode))
+					defer host.Reset()
+					require.Equal(t, types.OnPluginStartStatusOK, status)
+
+					action := host.CallOnHttpRequestHeaders([][2]string{
+						{":authority", "example.com"},
+						{":path", "/api/test"},
+						{":method", "GET"},
+					})
+					require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+					host.CallOnRedisCall(tt.status, tt.response)
+
+					if mode == config.FailureModeFailOpen {
+						require.Nil(t, host.GetLocalResponse())
+					} else {
+						requireFailureResponseWithoutQuotaHeaders(t, host.GetLocalResponse())
+					}
+					host.CompleteHttp()
+				})
+			}
+		}
+	})
+}
+
+func TestRateLimitRejectionKeepsConfiguredResponse(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(configWithFailureMode(cookieLimitConfig, config.FailureModeFailClosed))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "GET"},
+			{"cookie", "key1=value1"},
+		})
+		host.CallOnRedisCall(0, multiRuleResp([3]int{10, 11, 60}))
+
+		localResponse := host.GetLocalResponse()
+		require.NotNil(t, localResponse)
+		require.Equal(t, uint32(200), localResponse.StatusCode)
+		require.Equal(t, `{"code":-1,"msg":"Too many requests"}`, string(localResponse.Data))
+		require.True(t, test.HasHeader(localResponse.Headers, "x-ratelimit-reset"))
+		host.CompleteHttp()
+	})
+}
+
+func requireFailureResponseWithoutQuotaHeaders(t *testing.T, response *proxytest.LocalHttpResponse) {
+	t.Helper()
+	require.NotNil(t, response)
+	require.Equal(t, uint32(503), response.StatusCode)
+	for _, header := range []string{"x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"} {
+		require.False(t, test.HasHeader(response.Headers, header))
+	}
 }
 
 func TestOnHttpResponseHeaders(t *testing.T) {

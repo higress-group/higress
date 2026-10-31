@@ -140,10 +140,16 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 	}
 
 	err := cfg.RedisClient.Eval(MultiKeyFixedWindowScript, n, keys, args, func(response resp.Value) {
+		if err := response.Error(); err != nil {
+			log.Errorf("redis call error: %v", err)
+			handleRedisFailure(cfg, true)
+			return
+		}
+
 		arr := response.Array()
 		if len(arr) != n {
 			log.Errorf("redis response length mismatch: got %d, want %d", len(arr), n)
-			_ = proxywasm.ResumeHttpRequest()
+			handleRedisFailure(cfg, true)
 			return
 		}
 
@@ -155,7 +161,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 			a := sub.Array()
 			if len(a) != 3 {
 				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(a))
-				_ = proxywasm.ResumeHttpRequest()
+				handleRedisFailure(cfg, true)
 				return
 			}
 			threshold, current, ttl := a[0].Integer(), a[1].Integer(), a[2].Integer()
@@ -195,8 +201,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 	})
 
 	if err != nil {
-		log.Errorf("redis call failed: %v", err)
-		return types.ActionContinue
+		return handleRedisDispatchError(cfg, err)
 	}
 	return types.HeaderStopAllIterationAndWatermark
 }
@@ -350,6 +355,22 @@ func getDownStreamIp(rule config.LimitRuleItem) (net.IP, error) {
 		return nil, fmt.Errorf("invalid ip[%s]", ip)
 	}
 	return realIP, nil
+}
+
+func handleRedisDispatchError(cfg config.ClusterKeyRateLimitConfig, err error) types.Action {
+	log.Errorf("redis call failed: %v", err)
+	return handleRedisFailure(cfg, false)
+}
+
+func handleRedisFailure(cfg config.ClusterKeyRateLimitConfig, resumeOnOpen bool) types.Action {
+	if cfg.FailureMode == config.FailureModeFailClosed {
+		proxywasm.SendHttpResponse(503, nil, []byte("Service Unavailable"), -1)
+		return types.ActionPause
+	}
+	if resumeOnOpen {
+		_ = proxywasm.ResumeHttpRequest()
+	}
+	return types.ActionContinue
 }
 
 func rejected(config config.ClusterKeyRateLimitConfig, context LimitContext) {
