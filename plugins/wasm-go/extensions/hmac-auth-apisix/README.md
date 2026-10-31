@@ -30,10 +30,12 @@ description: APISIX HMAC 认证插件配置参考
 | `consumers`             | array of object | 必填                       | -                                           | 配置服务的调用者，用于对请求进行认证                         |
 | `allowed_algorithms`    | array of string | 选填                       | ["hmac-sha1", "hmac-sha256", "hmac-sha512"] | 允许的 HMAC 算法列表。有效值为 "hmac-sha1"、"hmac-sha256" 和 "hmac-sha512" 的组合 |
 | `clock_skew`            | number          | 选填                       | 300                                         | 客户端请求的时间戳与 Higress 服务器当前时间之间允许的最大时间差（以秒为单位）。这有助于解决客户端和服务器之间的时间同步差异，并防止重放攻击。时间戳将根据 Date 头中的时间（必须为 GMT 格式）进行计算。如果配置为0，会跳过该校验 |
-| `signed_headers`        | array of string | 选填                       | -                                           | 客户端请求的 HMAC 签名中应包含的 HMAC 签名头列表             |
+| `signed_headers`        | array of string | 选填                       | ["date"]                                    | 客户端请求的 HMAC 签名中应包含的签名头列表。未配置时，`headers` 字段必须包含 `date`，且 `Date` 请求头必须参与签名；显式配置为 `[]` 可在迁移期间保留不要求签名头的旧行为 |
 | `validate_request_body` | boolean         | 选填                       | false                                       | 如果为 true，则验证请求正文的完整性，以确保在传输过程中没有被篡改。具体来说，插件会创建一个 SHA-256 的 base64 编码 digest，并将其与 `Digest` 头进行比较。如果 `Digest` 头丢失或 digest 不匹配，验证将失败 |
 | `hide_credentials`      | boolean         | 选填                       | false                                       | 如果为 true，则不会将授权请求头传递给上游服务                |
 | `anonymous_consumer`    | string          | 选填                       | -                                           | 匿名消费者名称。如果已配置，则允许匿名用户绕过身份验证       |
+
+**`signed_headers` 迁移说明：** 显式空列表 `[]` 仅是临时兼容路径；新配置应省略该字段并签署 `date`，或显式配置所需的非空签名头列表。`clock_skew: 0` 只跳过时间偏差检查，不会取消默认的 `date` 签名要求。
 
 
 `consumers`中每一项的配置字段说明如下：
