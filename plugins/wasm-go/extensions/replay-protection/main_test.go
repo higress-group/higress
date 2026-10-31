@@ -158,6 +158,20 @@ func TestParseConfig(t *testing.T) {
 	})
 }
 
+func TestPluginStartsWithoutRedisInitialization(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(minimalConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		matchedConfig, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		cfg := matchedConfig.(*pluginconfig.ReplayProtectionConfig)
+		require.Equal(t, pluginconfig.FailureModeFailClosed, cfg.FailureMode)
+		require.False(t, cfg.Redis.Client.Ready())
+	})
+}
+
 func TestOnHttpRequestHeaders(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试强制 nonce 模式 - 缺少 nonce 头
@@ -365,6 +379,10 @@ func (c *dispatchErrorRedisClient) SetNX(string, interface{}, int, wrapper.Redis
 	return errors.New("dispatch failed")
 }
 
+func (c *dispatchErrorRedisClient) Ready() bool {
+	return true
+}
+
 func TestRedisDispatchFailureModes(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		for _, mode := range []string{pluginconfig.FailureModeFailOpen, pluginconfig.FailureModeFailClosed} {
@@ -395,9 +413,7 @@ func TestRedisDispatchFailureModes(t *testing.T) {
 					requireFailOpenRequest(t, host)
 				} else {
 					require.Equal(t, types.ActionPause, action)
-					localResponse := host.GetLocalResponse()
-					require.NotNil(t, localResponse)
-					require.Equal(t, uint32(503), localResponse.StatusCode)
+					requireFailClosedResponse(t, host)
 				}
 				host.CompleteHttp()
 			})
@@ -437,15 +453,22 @@ func TestRedisCallbackFailureModes(t *testing.T) {
 					if mode == pluginconfig.FailureModeFailOpen {
 						requireFailOpenRequest(t, host)
 					} else {
-						localResponse := host.GetLocalResponse()
-						require.NotNil(t, localResponse)
-						require.Equal(t, uint32(503), localResponse.StatusCode)
+						requireFailClosedResponse(t, host)
 					}
 					host.CompleteHttp()
 				})
 			}
 		}
 	})
+}
+
+func requireFailClosedResponse(t *testing.T, host test.TestHost) {
+	t.Helper()
+	localResponse := host.GetLocalResponse()
+	require.NotNil(t, localResponse)
+	require.Equal(t, uint32(503), localResponse.StatusCode)
+	require.Equal(t, "Service Unavailable", string(localResponse.Data))
+	require.Empty(t, localResponse.Headers)
 }
 
 func requireFailOpenRequest(t *testing.T, host test.TestHost) {

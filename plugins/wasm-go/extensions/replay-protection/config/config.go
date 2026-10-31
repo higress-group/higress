@@ -29,6 +29,17 @@ type ReplayProtectionConfig struct {
 type RedisConfig struct {
 	Client    wrapper.RedisClient
 	KeyPrefix string
+	username  string
+	password  string
+	timeout   int64
+	database  int
+}
+
+func (c *RedisConfig) EnsureReady() error {
+	if c.Client.Ready() {
+		return nil
+	}
+	return c.Client.Init(c.username, c.password, c.timeout, wrapper.WithDataBase(c.database))
 }
 
 func ParseConfig(json gjson.Result, config *ReplayProtectionConfig) error {
@@ -59,15 +70,14 @@ func ParseConfig(json gjson.Result, config *ReplayProtectionConfig) error {
 		timeout = 1000
 	}
 
-	// Initialize Redis client
 	config.Redis.Client = wrapper.NewRedisClusterClient(wrapper.FQDNCluster{
 		FQDN: serviceName,
 		Port: servicePort,
 	})
-	database := int(redisConfig.Get("database").Int())
-	if err := config.Redis.Client.Init(username, password, timeout, wrapper.WithDataBase(database)); err != nil {
-		return err
-	}
+	config.Redis.username = username
+	config.Redis.password = password
+	config.Redis.timeout = timeout
+	config.Redis.database = int(redisConfig.Get("database").Int())
 
 	keyPrefix := redisConfig.Get("key_prefix").String()
 	if keyPrefix == "" {

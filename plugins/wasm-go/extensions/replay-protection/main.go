@@ -46,6 +46,10 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ReplayProtectionCo
 
 	redisKey := fmt.Sprintf("%s:%s", cfg.Redis.KeyPrefix, nonce)
 
+	if err := cfg.Redis.EnsureReady(); err != nil {
+		return handleRedisDispatchError(cfg, err)
+	}
+
 	// Check if the nonce already exists
 	err := cfg.Redis.Client.SetNX(redisKey, "1", cfg.NonceTTL, func(response resp.Value) {
 		if err := response.Error(); err != nil {
