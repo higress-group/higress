@@ -993,8 +993,10 @@ func TestSignedHeadersDefault(t *testing.T) {
 			configureSignedHeaders bool
 			requestSignedHeaders   []string
 			clockSkew              int
+			omitClockSkew          bool
 			dateOffset             time.Duration
 			signatureDateOffset    time.Duration
+			omitDate               bool
 			expectedError          string
 		}{
 			{
@@ -1006,6 +1008,26 @@ func TestSignedHeadersDefault(t *testing.T) {
 				name:                 "omitted list accepts signed date",
 				requestSignedHeaders: []string{"date"},
 				clockSkew:            300,
+			},
+			{
+				name:                 "omitted list rejects advertised date missing from request with default clock skew",
+				requestSignedHeaders: []string{"date"},
+				omitClockSkew:        true,
+				omitDate:             true,
+				expectedError:        "Date header missing",
+			},
+			{
+				name:                 "omitted list rejects advertised date missing from request with clock skew disabled",
+				requestSignedHeaders: []string{"date"},
+				clockSkew:            0,
+				omitDate:             true,
+				expectedError:        `expected header "date" missing in request`,
+			},
+			{
+				name:                 "omitted list rejects non-empty signing list without date",
+				requestSignedHeaders: []string{"@request-target"},
+				omitClockSkew:        true,
+				expectedError:        `expected header "date" missing in signing`,
 			},
 			{
 				name:                 "omitted list rejects tampered date",
@@ -1028,21 +1050,27 @@ func TestSignedHeadersDefault(t *testing.T) {
 				clockSkew:              0,
 			},
 			{
-				name:                   "explicit non-empty list remains unchanged",
+				name:                   "explicit request-target list does not require date",
 				configSignedHeaders:    []string{"@request-target"},
 				configureSignedHeaders: true,
 				requestSignedHeaders:   []string{"@request-target"},
-				clockSkew:              300,
+				clockSkew:              0,
+				omitDate:               true,
 			},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				extra := map[string]interface{}{"clock_skew": tt.clockSkew}
-				if tt.configureSignedHeaders {
-					extra["signed_headers"] = tt.configSignedHeaders
+				configData := map[string]interface{}{"consumers": consumers}
+				if !tt.omitClockSkew {
+					configData["clock_skew"] = tt.clockSkew
 				}
-				host, status := test.NewTestHost(createConfig(consumers, extra))
+				if tt.configureSignedHeaders {
+					configData["signed_headers"] = tt.configSignedHeaders
+				}
+				testConfig, err := json.Marshal(configData)
+				require.NoError(t, err)
+				host, status := test.NewTestHost(testConfig)
 				defer host.Reset()
 				require.Equal(t, types.OnPluginStartStatusOK, status)
 
@@ -1053,17 +1081,24 @@ func TestSignedHeadersDefault(t *testing.T) {
 				}
 				requestDateString := requestDate.Format("Mon, 02 Jan 2006 15:04:05 GMT")
 				signatureDateString := signatureDate.Format("Mon, 02 Jan 2006 15:04:05 GMT")
+				headerValues := map[string]string{"date": signatureDateString}
+				if tt.omitDate {
+					headerValues = nil
+				}
 				authHeader := generateAuthorizationHeader(
 					"ak1", "sk1", "hmac-sha256", "GET", "/api/test",
-					tt.requestSignedHeaders, map[string]string{"date": signatureDateString},
+					tt.requestSignedHeaders, headerValues,
 				)
-				action := host.CallOnHttpRequestHeaders([][2]string{
+				requestHeaders := [][2]string{
 					{":authority", "example.com"},
 					{":path", "/api/test"},
 					{":method", "GET"},
 					{"authorization", authHeader},
-					{"date", requestDateString},
-				})
+				}
+				if !tt.omitDate {
+					requestHeaders = append(requestHeaders, [2]string{"date", requestDateString})
+				}
+				action := host.CallOnHttpRequestHeaders(requestHeaders)
 				require.Equal(t, types.ActionContinue, action)
 
 				localResponse := host.GetLocalResponse()
