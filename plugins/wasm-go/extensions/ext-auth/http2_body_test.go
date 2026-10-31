@@ -28,8 +28,13 @@ import (
 	"golang.org/x/net/http2/hpack"
 )
 
+type extAuthHTTP2Result struct {
+	headerAction types.Action
+	bodyActions  []types.Action
+}
+
 // Raw frames make DATA boundaries and omitted content headers deterministic.
-func runExtAuthHTTP2Request(t *testing.T, host test.TestHost, headers [][2]string, chunks [][]byte) {
+func runExtAuthHTTP2Request(t *testing.T, host test.TestHost, headers [][2]string, chunks [][]byte) extAuthHTTP2Result {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
@@ -37,6 +42,7 @@ func runExtAuthHTTP2Request(t *testing.T, host test.TestHost, headers [][2]strin
 	require.NoError(t, clientConn.SetDeadline(deadline))
 	require.NoError(t, serverConn.SetDeadline(deadline))
 
+	var result extAuthHTTP2Result
 	done := make(chan error, 1)
 	go func() {
 		defer serverConn.Close()
@@ -64,9 +70,9 @@ func runExtAuthHTTP2Request(t *testing.T, host test.TestHost, headers [][2]strin
 				for _, field := range fields {
 					requestHeaders = append(requestHeaders, [2]string{field.Name, field.Value})
 				}
-				host.CallOnHttpRequestHeaders(requestHeaders)
+				result.headerAction = host.CallOnHttpRequestHeaders(requestHeaders)
 			case *http2.DataFrame:
-				host.CallOnHttpStreamingRequestBody(f.Data(), f.StreamEnded())
+				result.bodyActions = append(result.bodyActions, host.CallOnHttpStreamingRequestBody(f.Data(), f.StreamEnded()))
 				if f.StreamEnded() {
 					done <- nil
 					return
@@ -93,6 +99,7 @@ func runExtAuthHTTP2Request(t *testing.T, host test.TestHost, headers [][2]strin
 		require.NoError(t, framer.WriteData(1, i == len(chunks)-1, chunk))
 	}
 	require.NoError(t, <-done)
+	return result
 }
 
 func TestExtAuthHTTP2BodyDelivery(t *testing.T) {
@@ -105,6 +112,7 @@ func TestExtAuthHTTP2BodyDelivery(t *testing.T) {
 			{name: "single DATA without content headers", chunks: [][]byte{payload}},
 			{name: "multiple DATA frames", chunks: [][]byte{payload[:3], payload[3:8], payload[8:]}},
 			{name: "empty then non-empty DATA", chunks: [][]byte{{}, payload}},
+			{name: "non-empty DATA then empty END_STREAM", chunks: [][]byte{payload, {}}},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
@@ -112,10 +120,11 @@ func TestExtAuthHTTP2BodyDelivery(t *testing.T) {
 				defer host.Reset()
 				require.Equal(t, types.OnPluginStartStatusOK, status)
 
-				runExtAuthHTTP2Request(t, host, [][2]string{
+				result := runExtAuthHTTP2Request(t, host, [][2]string{
 					{":method", "POST"}, {":scheme", "http"}, {":path", "/users"}, {":authority", "example.com"},
 				}, tt.chunks)
 
+				require.Equal(t, types.ActionPause, result.headerAction)
 				callouts := host.GetHttpCalloutAttributes()
 				require.Len(t, callouts, 1)
 				require.Equal(t, payload, callouts[0].Body)
@@ -131,16 +140,17 @@ func TestExtAuthHTTP2EncodedBodyCompatibility(t *testing.T) {
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
 		payload := []byte("encoded-body")
-		runExtAuthHTTP2Request(t, host, [][2]string{
+		result := runExtAuthHTTP2Request(t, host, [][2]string{
 			{":method", "POST"}, {":scheme", "http"}, {":path", "/users"}, {":authority", "example.com"},
 			{"content-encoding", "gzip"},
 		}, [][]byte{payload})
 
-		// Strict raw delivery for encoded bodies is covered by the integration change.
-		callouts := host.GetHttpCalloutAttributes()
-		require.LessOrEqual(t, len(callouts), 1)
-		if len(callouts) == 1 {
-			require.Equal(t, payload, callouts[0].Body)
-		}
+		// higress-group/wasm-go#59 (RequireRequestBody) and its ext-auth adoption
+		// will replace this deterministic suppression with one full-body callout.
+		require.Equal(t, types.ActionPause, result.headerAction)
+		require.Empty(t, host.GetHttpCalloutAttributes())
+		require.Nil(t, host.GetLocalResponse())
+		require.Equal(t, []types.Action{types.ActionContinue}, result.bodyActions,
+			"the terminal DATA frame must release the request to the upstream")
 	})
 }

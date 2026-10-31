@@ -28,8 +28,13 @@ import (
 	"golang.org/x/net/http2/hpack"
 )
 
+type hmacHTTP2Result struct {
+	headerAction types.Action
+	bodyActions  []types.Action
+}
+
 // Raw frames make DATA boundaries and omitted content headers deterministic.
-func runHmacHTTP2Request(t *testing.T, host test.TestHost, headers [][2]string, chunks [][]byte) {
+func runHmacHTTP2Request(t *testing.T, host test.TestHost, headers [][2]string, chunks [][]byte) hmacHTTP2Result {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
@@ -37,6 +42,7 @@ func runHmacHTTP2Request(t *testing.T, host test.TestHost, headers [][2]string, 
 	require.NoError(t, clientConn.SetDeadline(deadline))
 	require.NoError(t, serverConn.SetDeadline(deadline))
 
+	var result hmacHTTP2Result
 	done := make(chan error, 1)
 	go func() {
 		defer serverConn.Close()
@@ -64,9 +70,9 @@ func runHmacHTTP2Request(t *testing.T, host test.TestHost, headers [][2]string, 
 				for _, field := range fields {
 					requestHeaders = append(requestHeaders, [2]string{field.Name, field.Value})
 				}
-				host.CallOnHttpRequestHeaders(requestHeaders)
+				result.headerAction = host.CallOnHttpRequestHeaders(requestHeaders)
 			case *http2.DataFrame:
-				host.CallOnHttpStreamingRequestBody(f.Data(), f.StreamEnded())
+				result.bodyActions = append(result.bodyActions, host.CallOnHttpStreamingRequestBody(f.Data(), f.StreamEnded()))
 				if f.StreamEnded() {
 					done <- nil
 					return
@@ -93,6 +99,7 @@ func runHmacHTTP2Request(t *testing.T, host test.TestHost, headers [][2]string, 
 		require.NoError(t, framer.WriteData(1, i == len(chunks)-1, chunk))
 	}
 	require.NoError(t, <-done)
+	return result
 }
 
 func TestHmacHTTP2BodyDigest(t *testing.T) {
@@ -106,6 +113,7 @@ func TestHmacHTTP2BodyDigest(t *testing.T) {
 			{name: "single DATA without content headers", chunks: [][]byte{payload}},
 			{name: "multiple DATA frames", chunks: [][]byte{payload[:3], payload[3:8], payload[8:]}},
 			{name: "empty then non-empty DATA with incorrect digest", chunks: [][]byte{{}, payload}, incorrectDigest: true},
+			{name: "non-empty DATA then empty END_STREAM", chunks: [][]byte{payload, {}}},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
@@ -122,10 +130,21 @@ func TestHmacHTTP2BodyDigest(t *testing.T) {
 				if tt.incorrectDigest {
 					digestBody = []byte("different")
 				}
-				runHmacHTTP2Request(t, host, [][2]string{
+				result := runHmacHTTP2Request(t, host, [][2]string{
 					{":method", "POST"}, {":scheme", "http"}, {":path", "/p"}, {":authority", "e.com"},
 					{"authorization", auth}, {"date", date}, {"digest", calculateBodyDigest(digestBody)},
 				}, tt.chunks)
+
+				require.Equal(t, types.ActionPause, result.headerAction,
+					"HeaderStopIteration must hold the request for body validation")
+				require.Len(t, result.bodyActions, len(tt.chunks))
+				for i, action := range result.bodyActions {
+					expected := types.ActionPause
+					if i == len(result.bodyActions)-1 {
+						expected = types.ActionContinue
+					}
+					require.Equal(t, expected, action, "unexpected body-phase action for DATA frame %d", i)
+				}
 
 				response := host.GetLocalResponse()
 				if tt.incorrectDigest {
