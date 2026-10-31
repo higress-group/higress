@@ -481,6 +481,7 @@ func TestNonceResponsesUnaffected(t *testing.T) {
 				localResponse := host.GetLocalResponse()
 				if tt.expectCode == 0 {
 					require.Nil(t, localResponse)
+					require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
 				} else {
 					require.NotNil(t, localResponse)
 					require.Equal(t, tt.expectCode, localResponse.StatusCode)
