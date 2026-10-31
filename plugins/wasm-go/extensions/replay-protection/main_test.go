@@ -16,7 +16,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
+
+	pluginconfig "replay-protection/config"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
@@ -128,6 +131,8 @@ func TestParseConfig(t *testing.T) {
 			config, err := host.GetMatchConfig()
 			require.NoError(t, err)
 			require.NotNil(t, config)
+			parsedConfig := config.(*pluginconfig.ReplayProtectionConfig)
+			require.Equal(t, pluginconfig.FailureModeFailClosed, parsedConfig.FailureMode)
 		})
 
 		// 测试无效配置（缺少 Redis 配置）
@@ -140,6 +145,12 @@ func TestParseConfig(t *testing.T) {
 		// 测试无效配置（空的 Redis 服务名）
 		t.Run("invalid config - empty redis service name", func(t *testing.T) {
 			host, status := test.NewTestHost(invalidRedisConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		t.Run("invalid failure mode", func(t *testing.T) {
+			host, status := test.NewTestHost(configWithFailureMode(basicConfig, "invalid"))
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusFailed, status)
 		})
@@ -327,6 +338,128 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+	})
+}
+
+func configWithFailureMode(raw json.RawMessage, mode string) json.RawMessage {
+	var value map[string]interface{}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		panic(err)
+	}
+	value["failure_mode"] = mode
+	result, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return result
+}
+
+func TestRedisDispatchFailureModes(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, mode := range []string{pluginconfig.FailureModeFailOpen, pluginconfig.FailureModeFailClosed} {
+			t.Run(mode, func(t *testing.T) {
+				host, status := test.NewTestHost(configWithFailureMode(customConfig, mode))
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				action := host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/test"},
+					{":method", "GET"},
+				})
+				require.Equal(t, types.ActionContinue, action)
+
+				action = handleRedisDispatchError(pluginconfig.ReplayProtectionConfig{FailureMode: mode}, errors.New("dispatch failed"))
+				if mode == pluginconfig.FailureModeFailOpen {
+					require.Equal(t, types.ActionContinue, action)
+					require.Nil(t, host.GetLocalResponse())
+				} else {
+					require.Equal(t, types.ActionPause, action)
+					localResponse := host.GetLocalResponse()
+					require.NotNil(t, localResponse)
+					require.Equal(t, uint32(503), localResponse.StatusCode)
+				}
+				host.CompleteHttp()
+			})
+		}
+	})
+}
+
+func TestRedisCallbackFailureModes(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		tests := []struct {
+			name     string
+			status   int32
+			response []byte
+		}{
+			{name: "callback error", response: test.CreateRedisRespError("redis error")},
+			{name: "timeout", status: 1},
+			{name: "protocol error", response: []byte("invalid-resp")},
+			{name: "malformed response", response: test.CreateRedisRespInt(1)},
+		}
+		for _, mode := range []string{pluginconfig.FailureModeFailOpen, pluginconfig.FailureModeFailClosed} {
+			for _, tt := range tests {
+				t.Run(mode+"/"+tt.name, func(t *testing.T) {
+					host, status := test.NewTestHost(configWithFailureMode(basicConfig, mode))
+					defer host.Reset()
+					require.Equal(t, types.OnPluginStartStatusOK, status)
+
+					action := host.CallOnHttpRequestHeaders([][2]string{
+						{":authority", "example.com"},
+						{":path", "/test"},
+						{":method", "POST"},
+						{"X-Higress-Nonce", "dGVzdC1ub25jZS12YWx1ZQ=="},
+					})
+					require.Equal(t, types.ActionPause, action)
+					host.CallOnRedisCall(tt.status, tt.response)
+
+					localResponse := host.GetLocalResponse()
+					if mode == pluginconfig.FailureModeFailOpen {
+						require.Nil(t, localResponse)
+					} else {
+						require.NotNil(t, localResponse)
+						require.Equal(t, uint32(503), localResponse.StatusCode)
+					}
+					host.CompleteHttp()
+				})
+			}
+		}
+	})
+}
+
+func TestNonceResponsesUnaffected(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		tests := []struct {
+			name       string
+			response   []byte
+			expectCode uint32
+		}{
+			{name: "first nonce", response: []byte("+OK\r\n")},
+			{name: "duplicate nonce", response: test.CreateRedisRespNull(), expectCode: 429},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				host, status := test.NewTestHost(basicConfig)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/test"},
+					{":method", "POST"},
+					{"X-Higress-Nonce", "dGVzdC1ub25jZS12YWx1ZQ=="},
+				})
+				host.CallOnRedisCall(0, tt.response)
+
+				localResponse := host.GetLocalResponse()
+				if tt.expectCode == 0 {
+					require.Nil(t, localResponse)
+				} else {
+					require.NotNil(t, localResponse)
+					require.Equal(t, tt.expectCode, localResponse.StatusCode)
+					require.Equal(t, "Replay Attack Detected", string(localResponse.Data))
+				}
+				host.CompleteHttp()
+			})
+		}
 	})
 }
 
