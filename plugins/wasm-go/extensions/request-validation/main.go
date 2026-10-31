@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -32,9 +35,94 @@ const (
 	defaultHeaderSchema = "header"
 	defaultBodySchema   = "body"
 	defaultRejectedCode = 403
+	// Reject numbers outside float64's roughly 309-digit decimal range before jsonschema reaches big.Float.
+	maxJSONNumberDigits = 309
 )
 
 func main() {}
+
+func decodeJSON(body []byte) (interface{}, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var document interface{}
+	if err := decoder.Decode(&document); err != nil {
+		return nil, err
+	}
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple JSON values in request body")
+		}
+		return nil, err
+	}
+	return normalizeJSONNumbers(document)
+}
+
+func normalizeJSONNumbers(value interface{}) (interface{}, error) {
+	switch typed := value.(type) {
+	case json.Number:
+		return normalizeJSONNumber(typed)
+	case []interface{}:
+		for i, item := range typed {
+			normalized, err := normalizeJSONNumbers(item)
+			if err != nil {
+				return nil, err
+			}
+			typed[i] = normalized
+		}
+	case map[string]interface{}:
+		for key, item := range typed {
+			normalized, err := normalizeJSONNumbers(item)
+			if err != nil {
+				return nil, err
+			}
+			typed[key] = normalized
+		}
+	}
+	return value, nil
+}
+
+func normalizeJSONNumber(number json.Number) (json.Number, error) {
+	literal := number.String()
+	mantissa := literal
+	exponent := ""
+	if index := strings.IndexAny(literal, "eE"); index >= 0 {
+		mantissa, exponent = literal[:index], literal[index+1:]
+	}
+	digits := strings.TrimPrefix(mantissa, "-")
+	digitCount := len(digits)
+	if strings.Contains(digits, ".") {
+		digitCount--
+	}
+	exponentDigits := strings.TrimPrefix(strings.TrimPrefix(exponent, "-"), "+")
+	if digitCount > maxJSONNumberDigits || len(exponentDigits) > maxJSONNumberDigits {
+		return "", fmt.Errorf("JSON number exceeds supported digit bounds")
+	}
+	if exponent != "" {
+		value, err := strconv.ParseInt(exponent, 10, 32)
+		if err != nil || value > maxJSONNumberDigits || value < -maxJSONNumberDigits {
+			return "", fmt.Errorf("JSON number exceeds supported exponent bounds")
+		}
+	}
+	rational, ok := new(big.Rat).SetString(literal)
+	if !ok {
+		return "", fmt.Errorf("invalid JSON number")
+	}
+	if rational.IsInt() {
+		return json.Number(rational.Num().String()), nil
+	}
+	return number, nil
+}
+
+func validateJSONDocument(schema *jsonschema.Schema, document interface{}) (err error) {
+	// Defense against upstream library panics: report them as validation failures rather than crashing.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("JSON schema validation panic: %v", recovered)
+		}
+	}()
+	return schema.ValidateInterface(document)
+}
 
 func init() {
 	wrapper.SetCtx(
@@ -170,13 +258,15 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte, log 
 		return types.ActionContinue
 	}
 
-	document := bytes.NewReader(body)
 	compile, err := config.compiler.Compile(defaultBodySchema)
 	if err != nil {
 		log.Errorf("compile schema failed: %v", err)
 		return types.ActionContinue
 	}
-	err = compile.Validate(document)
+	document, err := decodeJSON(body)
+	if err == nil {
+		err = validateJSONDocument(compile, document)
+	}
 	if err != nil {
 		log.Errorf("validate request body failed: %v", err)
 		proxywasm.SendHttpResponseWithDetail(config.rejectedCode, "request-validation.invalid_body", nil, []byte(config.rejectedMsg), -1)

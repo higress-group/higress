@@ -16,10 +16,12 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/santhosh-tekuri/jsonschema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -218,6 +220,113 @@ func TestOnHttpRequestBodyTopLevelTypes(t *testing.T) {
 						})
 					}
 				})
+			}
+		}
+	})
+}
+
+func TestOnHttpRequestBodyRejectsPathologicalNumber(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		cfg := mustConfig(t, map[string]interface{}{
+			"body_schema":   `{"type":"number","minimum":0}`,
+			"enable_oas3":   true,
+			"rejected_code": 422,
+			"rejected_msg":  "Invalid request body",
+		})
+		host, status := test.NewTestHost(cfg)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+
+		action = host.CallOnHttpRequestBody([]byte(`1e100000000000000000000`))
+		require.Equal(t, types.ActionPause, action)
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		require.Equal(t, uint32(422), response.StatusCode)
+		require.Equal(t, "Invalid request body", string(response.Data))
+	})
+}
+
+func TestValidateJSONDocumentRecoversLibraryPanic(t *testing.T) {
+	compiler := jsonschema.NewCompiler()
+	require.NoError(t, compiler.AddResource(defaultBodySchema, strings.NewReader(`{"type":"number","minimum":0}`)))
+	schema, err := compiler.Compile(defaultBodySchema)
+	require.NoError(t, err)
+
+	err = validateJSONDocument(schema, json.Number(`1e100000000000000000000`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validation panic")
+}
+
+func TestOnHttpRequestBodyNumberNormalization(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		drafts := []struct {
+			name      string
+			configKey string
+		}{
+			{name: "draft4", configKey: "enable_swagger"},
+			{name: "draft7", configKey: "enable_oas3"},
+		}
+		testCases := []struct {
+			name        string
+			literal     string
+			validInt    bool
+			validNumber bool
+		}{
+			{name: "integer", literal: "1", validInt: true, validNumber: true},
+			{name: "zero fraction", literal: "1.0", validInt: true, validNumber: true},
+			{name: "zero exponent", literal: "1e0", validInt: true, validNumber: true},
+			{name: "fraction", literal: "1.5", validNumber: true},
+			{name: "negative zero", literal: "-0.0e2", validInt: true, validNumber: true},
+			{name: "integral exponent", literal: "1.5e1", validInt: true, validNumber: true},
+			{name: "fractional exponent", literal: "1e-1", validNumber: true},
+		}
+
+		for _, draft := range drafts {
+			for _, schemaType := range []string{"integer", "number"} {
+				for _, testCase := range testCases {
+					t.Run(draft.name+"/"+schemaType+"/"+testCase.name, func(t *testing.T) {
+						cfg := mustConfig(t, map[string]interface{}{
+							"body_schema":   `{"type":"object","properties":{"n":{"type":"` + schemaType + `"}},"required":["n"]}`,
+							draft.configKey: true,
+							"rejected_code": 422,
+							"rejected_msg":  "Invalid request body",
+						})
+						host, status := test.NewTestHost(cfg)
+						defer host.Reset()
+						require.Equal(t, types.OnPluginStartStatusOK, status)
+
+						action := host.CallOnHttpRequestHeaders([][2]string{
+							{":authority", "example.com"},
+							{":path", "/api/test"},
+							{":method", "POST"},
+						})
+						require.Equal(t, types.ActionContinue, action)
+						action = host.CallOnHttpRequestBody([]byte(`{"n":` + testCase.literal + `}`))
+
+						expectAccept := testCase.validNumber
+						if schemaType == "integer" {
+							expectAccept = testCase.validInt
+						}
+						response := host.GetLocalResponse()
+						if expectAccept {
+							require.Equal(t, types.ActionContinue, action)
+							require.Nil(t, response)
+						} else {
+							require.Equal(t, types.ActionPause, action)
+							require.NotNil(t, response)
+							require.Equal(t, uint32(422), response.StatusCode)
+							require.Equal(t, "Invalid request body", string(response.Data))
+						}
+						host.CompleteHttp()
+					})
+				}
 			}
 		}
 	})
