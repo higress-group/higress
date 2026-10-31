@@ -1115,6 +1115,86 @@ func TestSignedHeadersDefault(t *testing.T) {
 	})
 }
 
+func TestSignedHeadersExplicitListRequiresPresence(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		tests := []struct {
+			name          string
+			clockSkew     int
+			includeHeader bool
+			expectedError string
+		}{
+			{
+				name:          "advertised header absent with clock skew disabled",
+				clockSkew:     0,
+				expectedError: `expected header "x-token" missing in request`,
+			},
+			{
+				name:          "advertised header absent with clock skew enabled",
+				clockSkew:     300,
+				expectedError: `expected header "x-token" missing in request`,
+			},
+			{
+				name:          "listed header present",
+				clockSkew:     300,
+				includeHeader: true,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				configData := map[string]interface{}{
+					"consumers": []map[string]interface{}{
+						{
+							"name":       "consumer1",
+							"access_key": "ak1",
+							"secret_key": "sk1",
+						},
+					},
+					"clock_skew":     tt.clockSkew,
+					"signed_headers": []string{"x-token"},
+				}
+				testConfig, err := json.Marshal(configData)
+				require.NoError(t, err)
+				host, status := test.NewTestHost(testConfig)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				date := time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT")
+				headerValues := map[string]string{}
+				if tt.includeHeader {
+					headerValues["x-token"] = "token"
+				}
+				authHeader := generateAuthorizationHeader(
+					"ak1", "sk1", "hmac-sha256", "GET", "/api/test",
+					[]string{"x-token"}, headerValues,
+				)
+				requestHeaders := [][2]string{
+					{":authority", "example.com"},
+					{":path", "/api/test"},
+					{":method", "GET"},
+					{"authorization", authHeader},
+					{"date", date},
+				}
+				if tt.includeHeader {
+					requestHeaders = append(requestHeaders, [2]string{"x-token", "token"})
+				}
+
+				action := host.CallOnHttpRequestHeaders(requestHeaders)
+				require.Equal(t, types.ActionContinue, action)
+				localResponse := host.GetLocalResponse()
+				if tt.expectedError == "" {
+					require.Nil(t, localResponse)
+				} else {
+					require.NotNil(t, localResponse)
+					require.Equal(t, uint32(401), localResponse.StatusCode)
+					require.Contains(t, string(localResponse.Data), tt.expectedError)
+				}
+				host.CompleteHttp()
+			})
+		}
+	})
+}
+
 func TestCompleteFlow(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		t.Run("complete hmac auth flow", func(t *testing.T) {
