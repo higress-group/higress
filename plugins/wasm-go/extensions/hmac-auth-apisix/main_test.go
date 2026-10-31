@@ -1443,8 +1443,8 @@ func TestOnHttpRequestBody(t *testing.T) {
 			host.CompleteHttp()
 		})
 
-		// 测试空请求体
-		t.Run("empty request body", func(t *testing.T) {
+		// 测试空请求体获取失败
+		t.Run("empty body acquisition failure", func(t *testing.T) {
 			host, status := test.NewTestHost(createConfig(
 				[]map[string]interface{}{
 					{
@@ -1484,11 +1484,12 @@ func TestOnHttpRequestBody(t *testing.T) {
 			// 测试空请求体
 			action := host.CallOnHttpRequestBody(emptyBody)
 
-			require.Equal(t, types.ActionContinue, action, "Empty body with correct digest should be accepted")
-			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction(), "Stream action should be continue")
+			require.Equal(t, types.ActionPause, action, "Empty body acquisition should stop request processing")
+			require.Equal(t, types.ActionPause, host.GetHttpStreamAction(), "Stream action should remain paused")
 
 			localResponse := host.GetLocalResponse()
-			require.Nil(t, localResponse, "Empty body with correct digest should not be rejected")
+			require.NotNil(t, localResponse, "Empty body acquisition should produce a local response")
+			require.Equal(t, uint32(503), localResponse.StatusCode)
 
 			host.CompleteHttp()
 		})

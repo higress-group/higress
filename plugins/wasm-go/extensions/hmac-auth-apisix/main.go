@@ -163,6 +163,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.HmacAuthConfig) ty
 
 	// 如果有请求体且需要验证请求体，进入 onHttpRequestBody 方法
 	if ctx.HasRequestBody() && cfg.ValidateRequestBody {
+		ctx.RequireRequestBody()
 		return types.HeaderStopIteration
 	}
 	ctx.DontReadRequestBody()
