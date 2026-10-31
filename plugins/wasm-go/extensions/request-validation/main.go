@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -35,8 +36,6 @@ const (
 	defaultHeaderSchema = "header"
 	defaultBodySchema   = "body"
 	defaultRejectedCode = 403
-	// Reject numbers outside float64's roughly 309-digit decimal range before jsonschema reaches big.Float.
-	maxJSONNumberDigits = 309
 )
 
 func main() {}
@@ -84,25 +83,17 @@ func normalizeJSONNumbers(value interface{}) (interface{}, error) {
 
 func normalizeJSONNumber(number json.Number) (json.Number, error) {
 	literal := number.String()
-	mantissa := literal
-	exponent := ""
-	if index := strings.IndexAny(literal, "eE"); index >= 0 {
-		mantissa, exponent = literal[:index], literal[index+1:]
-	}
-	digits := strings.TrimPrefix(mantissa, "-")
-	digitCount := len(digits)
-	if strings.Contains(digits, ".") {
-		digitCount--
-	}
-	exponentDigits := strings.TrimPrefix(strings.TrimPrefix(exponent, "-"), "+")
-	if digitCount > maxJSONNumberDigits || len(exponentDigits) > maxJSONNumberDigits {
-		return "", fmt.Errorf("JSON number exceeds supported digit bounds")
-	}
-	if exponent != "" {
-		value, err := strconv.ParseInt(exponent, 10, 32)
-		if err != nil || value > maxJSONNumberDigits || value < -maxJSONNumberDigits {
-			return "", fmt.Errorf("JSON number exceeds supported exponent bounds")
+	// Overflowing literals are rejected; underflow to zero is accepted, matching
+	// the float64 semantics of the previous decoding path.
+	value, err := strconv.ParseFloat(literal, 64)
+	if errors.Is(err, strconv.ErrRange) {
+		if value == 0 {
+			return json.Number("0"), nil
 		}
+		return "", fmt.Errorf("JSON number overflows float64")
+	}
+	if err != nil {
+		return "", fmt.Errorf("invalid JSON number")
 	}
 	rational, ok := new(big.Rat).SetString(literal)
 	if !ok {

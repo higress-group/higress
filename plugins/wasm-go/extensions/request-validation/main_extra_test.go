@@ -225,7 +225,7 @@ func TestOnHttpRequestBodyTopLevelTypes(t *testing.T) {
 	})
 }
 
-func TestOnHttpRequestBodyRejectsPathologicalNumber(t *testing.T) {
+func TestOnHttpRequestBodyNumberBounds(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		cfg := mustConfig(t, map[string]interface{}{
 			"body_schema":   `{"type":"number","minimum":0}`,
@@ -233,23 +233,46 @@ func TestOnHttpRequestBodyRejectsPathologicalNumber(t *testing.T) {
 			"rejected_code": 422,
 			"rejected_msg":  "Invalid request body",
 		})
-		host, status := test.NewTestHost(cfg)
-		defer host.Reset()
-		require.Equal(t, types.OnPluginStartStatusOK, status)
+		testCases := []struct {
+			name         string
+			literal      string
+			expectAccept bool
+		}{
+			{name: "finite subnormal", literal: "1e-310", expectAccept: true},
+			{name: "smallest subnormal", literal: "5e-324", expectAccept: true},
+			{name: "underflow to zero", literal: "1e-400", expectAccept: true},
+			{name: "overflow", literal: "1e309"},
+			{name: "pathological overflow", literal: "1e100000000000000000000"},
+			{name: "high precision decimal", literal: "1234567890.123456789012345678901234567890", expectAccept: true},
+		}
 
-		action := host.CallOnHttpRequestHeaders([][2]string{
-			{":authority", "example.com"},
-			{":path", "/api/test"},
-			{":method", "POST"},
-		})
-		require.Equal(t, types.ActionContinue, action)
+		for _, testCase := range testCases {
+			t.Run(testCase.name, func(t *testing.T) {
+				host, status := test.NewTestHost(cfg)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		action = host.CallOnHttpRequestBody([]byte(`1e100000000000000000000`))
-		require.Equal(t, types.ActionPause, action)
-		response := host.GetLocalResponse()
-		require.NotNil(t, response)
-		require.Equal(t, uint32(422), response.StatusCode)
-		require.Equal(t, "Invalid request body", string(response.Data))
+				action := host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/api/test"},
+					{":method", "POST"},
+				})
+				require.Equal(t, types.ActionContinue, action)
+				action = host.CallOnHttpRequestBody([]byte(testCase.literal))
+
+				response := host.GetLocalResponse()
+				if testCase.expectAccept {
+					require.Equal(t, types.ActionContinue, action)
+					require.Nil(t, response)
+				} else {
+					require.Equal(t, types.ActionPause, action)
+					require.NotNil(t, response)
+					require.Equal(t, uint32(422), response.StatusCode)
+					require.Equal(t, "Invalid request body", string(response.Data))
+				}
+				host.CompleteHttp()
+			})
+		}
 	})
 }
 
