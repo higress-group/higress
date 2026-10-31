@@ -11,6 +11,8 @@ require (
 	github.com/tidwall/gjson v1.18.0
 )
 
+require golang.org/x/text v0.28.0 // indirect
+
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -20,5 +22,6 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/resp v0.1.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
+	golang.org/x/net v0.43.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
