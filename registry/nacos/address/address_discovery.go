@@ -111,7 +111,9 @@ func (p *NacosAddressProvider) Stop() {
 }
 
 func (p *NacosAddressProvider) GetNacosAddress(oldAddress string) <-chan string {
-	addressChan := make(chan string)
+	// Buffered so the goroutine never blocks on the send while holding
+	// p.cond.L when the caller has stopped waiting (e.g. after a timeout).
+	addressChan := make(chan string, 1)
 	go func() {
 		var addr string
 		p.cond.L.Lock()
