@@ -1,0 +1,159 @@
+# Copyright (c) 2022 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: higress-conformance-infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: higress-conformance-infra
+spec:
+  ports:
+    - port: 6379
+      targetPort: 6379
+  selector:
+    app: redis
+---
+# Ingress for parameter-based rate limiting
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-token-ratelimit-param
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.openai.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+# Ingress for header-based rate limiting
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-token-ratelimit-header
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.custom.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+# Ingress for IP-based rate limiting
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-token-ratelimit-ip
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.ip-limit.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+# AI Token Rate Limit plugin configuration
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-token-ratelimit
+  namespace: higress-system
+spec:
+  priority: 600
+  matchRules:
+    # Parameter-based rate limiting
+    - config:
+        rule_name: param_apikey_rule
+        rule_items:
+          - limit_by_param: apikey
+            limit_keys:
+              - key: test-key-1
+                token_per_minute: 100
+              - key: test-key-2
+                token_per_minute: 1
+        redis:
+          service_name: redis.higress-conformance-infra.svc.cluster.local
+          service_port: 6379
+      ingress:
+        - higress-conformance-infra/wasmplugin-ai-token-ratelimit-param
+    # Header-based rate limiting
+    - config:
+        rule_name: header_apikey_rule
+        rule_items:
+          - limit_by_header: x-api-key
+            limit_keys:
+              - key: header-key-1
+                token_per_minute: 50
+        redis:
+          service_name: redis.higress-conformance-infra.svc.cluster.local
+          service_port: 6379
+      ingress:
+        - higress-conformance-infra/wasmplugin-ai-token-ratelimit-header
+    # IP-based rate limiting
+    - config:
+        rule_name: ip_limit_rule
+        rule_items:
+          - limit_by_per_ip: from-remote-addr
+            limit_keys:
+              - key: "0.0.0.0/0"
+                token_per_minute: 1
+        redis:
+          service_name: redis.higress-conformance-infra.svc.cluster.local
+          service_port: 6379
+      ingress:
+        - higress-conformance-infra/wasmplugin-ai-token-ratelimit-ip
+    url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-token-ratelimit:1.0.0
