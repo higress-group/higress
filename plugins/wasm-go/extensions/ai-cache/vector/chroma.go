@@ -186,15 +186,19 @@ func (d *ChromaProvider) parseQueryResponse(responseBody []byte, log log.Log) ([
 	}
 
 	log.Debugf("[Chroma] queryResp Ids len: %d", len(queryResp.Ids))
-	if len(queryResp.Ids) == 1 && len(queryResp.Ids[0]) == 0 {
+	// Chroma may answer without any ids, and it omits distances/documents when the
+	// collection is empty, so every list has to be checked before it is indexed.
+	if len(queryResp.Ids) == 0 || len(queryResp.Ids[0]) == 0 {
 		return nil, errors.New("no query results found in response")
 	}
 	results := make([]QueryResult, 0, len(queryResp.Ids[0]))
 	for i := range queryResp.Ids[0] {
-		result := QueryResult{
-			Text:   queryResp.Ids[0][i],
-			Score:  queryResp.Distances[0][i],
-			Answer: queryResp.Documents[0][i],
+		result := QueryResult{Text: queryResp.Ids[0][i]}
+		if len(queryResp.Distances) > 0 && i < len(queryResp.Distances[0]) {
+			result.Score = queryResp.Distances[0][i]
+		}
+		if len(queryResp.Documents) > 0 && i < len(queryResp.Documents[0]) {
+			result.Answer = queryResp.Documents[0][i]
 		}
 		results = append(results, result)
 	}
