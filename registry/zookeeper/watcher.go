@@ -50,7 +50,7 @@ type watcher struct {
 	WatchingServices   map[string]watchConfig       `json:"watching_services"`
 	RegistryType       provider.ServiceRegistryType `json:"registry_type"`
 	Status             provider.WatcherStatus       `json:"status"`
-	serviceRemaind     *atomic.Int32
+	serviceRemaining     *atomic.Int32
 	cache              memory.Cache
 	mutex              *sync.Mutex
 	stop               chan struct{}
@@ -248,7 +248,7 @@ func (w *watcher) fetchAllServices(firstFetch ...bool) error {
 		}
 	}
 	if len(firstFetch) > 0 && firstFetch[0] {
-		w.serviceRemaind = atomic.NewInt32(int32(len(serviceConfigs)))
+		w.serviceRemaining = atomic.NewInt32(int32(len(serviceConfigs)))
 	}
 	for _, service := range serviceConfigs {
 		w.listIndex <- service
@@ -289,8 +289,8 @@ func (w *watcher) ListenService() {
 					if len(children) > 0 {
 						w.ChildToServiceEntry(children, listIndex.InterfaceName, listIndex.UrlIndex, listIndex.ServiceType)
 					}
-					if w.serviceRemaind != nil {
-						w.serviceRemaind.Sub(1)
+					if w.serviceRemaining != nil {
+						w.serviceRemaining.Sub(1)
 					}
 					if w.startScheduleWatchTask(listIndex, children, ttl, childEventCh, listIndex.Exit) {
 						return
@@ -736,11 +736,11 @@ func (w *watcher) GetRegistryType() string {
 }
 
 func (w *watcher) watcherReady() bool {
-	if w.serviceRemaind == nil {
+	if w.serviceRemaining == nil {
 		return true
 	}
-	remaind := w.serviceRemaind.Load()
-	if remaind <= 0 {
+	remaining := w.serviceRemaining.Load()
+	if remaining <= 0 {
 		return true
 	}
 	return false
