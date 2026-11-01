@@ -17,10 +17,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
-
-	"regexp"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -157,13 +156,15 @@ func (c ConditionRule) validate() error {
 	}
 
 	var validOperators = map[string]bool{
-		Op_Equal:    true,
-		Op_NotEqual: true,
-		Op_Prefix:   true,
-		Op_In:       true,
-		Op_NotIn:    true,
-		Op_Regex:    true,
-		Op_Percent:  true,
+		Op_Equal:     true,
+		Op_NotEqual:  true,
+		Op_Prefix:    true,
+		Op_In:        true,
+		Op_NotIn:     true,
+		Op_Regex:     true,
+		Op_Percent:   true,
+		Op_Exists:    true,
+		Op_NotExists: true,
 	}
 	if !validOperators[c.Operator] {
 		return fmt.Errorf("invalid operator: '%s'", c.Operator)
@@ -174,6 +175,9 @@ func (c ConditionRule) validate() error {
 	}
 
 	switch c.Operator {
+	case Op_Exists, Op_NotExists:
+		// 不校验Value
+		return nil
 	case Op_In, Op_NotIn:
 		// 至少一个值
 		if len(c.Value) < 1 {

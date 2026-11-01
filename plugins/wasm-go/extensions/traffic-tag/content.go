@@ -40,7 +40,12 @@ func onContentRequestHeaders(conditionGroups []ConditionGroup, log log.Log) bool
 func matchCondition(conditionGroup *ConditionGroup, log log.Log) bool {
 	for _, condition := range conditionGroup.Conditions {
 		conditionKeyValue, err := getConditionValue(condition, log)
-		if err != nil {
+		// 判断值是否存在
+		isExist := err == nil
+
+		// 如果是 DoesNotExist，不能在这里因为 err != nil 就提前拦截掉，必须放行到 switch 中处理。
+		// 对于其他常规操作符（比如 =, prefix, regex 等），如果没取到值，依旧按照原有逻辑认为匹配失败。
+		if !isExist && condition.Operator != Op_NotExists {
 			log.Debugf("failed to get condition value: %s", err)
 			if conditionGroup.Logic == "and" {
 				return false
@@ -49,6 +54,21 @@ func matchCondition(conditionGroup *ConditionGroup, log log.Log) bool {
 		}
 
 		switch condition.Operator {
+		case Op_Exists:
+			// 如果走到这里，说明上面没有被 return/continue 拦截，
+			// 意味着 isExist 必定为 true！所以必定Match
+			if conditionGroup.Logic == "or" {
+				log.Debugf("condition match: exists")
+				return true
+			}
+		case Op_NotExists:
+			if !isExist && conditionGroup.Logic == "or" {
+				log.Debugf("condition match: not exist")
+				return true
+			} else if isExist && conditionGroup.Logic == "and" {
+				log.Debugf("condition not match: not exist")
+				return false
+			}
 		case Op_Equal:
 			if conditionKeyValue == condition.Value[0] && conditionGroup.Logic == "or" {
 				log.Debugf("condition match: %s == %s", conditionKeyValue, condition.Value[0])

@@ -54,6 +54,8 @@ const (
 	Op_In          = "in"
 	Op_NotIn       = "not_in"
 	Op_Percent     = "percentage"
+	Op_Exists      = "exists"
+	Op_NotExists   = "not_exists"
 	TotalWeight    = 100
 )
 
