@@ -313,6 +313,53 @@ func RunClaudeOnHttpRequestBodyTests(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, "You are a custom assistant.", systemBlock["text"])
 		})
+
+		t.Run("claude skips malformed multimodal parts", func(t *testing.T) {
+			host, status := test.NewTestHost(claudeStandardConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "api.anthropic.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			body := `{
+				"model": "claude-sonnet-4-5-20250929",
+				"max_tokens": 1024,
+				"messages": [
+					{"role": "user", "content": [
+						{"type": "text", "text": "before"},
+						{"type": "image_url", "image_url": {}},
+						{"type": "image_url", "image_url": {"url": 123}},
+						{"type": "input_audio", "input_audio": {"data": "UklGRg=="}},
+						{"type": "file", "file": {}},
+						{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+						{"type": "text", "text": "after"}
+					]}
+				]
+			}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionContinue, action)
+
+			var request map[string]interface{}
+			require.NoError(t, json.Unmarshal(host.GetRequestBody(), &request))
+			messages, ok := request["messages"].([]interface{})
+			require.True(t, ok)
+			require.Len(t, messages, 1)
+			message, ok := messages[0].(map[string]interface{})
+			require.True(t, ok)
+			content, err := json.Marshal(message["content"])
+			require.NoError(t, err)
+			// Malformed parts are dropped; valid parts keep their order.
+			require.JSONEq(t, `[
+				{"type": "text", "text": "before"},
+				{"type": "image", "source": {"type": "url", "url": "https://example.com/cat.png"}},
+				{"type": "text", "text": "after"}
+			]`, string(content))
+		})
 	})
 }
 
