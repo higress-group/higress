@@ -235,6 +235,8 @@ Anthropic Claude 所对应的 `type` 为 `claude`。它特有的配置字段如�
 | --------------- | -------- | -------- | ------ | ----------------------------------------- |
 | `claudeVersion` | string   | 可选     | -      | Claude 服务的 API 版本，默认为 2023-06-01 |
 | `claudeCodeMode` | boolean | 可选     | false  | 启用 Claude Code 模式，用于支持 Claude Code OAuth 令牌认证。启用后将伪装成 Claude Code 客户端发起请求 |
+| `claudeCodeUserAgent`   | string   | 可选     | -      | Claude Code 模式下的 `user-agent` 请求头。未配置且请求未携带该头时，使用插件内置的 Claude CLI 默认值 |
+| `claudeCodeBetaFeatures`| string   | 可选     | -      | Claude Code 模式下的 `anthropic-beta` 请求头。未配置且请求未携带该头时，使用插件内置的 beta 特性列表默认值 |
 
 **Claude Code 模式说明**
 

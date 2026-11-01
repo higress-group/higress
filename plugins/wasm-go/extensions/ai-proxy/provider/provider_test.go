@@ -489,6 +489,21 @@ func TestProviderConfig_GetLogUpstreamErrorResponseBody(t *testing.T) {
 	}
 }
 
+func TestProviderConfig_FromJson_ClaudeCodeFields(t *testing.T) {
+	jsonStr := `{
+		"type": "claude",
+		"apiTokens": ["token"],
+		"claudeCodeMode": true,
+		"claudeCodeUserAgent": "claude-cli/2.1.148 (external, cli)",
+		"claudeCodeBetaFeatures": "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24",
+	}`
+	c := &ProviderConfig{}
+	c.FromJson(gjson.Parse(jsonStr))
+	assert.True(t, c.claudeCodeMode)
+	assert.Equal(t, "claude-cli/2.1.148 (external, cli)", c.claudeCodeUserAgent)
+	assert.Equal(t, "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24", c.claudeCodeBetaFeatures)
+}
+
 // ============ Failover Tests ============
 
 func TestFailover_FromJson_Defaults(t *testing.T) {
