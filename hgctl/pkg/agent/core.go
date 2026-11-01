@@ -103,7 +103,7 @@ func (c *AgenticCore) run(args ...string) error {
 	return cmd.Run()
 }
 
-// setup additional prequisite environment and plugins manifest to user's profile
+// setup additional prerequisite environment and plugins manifest to user's profile
 // e.g. ../manifest/agent
 func (c *AgenticCore) Setup() {
 	// Check if this is the first time, otherwise directly return (TODO: this is a simple check)
