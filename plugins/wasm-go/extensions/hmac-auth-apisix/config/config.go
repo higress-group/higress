@@ -117,6 +117,7 @@ func ParseGlobalConfig(jsonData gjson.Result, global *HmacAuthConfig) error {
 	}
 
 	// 处理 signed_headers 配置
+	global.SignedHeaders = []string{"date"}
 	signedHeaders := jsonData.Get("signed_headers")
 	if signedHeaders.Exists() {
 		global.SignedHeaders = []string{}

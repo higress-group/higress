@@ -139,6 +139,12 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.HmacAuthConfig) ty
 			if !signedHeadersMap[lowerRequiredHeader] {
 				return sendUnauthorizedResponse("expected header \"" + requiredHeader + "\" missing in signing")
 			}
+			if lowerRequiredHeader == "@request-target" {
+				continue
+			}
+			if _, err := proxywasm.GetHttpRequestHeader(requiredHeader); err != nil {
+				return sendUnauthorizedResponse("expected header \"" + requiredHeader + "\" missing in request")
+			}
 		}
 	}
 
