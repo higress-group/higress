@@ -38,7 +38,7 @@ import (
 func ValidateBackendResource(resource *v1.TypedLocalObjectReference) bool {
 	if resource == nil || resource.APIGroup == nil ||
 		*resource.APIGroup != netv1.SchemeGroupVersion.Group ||
-		resource.Kind != "McpBridge" || resource.Name != "default" {
+		resource.Kind != "McpBridge" {
 		return false
 	}
 	return true
