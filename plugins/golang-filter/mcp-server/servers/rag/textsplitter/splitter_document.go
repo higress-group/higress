@@ -62,7 +62,7 @@ func CreateDocuments(textSplitter TextSplitter, texts []string, metadatas []map[
 	return documents, nil
 }
 
-// joinDocs comines two documents with the separator used to split them.
+// joinDocs combines two documents with the separator used to split them.
 func joinDocs(docs []string, separator string) string {
 	return strings.TrimSpace(strings.Join(docs, separator))
 }
