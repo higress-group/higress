@@ -3,9 +3,11 @@
 package main
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/config"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -83,6 +85,24 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, c config.PluginConfig, log lo
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, c config.PluginConfig, body []byte, log log.Log) types.Action {
+	// The cache key below is derived from the first occurrence of the top-level
+	// "messages" member (gjson), while the body is forwarded unchanged and the
+	// upstream parser keeps the last one: a body that declares the member twice
+	// would store one conversation's answer under another conversation's key and
+	// serve it on a later hit, so reject the ambiguous body before any cache
+	// access. The "disabled" strategy never reads the member, so it is left
+	// untouched.
+	if c.CacheKeyStrategy != config.CACHE_KEY_STRATEGY_DISABLED {
+		if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "messages"); err != nil {
+			log.Debugf("skip duplicate messages member check: %v", err)
+		} else if duplicate {
+			message := jsonbody.DuplicateMemberMessage("messages")
+			log.Warnf("rejecting request: %s", message)
+			_ = proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "duplicate_messages_member",
+				[][2]string{{"content-type", "text/plain"}}, []byte(message), -1)
+			return types.ActionPause
+		}
+	}
 	bodyJson := gjson.ParseBytes(body)
 	// TODO: It may be necessary to support stream mode determination for different LLM providers.
 	stream := false
