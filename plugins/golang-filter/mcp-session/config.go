@@ -22,12 +22,17 @@ const (
 
 var GlobalSSEPathSuffix = "/sse"
 
+// defaultSSEFragmentCacheLimit caps how many bytes the SSE upstream fragment
+// cache may retain while waiting for a complete endpoint event (#4879).
+const defaultSSEFragmentCacheLimit = 1 << 20 // 1 MiB
+
 type config struct {
 	matchList             []common.MatchRule
 	enableUserLevelServer bool
 	rateLimitConfig       *handler.MCPRatelimitConfig
 	redisClient           *common.RedisClient
 	sharedMCPServer       *common.MCPServer // Created once, thread-safe with sync.RWMutex
+	sseFragmentCacheLimit int               // 0 means defaultSSEFragmentCacheLimit
 }
 
 func (c *config) Destroy() {
@@ -110,6 +115,10 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 	}
 	GlobalSSEPathSuffix = ssePathSuffix
 
+	if limit, ok := v.AsMap()["sse_fragment_cache_limit"].(float64); ok && limit > 0 {
+		conf.sseFragmentCacheLimit = int(limit)
+	}
+
 	// Create shared MCPServer once during config parsing (thread-safe with sync.RWMutex)
 	conf.sharedMCPServer = common.NewMCPServer(DefaultServerName, Version)
 
@@ -134,6 +143,7 @@ func (p *Parser) Merge(parent interface{}, child interface{}) interface{} {
 	if childConfig.rateLimitConfig != nil {
 		newConfig.rateLimitConfig = childConfig.rateLimitConfig
 	}
+	newConfig.sseFragmentCacheLimit = childConfig.sseFragmentCacheLimit
 	return &newConfig
 }
 

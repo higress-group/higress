@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-session/common"
@@ -720,5 +721,86 @@ func TestEncodeDataFromSSEUpstream_FragmentedNonEndpointEvent(t *testing.T) {
 	got := feedSSEChunks(t, f, chunks...)
 	if got != want {
 		t.Errorf("expected client to receive the complete message %q, got %q", want, got)
+	}
+}
+
+// TestEncodeDataFromSSEUpstream_TruncatedEndpointFlushedAtEndStream verifies
+// that an endpoint event whose terminating blank line never arrives is flushed
+// to the client at end-of-stream instead of being dropped from the fragment
+// cache (#4879 part 1: the maintainer's exact scenario — upstream closes before
+// a parseable endpoint event completes).
+func TestEncodeDataFromSSEUpstream_TruncatedEndpointFlushedAtEndStream(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	f := createSSETestFilter(createPathRewriteDisabledRule())
+	chunks := []string{
+		"event: endpoint\ndata: https://api.example.com/mes",
+		"sages?sessionId=demo", // no terminating blank line before the stream ends
+	}
+	want := chunks[0] + chunks[1]
+
+	got := feedSSEChunks(t, f, chunks...)
+	if got != want {
+		t.Errorf("expected client to receive the truncated tail %q at end-of-stream, got %q", want, got)
+	}
+	if f.cachedResponseBody != nil {
+		t.Errorf("expected cachedResponseBody to be cleared at end-of-stream, got %q", string(f.cachedResponseBody))
+	}
+}
+
+// TestEncodeDataFromSSEUpstream_StreamWithoutEndpointEventFlushedAtEndStream
+// verifies that an SSE stream carrying no endpoint event at all (error or
+// notification-only streams) is forwarded in full at end-of-stream rather than
+// swallowed by the fragment cache.
+func TestEncodeDataFromSSEUpstream_StreamWithoutEndpointEventFlushedAtEndStream(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	f := createSSETestFilter(createPathRewriteDisabledRule())
+	chunks := []string{
+		"event: message\ndata: {\"jsonrpc\":\"2.0\"}\n\n",
+		"event: message\ndata: {\"error\":\"boom\"}\n\n",
+	}
+	want := chunks[0] + chunks[1]
+
+	got := feedSSEChunks(t, f, chunks...)
+	if got != want {
+		t.Errorf("expected client to receive the full stream %q at end-of-stream, got %q", want, got)
+	}
+	if f.cachedResponseBody != nil {
+		t.Errorf("expected cachedResponseBody to be cleared at end-of-stream, got %q", string(f.cachedResponseBody))
+	}
+}
+
+// TestEncodeDataFromSSEUpstream_FragmentCacheOverflowFailsOpen verifies the
+// bounded fragment cache: once the assembled data exceeds the configured
+// limit, the data passes through unmodified and further scanning stops,
+// instead of growing the cache without bound (#4879 part 2).
+func TestEncodeDataFromSSEUpstream_FragmentCacheOverflowFailsOpen(t *testing.T) {
+	mockAPI := &mockCommonCAPI{}
+	api.SetCommonCAPI(mockAPI)
+
+	f := createSSETestFilter(createPathRewriteDisabledRule())
+	f.config = &config{sseFragmentCacheLimit: 64}
+
+	big := "event: message\ndata: " + strings.Repeat("x", 128) + "\n\n"
+	got := feedSSEChunks(t, f, big)
+	if got != big {
+		t.Errorf("expected oversized fragment to pass through unmodified, got %q", got)
+	}
+	if f.cachedResponseBody != nil {
+		t.Errorf("expected cachedResponseBody to be dropped on overflow, got %d bytes", len(f.cachedResponseBody))
+	}
+	if f.needProcess {
+		t.Errorf("expected needProcess to be false after failing open")
+	}
+
+	// Later chunks must pass through untouched even if they contain an
+	// endpoint event: scanning has been disabled.
+	tail := "event: endpoint\ndata: https://api.example.com/messages?sessionId=demo\n\n"
+	got2 := feedSSEChunks(t, f, tail)
+	if got2 != tail {
+		t.Errorf("expected post-overflow chunk to pass through unmodified, got %q", got2)
 	}
 }

@@ -328,6 +328,28 @@ func (f *filter) encodeDataFromSSEUpstream(buffer api.BufferInstance, endStream 
 		return api.Continue
 	}
 	if endpointUrl == "" {
+		if endStream {
+			// The upstream ended without a complete endpoint event (truncated
+			// final event, or a stream that never carried one). Flush the
+			// assembled bytes instead of dropping the drained cache, so the
+			// client receives whatever the upstream sent. See #4879.
+			f.cachedResponseBody = nil
+			f.needProcess = false
+			if len(combinedData) > 0 {
+				_ = buffer.SetString(combinedData)
+			}
+			return api.Continue
+		}
+		if len(combinedData) > f.fragmentCacheLimit() {
+			// Fail open: pass the accumulated data through unmodified and stop
+			// scanning, instead of growing the fragment cache without bound
+			// while a misbehaving upstream never terminates an event. See #4879.
+			f.cachedResponseBody = nil
+			f.needProcess = false
+			api.LogWarnf("SSE fragment cache exceeded %d bytes; passing data through without endpoint URL rewriting", f.fragmentCacheLimit())
+			_ = buffer.SetString(combinedData)
+			return api.Continue
+		}
 		// No endpoint URL found. Need to buffer and check again.
 		f.cachedResponseBody = []byte(combinedData)
 		buffer.Reset()
@@ -543,6 +565,16 @@ func (f *filter) OnDestroy(reason api.DestroyReason) {
 			close(f.stopChan)
 		}
 	}
+}
+
+// fragmentCacheLimit returns the effective SSE fragment cache limit. A zero
+// config value (including the nil config used by unit tests) falls back to
+// defaultSSEFragmentCacheLimit.
+func (f *filter) fragmentCacheLimit() int {
+	if f.config != nil && f.config.sseFragmentCacheLimit > 0 {
+		return f.config.sseFragmentCacheLimit
+	}
+	return defaultSSEFragmentCacheLimit
 }
 
 // check if the request is a tools/call request
