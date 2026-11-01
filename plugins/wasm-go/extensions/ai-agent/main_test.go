@@ -364,6 +364,53 @@ paths:
 	return data
 }()
 
+// 测试配置：指定 OpenAPI 文档的最小配置
+func openAPIConfig(api string) json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"llm": map[string]interface{}{
+			"apiKey":      "test-api-key",
+			"serviceName": "llm-service",
+			"servicePort": 8080,
+			"domain":      "llm.example.com",
+			"path":        "/v1/chat/completions",
+			"model":       "qwen-turbo",
+		},
+		"apis": []map[string]interface{}{
+			{
+				"apiProvider": map[string]interface{}{
+					"serviceName": "api-service",
+					"servicePort": 9090,
+					"domain":      "api.example.com",
+				},
+				"api": api,
+			},
+		},
+	})
+	return data
+}
+
+// 测试配置：OpenAPI 文档缺少 servers
+var missingServersConfig = openAPIConfig(`openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /items:
+    get:
+      operationId: listItems`)
+
+// 测试配置：OpenAPI 文档 servers 的 url 为空
+var emptyServerURLConfig = openAPIConfig(`openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+servers:
+  - url: ""
+paths:
+  /items:
+    get:
+      operationId: listItems`)
+
 // 测试配置：用于HTTP请求测试的简化配置
 var httpTestConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -494,6 +541,22 @@ func TestParseConfig(t *testing.T) {
 			host, status := test.NewTestHost(missingAPIProviderConfig)
 			defer host.Reset()
 			// 缺少API提供者信息应该导致配置解析失败
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		// 测试 OpenAPI 缺少 servers 的配置
+		t.Run("missing API servers config", func(t *testing.T) {
+			host, status := test.NewTestHost(missingServersConfig)
+			defer host.Reset()
+			// 缺少 servers 应该导致配置解析失败，而不是 panic
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		// 测试 servers 的 url 为空的配置
+		t.Run("empty API server URL config", func(t *testing.T) {
+			host, status := test.NewTestHost(emptyServerURLConfig)
+			defer host.Reset()
+			// servers 的 url 为空应该导致配置解析失败，而不是 panic
 			require.Equal(t, types.OnPluginStartStatusFailed, status)
 		})
 	})
