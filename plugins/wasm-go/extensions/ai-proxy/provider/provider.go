@@ -162,6 +162,7 @@ const (
 	providerTypeLongcat    = "longcat"
 	providerTypeFireworks  = "fireworks"
 	providerTypeGaladriel  = "galadriel"
+	providerTypeDaoxe      = "daoxe"
 	providerTypeVllm       = "vllm"
 	providerTypeGeneric    = "generic"
 	providerTypeKling      = "kling"
@@ -269,6 +270,7 @@ var (
 		providerTypeLongcat:    &longcatProviderInitializer{},
 		providerTypeFireworks:  &fireworksProviderInitializer{},
 		providerTypeGaladriel:  &galadrielProviderInitializer{},
+		providerTypeDaoxe:      &daoxeProviderInitializer{},
 		providerTypeVllm:       &vllmProviderInitializer{},
 		providerTypeGeneric:    &genericProviderInitializer{},
 		providerTypeKling:      &klingProviderInitializer{},
