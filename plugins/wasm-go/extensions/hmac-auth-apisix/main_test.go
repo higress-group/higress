@@ -1443,8 +1443,8 @@ func TestOnHttpRequestBody(t *testing.T) {
 			host.CompleteHttp()
 		})
 
-		// 测试空请求体
-		t.Run("empty request body", func(t *testing.T) {
+		// 测试空请求体正常交付
+		t.Run("empty body with valid digest", func(t *testing.T) {
 			host, status := test.NewTestHost(createConfig(
 				[]map[string]interface{}{
 					{
@@ -1484,11 +1484,11 @@ func TestOnHttpRequestBody(t *testing.T) {
 			// 测试空请求体
 			action := host.CallOnHttpRequestBody(emptyBody)
 
-			require.Equal(t, types.ActionContinue, action, "Empty body with correct digest should be accepted")
+			require.Equal(t, types.ActionContinue, action, "Empty body with a valid digest should be accepted")
 			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction(), "Stream action should be continue")
 
 			localResponse := host.GetLocalResponse()
-			require.Nil(t, localResponse, "Empty body with correct digest should not be rejected")
+			require.Nil(t, localResponse, "Empty body with a valid digest should not be rejected")
 
 			host.CompleteHttp()
 		})
