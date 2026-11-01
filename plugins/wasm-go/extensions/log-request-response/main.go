@@ -52,6 +52,8 @@ func init() {
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		// Set custom function for processing streaming response body
 		wrapper.ProcessStreamingResponseBody(onStreamingResponseBody),
+		// Set the maximum memory limit for WASM plugin rebuild to 200MB
+		wrapper.WithRebuildMaxMemBytes[PluginConfig](200*1024*1024),
 	)
 }
 
