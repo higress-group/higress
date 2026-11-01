@@ -37,6 +37,32 @@ import (
 	"github.com/alibaba/higress/v2/pkg/kube"
 )
 
+func TestStripMcpServerConfigHeader(t *testing.T) {
+	t.Run("empty route headers", func(t *testing.T) {
+		route := &networking.HTTPRoute{}
+		stripMcpServerConfigHeader(route)
+		assert.Equal(t, []string{mcpServerConfigHeader}, route.Headers.Request.Remove)
+	})
+
+	t.Run("preserve other header operations", func(t *testing.T) {
+		route := &networking.HTTPRoute{Headers: &networking.Headers{Request: &networking.Headers_HeaderOperations{
+			Remove: []string{"x-remove", "X-Higress-McpServer-Config"},
+			Add: []*networking.Headers_HeaderValue{
+				{Name: mcpServerConfigHeader, Value: "client-value"},
+				{Name: "x-add", Value: "keep"},
+			},
+			Set: []*networking.Headers_HeaderValue{
+				{Name: "X-Higress-McpServer-Config", Value: "client-value"},
+				{Name: "x-set", Value: "keep"},
+			},
+		}}}
+		stripMcpServerConfigHeader(route)
+		assert.Equal(t, []string{"x-remove", mcpServerConfigHeader}, route.Headers.Request.Remove)
+		assert.Equal(t, []*networking.Headers_HeaderValue{{Name: "x-add", Value: "keep"}}, route.Headers.Request.Add)
+		assert.Equal(t, []*networking.Headers_HeaderValue{{Name: "x-set", Value: "keep"}}, route.Headers.Request.Set)
+	})
+}
+
 func TestNormalizeWeightedCluster(t *testing.T) {
 	validate := func(route *common.WrapperHTTPRoute) int32 {
 		var total int32

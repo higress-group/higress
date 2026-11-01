@@ -1,6 +1,7 @@
 package mcp_session
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -478,6 +479,100 @@ func (h testHeaderMap) Get(key string) (string, bool) {
 
 func (h testHeaderMap) Set(key, value string) { h.values[key] = value }
 func (h testHeaderMap) Del(key string)        { delete(h.values, key) }
+
+func newTestRequestHeaders(path string) testHeaderMap {
+	return testHeaderMap{values: map[string]string{
+		":method":    http.MethodPost,
+		":scheme":    "http",
+		":authority": "example.com",
+		":path":      path,
+	}}
+}
+
+type testMCPConfigHandler struct {
+	encoded string
+	err     error
+}
+
+func (h *testMCPConfigHandler) HandleConfigRequest(*http.Request, []byte) bool {
+	return true
+}
+
+func (h *testMCPConfigHandler) GetEncodedConfig(string, string) (string, error) {
+	return h.encoded, h.err
+}
+
+func TestDecodeHeadersRemovesClientConfigOnEveryPath(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+	matchList := []common.MatchRule{{
+		MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"),
+		MatchRuleType: common.PrefixMatch,
+		MatchRulePath: "/mcp",
+		UpstreamType:  common.RestUpstream,
+	}}
+	tests := []struct {
+		name   string
+		path   string
+		config *config
+		status api.StatusType
+	}{
+		{name: "malformed URL", path: "/%", status: api.Continue},
+		{name: "unmatched path", path: "/other", config: &config{matchList: matchList}, status: api.Continue},
+		{name: "static REST", path: "/mcp", config: &config{matchList: matchList}, status: api.Continue},
+		{name: "static streamable", path: "/mcp", config: &config{matchList: []common.MatchRule{{MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"), MatchRuleType: common.PrefixMatch, MatchRulePath: "/mcp", UpstreamType: common.StreamableUpstream}}}, status: api.Continue},
+		{name: "static SSE", path: "/mcp", config: &config{matchList: []common.MatchRule{{MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"), MatchRuleType: common.PrefixMatch, MatchRulePath: "/mcp", UpstreamType: common.SSEUpstream}}}, status: api.Continue},
+		{name: "unknown upstream", path: "/mcp", config: &config{matchList: []common.MatchRule{{MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"), MatchRuleType: common.PrefixMatch, MatchRulePath: "/mcp"}}}, status: api.Continue},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			header := newTestRequestHeaders(tt.path)
+			header.Set(mcpServerConfigHeader, "client-value")
+			f := &filter{config: tt.config}
+			if status := f.DecodeHeaders(header, true); status != tt.status {
+				t.Fatalf("expected status %v, got %v", tt.status, status)
+			}
+			if value, ok := header.Get(mcpServerConfigHeader); ok {
+				t.Fatalf("expected client config header to be removed, got %q", value)
+			}
+		})
+	}
+}
+
+func TestDecodeHeadersOnlySetsConfigFromDynamicLookup(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+	tests := []struct {
+		name     string
+		handler  *testMCPConfigHandler
+		expected string
+	}{
+		{name: "valid config", handler: &testMCPConfigHandler{encoded: "trusted-config"}, expected: "trusted-config"},
+		{name: "lookup error", handler: &testMCPConfigHandler{err: errors.New("lookup failed")}},
+		{name: "empty config", handler: &testMCPConfigHandler{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			header := newTestRequestHeaders("/mcp/server/alice")
+			header.Set(mcpServerConfigHeader, "client-value")
+			f := &filter{
+				config: &config{
+					enableUserLevelServer: true,
+					matchList:             []common.MatchRule{{MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"), MatchRuleType: common.PrefixMatch, MatchRulePath: "/mcp", UpstreamType: common.RestUpstream}},
+				},
+				mcpConfigHandler: tt.handler,
+			}
+			if status := f.DecodeHeaders(header, true); status != api.Continue {
+				t.Fatalf("expected api.Continue, got %v", status)
+			}
+			value, ok := header.Get(mcpServerConfigHeader)
+			if tt.expected == "" && ok {
+				t.Fatalf("expected no config header, got %q", value)
+			}
+			if tt.expected != "" && (!ok || value != tt.expected) {
+				t.Fatalf("expected %q, got %q, present=%t", tt.expected, value, ok)
+			}
+		})
+	}
+}
 
 // TestRestUpstreamSkipsBodyBufferingWithoutRateLimit verifies that plain
 // REST/streamable MCP proxying does not buffer the request body, so that large

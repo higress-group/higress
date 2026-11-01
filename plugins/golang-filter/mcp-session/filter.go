@@ -17,6 +17,7 @@ import (
 
 const (
 	RedisNotEnabledResponseBody = "Redis is not enabled, SSE connection is not supported"
+	mcpServerConfigHeader       = "x-higress-mcpserver-config"
 )
 
 // The callbacks in the filter, like `DecodeHeaders`, can be implemented on demand.
@@ -40,14 +41,20 @@ type filter struct {
 	sseServer          *common.SSEServer // SSE server instance for this filter (per-request, not shared)
 
 	userLevelConfig     bool
-	mcpConfigHandler    *handler.MCPConfigHandler
+	mcpConfigHandler    mcpConfigHandler
 	ratelimit           bool
 	mcpRatelimitHandler *handler.MCPRatelimitHandler
+}
+
+type mcpConfigHandler interface {
+	HandleConfigRequest(req *http.Request, body []byte) bool
+	GetEncodedConfig(serverName, uid string) (string, error)
 }
 
 // Callbacks which are called in request path
 // The endStream is true if the request doesn't have body
 func (f *filter) DecodeHeaders(header api.RequestHeaderMap, endStream bool) api.StatusType {
+	header.Del(mcpServerConfigHeader)
 	requestUrl := common.NewRequestURL(header)
 	if requestUrl == nil {
 		return api.Continue
@@ -114,7 +121,7 @@ func (f *filter) processMcpRequestHeadersForRestUpstream(header api.RequestHeade
 				// Get encoded config
 				encodedConfig, _ := f.mcpConfigHandler.GetEncodedConfig(serverName, uid)
 				if encodedConfig != "" {
-					header.Set("x-higress-mcpserver-config", encodedConfig)
+					header.Set(mcpServerConfigHeader, encodedConfig)
 					api.LogDebugf("Set x-higress-mcpserver-config Header for %s:%s", serverName, uid)
 				}
 			}

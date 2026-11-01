@@ -552,6 +552,44 @@ func (m *IngressConfig) convertGateways(configs []common.WrapperConfig) []config
 	return out
 }
 
+const mcpServerConfigHeader = "x-higress-mcpserver-config"
+
+func stripMcpServerConfigHeader(route *networking.HTTPRoute) {
+	if route == nil {
+		return
+	}
+	if route.Headers == nil {
+		route.Headers = &networking.Headers{}
+	}
+	if route.Headers.Request == nil {
+		route.Headers.Request = &networking.Headers_HeaderOperations{}
+	}
+	requestHeaders := route.Headers.Request
+	remove := make([]string, 0, len(requestHeaders.Remove)+1)
+	for _, name := range requestHeaders.Remove {
+		if !strings.EqualFold(name, mcpServerConfigHeader) {
+			remove = append(remove, name)
+		}
+	}
+	requestHeaders.Remove = append(remove, mcpServerConfigHeader)
+
+	add := requestHeaders.Add[:0]
+	for _, header := range requestHeaders.Add {
+		if !strings.EqualFold(header.Name, mcpServerConfigHeader) {
+			add = append(add, header)
+		}
+	}
+	requestHeaders.Add = add
+
+	set := requestHeaders.Set[:0]
+	for _, header := range requestHeaders.Set {
+		if !strings.EqualFold(header.Name, mcpServerConfigHeader) {
+			set = append(set, header)
+		}
+	}
+	requestHeaders.Set = set
+}
+
 func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []config.Config {
 	convertOptions := common.ConvertOptions{
 		IngressRouteCache: common.NewIngressRouteCache(),
@@ -662,6 +700,7 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 		common.SortHTTPRoutes(routes)
 
 		for _, route := range routes {
+			stripMcpServerConfigHeader(route.HTTPRoute)
 			vs.Http = append(vs.Http, route.HTTPRoute)
 		}
 
@@ -686,6 +725,11 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 	if m.RegistryReconciler != nil {
 		allConfigsFromMcp := m.RegistryReconciler.GetAllConfigs(gvk.VirtualService)
 		for _, cfg := range allConfigsFromMcp {
+			if virtualService, ok := cfg.Spec.(*networking.VirtualService); ok {
+				for _, route := range virtualService.Http {
+					stripMcpServerConfigHeader(route)
+				}
+			}
 			out = append(out, *cfg)
 		}
 	}
