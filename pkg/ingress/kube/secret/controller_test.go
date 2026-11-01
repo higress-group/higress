@@ -59,7 +59,7 @@ func TestController(t *testing.T) {
 
 	// add event handler
 	ctrl.AddEventHandler(func(name util.ClusterNamespacedName) {
-		t.Logf("event recived, clusterId: %s, namespacedName: %s", name.ClusterId, name.NamespacedName.String())
+		t.Logf("event received, clusterId: %s, namespacedName: %s", name.ClusterId, name.NamespacedName.String())
 
 		retry.UntilSuccessOrFail(t, func() error {
 			secret, err := ctrl.Lister().Secrets(name.NamespacedName.Namespace).Get(name.NamespacedName.Name)
