@@ -1,0 +1,6 @@
+FROM ubuntu:focal@sha256:33a5cc25d22c45900796a1aca487ad7a7cb09f09ea00b779e3b2026b4fc2faba AS golang-base
+
+RUN apt update && apt install -y curl && \
+    curl -L "https://go.dev/dl/go1.23.8.linux-amd64.tar.gz" -o go-1.23.8.tar.gz && \
+    tar -C /usr/local -xzf go-1.23.8.tar.gz && \
+    rm go-1.23.8.tar.gz
