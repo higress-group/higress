@@ -1,0 +1,148 @@
+apiVersion: 2.0.0
+info:
+  # 插件类型
+  type: oss
+  # 功能分类
+  category: ai
+  # 插件名称
+  name: ai-header-session
+  # 插件标题
+  title: AI Header Session
+  x-title-i18n:
+    zh-CN: AI 会话头整形
+  # 插件简介
+  description: Extract session headers from various AI clients and deterministically normalize them into a unified session header.
+  x-description-i18n:
+    zh-CN: 提取各类 AI 客户端的会话标识 header，确定性地归一为统一的 session 头；匹配失败时打印全部请求头。
+  # 插件版本
+  version: 1.0.0
+  # 插件镜像名称
+  image: platform_wasm/ai-header-session
+  # 支持的最小网关版本
+  gatewayMinVersion: ""
+spec:
+  # 执行阶段
+  phase: default
+  # 执行优先级
+  priority: 500
+  configSchema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        session_header:
+          type: string
+          default: X-AI-Session-Id
+          title: 统一会话头名
+          description: The unified output session header name.
+          x-description-i18n:
+            zh-CN: 统一输出的会话 header 名。
+        hash_algorithm:
+          type: string
+          enum:
+            - fnv
+            - sha256
+          default: fnv
+          title: 摘要算法
+          description: Deterministic digest algorithm used to fold the canonical string into the session id.
+          x-description-i18n:
+            zh-CN: 把规范串折叠成会话 ID 的确定性摘要算法。
+        match_mode:
+          type: string
+          enum:
+            - clients
+            - header
+          default: clients
+          title: 识别方案
+          description: "Recognition scheme: clients (by client type) or header (level-by-level header extraction)."
+          x-description-i18n:
+            zh-CN: "识别方案：clients（按客户端类型）或 header（按 header 逐级提取）。"
+        clients:
+          type: array
+          title: 客户端规则（clients 方案）
+          description: Client recognition rules, used when match_mode is clients. Empty means built-in defaults.
+          x-description-i18n:
+            zh-CN: 客户端识别规则，match_mode 为 clients 时生效；留空使用内置默认规则。
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                title: 客户端名
+                description: Client name, also used as the session-id prefix.
+                x-description-i18n:
+                  zh-CN: 客户端名，同时作为会话 ID 前缀。
+              match_header:
+                type: string
+                default: user-agent
+                title: 识别 header
+                description: Header used to recognize the client.
+                x-description-i18n:
+                  zh-CN: 用于识别客户端的 header 名。
+              match_pattern:
+                type: string
+                title: 识别正则
+                description: Go RE2 regex matched against the match_header value.
+                x-description-i18n:
+                  zh-CN: 在 match_header 值上匹配的 Go RE2 正则。
+              session_headers:
+                type: array
+                title: 会话来源 header（有序）
+                description: Ordered list of header names used to derive the session id.
+                x-description-i18n:
+                  zh-CN: 用于派生会话 ID 的 header 名有序列表。
+                items:
+                  type: string
+            required:
+              - name
+              - match_pattern
+              - session_headers
+        header_rules:
+          type: array
+          title: 逐级提取规则（header 方案）
+          description: Level-by-level extraction rules, required when match_mode is header.
+          x-description-i18n:
+            zh-CN: 逐级提取规则列表，match_mode 为 header 时必填。
+          items:
+            type: object
+            properties:
+              header:
+                type: string
+                title: header 名
+                description: Header name to extract.
+                x-description-i18n:
+                  zh-CN: 要提取的 header 名。
+              pattern:
+                type: string
+                title: 提取正则
+                description: Go RE2 regex on the header value; the substring after the match is taken; empty means take the whole value.
+                x-description-i18n:
+                  zh-CN: 在 header 值上匹配的正则；命中后取匹配之后的子串；为空则取整个值。
+            required:
+              - header
+        log:
+          type: object
+          title: 日志配置
+          description: Logging configuration.
+          x-description-i18n:
+            zh-CN: 日志配置。
+          properties:
+            dump_unmatched:
+              type: boolean
+              default: true
+              title: 匹配失败时打印请求头
+              description: Dump all request headers when matching fails (unmatched or missing source headers).
+              x-description-i18n:
+                zh-CN: 匹配失败（未识别到客户端 / 逐级提取未命中 / 缺失源 header）时是否打印全部请求头。
+      example:
+        session_header: X-AI-Session-Id
+        hash_algorithm: fnv
+        match_mode: header
+        header_rules:
+          - header: x-session-id
+          - header: x-conversation-id
+          - header: x-request-id
+          - header: x-client-request-id
+          - header: openai-conversation-id
+          - header: anthropic-request-id
+        log:
+          dump_unmatched: true
