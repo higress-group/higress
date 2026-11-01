@@ -41,6 +41,7 @@ It supports three rate limiting modes:
 | show_limit_quota_header  | bool          | No                                        | false             | Whether to display `X-RateLimit-Limit` (total allowed requests) and `X-RateLimit-Remaining` (remaining allowed requests) in the response header. |  
 | rejected_code            | int           | No                                        | 429               | HTTP status code returned when a request is rate-limited.                  |  
 | rejected_msg             | string        | No                                        | Too many requests | Response body returned when a request is rate-limited.                      |  
+| failure_mode             | string        | No                                        | fail_open         | Policy for Redis call failures, timeouts, and invalid responses: `fail_open` allows the request; `fail_closed` returns a fixed 503. Use `fail_closed` when rate limiting must remain strict during Redis failures. |
 | redis                    | object        | Yes                                       | -                   | Configuration for Redis.                                                   |  
 
 ### Configuration Fields for `global_threshold`

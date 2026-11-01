@@ -140,25 +140,53 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 	}
 
 	err := cfg.RedisClient.Eval(MultiKeyFixedWindowScript, n, keys, args, func(response resp.Value) {
+		if err := response.Error(); err != nil {
+			log.Errorf("redis call error: %v", err)
+			handleRedisFailure(cfg, true)
+			return
+		}
+
+		if response.Type() != resp.Array {
+			log.Errorf("unexpected redis response type %s", response.Type())
+			handleRedisFailure(cfg, true)
+			return
+		}
 		arr := response.Array()
 		if len(arr) != n {
 			log.Errorf("redis response length mismatch: got %d, want %d", len(arr), n)
-			_ = proxywasm.ResumeHttpRequest()
+			handleRedisFailure(cfg, true)
 			return
 		}
 
 		// 使用 math.MaxFloat64 初始化，避免在 arr[0] 校验前预先读取
 		tightestIdx := 0
 		tightestRatio := math.MaxFloat64
+		tuples := make([][3]int, n)
 
 		for i, sub := range arr {
+			if sub.Type() != resp.Array {
+				log.Errorf("unexpected redis sub-array response type %s", sub.Type())
+				handleRedisFailure(cfg, true)
+				return
+			}
 			a := sub.Array()
 			if len(a) != 3 {
 				log.Errorf("redis sub-array length mismatch: got %d, want 3", len(a))
-				_ = proxywasm.ResumeHttpRequest()
+				handleRedisFailure(cfg, true)
 				return
 			}
-			threshold, current, ttl := a[0].Integer(), a[1].Integer(), a[2].Integer()
+			for _, value := range a {
+				if value.Type() != resp.Integer {
+					log.Errorf("unexpected redis counter response type %s", value.Type())
+					handleRedisFailure(cfg, true)
+					return
+				}
+			}
+			tuples[i] = [3]int{a[0].Integer(), a[1].Integer(), a[2].Integer()}
+		}
+
+		for i, tuple := range tuples {
+			threshold, current, ttl := tuple[0], tuple[1], tuple[2]
 			log.Debugf("cluster-key-rate-limit:   eval rule[%d] key=%s threshold=%d current=%d ttl=%ds",
 				i, matched[i].key, threshold, current, ttl)
 
@@ -181,8 +209,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 		}
 
 		// 未触发：写入 tightest 规则到 LimitContext，供 onHttpResponseHeaders 读取 X-RateLimit-* 头
-		tightSub := arr[tightestIdx].Array()
-		tightThreshold, tightCurrent, tightTtl := tightSub[0].Integer(), tightSub[1].Integer(), tightSub[2].Integer()
+		tightestTuple := tuples[tightestIdx]
+		tightThreshold, tightCurrent, tightTtl := tightestTuple[0], tightestTuple[1], tightestTuple[2]
 		log.Debugf("cluster-key-rate-limit: all %d rule(s) within threshold, tightest rule[%d] key=%s (count=%d remaining=%d reset=%ds)",
 			n, tightestIdx, matched[tightestIdx].key, tightThreshold, tightThreshold-tightCurrent, tightTtl)
 		ctx.SetContext(LimitContextKey, LimitContext{
@@ -195,8 +223,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ClusterKeyRateLimi
 	})
 
 	if err != nil {
-		log.Errorf("redis call failed: %v", err)
-		return types.ActionContinue
+		return handleRedisDispatchError(cfg, err)
 	}
 	return types.HeaderStopAllIterationAndWatermark
 }
@@ -350,6 +377,22 @@ func getDownStreamIp(rule config.LimitRuleItem) (net.IP, error) {
 		return nil, fmt.Errorf("invalid ip[%s]", ip)
 	}
 	return realIP, nil
+}
+
+func handleRedisDispatchError(cfg config.ClusterKeyRateLimitConfig, err error) types.Action {
+	log.Errorf("redis call failed: %v", err)
+	return handleRedisFailure(cfg, false)
+}
+
+func handleRedisFailure(cfg config.ClusterKeyRateLimitConfig, resumeOnOpen bool) types.Action {
+	if cfg.FailureMode == config.FailureModeFailClosed {
+		proxywasm.SendHttpResponse(503, nil, []byte("Service Unavailable"), -1)
+		return types.ActionPause
+	}
+	if resumeOnOpen {
+		_ = proxywasm.ResumeHttpRequest()
+	}
+	return types.ActionContinue
 }
 
 func rejected(config config.ClusterKeyRateLimitConfig, context LimitContext) {
