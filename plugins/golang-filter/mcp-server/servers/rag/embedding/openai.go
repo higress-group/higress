@@ -19,7 +19,7 @@ type openAIProviderInitializer struct {
 
 func (c *openAIProviderInitializer) validateConfig(config *config.EmbeddingConfig) error {
 	if config.APIKey == "" {
-		return errors.New("[openai embbeding] apiKey is required")
+		return errors.New("[openai embedding] apiKey is required")
 	}
 	if config.Model == "" {
 		config.Model = OPENAI_DEFAULT_MODEL_NAME
