@@ -137,7 +137,7 @@ func TestExtAuthHTTP2BodyDelivery(t *testing.T) {
 	})
 }
 
-func TestExtAuthHTTP2EncodedBodyCompatibility(t *testing.T) {
+func TestExtAuthHTTP2EncodedBodyDelivery(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(withRequestBodyConfig)
 		defer host.Reset()
@@ -149,12 +149,11 @@ func TestExtAuthHTTP2EncodedBodyCompatibility(t *testing.T) {
 			{"content-encoding", "gzip"},
 		}, [][]byte{payload})
 
-		// higress-group/wasm-go#59 (RequireRequestBody) and its ext-auth adoption
-		// will replace this deterministic suppression with one full-body callout.
 		require.Equal(t, types.ActionPause, result.headerAction)
-		require.Empty(t, host.GetHttpCalloutAttributes())
+		require.Equal(t, []types.Action{types.DataStopIterationAndBuffer}, result.bodyActions)
+		callouts := host.GetHttpCalloutAttributes()
+		require.Len(t, callouts, 1)
+		require.Equal(t, payload, callouts[0].Body)
 		require.Nil(t, host.GetLocalResponse())
-		require.Equal(t, []types.Action{types.ActionContinue}, result.bodyActions,
-			"the terminal DATA frame must release the request to the upstream")
 	})
 }

@@ -57,7 +57,7 @@ func TestExtAuthRawBodyDelivery(t *testing.T) {
 	})
 }
 
-func TestExtAuthBodyAcquisitionFailure(t *testing.T) {
+func TestExtAuthEmptyBodyDelivery(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(withRequestBodyConfig)
 		defer host.Reset()
@@ -68,6 +68,24 @@ func TestExtAuthBodyAcquisitionFailure(t *testing.T) {
 		})
 		require.Equal(t, types.HeaderStopIteration, action)
 		require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody(nil))
+		callouts := host.GetHttpCalloutAttributes()
+		require.Len(t, callouts, 1)
+		require.Empty(t, callouts[0].Body)
+		require.Nil(t, host.GetLocalResponse())
+	})
+}
+
+func TestExtAuthBodyAcquisitionFailure(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(withRequestBodyConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"}, {":path", "/users"}, {":method", "POST"},
+		})
+		require.Equal(t, types.HeaderStopIteration, action)
+		require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody(make([]byte, 1025)))
 		require.Empty(t, host.GetHttpCalloutAttributes())
 		response := host.GetLocalResponse()
 		require.NotNil(t, response)
