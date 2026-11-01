@@ -100,7 +100,7 @@ func (p ProfileConsole) SetFlags(install InstallMode) ([]string, error) {
 	return sets, nil
 }
 
-func (p ProfileConsole) Validate(install InstallMode) []error {
+func (p *ProfileConsole) Validate(install InstallMode) []error {
 	errs := make([]error, 0)
 	if install == InstallK8s || install == InstallLocalK8s {
 		if p.Replicas <= 0 {
@@ -149,7 +149,7 @@ func (p ProfileGateway) SetFlags(install InstallMode) ([]string, error) {
 	return sets, nil
 }
 
-func (p ProfileGateway) Validate(install InstallMode) []error {
+func (p *ProfileGateway) Validate(install InstallMode) []error {
 	errs := make([]error, 0)
 	if install == InstallK8s || install == InstallLocalK8s {
 		if p.Replicas <= 0 {
@@ -201,7 +201,7 @@ func (p ProfileController) SetFlags(install InstallMode) ([]string, error) {
 	return sets, nil
 }
 
-func (p ProfileController) Validate(install InstallMode) []error {
+func (p *ProfileController) Validate(install InstallMode) []error {
 	errs := make([]error, 0)
 	if install == InstallK8s || install == InstallLocalK8s {
 		if p.Replicas <= 0 {
@@ -461,7 +461,7 @@ type Limits struct {
 	Memory string `json:"memory,omitempty"`
 }
 
-func (r Resource) Validate() []error {
+func (r *Resource) Validate() []error {
 	errs := make([]error, 0)
 
 	r.Requests.CPU = strings.ReplaceAll(r.Requests.CPU, " ", "")
