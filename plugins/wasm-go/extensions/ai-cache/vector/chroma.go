@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
@@ -47,6 +48,10 @@ func (d *ChromaProvider) QueryEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(results []QueryResult, ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 	// 最少需要填写的参数为 collection_id, embeddings 和 ids
 	// 下面是一个例子
 	// {
@@ -64,9 +69,10 @@ func (d *ChromaProvider) QueryEmbedding(
 	// }
 
 	requestBody, err := json.Marshal(chromaQueryRequest{
+		Where:           map[string]string{TenantField: consumer},
 		QueryEmbeddings: []chromaEmbedding{emb},
 		Limit:           d.config.topK,
-		Include:         []string{"distances", "documents"},
+		Include:         []string{"distances", "documents", "metadatas"},
 	})
 
 	if err != nil {
@@ -99,6 +105,10 @@ func (d *ChromaProvider) UploadAnswerAndEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 	// 最少需要填写的参数为 collection_id, embeddings 和 ids
 	// 下面是一个例子
 	// {
@@ -126,8 +136,9 @@ func (d *ChromaProvider) UploadAnswerAndEmbedding(
 	// }
 	requestBody, err := json.Marshal(chromaInsertRequest{
 		Embeddings: []chromaEmbedding{queryEmb},
-		IDs:        []string{queryString}, // queryString 指的是用户查询的问题
+		IDs:        []string{uuid.New().String()},
 		Documents:  []string{queryAnswer}, // queryAnswer 指的是用户查询的问题的答案
+		Metadatas:  []chromaMetadataMap{{TenantField: consumer, "question": queryString}},
 	})
 
 	if err != nil {
@@ -168,14 +179,14 @@ type chromaQueryRequest struct {
 }
 
 type chromaQueryResponse struct {
-	Ids        [][]string          `json:"ids"`                  // 第一维是 batch query，第二维是查询到的多个 ids
-	Distances  [][]float64         `json:"distances,omitempty"`  // 与 Ids 一一对应
-	Metadatas  []chromaMetadataMap `json:"metadatas,omitempty"`  // 可选参数
-	Embeddings []chromaEmbedding   `json:"embeddings,omitempty"` // 可选参数
-	Documents  [][]string          `json:"documents,omitempty"`  // 与 Ids 一一对应
-	Uris       []string            `json:"uris,omitempty"`       // 可选参数
-	Data       []interface{}       `json:"data,omitempty"`       // 可选参数
-	Included   []string            `json:"included"`
+	Ids        [][]string            `json:"ids"`                  // 第一维是 batch query，第二维是查询到的多个 ids
+	Distances  [][]float64           `json:"distances,omitempty"`  // 与 Ids 一一对应
+	Metadatas  [][]chromaMetadataMap `json:"metadatas,omitempty"`  // 可选参数
+	Embeddings []chromaEmbedding     `json:"embeddings,omitempty"` // 可选参数
+	Documents  [][]string            `json:"documents,omitempty"`  // 与 Ids 一一对应
+	Uris       []string              `json:"uris,omitempty"`       // 可选参数
+	Data       []interface{}         `json:"data,omitempty"`       // 可选参数
+	Included   []string              `json:"included"`
 }
 
 func (d *ChromaProvider) parseQueryResponse(responseBody []byte, log log.Log) ([]QueryResult, error) {
@@ -191,10 +202,19 @@ func (d *ChromaProvider) parseQueryResponse(responseBody []byte, log log.Log) ([
 	}
 	results := make([]QueryResult, 0, len(queryResp.Ids[0]))
 	for i := range queryResp.Ids[0] {
+		consumer := ""
+		text := queryResp.Ids[0][i]
+		if len(queryResp.Metadatas) > 0 && i < len(queryResp.Metadatas[0]) {
+			consumer = queryResp.Metadatas[0][i][TenantField]
+			if question := queryResp.Metadatas[0][i]["question"]; question != "" {
+				text = question
+			}
+		}
 		result := QueryResult{
-			Text:   queryResp.Ids[0][i],
-			Score:  queryResp.Distances[0][i],
-			Answer: queryResp.Documents[0][i],
+			Text:     text,
+			Score:    queryResp.Distances[0][i],
+			Answer:   queryResp.Documents[0][i],
+			Consumer: consumer,
 		}
 		results = append(results, result)
 	}

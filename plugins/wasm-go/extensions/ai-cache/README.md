@@ -22,6 +22,15 @@ LLM 结果缓存插件，默认配置方式可以直接用于 openai 协议的�
 插件执行阶段：`认证阶段`
 插件执行优先级：`10`
 
+## Consumer 身份与升级迁移
+
+- 必须先执行 consumer authentication，再执行 ai-cache。认证插件必须删除或替换客户端提供的 `x-mse-consumer`，ai-cache 只使用认证后的 consumer name；不使用 API Key 派生缓存身份，也不新增 tenant 请求头。未获得认证 consumer 的请求会跳过所有缓存处理：不做精确缓存读写，不请求 embedding，不查询或上传 vector，也不做语义命中后的 Redis 回查，请求继续转发到上游。
+- 精确缓存和语义命中后的 Redis 回查统一使用 `配置前缀 + "v2:" + SHA256(consumer + NUL + 原始问题键)` 的小写十六进制格式，配置前缀只添加一次。升级后不会读取旧版未版本化 key。
+- 七种 vector provider（dashvector、chroma、elasticsearch、weaviate、pinecone、qdrant、milvus）都会在上传记录中写入 `consumer` 元数据，并在查询时按同一值过滤。直接返回 `Answer` 和使用 `Text` 回查 Redis 的路径都要求结果带有匹配的 consumer。请确保现有 collection/index schema 允许该字符串字段并支持过滤。
+- key 格式变更会使所有旧 Redis 条目不再被使用，缓存需要冷启动；不同 consumer 之间原有的命中会消失，整体命中率会发生变化。没有匹配 consumer 元数据的旧 vector 记录同样不可用。旧数据只能离线分批清理，请求路径不会执行删除。
+- 滚动升级期间，旧节点仍可能读取旧数据。切换前应排空旧节点并清理旧 namespace，或先下线旧版本，再完成切换。
+- `enableSemanticCache` 始终默认为 `false`，即使配置了 vector provider 也不会自动开启。现有语义缓存用户必须显式设置 `enableSemanticCache: true`、`vector.threshold` 和 `vector.thresholdRelation`。threshold 没有数值默认值，显式配置 `0` 时保留为 `0`。不同 provider 使用不可直接比较的距离或相似度刻度及方向，因此 thresholdRelation 也必须显式选择。
+
 ## 配置说明
 配置分为 3 个部分：向量数据库（vector）；文本向量化接口（embedding）；缓存数据库（cache），同时也提供了细粒度的 LLM 请求/响应提取参数配置等。
 
@@ -37,12 +46,12 @@ LLM 结果缓存插件，默认配置方式可以直接用于 openai 协议的�
 | embedding | object | optional | - | 文本向量化服务配置，详见下文文本向量化服务配置 |
 | cache | object | optional | - | 缓存服务配置，详见下文缓存服务配置 |
 | cacheKeyStrategy | string | optional | "lastQuestion" | 决定如何根据历史问题生成缓存键的策略。可选值: "lastQuestion" (使用最后一个问题), "allQuestions" (拼接所有问题) 或 "disabled" (禁用缓存) |
-| enableSemanticCache | bool | optional | false | 是否启用语义化缓存。若不启用，则使用字符串匹配的方式来查找缓存，此时需要配置cache服务。当配置了 vector provider 时，默认自动开启 |
+| enableSemanticCache | bool | optional | false | 是否启用语义化缓存。即使配置了 vector provider 也不会自动开启；启用时必须同时显式配置 threshold 和 thresholdRelation |
 
 根据是否需要启用语义缓存，可以只配置组件的组合为:
 1. `cache`: 仅启用字符串匹配缓存
-2. `vector (+ embedding)`: 启用语义化缓存, 其中若 `vector` 未提供字符串表征服务，则需要自行配置 `embedding` 服务
-3. `vector (+ embedding) + cache`: 启用语义化缓存并用缓存服务存储LLM响应以加速
+2. `vector (+ embedding)`: 显式启用语义化缓存后使用，其中若 `vector` 未提供字符串表征服务，则需要自行配置 `embedding` 服务
+3. `vector (+ embedding) + cache`: 显式启用语义化缓存后，用语义检索和缓存服务存储LLM响应以加速
 
 注意若不配置相关组件，则可以忽略相应组件的`required`字段。
 
@@ -58,8 +67,8 @@ LLM 结果缓存插件，默认配置方式可以直接用于 openai 协议的�
 | vector.topK | int | optional | 1 | 返回TopK结果 |
 | vector.timeout | uint32 | optional | 10000 | 请求向量存储服务的超时时间，单位为毫秒。默认值是10000，即10秒 |
 | vector.collectionID | string | optional | - | 向量存储服务 Collection ID |
-| vector.threshold | float64 | optional | 1000 | 向量相似度度量阈值 |
-| vector.thresholdRelation | string | optional | "lt" | 相似度度量比较方式。相似度度量方式有 `Cosine`, `DotProduct`, `Euclidean` 等，前两者值越大相似度越高，后者值越小相似度越高。对于 `Cosine` 和 `DotProduct` 选择 `gt`，对于 `Euclidean` 则选择 `lt`。所有可选值包括 `lt` (less than，小于)、`lte` (less than or equal to，小等于)、`gt` (greater than，大于)、`gte` (greater than or equal to，大等于) |
+| vector.threshold | float64 | 语义缓存启用时 required | - | 向量相似度或距离阈值，无数值默认值；显式配置 0 时保留为 0 |
+| vector.thresholdRelation | string | 语义缓存启用时 required | - | 相似度或距离的比较方式，无默认方向。相似度度量方式有 `Cosine`, `DotProduct`, `Euclidean` 等，前两者值越大相似度越高，后者值越小相似度越高。对于 `Cosine` 和 `DotProduct` 选择 `gt`，对于 `Euclidean` 则选择 `lt`。所有可选值包括 `lt`、`lte`、`gt`、`gte` |
 | vector.esUsername | string | optional | - | ElasticSearch 用户名，仅用于 elasticsearch 类型 |
 | vector.esPassword | string | optional | - | ElasticSearch 密码，仅用于 elasticsearch 类型 |
 
