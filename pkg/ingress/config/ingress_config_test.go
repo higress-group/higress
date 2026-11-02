@@ -47,20 +47,65 @@ func TestStripMcpServerConfigHeader(t *testing.T) {
 	t.Run("preserve other header operations", func(t *testing.T) {
 		route := &networking.HTTPRoute{Headers: &networking.Headers{Request: &networking.Headers_HeaderOperations{
 			Remove: []string{"x-remove", "X-Higress-McpServer-Config"},
-			Add: []*networking.Headers_HeaderValue{
-				{Name: mcpServerConfigHeader, Value: "client-value"},
-				{Name: "x-add", Value: "keep"},
+			Add: map[string]string{
+				mcpServerConfigHeader: "client-value",
+				"x-add":               "keep",
 			},
-			Set: []*networking.Headers_HeaderValue{
-				{Name: "X-Higress-McpServer-Config", Value: "client-value"},
-				{Name: "x-set", Value: "keep"},
+			Set: map[string]string{
+				"X-Higress-McpServer-Config": "client-value",
+				"x-set":                      "keep",
 			},
 		}}}
 		stripMcpServerConfigHeader(route)
 		assert.Equal(t, []string{"x-remove", mcpServerConfigHeader}, route.Headers.Request.Remove)
-		assert.Equal(t, []*networking.Headers_HeaderValue{{Name: "x-add", Value: "keep"}}, route.Headers.Request.Add)
-		assert.Equal(t, []*networking.Headers_HeaderValue{{Name: "x-set", Value: "keep"}}, route.Headers.Request.Set)
+		assert.Equal(t, map[string]string{"x-add": "keep"}, route.Headers.Request.Add)
+		assert.Equal(t, map[string]string{"x-set": "keep"}, route.Headers.Request.Set)
 	})
+}
+
+func TestStripMcpServerConfigHeaderFromAllRouteSources(t *testing.T) {
+	routeSources := []string{
+		"Ingress",
+		"Nacos McpServer CRD",
+		"Gateway API HTTPRoute",
+		"Gateway API GRPCRoute",
+		"console and internal",
+	}
+	for _, source := range routeSources {
+		t.Run(source, func(t *testing.T) {
+			configs := []config.Config{{
+				Meta: config.Meta{GroupVersionKind: gvk.VirtualService},
+				Spec: &networking.VirtualService{Http: []*networking.HTTPRoute{{
+					Headers: &networking.Headers{Request: &networking.Headers_HeaderOperations{
+						Set: map[string]string{mcpServerConfigHeader: "client-value"},
+					}},
+				}}},
+			}}
+
+			stripMcpServerConfigHeaderFromConfigs(configs)
+
+			route := configs[0].Spec.(*networking.VirtualService).Http[0]
+			assert.Empty(t, route.Headers.Request.Set)
+			assert.Equal(t, []string{mcpServerConfigHeader}, route.Headers.Request.Remove)
+		})
+	}
+}
+
+func TestGatewayAPIRouteRejectsStandalonePluginClientConfig(t *testing.T) {
+	configs := []config.Config{{
+		Meta: config.Meta{GroupVersionKind: gvk.VirtualService, Name: "standalone-mcp-server"},
+		Spec: &networking.VirtualService{Http: []*networking.HTTPRoute{{
+			Headers: &networking.Headers{Request: &networking.Headers_HeaderOperations{
+				Add: map[string]string{mcpServerConfigHeader: "eyJ0b29scyI6W119"},
+			}},
+		}}},
+	}}
+
+	stripMcpServerConfigHeaderFromConfigs(configs)
+
+	requestHeaders := configs[0].Spec.(*networking.VirtualService).Http[0].Headers.Request
+	assert.Empty(t, requestHeaders.Add)
+	assert.Equal(t, []string{mcpServerConfigHeader}, requestHeaders.Remove)
 }
 
 func TestNormalizeWeightedCluster(t *testing.T) {

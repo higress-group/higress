@@ -1,5 +1,9 @@
 # mcp-server
 
+## Upgrade note
+
+The gateway now strips client-supplied `x-higress-mcpserver-config` on all routes. Trusted internal hops must use a different header name. No functional replacement is offered for non-MCP consumers of this header.
+
 [中文](./README.md)
 
 ## Feature Description

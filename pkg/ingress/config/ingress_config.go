@@ -323,6 +323,9 @@ func (m *IngressConfig) List(typ config.GroupVersionKind, namespace string) []co
 		configs = append(configs, configsFromGateway...)
 	}
 
+	if typ == gvk.VirtualService {
+		stripMcpServerConfigHeaderFromConfigs(configs)
+	}
 	return configs
 }
 
@@ -573,21 +576,29 @@ func stripMcpServerConfigHeader(route *networking.HTTPRoute) {
 	}
 	requestHeaders.Remove = append(remove, mcpServerConfigHeader)
 
-	add := requestHeaders.Add[:0]
-	for _, header := range requestHeaders.Add {
-		if !strings.EqualFold(header.Name, mcpServerConfigHeader) {
-			add = append(add, header)
+	for name := range requestHeaders.Add {
+		if strings.EqualFold(name, mcpServerConfigHeader) {
+			delete(requestHeaders.Add, name)
 		}
 	}
-	requestHeaders.Add = add
 
-	set := requestHeaders.Set[:0]
-	for _, header := range requestHeaders.Set {
-		if !strings.EqualFold(header.Name, mcpServerConfigHeader) {
-			set = append(set, header)
+	for name := range requestHeaders.Set {
+		if strings.EqualFold(name, mcpServerConfigHeader) {
+			delete(requestHeaders.Set, name)
 		}
 	}
-	requestHeaders.Set = set
+}
+
+func stripMcpServerConfigHeaderFromConfigs(configs []config.Config) {
+	for i := range configs {
+		virtualService, ok := configs[i].Spec.(*networking.VirtualService)
+		if !ok {
+			continue
+		}
+		for _, route := range virtualService.Http {
+			stripMcpServerConfigHeader(route)
+		}
+	}
 }
 
 func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []config.Config {
