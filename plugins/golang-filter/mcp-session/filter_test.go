@@ -563,12 +563,15 @@ func TestDecodeHeadersOnlySetsConfigFromDynamicLookup(t *testing.T) {
 			if status := f.DecodeHeaders(header, true); status != api.Continue {
 				t.Fatalf("expected api.Continue, got %v", status)
 			}
-			value, ok := header.Get(mcpServerConfigHeader)
+			value, ok := header.Get(internalMcpServerConfigHeader)
 			if tt.expected == "" && ok {
 				t.Fatalf("expected no config header, got %q", value)
 			}
 			if tt.expected != "" && (!ok || value != tt.expected) {
 				t.Fatalf("expected %q, got %q, present=%t", tt.expected, value, ok)
+			}
+			if value, ok := header.Get(mcpServerConfigHeader); ok {
+				t.Fatalf("expected public config header to remain absent, got %q", value)
 			}
 		})
 	}

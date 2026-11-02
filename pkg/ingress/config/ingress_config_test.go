@@ -19,6 +19,7 @@ import (
 
 	httppb "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pkg/cluster"
@@ -29,12 +30,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	ingress "k8s.io/api/networking/v1"
 	ingressv1beta1 "k8s.io/api/networking/v1beta1"
+	listersv1 "k8s.io/client-go/listers/core/v1"
 
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/annotations"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/common"
 	controllerv1beta1 "github.com/alibaba/higress/v2/pkg/ingress/kube/ingress"
 	controllerv1 "github.com/alibaba/higress/v2/pkg/ingress/kube/ingressv1"
 	"github.com/alibaba/higress/v2/pkg/kube"
+	"github.com/alibaba/higress/v2/registry/reconcile"
 )
 
 func TestStripMcpServerConfigHeader(t *testing.T) {
@@ -63,36 +66,46 @@ func TestStripMcpServerConfigHeader(t *testing.T) {
 	})
 }
 
-func TestStripMcpServerConfigHeaderFromAllRouteSources(t *testing.T) {
-	routeSources := []string{
-		"Ingress",
-		"Nacos McpServer CRD",
-		"Gateway API HTTPRoute",
-		"Gateway API GRPCRoute",
-		"console and internal",
-	}
-	for _, source := range routeSources {
-		t.Run(source, func(t *testing.T) {
-			configs := []config.Config{{
-				Meta: config.Meta{GroupVersionKind: gvk.VirtualService},
-				Spec: &networking.VirtualService{Http: []*networking.HTTPRoute{{
-					Headers: &networking.Headers{Request: &networking.Headers_HeaderOperations{
-						Set: map[string]string{mcpServerConfigHeader: "client-value"},
-					}},
-				}}},
-			}}
-
-			stripMcpServerConfigHeaderFromConfigs(configs)
-
-			route := configs[0].Spec.(*networking.VirtualService).Http[0]
-			assert.Empty(t, route.Headers.Request.Set)
-			assert.Equal(t, []string{mcpServerConfigHeader}, route.Headers.Request.Remove)
-		})
-	}
+type headerStripIngressController struct {
+	common.IngressController
 }
 
-func TestGatewayAPIRouteRejectsStandalonePluginClientConfig(t *testing.T) {
-	configs := []config.Config{{
+func (c *headerStripIngressController) List() []config.Config {
+	return []config.Config{{Meta: config.Meta{
+		GroupVersionKind: gvk.Ingress,
+		Name:             "header-strip",
+		Namespace:        "default",
+		Annotations:      map[string]string{common.ClusterIdAnnotation: "test"},
+	}}}
+}
+
+func (c *headerStripIngressController) ServiceLister() listersv1.ServiceLister { return nil }
+func (c *headerStripIngressController) SecretLister() listersv1.SecretLister   { return nil }
+
+func (c *headerStripIngressController) ConvertHTTPRoute(options *common.ConvertOptions, wrapper *common.WrapperConfig) error {
+	const host = "example.com"
+	options.VirtualServices[host] = common.NewWrapperVirtualService(host, wrapper)
+	options.HTTPRoutes[host] = []*common.WrapperHTTPRoute{{
+		HTTPRoute: &networking.HTTPRoute{
+			Route: []*networking.HTTPRouteDestination{{Weight: 100}},
+			Headers: &networking.Headers{Request: &networking.Headers_HeaderOperations{
+				Add: map[string]string{mcpServerConfigHeader: "eyJ0b29scyI6W119"},
+			}},
+		},
+		WrapperConfig: wrapper,
+	}}
+	return nil
+}
+
+type headerStripGatewayController struct {
+	common.GatewayController
+}
+
+func (c *headerStripGatewayController) List(typ config.GroupVersionKind, namespace string) []config.Config {
+	if typ != gvk.VirtualService {
+		return nil
+	}
+	return []config.Config{{
 		Meta: config.Meta{GroupVersionKind: gvk.VirtualService, Name: "standalone-mcp-server"},
 		Spec: &networking.VirtualService{Http: []*networking.HTTPRoute{{
 			Headers: &networking.Headers{Request: &networking.Headers_HeaderOperations{
@@ -100,12 +113,45 @@ func TestGatewayAPIRouteRejectsStandalonePluginClientConfig(t *testing.T) {
 			}},
 		}}},
 	}}
+}
 
-	stripMcpServerConfigHeaderFromConfigs(configs)
+func TestListStripsMcpServerConfigHeaderFromGeneratedRoutes(t *testing.T) {
+	for _, source := range []string{
+		"Ingress",
+		"Nacos McpServer CRD",
+		"Gateway API HTTPRoute",
+		"Gateway API GRPCRoute",
+		"console and internal",
+	} {
+		t.Run(source, func(t *testing.T) {
+			fake := kube.NewFakeClient()
+			options := common.Options{ClusterId: "test", RawClusterId: "test__", GatewayHttpPort: 80, GatewayHttpsPort: 443}
+			m := NewIngressConfig(fake, nil, "higress-system", options)
+			switch source {
+			case "Ingress", "console and internal":
+				m.remoteIngressControllers = map[cluster.ID]common.IngressController{"test": &headerStripIngressController{}}
+			case "Gateway API HTTPRoute", "Gateway API GRPCRoute":
+				m.remoteGatewayControllers = map[cluster.ID]common.GatewayController{"test": &headerStripGatewayController{}}
+			case "Nacos McpServer CRD":
+				m.RegistryReconciler = reconcile.NewReconciler(nil, fake, "higress-system", "test")
+				m.RegistryReconciler.UpdateConfigCache(gvk.VirtualService, "mcp", &config.Config{
+					Meta: config.Meta{GroupVersionKind: gvk.VirtualService, Name: "mcp"},
+					Spec: &networking.VirtualService{Http: []*networking.HTTPRoute{{
+						Headers: &networking.Headers{Request: &networking.Headers_HeaderOperations{
+							Add: map[string]string{mcpServerConfigHeader: "eyJ0b29scyI6W119"},
+						}},
+					}}},
+				}, false)
+			}
 
-	requestHeaders := configs[0].Spec.(*networking.VirtualService).Http[0].Headers.Request
-	assert.Empty(t, requestHeaders.Add)
-	assert.Equal(t, []string{mcpServerConfigHeader}, requestHeaders.Remove)
+			configs := m.List(gvk.VirtualService, "")
+
+			require.Len(t, configs, 1)
+			route := configs[0].Spec.(*networking.VirtualService).Http[0]
+			assert.Empty(t, route.Headers.Request.Add)
+			assert.Contains(t, route.Headers.Request.Remove, mcpServerConfigHeader)
+		})
+	}
 }
 
 func TestNormalizeWeightedCluster(t *testing.T) {

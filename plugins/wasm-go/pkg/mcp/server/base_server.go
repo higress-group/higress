@@ -83,10 +83,12 @@ func (s *BaseMCPServer) SetConfig(config []byte) {
 // It first tries to get the config from the request header, then falls back to the stored config
 func (s *BaseMCPServer) GetConfig(v any) {
 	var config []byte
-	// Route-level removal strips client values before filters run, leaving the
-	// session filter as the only writer. A client value reaching this point on
-	// an uncovered route class indicates a controller bug.
-	serverConfigBase64, _ := proxywasm.GetHttpRequestHeader("x-higress-mcpserver-config")
+	// Route operations remove the public name, and Envoy's HTTP connection manager
+	// sanitizes x-envoy-* names from downstream clients. Only the session filter
+	// writes this internal name; without it, standalone plugins use stored config,
+	// so client headers cannot influence config on any route source.
+	serverConfigBase64, _ := proxywasm.GetHttpRequestHeader("x-envoy-internal-mcpserver-config")
+	proxywasm.RemoveHttpRequestHeader("x-envoy-internal-mcpserver-config")
 	proxywasm.RemoveHttpRequestHeader("x-higress-mcpserver-config")
 	if serverConfigBase64 != "" {
 		serverConfig, err := base64.StdEncoding.DecodeString(serverConfigBase64)

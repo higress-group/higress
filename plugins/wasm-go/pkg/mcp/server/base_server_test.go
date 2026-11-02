@@ -15,12 +15,25 @@
 package server
 
 import (
+	"encoding/base64"
 	"reflect"
 	"testing"
+
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/stretchr/testify/require"
 )
 
 type snapshotTestTool struct {
 	description string
+}
+
+type baseServerTestPluginContext struct {
+	types.DefaultPluginContext
+}
+
+func (*baseServerTestPluginContext) NewHttpContext(uint32) types.HttpContext {
+	return &types.DefaultHttpContext{}
 }
 
 func (t *snapshotTestTool) Create(_ []byte) Tool               { return t }
@@ -86,5 +99,53 @@ func TestSnapshotToolsIsDeterministicAndRequestScoped(t *testing.T) {
 	}
 	if got, want := names(second), []string{"alpha", "later", "middle", "zeta"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("second order = %v, want %v", got, want)
+	}
+}
+
+func TestBaseMCPServerGetConfigUsesOnlyInternalHeader(t *testing.T) {
+	tests := []struct {
+		name     string
+		headers  [][2]string
+		expected string
+	}{
+		{
+			name: "public header uses stored config",
+			headers: [][2]string{{
+				"x-higress-mcpserver-config", base64.StdEncoding.EncodeToString([]byte(`{"source":"client"}`)),
+			}},
+			expected: "stored",
+		},
+		{
+			name: "internal header is honored",
+			headers: [][2]string{{
+				"x-envoy-internal-mcpserver-config", base64.StdEncoding.EncodeToString([]byte(`{"source":"session"}`)),
+			}},
+			expected: "session",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opt := proxytest.NewEmulatorOption().WithVMContext(&types.DefaultVMContext{}).WithPluginContext(
+				func(uint32) types.PluginContext { return &baseServerTestPluginContext{} },
+			)
+			host, reset := proxytest.NewHostEmulator(opt)
+			defer reset()
+			require.Equal(t, types.OnPluginStartStatusOK, host.StartPlugin())
+			contextID := host.InitializeHttpContext()
+			host.CallOnRequestHeaders(contextID, test.headers, true)
+
+			server := NewBaseMCPServer()
+			server.SetConfig([]byte(`{"source":"stored"}`))
+			var config struct {
+				Source string `json:"source"`
+			}
+			server.GetConfig(&config)
+
+			require.Equal(t, test.expected, config.Source)
+			for _, header := range host.GetCurrentRequestHeaders(contextID) {
+				require.NotEqual(t, "x-higress-mcpserver-config", header[0])
+				require.NotEqual(t, "x-envoy-internal-mcpserver-config", header[0])
+			}
+		})
 	}
 }

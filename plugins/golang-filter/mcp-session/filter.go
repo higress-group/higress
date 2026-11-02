@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	RedisNotEnabledResponseBody = "Redis is not enabled, SSE connection is not supported"
-	mcpServerConfigHeader       = "x-higress-mcpserver-config"
+	RedisNotEnabledResponseBody   = "Redis is not enabled, SSE connection is not supported"
+	mcpServerConfigHeader         = "x-higress-mcpserver-config"
+	internalMcpServerConfigHeader = "x-envoy-internal-mcpserver-config"
 )
 
 // The callbacks in the filter, like `DecodeHeaders`, can be implemented on demand.
@@ -121,8 +122,8 @@ func (f *filter) processMcpRequestHeadersForRestUpstream(header api.RequestHeade
 				// Get encoded config
 				encodedConfig, _ := f.mcpConfigHandler.GetEncodedConfig(serverName, uid)
 				if encodedConfig != "" {
-					header.Set(mcpServerConfigHeader, encodedConfig)
-					api.LogDebugf("Set x-higress-mcpserver-config Header for %s:%s", serverName, uid)
+					header.Set(internalMcpServerConfigHeader, encodedConfig)
+					api.LogDebugf("Set internal MCP server config header for %s:%s", serverName, uid)
 				}
 			}
 			f.ratelimit = true

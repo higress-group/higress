@@ -2,7 +2,7 @@
 
 ## Upgrade note
 
-The gateway now strips client-supplied `x-higress-mcpserver-config` on all routes. Trusted internal hops must use a different header name. No functional replacement is offered for non-MCP consumers of this header.
+The gateway no longer honors client-supplied config headers on any route source, including native Istio VirtualServices. Config injection happens only through the trusted session path. Deployments that relied on setting the header directly must use the console/McpServer configuration instead; there is no header-based replacement.
 
 [中文](./README.md)
 
