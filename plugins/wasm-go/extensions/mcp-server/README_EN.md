@@ -2,7 +2,7 @@
 
 ## Upgrade note
 
-The gateway no longer honors client-supplied config headers on any route source, including native Istio VirtualServices. Config injection happens only through the trusted session path. Deployments that relied on setting the header directly must use the console/McpServer configuration instead; there is no header-based replacement.
+In the upcoming plugin version, request-header MCP server configuration injection is fully removed: no header name, documented or undocumented, is honored. The per-user MCP server configuration feature is being removed from the gateway upstream. Configure MCP servers exclusively through stored configuration in the console or McpServer resources.
 
 [中文](./README.md)
 

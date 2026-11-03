@@ -102,25 +102,38 @@ func TestSnapshotToolsIsDeterministicAndRequestScoped(t *testing.T) {
 	}
 }
 
-func TestBaseMCPServerGetConfigUsesOnlyInternalHeader(t *testing.T) {
+func TestBaseMCPServerGetConfigUsesStoredConfigAndStripsRequestHeaders(t *testing.T) {
 	tests := []struct {
-		name     string
-		headers  [][2]string
-		expected string
+		name    string
+		headers [][2]string
 	}{
 		{
-			name: "public header uses stored config",
-			headers: [][2]string{{
-				"x-higress-mcpserver-config", base64.StdEncoding.EncodeToString([]byte(`{"source":"client"}`)),
-			}},
-			expected: "stored",
+			name: "public header",
+			headers: [][2]string{
+				{"x-higress-mcpserver-config", base64.StdEncoding.EncodeToString([]byte(`{"source":"public"}`))},
+				{"x-forwarded-header", "preserve"},
+			},
 		},
 		{
-			name: "internal header is honored",
-			headers: [][2]string{{
-				"x-envoy-internal-mcpserver-config", base64.StdEncoding.EncodeToString([]byte(`{"source":"session"}`)),
-			}},
-			expected: "session",
+			name: "internal header",
+			headers: [][2]string{
+				{"x-envoy-internal-mcpserver-config", base64.StdEncoding.EncodeToString([]byte(`{"source":"internal"}`))},
+				{"x-forwarded-header", "preserve"},
+			},
+		},
+		{
+			name: "both headers",
+			headers: [][2]string{
+				{"x-higress-mcpserver-config", base64.StdEncoding.EncodeToString([]byte(`{"source":"public"}`))},
+				{"x-envoy-internal-mcpserver-config", base64.StdEncoding.EncodeToString([]byte(`{"source":"internal"}`))},
+				{"x-forwarded-header", "preserve"},
+			},
+		},
+		{
+			name: "no config headers",
+			headers: [][2]string{
+				{"x-forwarded-header", "preserve"},
+			},
 		},
 	}
 	for _, test := range tests {
@@ -141,8 +154,10 @@ func TestBaseMCPServerGetConfigUsesOnlyInternalHeader(t *testing.T) {
 			}
 			server.GetConfig(&config)
 
-			require.Equal(t, test.expected, config.Source)
-			for _, header := range host.GetCurrentRequestHeaders(contextID) {
+			require.Equal(t, "stored", config.Source)
+			forwardedHeaders := host.GetCurrentRequestHeaders(contextID)
+			require.Contains(t, forwardedHeaders, [2]string{"x-forwarded-header", "preserve"})
+			for _, header := range forwardedHeaders {
 				require.NotEqual(t, "x-higress-mcpserver-config", header[0])
 				require.NotEqual(t, "x-envoy-internal-mcpserver-config", header[0])
 			}
