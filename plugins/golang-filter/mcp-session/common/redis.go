@@ -2,12 +2,15 @@ package common
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
 	"github.com/go-redis/redis/v8"
 )
+
+var ErrKeyNotExist = errors.New("key does not exist")
 
 type RedisConfig struct {
 	address  string
@@ -233,7 +236,7 @@ func (r *RedisClient) Set(key string, value string, expiration time.Duration) er
 func (r *RedisClient) Get(key string) (string, error) {
 	value, err := r.client.Get(r.ctx, key).Result()
 	if err == redis.Nil {
-		return "", fmt.Errorf("key does not exist")
+		return "", ErrKeyNotExist
 	} else if err != nil {
 		return "", fmt.Errorf("failed to get key: %w", err)
 	}
@@ -250,30 +253,8 @@ func (r *RedisClient) Get(key string) (string, error) {
 	return value, nil
 }
 
-// Expire sets the expiration time for a key
-func (r *RedisClient) Expire(key string, expiration time.Duration) error {
-	ok, err := r.client.Expire(r.ctx, key, expiration).Result()
-	if err != nil {
-		return fmt.Errorf("failed to set expiration for key: %w", err)
-	}
-	if !ok {
-		return fmt.Errorf("key does not exist")
-	}
-	return nil
-}
-
 // Close closes the Redis client and stops the keepalive goroutine
 func (r *RedisClient) Close() error {
 	r.cancel()
 	return r.client.Close()
-}
-
-// Eval executes a Lua script
-func (r *RedisClient) Eval(script string, numKeys int, keys []string, args []interface{}) (interface{}, error) {
-	result, err := r.client.Eval(r.ctx, script, keys, args...).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute Lua script: %w", err)
-	}
-
-	return result, nil
 }

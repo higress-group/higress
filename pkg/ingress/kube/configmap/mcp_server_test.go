@@ -48,20 +48,18 @@ func Test_validMcpServer(t *testing.T) {
 		{
 			name: "enabled but no redis config",
 			mcp: &McpServer{
-				Enable:                true,
-				EnableUserLevelServer: false,
-				Redis:                 nil,
-				MatchList:             []*MatchRule{},
-				Servers:               []*SSEServer{},
+				Enable:    true,
+				Redis:     nil,
+				MatchList: []*MatchRule{},
+				Servers:   []*SSEServer{},
 			},
 			wantErr: nil,
 		},
 		{
 			name: "enabled but bad match_rule_type",
 			mcp: &McpServer{
-				Enable:                true,
-				EnableUserLevelServer: false,
-				Redis:                 nil,
+				Enable: true,
+				Redis:  nil,
 				MatchList: []*MatchRule{
 					{
 						MatchRuleDomain: "*",
@@ -76,9 +74,8 @@ func Test_validMcpServer(t *testing.T) {
 		{
 			name: "enabled but bad upstream_type",
 			mcp: &McpServer{
-				Enable:                true,
-				EnableUserLevelServer: false,
-				Redis:                 nil,
+				Enable: true,
+				Redis:  nil,
 				MatchList: []*MatchRule{
 					{
 						MatchRuleDomain: "*",
@@ -94,9 +91,8 @@ func Test_validMcpServer(t *testing.T) {
 		{
 			name: "enabled but path rewrite with unsupported upstream type",
 			mcp: &McpServer{
-				Enable:                true,
-				EnableUserLevelServer: false,
-				Redis:                 nil,
+				Enable: true,
+				Redis:  nil,
 				MatchList: []*MatchRule{
 					{
 						MatchRuleDomain:   "*",
@@ -110,17 +106,6 @@ func Test_validMcpServer(t *testing.T) {
 				Servers: []*SSEServer{},
 			},
 			wantErr: errors.New("path rewrite is only supported for SSE upstream type"),
-		},
-		{
-			name: "enabled with user level server but no redis config",
-			mcp: &McpServer{
-				Enable:                true,
-				EnableUserLevelServer: true,
-				Redis:                 nil,
-				MatchList:             []*MatchRule{},
-				Servers:               []*SSEServer{},
-			},
-			wantErr: errors.New("redis config cannot be empty when user level server is enabled"),
 		},
 		{
 			name: "redis config with password secret missing name",
@@ -149,8 +134,7 @@ func Test_validMcpServer(t *testing.T) {
 		{
 			name: "valid config with redis",
 			mcp: &McpServer{
-				Enable:                true,
-				EnableUserLevelServer: true,
+				Enable: true,
 				Redis: &RedisConfig{
 					Address:  "localhost:6379",
 					Username: "default",
@@ -569,19 +553,6 @@ func TestMcpServerController_ValidHigressConfig(t *testing.T) {
 			},
 			wantErr: nil,
 		},
-		{
-			name: "invalid config - user level server without redis",
-			higressConfig: &HigressConfig{
-				McpServer: &McpServer{
-					Enable:                true,
-					EnableUserLevelServer: true,
-					Redis:                 nil,
-					MatchList:             []*MatchRule{},
-					Servers:               []*SSEServer{},
-				},
-			},
-			wantErr: errors.New("redis config cannot be empty when user level server is enabled"),
-		},
 	}
 
 	for _, tt := range tests {
@@ -670,10 +641,8 @@ func TestMcpServerController_constructMcpSessionStruct(t *testing.T) {
 							"password": "",
 							"db": 0
 						},
-						"rate_limit": null,
 						"sse_path_suffix": "",
-						"match_list": [],
-						"enable_user_level_server": false
+						"match_list": []
 					}
 				}
 			}`,
@@ -710,12 +679,6 @@ func TestMcpServerController_constructMcpSessionStruct(t *testing.T) {
 						PathRewritePrefix: "/mcp",
 					},
 				},
-				EnableUserLevelServer: true,
-				Ratelimit: &MCPRatelimitConfig{
-					Limit:     100,
-					Window:    3600,
-					WhiteList: []string{"user1", "user2"},
-				},
 			},
 			wantJSON: `{
 				"@type": "type.googleapis.com/envoy.extensions.filters.http.golang.v3alpha.Config",
@@ -730,11 +693,6 @@ func TestMcpServerController_constructMcpSessionStruct(t *testing.T) {
 							"username": "user",
 							"password": "pass",
 							"db": 1
-						},
-						"rate_limit": {
-							"limit": 100,
-							"window": 3600,
-							"white_list": ["user1","user2"]
 						},
 						"sse_path_suffix": "/sse",
 						"match_list": [{
@@ -758,8 +716,7 @@ func TestMcpServerController_constructMcpSessionStruct(t *testing.T) {
 							"upstream_type": "sse",
 							"enable_path_rewrite": true,
 							"path_rewrite_prefix": "/mcp"
-						}],
-						"enable_user_level_server": true
+						}]
 					}
 				}
 			}`,
@@ -793,10 +750,8 @@ func TestMcpServerController_constructMcpSessionStruct(t *testing.T) {
 							"password": "${secret.test-namespace/redis-credentials.password}",
 							"db": 0
 						},
-						"rate_limit": null,
 						"sse_path_suffix": "",
-						"match_list": [],
-						"enable_user_level_server": false
+						"match_list": []
 					}
 				}
 			}`,
@@ -830,10 +785,8 @@ func TestMcpServerController_constructMcpSessionStruct(t *testing.T) {
 							"password": "${secret.other-ns/redis-credentials.password}",
 							"db": 0
 						},
-						"rate_limit": null,
 						"sse_path_suffix": "",
-						"match_list": [],
-						"enable_user_level_server": false
+						"match_list": []
 					}
 				}
 			}`,
@@ -923,6 +876,7 @@ func TestMcpServerController_constructMcpSessionStructProviderDomains(t *testing
 			wantRules := []*MatchRule{manualRule}
 			for _, domain := range tt.wantDomains {
 				wantRules = append(wantRules, &MatchRule{
+					ServerName:        "orders",
 					MatchRuleDomain:   domain,
 					MatchRulePath:     "/mcp",
 					MatchRuleType:     "prefix",
