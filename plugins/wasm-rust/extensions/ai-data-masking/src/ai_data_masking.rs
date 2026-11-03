@@ -673,7 +673,7 @@ impl AiDataMasking {
         } else if self.stream {
             (
                 format!(
-                    "data:{}\n\n",
+                    "data:{}\n\ndata: [DONE]\n\n",
                     json!({"choices": [{"index": 0, "delta": {"role": "assistant", "content": msg}}], "usage": {}})
                 ),
                 "text/event-stream;charset=UTF-8".to_string(),
@@ -1282,5 +1282,56 @@ mod tests {
             started.elapsed() < Duration::from_secs(30),
             "45,000-value regression guard exceeded its intentionally broad limit"
         );
+    }
+
+    fn masking(is_openai: bool, stream: bool) -> AiDataMasking {
+        AiDataMasking {
+            weak: Weak::default(),
+            mask_map: HashMap::new(),
+            mask_restore: None,
+            config: None,
+            is_openai,
+            is_openai_stream: None,
+            stream,
+            msg_window: MsgWindow::default(),
+            log: Log::new(PLUGIN_NAME.to_string()),
+            char_window_size: 0,
+            byte_window_size: 0,
+        }
+    }
+
+    #[test]
+    fn openai_stream_denial_terminates_with_done() {
+        let masking = masking(true, true);
+
+        let (body, content_type) = masking.msg_to_response("blocked", "", "");
+
+        assert_eq!(content_type, "text/event-stream;charset=UTF-8");
+        assert!(body.starts_with("data:"));
+        assert!(body.ends_with("data: [DONE]\n\n"));
+        assert_eq!(body.matches("data: [DONE]").count(), 1);
+        let frame = body
+            .strip_prefix("data:")
+            .unwrap()
+            .split("\n\n")
+            .next()
+            .unwrap();
+        let payload: Value = serde_json::from_str(frame).unwrap();
+        assert_eq!(payload["choices"][0]["delta"]["content"], "blocked");
+    }
+
+    #[test]
+    fn non_stream_and_non_openai_denial_do_not_emit_done() {
+        let (body, content_type) = masking(true, false).msg_to_response("blocked", "", "");
+        assert_eq!(content_type, "application/json");
+        assert!(!body.contains("[DONE]"));
+        let payload: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(payload["choices"][0]["message"]["content"], "blocked");
+
+        let (body, content_type) =
+            masking(false, true).msg_to_response("blocked", "raw-denial", "text/plain");
+        assert_eq!(body, "raw-denial");
+        assert_eq!(content_type, "text/plain");
+        assert!(!body.contains("[DONE]"));
     }
 }
