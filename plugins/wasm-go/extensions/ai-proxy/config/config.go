@@ -88,7 +88,10 @@ func (c *PluginConfig) Complete() error {
 	}
 
 	providerConfig := c.GetProviderConfig()
-	return providerConfig.SetApiTokensFailover(c.activeProvider)
+	if err := providerConfig.SetApiTokensFailover(c.activeProvider); err != nil {
+		return err
+	}
+	return providerConfig.InitApiKeyAffinity()
 }
 
 func (c *PluginConfig) GetProvider() provider.Provider {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -566,8 +567,23 @@ func modifyApiTokenRequestCount(key, apiToken string, op string) {
 }
 
 func (c *ProviderConfig) initApiTokens() error {
-	_, cas, _ := getApiTokens(c.failover.ctxApiTokens)
-	return setApiTokens(c.failover.ctxApiTokens, c.apiTokens, cas)
+	for attempt := 1; attempt <= casMaxRetries; attempt++ {
+		apiTokens, cas, err := getApiTokens(c.failover.ctxApiTokens)
+		if err != nil {
+			return err
+		}
+		// Multiple Wasm VMs may initialize the same config, so reuse an identical shared value.
+		if slices.Equal(apiTokens, c.apiTokens) {
+			return nil
+		}
+		if err = setApiTokens(c.failover.ctxApiTokens, c.apiTokens, cas); err == nil {
+			return nil
+		} else if !errors.Is(err, types.ErrorStatusCasMismatch) {
+			return err
+		}
+	}
+
+	return fmt.Errorf("failed to init apiTokens after %d CAS retries", casMaxRetries)
 }
 
 func getApiTokenUnavailableSince(key string) (map[string]int64, uint32, error) {
@@ -700,6 +716,11 @@ func (c *ProviderConfig) OnRequestFailed(activeProvider Provider, ctx wrapper.Ht
 		log.Warnf("apiToken:%s need failover, error status:%s", apiTokenInUse, status)
 		c.handleUnavailableApiToken(ctx, apiTokenInUse)
 	}
+	// Enter affinity retry only when x-mse-consumer established a consumer context.
+	if c.IsApiKeyAffinityRequest(ctx) && isAffinityRetryStatus(status) {
+		c.PrepareApiKeyAffinityRetry(ctx, status)
+		return types.ActionContinue
+	}
 	if c.IsRetryOnFailureEnabled() && util.MatchStatus(status, c.retryOnFailure.retryOnStatus) {
 		log.Warnf("need retry, notice that retry response will be bufferd, error status:%s", status)
 		err := c.retryFailedRequest(activeProvider, ctx, apiTokenInUse, apiTokens)
@@ -721,16 +742,23 @@ func (c *ProviderConfig) GetApiTokenInUse(ctx wrapper.HttpContext) string {
 	return token
 }
 
-func (c *ProviderConfig) SetApiTokenInUse(ctx wrapper.HttpContext) {
+func (c *ProviderConfig) SetApiTokenInUse(ctx wrapper.HttpContext) string {
 	var apiToken string
-	// if enable apiToken failover, only use available apiToken from global apiTokens list
-	if c.isFailoverEnabled() {
+	if c.ApiKeyAffinityEnabled() && c.GetApiKeyAffinityConsumer() != "" {
+		apiToken = c.GetApiKeyAffinityToken(ctx)
+	} else if c.isFailoverEnabled() {
+		// if enable apiToken failover, only use available apiToken from global apiTokens list
 		apiToken = c.GetGlobalRandomToken()
 	} else {
 		apiToken = c.GetOrSetTokenWithContext(ctx)
 	}
-	log.Debugf("Use apiToken %s to send request", apiToken)
+	fingerprint := tokenFingerprint(apiToken)
+	if len(fingerprint) > 12 {
+		fingerprint = fingerprint[:12]
+	}
+	log.Debugf("Use apiToken fingerprint %s to send request", fingerprint)
 	ctx.SetContext(c.failover.ctxApiTokenInUse, apiToken)
+	return apiToken
 }
 
 func (c *ProviderConfig) setHealthCheckEndpoint(ctx wrapper.HttpContext) {
