@@ -1,7 +1,6 @@
 package mcp_session
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -489,19 +488,6 @@ func newTestRequestHeaders(path string) testHeaderMap {
 	}}
 }
 
-type testMCPConfigHandler struct {
-	encoded string
-	err     error
-}
-
-func (h *testMCPConfigHandler) HandleConfigRequest(*http.Request, []byte) bool {
-	return true
-}
-
-func (h *testMCPConfigHandler) GetEncodedConfig(string, string) (string, error) {
-	return h.encoded, h.err
-}
-
 func TestDecodeHeadersRemovesClientConfigOnEveryPath(t *testing.T) {
 	api.SetCommonCAPI(&mockCommonCAPI{})
 	matchList := []common.MatchRule{{
@@ -538,46 +524,9 @@ func TestDecodeHeadersRemovesClientConfigOnEveryPath(t *testing.T) {
 	}
 }
 
-func TestDecodeHeadersOnlySetsConfigFromDynamicLookup(t *testing.T) {
-	api.SetCommonCAPI(&mockCommonCAPI{})
-	tests := []struct {
-		name     string
-		handler  *testMCPConfigHandler
-		expected string
-	}{
-		{name: "valid config", handler: &testMCPConfigHandler{encoded: "trusted-config"}, expected: "trusted-config"},
-		{name: "lookup error", handler: &testMCPConfigHandler{err: errors.New("lookup failed")}},
-		{name: "empty config", handler: &testMCPConfigHandler{}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			header := newTestRequestHeaders("/mcp/server/alice")
-			header.Set(mcpServerConfigHeader, "client-value")
-			f := &filter{
-				config: &config{
-					enableUserLevelServer: true,
-					matchList:             []common.MatchRule{{MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"), MatchRuleType: common.PrefixMatch, MatchRulePath: "/mcp", UpstreamType: common.RestUpstream}},
-				},
-				mcpConfigHandler: tt.handler,
-			}
-			if status := f.DecodeHeaders(header, true); status != api.Continue {
-				t.Fatalf("expected api.Continue, got %v", status)
-			}
-			value, ok := header.Get(mcpServerConfigHeader)
-			if tt.expected == "" && ok {
-				t.Fatalf("expected no config header, got %q", value)
-			}
-			if tt.expected != "" && (!ok || value != tt.expected) {
-				t.Fatalf("expected %q, got %q, present=%t", tt.expected, value, ok)
-			}
-		})
-	}
-}
-
-// TestRestUpstreamSkipsBodyBufferingWithoutRateLimit verifies that plain
-// REST/streamable MCP proxying does not buffer the request body, so that large
-// requests are not rejected with a 413. See #3238.
-func TestRestUpstreamSkipsBodyBufferingWithoutRateLimit(t *testing.T) {
+// TestRestUpstreamSkipsBodyBuffering verifies that plain REST/streamable MCP
+// proxying does not buffer the request body. See #3238.
+func TestRestUpstreamSkipsBodyBuffering(t *testing.T) {
 	mockAPI := &mockCommonCAPI{}
 	api.SetCommonCAPI(mockAPI)
 
@@ -585,15 +534,14 @@ func TestRestUpstreamSkipsBodyBufferingWithoutRateLimit(t *testing.T) {
 		t.Run(string(upstreamType), func(t *testing.T) {
 			parsedURL, _ := url.Parse("http://example.com/mcp/api")
 			f := &filter{
-				config:      &config{enableUserLevelServer: false},
+				config:      &config{},
 				matchedRule: common.MatchRule{UpstreamType: upstreamType},
 				needProcess: true,
 				req:         &http.Request{Method: http.MethodPost, URL: parsedURL},
 			}
 			header := testHeaderMap{values: map[string]string{}}
 
-			// endStream=false would previously return StopAndBuffer and buffer
-			// the whole body. Without rate limiting we should stream instead.
+			// endStream=false must still stream rather than buffer the full body.
 			status := f.processMcpRequestHeadersForRestUpstream(header, false)
 			if status != api.Continue {
 				t.Errorf("expected api.Continue, got %v", status)
@@ -607,34 +555,6 @@ func TestRestUpstreamSkipsBodyBufferingWithoutRateLimit(t *testing.T) {
 				t.Errorf("expected DecodeData to Continue when body is skipped, got %v", got)
 			}
 		})
-	}
-}
-
-// TestRestUpstreamBuffersBodyWhenRateLimitEnabled verifies that the body is
-// still buffered when user-level rate limiting is enabled, since that path
-// needs to inspect the JSON-RPC method in the body.
-func TestRestUpstreamBuffersBodyWhenRateLimitEnabled(t *testing.T) {
-	mockAPI := &mockCommonCAPI{}
-	api.SetCommonCAPI(mockAPI)
-
-	// Use a path with fewer than 3 segments so the config handler (which is
-	// nil in this test) is never queried; f.ratelimit is still set to true
-	// because enableUserLevelServer is enabled.
-	parsedURL, _ := url.Parse("http://example.com/mcp")
-	f := &filter{
-		config:      &config{enableUserLevelServer: true},
-		matchedRule: common.MatchRule{UpstreamType: common.RestUpstream},
-		needProcess: true,
-		req:         &http.Request{Method: http.MethodPost, URL: parsedURL},
-	}
-
-	header := testHeaderMap{values: map[string]string{}}
-	status := f.processMcpRequestHeadersForRestUpstream(header, false)
-	if status != api.StopAndBuffer {
-		t.Errorf("expected api.StopAndBuffer when rate limiting is enabled, got %v", status)
-	}
-	if f.skipRequestBody {
-		t.Errorf("expected skipRequestBody to be false when buffering is required")
 	}
 }
 

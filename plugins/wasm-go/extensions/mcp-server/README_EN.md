@@ -2,9 +2,13 @@
 
 ## Upgrade note
 
-In the upcoming plugin version, request-header MCP server configuration injection is fully removed: no header name, documented or undocumented, is honored. The per-user MCP server configuration feature is being removed from the gateway upstream. Configure MCP servers exclusively through stored configuration in the console or McpServer resources.
+In the upcoming plugin version, request-header MCP server configuration injection is fully removed: no header name, documented or undocumented, is honored. Configure MCP servers exclusively through stored configuration in the console or McpServer resources.
 
 Deployments that still run older plugin versions continue to honor the `x-higress-mcpserver-config` header. On controller-generated routes, the gateway's route-level header strips remove it before it reaches the plugin, so those deployments remain protected. On directly applied native Istio VirtualServices, the route-level strip does not apply, so a client-supplied value is still honored by the old plugin until the deployment upgrades. Upgrade the plugin OCI version (or add a route/header-manipulation rule) as part of the migration; upgrading the plugin fully removes this behavior.
+
+Per-user MCP server configuration and per-user rate limiting are removed. When Redis is configured, MCP sessions are registry-validated: unknown session IDs and session IDs replayed against a different server are rejected. Without Redis, session IDs remain generated but unvalidated; this is a documented limitation for standalone deployments.
+
+Session validity slides with activity: every successful validation refreshes the session TTL, so active SSE connections keep working while idle sessions expire after the TTL.
 
 [中文](./README.md)
 
