@@ -2,6 +2,7 @@
 """Focused adversarial checks for the instructions evidence contract."""
 import copy
 import hashlib
+import json
 import unittest
 
 import verify
@@ -32,6 +33,48 @@ def valid_evidence(variant):
 
 
 class InstructionsEvidenceTest(unittest.TestCase):
+    def test_default_off_allows_only_the_november_version_addition(self):
+        baseline = {"status": 200, "headers": {"content-type": "application/json; charset=utf-8", "mcp-session-id-present": False},
+                    "body": {"jsonrpc": "2.0", "id": "default-14001", "result": {
+                        "supportedVersions": ["2024-11-05", "2025-03-26", "2025-06-18", "2026-07-28"],
+                        "capabilities": {"tools": {}}, "resultType": "complete", "ttlMs": 0, "cacheScope": "private",
+                        "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "instructions-14001", "version": "1.0.0"}}}}}
+        def seal(response):
+            response["bodySha256"] = hashlib.sha256(json.dumps(response["body"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            return response
+        seal(baseline)
+        original = copy.deepcopy(baseline)
+        candidate = copy.deepcopy(baseline)
+        candidate["body"]["result"]["supportedVersions"].insert(3, "2025-11-25")
+        seal(candidate)
+        verify.check_instructions_default_response(candidate, baseline)
+        self.assertEqual(baseline, original, "comparison must preserve the historical baseline")
+        for fault in ("extra-version", "duplicate-version", "missing-version", "reordered-version", "removed-old-version",
+                      "capability", "instructions", "server-info", "ttl", "status", "header", "id", "hash"):
+            with self.subTest(fault=fault):
+                broken = copy.deepcopy(candidate)
+                result = broken["body"]["result"]
+                if fault == "extra-version": result["supportedVersions"].append("2099-01-01")
+                elif fault == "duplicate-version": result["supportedVersions"].append("2025-11-25")
+                elif fault == "missing-version": result["supportedVersions"].remove("2025-11-25")
+                elif fault == "reordered-version": result["supportedVersions"].reverse()
+                elif fault == "removed-old-version": result["supportedVersions"].pop(0)
+                elif fault == "capability": result["capabilities"]["tasks"] = {}
+                elif fault == "instructions": result["instructions"] = "unexpected upstream guidance"
+                elif fault == "server-info": result["_meta"]["io.modelcontextprotocol/serverInfo"]["version"] = "changed"
+                elif fault == "ttl": result["ttlMs"] = 1
+                elif fault == "status": broken["status"] = 201
+                elif fault == "header": broken["headers"]["mcp-session-id-present"] = True
+                elif fault == "id": broken["body"]["id"] = "changed"
+                seal(broken)
+                if fault == "hash": broken["bodySha256"] = "0" * 64
+                with self.assertRaises(AssertionError): verify.check_instructions_default_response(broken, baseline)
+        for fault in ("versions", "hash"):
+            broken = copy.deepcopy(baseline)
+            if fault == "versions": broken["body"]["result"]["supportedVersions"].insert(3, "2025-11-25"); seal(broken)
+            else: broken["bodySha256"] = "0" * 64
+            with self.assertRaises(AssertionError): verify.check_instructions_default_response(candidate, broken)
+
     def test_complete_independently_pinned_cases_and_requests(self):
         for variant, case_count, request_count in (("baseline", 2, 2), ("candidate", 29, 33)):
             snapshot, log = valid_evidence(variant)
