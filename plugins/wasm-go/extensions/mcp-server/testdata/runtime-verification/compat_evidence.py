@@ -111,6 +111,26 @@ def nov25_errors(root, inputs):
     return errors
 
 
+def retained_control_sequence(row):
+    detail = row.get("detail", {})
+    if row["case"] != "auto-concurrent-legacy-session-isolation":
+        return detail.get("upstreamSequence")
+    # Only this two-request barrier case permits different global interleavings.
+    # Reuse its live oracle before comparing the stable, ordered request paths.
+    backends = detail["backendEvents"]
+    if set(backends) != {"backend-primary"}:
+        raise ValueError("concurrent legacy backend ownership differs")
+    events = backends["backend-primary"]
+    verify_auto.check_legacy_sessions({"events": events, "auto": detail["backendState"]}, {"alice": "alice", "bob": "bob"})
+    methods = [event["rpcMethod"] for event in events]
+    if detail["upstreamSequence"] != methods or [event["seq"] for event in events] != list(range(1, 9)):
+        raise ValueError("concurrent legacy sequence differs from its event ledger")
+    if methods[:methods.index(verify_auto.CALL)].count(verify_auto.NOTIFY) != 2:
+        raise ValueError("concurrent legacy business preceded the initialized barrier")
+    return {key: [event["rpcMethod"] for event in events if event["requestKey"] == key]
+            for key in ("alice", "bob")}
+
+
 def finalize(root):
     root = Path(root)
     errors, variants, coverage = [], {}, {}
@@ -174,7 +194,7 @@ def finalize(root):
             rows = controls["cases"]
             if controls["expectedCases"] != [name for name, _ in verify_auto.cases(None)] or not completeness(controls["expectedCases"], rows) or any(row.get("status") != "PASS" for row in rows):
                 errors.append(variant + " retained control/cancellation cases failed")
-            mechanisms[variant] = {row["case"]: row.get("detail", {}).get("upstreamSequence") for row in rows}
+            mechanisms[variant] = {row["case"]: retained_control_sequence(row) for row in rows}
             role = "baseline" if variant == "control" else "candidate"
             instructions = json.loads((root / f"instructions-{role}.json").read_text())
             log = (root / f"gateway-{variant}.log").read_text(errors="replace")
@@ -183,7 +203,7 @@ def finalize(root):
             if not check["complete"] or not check["exchangeLedgerComplete"] or not check["accessLedgerComplete"]:
                 errors.append(variant + " instructions scope/field/budget evidence failed")
             coverage.setdefault("A10", []).extend(variant + ":" + row["case"] for row in rows)
-        except (OSError, ValueError, KeyError) as error:
+        except (OSError, ValueError, KeyError, TypeError, AssertionError) as error:
             errors.append(variant + " supplemental evidence unavailable: " + str(error))
     if mechanisms.get("control") != mechanisms.get("candidate"):
         errors.append("retained control sequences differ")

@@ -422,6 +422,50 @@ def nov25_focused_checks():
             rejected(lambda: verifier.nov25_case(workflow))
 
 
+def concurrent_legacy_control(interleaved=False):
+    methods = (verify_auto.PROBE, verify_auto.INIT, verify_auto.NOTIFY, verify_auto.CALL)
+    order = [("alice", 0), ("bob", 0), ("alice", 1), ("bob", 1), ("alice", 2), ("bob", 2), ("alice", 3), ("bob", 3)]
+    if interleaved:
+        order = [("alice", 0), ("alice", 1), ("bob", 0), ("alice", 2), ("bob", 1), ("bob", 2), ("bob", 3), ("alice", 3)]
+    events = [{"requestKey": key, "authAlias": key, "rpcMethod": methods[phase], "seq": index + 1,
+               "sessionPresent": phase >= 2, "sessionMatchesRequest": phase >= 2} for index, (key, phase) in enumerate(order)]
+    return {"case": "auto-concurrent-legacy-session-isolation", "status": "PASS", "detail": {
+        "upstreamSequence": [event["rpcMethod"] for event in events], "backendEvents": {"backend-primary": events},
+        "backendState": {"executions": {"alice": 1, "bob": 1}}}}
+
+
+def concurrent_control_checks():
+    original = concurrent_legacy_control()
+    expected = {key: [verify_auto.PROBE, verify_auto.INIT, verify_auto.NOTIFY, verify_auto.CALL] for key in ("alice", "bob")}
+    require(evidence.retained_control_sequence(original) == expected, "ordered request projection differs")
+    require(evidence.retained_control_sequence(concurrent_legacy_control(True)) == expected, "legal concurrent interleaving rejected")
+    for fault in ("missing", "extra", "per-request-order", "session-crossing", "session-missing", "auth-crossing",
+                  "request-crossing", "execution-missing", "execution-extra", "early-business", "global-sequence", "event-sequence", "backend"):
+        changed = copy.deepcopy(original)
+        detail, events = changed["detail"], changed["detail"]["backendEvents"]["backend-primary"]
+        if fault == "missing": events.pop()
+        elif fault == "extra": events.append(copy.deepcopy(events[-1]))
+        elif fault == "per-request-order": events[0], events[2] = events[2], events[0]
+        elif fault == "session-crossing": events[4]["sessionMatchesRequest"] = False
+        elif fault == "session-missing": events[6]["sessionPresent"] = False
+        elif fault == "auth-crossing": events[4]["authAlias"] = "bob"
+        elif fault == "request-crossing": events[4]["requestKey"] = "bob"
+        elif fault == "execution-missing": detail["backendState"]["executions"].pop("bob")
+        elif fault == "execution-extra": detail["backendState"]["executions"]["alice"] = 2
+        elif fault == "early-business": events[5], events[6] = events[6], events[5]
+        elif fault == "backend": detail["backendEvents"]["backend-secondary"] = []
+        # Keep ordinary ledger metadata consistent while fault-injecting the
+        # actual request/session/order condition, rather than a stale mirror.
+        detail["upstreamSequence"] = [event["rpcMethod"] for event in events]
+        for index, event in enumerate(events): event["seq"] = index + 1
+        if fault == "global-sequence": detail["upstreamSequence"].reverse()
+        elif fault == "event-sequence": events[-1]["seq"] = 1
+        rejected(lambda: evidence.retained_control_sequence(changed))
+    ordinary = {"case": "auto-success-legacy", "detail": {"upstreamSequence": expected["alice"]}}
+    reordered = copy.deepcopy(ordinary); reordered["detail"]["upstreamSequence"][0:2] = list(reversed(expected["alice"][0:2]))
+    require(evidence.retained_control_sequence(ordinary) != evidence.retained_control_sequence(reordered), "sequential case ordering was weakened")
+
+
 def valid_runtime(root):
     def write(name, value): (root / name).write_text(json.dumps(value))
     fixture = root / "harness" / "registered_fixture.go.txt"; fixture.parent.mkdir(); fixture.write_text("same fixture")
@@ -449,7 +493,7 @@ def valid_runtime(root):
         write(f"compat-{role}.json", {"expectedCases": registry, "cases": rows, "exchanges": exchanges})
         if role != "oracle":
             names = [name for name, _ in verify_auto.cases(None)]
-            write(f"controls-{role}.json", {"expectedCases": names, "cases": [{"case": name, "status": "PASS", "detail": {"upstreamSequence": []}} for name in names]})
+            write(f"controls-{role}.json", {"expectedCases": names, "cases": [concurrent_legacy_control(role == "candidate") if name == "auto-concurrent-legacy-session-isolation" else {"case": name, "status": "PASS", "detail": {"upstreamSequence": []}} for name in names]})
             instructions_role = "baseline" if role == "control" else "candidate"
             instructions, access = valid_evidence(instructions_role)
             write(f"instructions-{instructions_role}.json", instructions)
@@ -471,6 +515,12 @@ def evidence_checks():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory); inputs = valid_runtime(root)
         require(evidence.finalize(root) == 0, "complete focused synthetic evidence rejected")
+        controls = root / "controls-candidate.json"; saved_controls = controls.read_text()
+        changed = json.loads(saved_controls)
+        row = next(row for row in changed["cases"] if row["case"] == "auto-concurrent-legacy-session-isolation")
+        row["detail"]["backendEvents"]["backend-primary"][-1]["sessionMatchesRequest"] = False
+        controls.write_text(json.dumps(changed)); require(evidence.finalize(root) == 1, "concurrent session crossing accepted by finalization")
+        controls.write_text(saved_controls)
         focused = root / "nov25-candidate.json"; saved_focused = focused.read_text()
         for fault in ("missing", "duplicate", "request", "headers", "status"):
             snapshot = json.loads(saved_focused)
@@ -509,7 +559,7 @@ def evidence_checks():
 
 
 def main():
-    strict_peer_checks(); nov25_focused_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
+    strict_peer_checks(); concurrent_control_checks(); nov25_focused_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
     print("unified compatibility fixture/oracle self-tests passed")
 
 
