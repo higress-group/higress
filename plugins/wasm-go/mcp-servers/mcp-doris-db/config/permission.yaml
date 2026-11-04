@@ -1,0 +1,13 @@
+# 允许访问的表和字段白名单
+# 只允许访问这里列出的表和字段
+
+whitelist:
+  user:
+    - id
+    - name
+    - email
+  orders:
+    - id
+    - user_id
+    - amount
+    - status 

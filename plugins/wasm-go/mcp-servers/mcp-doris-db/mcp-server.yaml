@@ -1,0 +1,23 @@
+# MCP Server API 定义
+
+apis:
+  - name: queryTable
+    description: 查询 Doris 表数据
+    params:
+      table: { type: string, required: true, desc: "表名" }
+      fields: { type: array, required: false, desc: "字段列表，默认全部" }
+      where: { type: string, required: false, desc: "查询条件" }
+      limit: { type: int, required: false, desc: "每页数量，默认10" }
+      offset: { type: int, required: false, desc: "偏移量，默认0" }
+    returns:
+      data: { type: array, desc: "数据列表" }
+      total: { type: int, desc: "总数" }
+
+  - name: executeSQL
+    description: 执行自定义 SQL 语句
+    params:
+      sql: { type: string, required: true, desc: "SQL 语句" }
+      args: { type: array, required: false, desc: "参数数组" }
+    returns:
+      data: { type: array, desc: "查询结果或执行状态" }
+      error: { type: string, desc: "错误信息（如有）" } 
