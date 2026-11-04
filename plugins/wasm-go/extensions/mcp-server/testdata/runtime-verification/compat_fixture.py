@@ -87,6 +87,13 @@ def sse_get_auth_config(out):
     Path(out, "envoy.yaml").write_text("admin:\n  address:\n    socket_address: {address: 0.0.0.0, port_value: 9901}\nstatic_resources:\n  listeners:\n" + config + "  clusters:\n" + cluster)
 
 
+def nov25_config(out):
+    # One filename, VM identity and config for both exact source modules.
+    listener = base.listener_yaml(PORTS["http-legacy"], "nov25-legacy", "compat-route", proxy("http-legacy"), "plugin.wasm")
+    cluster = base.cluster_yaml("compat-route").replace("address: compat-route,", "address: backend-primary,")
+    Path(out, "envoy.yaml").write_text("admin:\n  address:\n    socket_address: {address: 0.0.0.0, port_value: 9901}\nstatic_resources:\n  listeners:\n" + listener + "  clusters:\n" + cluster)
+
+
 if __name__ == "__main__":
     import sys
     if "--sse-get-auth-headers" in sys.argv[3:]:

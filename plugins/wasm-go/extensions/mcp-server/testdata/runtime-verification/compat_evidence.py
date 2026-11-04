@@ -71,6 +71,66 @@ def core_ledger_errors(expected, snapshot, log):
     return errors
 
 
+def nov25_errors(root, inputs):
+    """Require exact baseline, equivalent binary inputs and complete red/green traffic."""
+    errors, snapshots = [], {}
+    if inputs.get("nov25Baseline") != contract.NOV25_BASELINE:
+        errors.append("November pre-fix source pin differs")
+    entry = inputs.get("versions", {}).get("nov25-baseline", {})
+    candidate = inputs.get("versions", {}).get("candidate", {})
+    wasm = root / "plain-nov25-baseline.wasm"
+    if entry.get("source") != contract.NOV25_BASELINE or not wasm.is_file() or entry.get("wasm", {}).get("plain") != hashlib.sha256(wasm.read_bytes()).hexdigest():
+        errors.append("November baseline source/Wasm identity differs")
+    if not entry.get("go") or entry.get("go") != candidate.get("go") or not entry.get("moduleFiles") or entry.get("moduleFiles") != candidate.get("moduleFiles"):
+        errors.append("November baseline/candidate toolchain or module inputs differ")
+    configs = inputs.get("nov25Configs", {})
+    if set(configs) != {"nov25-baseline", "candidate"} or len(set(configs.values())) != 1:
+        errors.append("November baseline/candidate configs differ")
+    expected = contract.nov25_cases()
+    for variant in ("nov25-baseline", "candidate"):
+        try:
+            config = root / f"envoy-nov25-{variant}.yaml"
+            if configs.get(variant) != hashlib.sha256(config.read_bytes()).hexdigest():
+                errors.append("November config identity differs: " + variant)
+            snapshot = json.loads((root / f"nov25-{variant}.json").read_text())
+            rows = snapshot.get("cases", [])
+            if snapshot.get("baseline") != contract.NOV25_BASELINE or snapshot.get("expectedCases") != expected or not contract.complete(expected, rows) or any(row.get("status") != "PASS" for row in rows):
+                errors.append("November incomplete/failed cases: " + variant)
+            snapshots[variant] = snapshot
+            log = (root / f"gateway-nov25-{variant}.log").read_text(errors="replace")
+            errors.extend("November " + variant + " " + error for error in core_ledger_errors(expected, snapshot, log))
+            if "plugin start successfully" not in log:
+                errors.append("November Wasm loading marker missing: " + variant)
+        except (OSError, ValueError, KeyError) as error:
+            errors.append("November evidence unavailable: " + str(error))
+    if set(snapshots) == {"nov25-baseline", "candidate"}:
+        def requests(role):
+            return [{key: row.get(key) for key in ("case", "port", "request", "requestHeadersSha256")} for row in snapshots[role].get("exchanges", [])]
+        if requests("nov25-baseline") != requests("candidate") or any(not row.get("request") or not row.get("requestHeadersSha256") for row in snapshots["candidate"].get("exchanges", [])):
+            errors.append("November baseline/candidate traffic inputs differ")
+    return errors
+
+
+def retained_control_sequence(row):
+    detail = row.get("detail", {})
+    if row["case"] != "auto-concurrent-legacy-session-isolation":
+        return detail.get("upstreamSequence")
+    # Only this two-request barrier case permits different global interleavings.
+    # Reuse its live oracle before comparing the stable, ordered request paths.
+    backends = detail["backendEvents"]
+    if set(backends) != {"backend-primary"}:
+        raise ValueError("concurrent legacy backend ownership differs")
+    events = backends["backend-primary"]
+    verify_auto.check_legacy_sessions({"events": events, "auto": detail["backendState"]}, {"alice": "alice", "bob": "bob"})
+    methods = [event["rpcMethod"] for event in events]
+    if detail["upstreamSequence"] != methods or [event["seq"] for event in events] != list(range(1, 9)):
+        raise ValueError("concurrent legacy sequence differs from its event ledger")
+    if methods[:methods.index(verify_auto.CALL)].count(verify_auto.NOTIFY) != 2:
+        raise ValueError("concurrent legacy business preceded the initialized barrier")
+    return {key: [event["rpcMethod"] for event in events if event["requestKey"] == key]
+            for key in ("alice", "bob")}
+
+
 def finalize(root):
     root = Path(root)
     errors, variants, coverage = [], {}, {}
@@ -84,6 +144,7 @@ def finalize(root):
         inputs = {}
         errors.append("inputs unavailable: " + str(error))
     errors.extend(metadata_errors(root, inputs))
+    errors.extend(nov25_errors(root, inputs))
     for variant in ("oracle", "control", "candidate"):
         try:
             snapshot = json.loads((root / f"compat-{variant}.json").read_text())
@@ -133,7 +194,7 @@ def finalize(root):
             rows = controls["cases"]
             if controls["expectedCases"] != [name for name, _ in verify_auto.cases(None)] or not completeness(controls["expectedCases"], rows) or any(row.get("status") != "PASS" for row in rows):
                 errors.append(variant + " retained control/cancellation cases failed")
-            mechanisms[variant] = {row["case"]: row.get("detail", {}).get("upstreamSequence") for row in rows}
+            mechanisms[variant] = {row["case"]: retained_control_sequence(row) for row in rows}
             role = "baseline" if variant == "control" else "candidate"
             instructions = json.loads((root / f"instructions-{role}.json").read_text())
             log = (root / f"gateway-{variant}.log").read_text(errors="replace")
@@ -142,7 +203,7 @@ def finalize(root):
             if not check["complete"] or not check["exchangeLedgerComplete"] or not check["accessLedgerComplete"]:
                 errors.append(variant + " instructions scope/field/budget evidence failed")
             coverage.setdefault("A10", []).extend(variant + ":" + row["case"] for row in rows)
-        except (OSError, ValueError, KeyError) as error:
+        except (OSError, ValueError, KeyError, TypeError, AssertionError) as error:
             errors.append(variant + " supplemental evidence unavailable: " + str(error))
     if mechanisms.get("control") != mechanisms.get("candidate"):
         errors.append("retained control sequences differ")

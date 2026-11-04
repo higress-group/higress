@@ -279,6 +279,12 @@ def generation_transition():
     return 0
 
 
+def downstream_versions():
+    # Keep historical binaries' declarations separate from the current candidate.
+    historical = COMPATIBILITY_ORACLE or CORPUS_REVISION in ("affected", "oracle") or os.environ.get("RUNTIME_COMPAT_MECHANISM_BASELINE") == "1" or os.environ.get("RUNTIME_INSTRUCTIONS_VARIANT") == "baseline" or os.environ.get("RUNTIME_AUTO_EXPLICIT_BASELINE") == "1"
+    return list(LEGACY) + ([] if historical else ["2025-11-25"]) + [MODERN]
+
+
 def result_contract(response, ttl=False):
     check(isinstance(response, dict) and "result" in response, f"missing result: {response}")
     result = response["result"]
@@ -288,7 +294,7 @@ def result_contract(response, ttl=False):
     if ttl:
         check(result.get("ttlMs") == 0 and result.get("cacheScope") == "private", f"bad cache wire fields: {result}")
     forbidden = json.dumps(result)
-    for token in ("2025-11-25", "listChanged", "subscriptions", "requestState", "multi-round"):
+    for token in (("2025-11-25",) if "2025-11-25" not in downstream_versions() else ()) + ("listChanged", "subscriptions", "requestState", "multi-round"):
         check(token not in forbidden, f"forbidden advertised capability {token}: {result}")
     return result
 
@@ -354,7 +360,7 @@ def direct_mode(port, tool_name, arguments, expected_path):
         check(status == 200, f"discover status {status}: {discover}")
         discovered = result_contract(discover, ttl=True)
         check(discovered.get("capabilities") == {"tools": {}}, f"capabilities are not tools-only: {discovered}")
-        check(discovered.get("supportedVersions") == ["2024-11-05", "2025-03-26", "2025-06-18", "2026-07-28"], f"supportedVersions are not exact: {discovered}")
+        check(discovered.get("supportedVersions") == downstream_versions(), f"supportedVersions are not exact: {discovered}")
         status, _, listed = modern_rpc(port, "tools/list", f"list-{port}")
         check(status == 200, f"list status {status}: {listed}")
         tools = result_contract(listed, ttl=True).get("tools") or []
@@ -863,6 +869,22 @@ def instructions_disconnect_request():
             + str(len(body)).encode() + b"\r\n\r\n" + body)
 
 
+def check_instructions_default_response(observed, baseline):
+    # The pinned instructions baseline predates downstream November support.
+    # Permit only that exact declaration addition and its derived body hash;
+    # compare every remaining recorded response field against the old binary.
+    result = baseline["body"]["result"]
+    versions = list(LEGACY) + [MODERN]
+    check(result["supportedVersions"] == versions, "pinned default/off versions differ")
+    baseline_body = json.dumps(baseline["body"], sort_keys=True, separators=(",", ":")).encode()
+    check(baseline["bodySha256"] == hashlib.sha256(baseline_body).hexdigest(), "pinned default/off body hash differs")
+    expected = {**baseline, "body": {**baseline["body"], "result": {
+        **result, "supportedVersions": versions[:-1] + ["2025-11-25", MODERN]}}}
+    expected_body = json.dumps(expected["body"], sort_keys=True, separators=(",", ":")).encode()
+    expected["bodySha256"] = hashlib.sha256(expected_body).hexdigest()
+    check(observed == expected, "default/off differs from pinned baseline beyond November version declaration")
+
+
 def instructions_verification():
     # This mode is deliberately separate evidence from the historical full matrix.
     from concurrent.futures import ThreadPoolExecutor
@@ -904,8 +926,9 @@ def instructions_verification():
             defaults[str(port)] = EXCHANGES[-1]["response"]
             if variant == "candidate":
                 baseline = json.loads((EVIDENCE / "instructions-baseline.json").read_text())["defaults"][str(port)]
-                check(defaults[str(port)] == baseline, "default/off differs from pinned baseline")
-            return {"backendAttempts": 0, "baselineEqual": variant == "candidate"}
+                check_instructions_default_response(defaults[str(port)], baseline)
+                return {"backendAttempts": 0, "baselineEqualExceptVersionDeclaration": True}
+            return {"backendAttempts": 0, "baselineEqual": False}
         return case
 
     def success(mode, expected):

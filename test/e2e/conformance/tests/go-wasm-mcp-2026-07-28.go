@@ -48,7 +48,7 @@ var WasmPluginsMCP20260728 = suite.ConformanceTest{
 			mcpResponseAssertion(
 				"modern discovery", modernHeaders("server/discover", ""),
 				[]byte(`{"jsonrpc":"2.0","id":"discover-e2e","method":"server/discover","params":{`+modernMeta+`}}`),
-				[]byte(`{"jsonrpc":"2.0","id":"discover-e2e","result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"e2e-mcp-2026","version":"1.0.0"}},"cacheScope":"private","capabilities":{"tools":{}},"resultType":"complete","supportedVersions":["2024-11-05","2025-03-26","2025-06-18","2026-07-28"],"ttlMs":0}}`),
+				[]byte(`{"jsonrpc":"2.0","id":"discover-e2e","result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"e2e-mcp-2026","version":"1.0.0"}},"cacheScope":"private","capabilities":{"tools":{}},"resultType":"complete","supportedVersions":["2024-11-05","2025-03-26","2025-06-18","2025-11-25","2026-07-28"],"ttlMs":0}}`),
 			),
 			mcpResponseAssertion(
 				"modern tools/list", modernHeaders("tools/list", ""),

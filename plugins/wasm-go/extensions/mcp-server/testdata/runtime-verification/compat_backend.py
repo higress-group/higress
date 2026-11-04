@@ -8,7 +8,7 @@ import os
 import threading
 from urllib.parse import parse_qs, quote, urlsplit
 
-from compat_contract import JSONNumber, MODERN, strict_request, token, unique_json, SSE_GET_AUTH_BODY, SSE_GET_AUTH_CHALLENGES, body_record
+from compat_contract import JSONNumber, MODERN, strict_request, token, unique_json, NOV25_TOOL, SSE_GET_AUTH_BODY, SSE_GET_AUTH_CHALLENGES, body_record
 from typed_canonical import canonical_json_sha256, loads_typed
 
 LOCK = threading.Lock()
@@ -66,6 +66,9 @@ def record(handler, raw, request=None, rejection=None):
              "ordinaryHeaders": handler.headers.get_all("X-Ordinary", []),
              "rpcBodyBytes": len(raw), "rpcBodySha256": hashlib.sha256(raw).hexdigest(),
              "accepted": rejection is None, "rejection": rejection,
+             "protocolVersion": handler.headers.get("MCP-Protocol-Version"),
+             "initializeVersion": (request.get("params") or {}).get("protocolVersion") if method == "initialize" else None,
+             "sessionAlias": "nov25-upstream" if handler.headers.get("Mcp-Session-Id") == "nov25-upstream-session" else "other" if handler.headers.get("Mcp-Session-Id") else None,
              "initializeCapabilityKeys": sorted((request.get("params") or {}).get("capabilities", {})) if method == "initialize" else None}
     if request.get("params") is not None:
         event["paramsTypedSha256"] = canonical_json_sha256(request["params"])
@@ -202,6 +205,16 @@ def post(handler, body):
             result = result[:-1] + b',"padding":"' + b"x" * ((1 << 20) + 1) + b'"}'
         if mode == "deep":
             result = result[:-1] + b',"deep":' + b'[' * 70 + b'0' + b']' * 70 + b'}'
+    if headers.get("X-Compat-Nov25") == "1":
+        if method == "initialize":
+            raw_response(handler, 200, rpc_response(rpc_id, result), headers=(("Mcp-Session-Id", "nov25-upstream-session"),))
+            return True
+        if method == "tools/list":
+            result = json.dumps({"tools": [NOV25_TOOL]}, separators=(",", ":")).encode()
+        elif method == "tools/call":
+            arguments = request.get("params", {}).get("arguments", {})
+            failed = arguments.get("fail") is True
+            result = json.dumps({"content": [{"type": "text", "text": "synthetic execution failed" if failed else "echo:" + arguments.get("value", "")}], "isError": failed}, separators=(",", ":")).encode()
     response = rpc_response(rpc_id, result, mode == "rpc-error")
     if path == "/unified/messages":
         key = handler.headers.get("X-Compat-Case", "unassociated")

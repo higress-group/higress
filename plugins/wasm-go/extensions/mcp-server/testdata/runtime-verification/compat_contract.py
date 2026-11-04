@@ -181,7 +181,7 @@ def body_record(raw):
 
 def exchange_count(case):
     """Independent per-case downstream request count, including counter controls."""
-    return {"input": 4, "descriptors": 7, "builtin": 2}.get(case["kind"], 1)
+    return case.get("exchanges", {"input": 4, "descriptors": 7, "builtin": 2}.get(case["kind"], 1))
 
 
 SSE_GET_AUTH_AFFECTED = "10f72611286e9d81b83094249b1af8787a12a3ac"
@@ -196,3 +196,30 @@ def sse_get_auth_cases():
              "rpcId": '\"client\\u002did\"' if profile == "legacy" else "" if profile == "notification" else "null" if method == "tools/list" else "1.50"}
             for profile in ("legacy", "modern", "notification")
             for method in ("tools/list", "tools/call") for status in (401, 403)]
+
+
+# A dedicated bug baseline; historical business and control pins remain unchanged.
+NOV25_BASELINE = "03a91cb3fbe2664ac190868ee062ca6bccbba4e2"
+NOV25 = "2025-11-25"
+NOV25_OLD_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", MODERN]
+NOV25_VERSIONS = NOV25_OLD_VERSIONS[:-1] + [NOV25, MODERN]
+NOV25_TOOL = {"name": "echo", "description": "synthetic Tools compatibility fixture",
+              "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}, "fail": {"type": "boolean"}}, "required": ["value"]}}
+
+
+def nov25_cases():
+    """Same finite traffic plan for the pre-fix and candidate binaries."""
+    rows = [{"id": "nov25/" + kind, "kind": kind, "exchanges": 1}
+            for kind in ("initialize-header", "initialize-body", "fallback", "modern-body-fallback", "unknown-header",
+                         "missing-version", "empty-version", "duplicate-version", "handshake-modern-identity",
+                         "handshake-modern-meta", "modern-missing-meta", "modern-mismatched-meta", "discovery")]
+    rows += [{"id": "nov25/old/" + version, "kind": "old", "version": version, "exchanges": 1}
+             for version in NOV25_OLD_VERSIONS[:-1]]
+    rows += [{"id": "nov25/tools-workflow", "kind": "tools-workflow", "exchanges": 5}]
+    return rows
+
+
+def nov25_request(method, params=None, rpc_id="nov25-client"):
+    value = {"jsonrpc": "2.0", "method": method, "params": params or {}}
+    if method != "notifications/initialized": value["id"] = rpc_id
+    return json.dumps(value, separators=(",", ":")).encode()

@@ -483,13 +483,23 @@ func TestPrepareRequestExactVersionAndMethodErrors(t *testing.T) {
 		wantCode  int
 	}{
 		{
-			name: "unsupported version",
+			name: "handshake version cannot carry explicit modern identity",
 			transport: func() Transport {
 				value := modernTransport("tools/list", "")
 				value.ProtocolVersion = "2025-11-25"
 				return value
 			}(),
 			body:     strings.ReplaceAll(modernListRequest, "2026-07-28", "2025-11-25"),
+			wantCode: CodeHeaderMismatch,
+		},
+		{
+			name: "unsupported version",
+			transport: func() Transport {
+				value := modernTransport("tools/list", "")
+				value.ProtocolVersion = "2099-01-01"
+				return value
+			}(),
+			body:     strings.ReplaceAll(modernListRequest, "2026-07-28", "2099-01-01"),
 			wantCode: CodeUnsupportedVersion,
 		},
 		{

@@ -293,6 +293,19 @@ def backend_checks():
         events = compat_backend.state()["events"]
         require([row["accepted"] for row in events] == [True, False, False], "strict peer ledger lost a rejection")
         require(all(row["kind"] == "business" for row in events), "peer attempt phase lost")
+        for method, params in (("initialize", {"protocolVersion": "2025-03-26", "capabilities": {}}), ("tools/list", {}),
+                               ("tools/call", {"name": "echo", "arguments": {"value": "native", "fail": False}}),
+                               ("tools/call", {"name": "echo", "arguments": {"value": "native", "fail": True}})):
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            peer_headers = {"Content-Type": "application/json", "X-Compat-Nov25": "1", "X-Compat-Case": "nov25-peer"}
+            if method != "initialize": peer_headers["Mcp-Session-Id"] = "nov25-upstream-session"
+            connection.request("POST", "/unified/legacy", c.nov25_request(method, params), peer_headers)
+            response = connection.getresponse(); result = json.loads(response.read())["result"]; connection.close()
+            require(response.status == 200, "November peer rejected a supported operation")
+            if method == "initialize": require(response.getheader("Mcp-Session-Id") == "nov25-upstream-session", "November peer session missing")
+            elif method == "tools/list": require(result["tools"] == [c.NOV25_TOOL], "November peer descriptor changed")
+            else: require(result["isError"] is params["arguments"]["fail"] and result["content"][0]["text"] == ("synthetic execution failed" if params["arguments"]["fail"] else "echo:native"), "November peer tool result/error incorrect")
+        require([row["sessionAlias"] for row in compat_backend.state()["events"] if row["case"] == "nov25-peer"] == [None, "nov25-upstream", "nov25-upstream", "nov25-upstream"], "November peer ledger session aliases changed")
         connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
         connection.request("GET", "/unified/sse", headers={"X-Compat-Case": "gzip-self-test", "X-Compat-Fail-Stage": "get", "X-Compat-Response": "http401", "X-Compat-Auth-Fixture": "gzip-headers"})
         response = connection.getresponse(); raw = response.read(); pairs = response.getheaders(); connection.close()
@@ -317,12 +330,149 @@ def fixture_checks():
         require(text.count("vm_id: unified-registered\n") == 1 and text.count("vm_id: unified-registered-body\n") == 1, "large bodies share the counter VM")
 
 
+def nov25_observations(root):
+    """Feed bounded wire/ledger observations through the actual focused assertions."""
+    from unittest.mock import patch
+    import verify
+    snapshots = {}
+    for role in ("nov25-baseline", "candidate"):
+        verifier = Compatibility(role, root)
+        backend_state = {"events": []}
+        baseline = role == "nov25-baseline"
+        versions = c.NOV25_OLD_VERSIONS if baseline else c.NOV25_VERSIONS
+        def exchange(port, raw, modern, **options):
+            request = json.loads(raw)
+            method, params = request["method"], request["params"]
+            case = next(row for row in c.nov25_cases() if row["id"] == verifier.case)
+            kind = case["kind"]
+            status, response = 200, {"jsonrpc": "2.0", "id": "nov25-client"}
+            if kind in ("initialize-header", "initialize-body", "fallback", "modern-body-fallback", "old"):
+                response["result"] = {"protocolVersion": "2025-06-18" if kind in ("fallback", "modern-body-fallback") or baseline and kind == "initialize-body" else params["protocolVersion"], "capabilities": {"tools": {}}}
+            elif kind == "discovery":
+                response["result"] = {"supportedVersions": versions, "capabilities": {"tools": {}}, "resultType": "complete", "ttlMs": c.JSONNumber("0"), "cacheScope": "private", "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "compat-http-legacy", "version": "1"}}}
+            elif kind == "tools-workflow":
+                if method == "initialize": response["result"] = {"protocolVersion": c.NOV25}
+                elif method == "notifications/initialized": status, response = 202, None
+                else:
+                    if method == "tools/list": response["result"] = {"tools": [c.NOV25_TOOL]}
+                    else:
+                        failed = params["arguments"]["fail"]
+                        response["result"] = {"content": [{"type": "text", "text": "synthetic execution failed" if failed else "echo:nov25"}], "isError": failed}
+                    if not baseline:
+                        backend_state["events"] += [{"kind": "control" if operation != method else "business", "rpcMethod": operation, "accepted": True,
+                            "protocolVersion": None, "initializeVersion": "2025-03-26" if operation == "initialize" else None,
+                            "sessionAlias": None if operation == "initialize" else "nov25-upstream", "case": verifier.case}
+                            for operation in ("initialize", "notifications/initialized", method)]
+            rejection = kind not in ("initialize-header", "initialize-body", "fallback", "modern-body-fallback", "old", "discovery", "tools-workflow") or baseline and kind in ("initialize-header", "tools-workflow")
+            if rejection:
+                code = -32022 if kind in ("unknown-header", "modern-mismatched-meta") or baseline and kind in ("initialize-header", "tools-workflow", "duplicate-version", "handshake-modern-identity", "handshake-modern-meta") else -32020
+                status, response = 400, {"jsonrpc": "2.0", "id": None, "error": {"code": c.JSONNumber(str(code)), "data": {"supported": versions}}}
+            count = verifier.exchange_counts.get(verifier.case, 0) + 1
+            verifier.exchange_counts[verifier.case] = count
+            verifier.exchanges.append({"case": verifier.case, "accessRequestId": f"compat-nov25-{verifier.case}-{count}", "httpStatus": status, "port": port,
+                "request": c.body_record(raw), "requestHeadersSha256": hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest()})
+            return status, {}, response
+        verifier.exchange = exchange
+        def backend(reset=False):
+            if reset: backend_state["events"] = []
+            return backend_state
+        verifier.backend = backend
+        with patch.object(verify, "wait_http", return_value=None):
+            require(verifier.run_nov25() == 0, "valid November observations rejected: " + role)
+        snapshot = json.loads((root / f"nov25-{role}.json").read_text())
+        snapshots[role] = snapshot
+        (root / f"gateway-nov25-{role}.log").write_text("plugin start successfully\n" + "\n".join(f"access request_id={row['accessRequestId']} listener=nov25 method=POST path=/mcp code={row['httpStatus']} flags=-" for row in snapshot["exchanges"]))
+    return snapshots
+
+
+def nov25_focused_checks():
+    from unittest.mock import patch
+    import verify
+    require(len(c.nov25_cases()) == 17, "November registry changed unexpectedly")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        snapshots = nov25_observations(root)
+        for role in snapshots:
+            require(len(snapshots[role]["exchanges"]) == 21, "November traffic incomplete")
+        compat_fixture.nov25_config(root); first = (root / "envoy.yaml").read_bytes()
+        compat_fixture.nov25_config(root)
+        require(first == (root / "envoy.yaml").read_bytes() and b"/runtime/plugin.wasm" in first, "November configuration depends on source role")
+        # A positive-looking RPC with the wrong descriptor, ID or tool-error
+        # polarity must fail the actual candidate workflow assertion.
+        for fault in ("descriptor", "id", "isError", "duplicate", "upstream-version", "session"):
+            verifier = Compatibility("candidate", root)
+            workflow = next(row for row in c.nov25_cases() if row["kind"] == "tools-workflow")
+            verifier.case = workflow["id"]
+            responses = [(200, {}, {"jsonrpc": "2.0", "id": "nov25-client", "result": {"protocolVersion": c.NOV25}}), (202, {}, None),
+                         (200, {}, {"jsonrpc": "2.0", "id": "nov25-client", "result": {"tools": [copy.deepcopy(c.NOV25_TOOL)]}})]
+            for fail in (False, True): responses.append((200, {}, {"jsonrpc": "2.0", "id": "nov25-client", "result": {"content": [{"type": "text", "text": "synthetic execution failed" if fail else "echo:nov25"}], "isError": fail}}))
+            if fault == "descriptor": responses[2][2]["result"]["tools"][0]["inputSchema"] = {}
+            elif fault == "id": responses[3][2]["id"] = "wrong"
+            elif fault == "isError": responses[4][2]["result"]["isError"] = False
+            iterator = iter(responses)
+            def exchange(*args, **kwargs):
+                verifier.exchanges.append({}); return next(iterator)
+            verifier.exchange = exchange
+            ledger = copy.deepcopy(snapshots["candidate"]["cases"][-1]["detail"]["ledger"])
+            if fault == "duplicate":
+                ledger["events"].append(copy.deepcopy(ledger["events"][-1])); ledger["attempts"]["business"] += 1
+            elif fault == "upstream-version": ledger["events"][0]["initializeVersion"] = c.NOV25
+            elif fault == "session": ledger["events"][1]["sessionAlias"] = "downstream"
+            verifier.ledger = lambda: ledger
+            rejected(lambda: verifier.nov25_case(workflow))
+
+
+def concurrent_legacy_control(interleaved=False):
+    methods = (verify_auto.PROBE, verify_auto.INIT, verify_auto.NOTIFY, verify_auto.CALL)
+    order = [("alice", 0), ("bob", 0), ("alice", 1), ("bob", 1), ("alice", 2), ("bob", 2), ("alice", 3), ("bob", 3)]
+    if interleaved:
+        order = [("alice", 0), ("alice", 1), ("bob", 0), ("alice", 2), ("bob", 1), ("bob", 2), ("bob", 3), ("alice", 3)]
+    events = [{"requestKey": key, "authAlias": key, "rpcMethod": methods[phase], "seq": index + 1,
+               "sessionPresent": phase >= 2, "sessionMatchesRequest": phase >= 2} for index, (key, phase) in enumerate(order)]
+    return {"case": "auto-concurrent-legacy-session-isolation", "status": "PASS", "detail": {
+        "upstreamSequence": [event["rpcMethod"] for event in events], "backendEvents": {"backend-primary": events},
+        "backendState": {"executions": {"alice": 1, "bob": 1}}}}
+
+
+def concurrent_control_checks():
+    original = concurrent_legacy_control()
+    expected = {key: [verify_auto.PROBE, verify_auto.INIT, verify_auto.NOTIFY, verify_auto.CALL] for key in ("alice", "bob")}
+    require(evidence.retained_control_sequence(original) == expected, "ordered request projection differs")
+    require(evidence.retained_control_sequence(concurrent_legacy_control(True)) == expected, "legal concurrent interleaving rejected")
+    for fault in ("missing", "extra", "per-request-order", "session-crossing", "session-missing", "auth-crossing",
+                  "request-crossing", "execution-missing", "execution-extra", "early-business", "global-sequence", "event-sequence", "backend"):
+        changed = copy.deepcopy(original)
+        detail, events = changed["detail"], changed["detail"]["backendEvents"]["backend-primary"]
+        if fault == "missing": events.pop()
+        elif fault == "extra": events.append(copy.deepcopy(events[-1]))
+        elif fault == "per-request-order": events[0], events[2] = events[2], events[0]
+        elif fault == "session-crossing": events[4]["sessionMatchesRequest"] = False
+        elif fault == "session-missing": events[6]["sessionPresent"] = False
+        elif fault == "auth-crossing": events[4]["authAlias"] = "bob"
+        elif fault == "request-crossing": events[4]["requestKey"] = "bob"
+        elif fault == "execution-missing": detail["backendState"]["executions"].pop("bob")
+        elif fault == "execution-extra": detail["backendState"]["executions"]["alice"] = 2
+        elif fault == "early-business": events[5], events[6] = events[6], events[5]
+        elif fault == "backend": detail["backendEvents"]["backend-secondary"] = []
+        # Keep ordinary ledger metadata consistent while fault-injecting the
+        # actual request/session/order condition, rather than a stale mirror.
+        detail["upstreamSequence"] = [event["rpcMethod"] for event in events]
+        for index, event in enumerate(events): event["seq"] = index + 1
+        if fault == "global-sequence": detail["upstreamSequence"].reverse()
+        elif fault == "event-sequence": events[-1]["seq"] = 1
+        rejected(lambda: evidence.retained_control_sequence(changed))
+    ordinary = {"case": "auto-success-legacy", "detail": {"upstreamSequence": expected["alice"]}}
+    reordered = copy.deepcopy(ordinary); reordered["detail"]["upstreamSequence"][0:2] = list(reversed(expected["alice"][0:2]))
+    require(evidence.retained_control_sequence(ordinary) != evidence.retained_control_sequence(reordered), "sequential case ordering was weakened")
+
+
 def valid_runtime(root):
     def write(name, value): (root / name).write_text(json.dumps(value))
     fixture = root / "harness" / "registered_fixture.go.txt"; fixture.parent.mkdir(); fixture.write_text("same fixture")
     fixture_sha = hashlib.sha256(fixture.read_bytes()).hexdigest()
     inputs = {"candidate": "a" * 40, "businessOracle": c.ORACLE, "controlScopeBaseline": c.CONTROL,
               "sourceStillClean": True, "tokenOverridesUnset": True, "cleanupComplete": True,
+              "nov25Baseline": c.NOV25_BASELINE, "nov25Configs": {},
               "registeredFixtureSha256": fixture_sha, "harness": {"registered_fixture.go.txt": fixture_sha},
               "images": {"gateway@sha256:" + "b" * 64: {}}, "versions": {}}
     for role, source in (("oracle", c.ORACLE), ("control", c.CONTROL), ("candidate", "a" * 40)):
@@ -343,12 +493,19 @@ def valid_runtime(root):
         write(f"compat-{role}.json", {"expectedCases": registry, "cases": rows, "exchanges": exchanges})
         if role != "oracle":
             names = [name for name, _ in verify_auto.cases(None)]
-            write(f"controls-{role}.json", {"expectedCases": names, "cases": [{"case": name, "status": "PASS", "detail": {"upstreamSequence": []}} for name in names]})
+            write(f"controls-{role}.json", {"expectedCases": names, "cases": [concurrent_legacy_control(role == "candidate") if name == "auto-concurrent-legacy-session-isolation" else {"case": name, "status": "PASS", "detail": {"upstreamSequence": []}} for name in names]})
             instructions_role = "baseline" if role == "control" else "candidate"
             instructions, access = valid_evidence(instructions_role)
             write(f"instructions-{instructions_role}.json", instructions)
             log.append(access)
         (root / f"gateway-{role}.log").write_text("\n".join(log))
+    baseline_wasm = root / "plain-nov25-baseline.wasm"; baseline_wasm.write_bytes(b"November baseline")
+    inputs["versions"]["nov25-baseline"] = {**inputs["versions"]["candidate"], "source": c.NOV25_BASELINE, "wasm": {"plain": hashlib.sha256(baseline_wasm.read_bytes()).hexdigest()}}
+    nov25_observations(root)
+    compat_fixture.nov25_config(root)
+    for role in ("nov25-baseline", "candidate"):
+        config = root / f"envoy-nov25-{role}.yaml"; config.write_bytes((root / "envoy.yaml").read_bytes())
+        inputs["nov25Configs"][role] = hashlib.sha256(config.read_bytes()).hexdigest()
     write("compat-inputs.json", inputs)
     (root / "routing").mkdir(); write("routing/manifest.json", {"passed": True, "cleanup_complete": True})
     return inputs
@@ -358,6 +515,22 @@ def evidence_checks():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory); inputs = valid_runtime(root)
         require(evidence.finalize(root) == 0, "complete focused synthetic evidence rejected")
+        controls = root / "controls-candidate.json"; saved_controls = controls.read_text()
+        changed = json.loads(saved_controls)
+        row = next(row for row in changed["cases"] if row["case"] == "auto-concurrent-legacy-session-isolation")
+        row["detail"]["backendEvents"]["backend-primary"][-1]["sessionMatchesRequest"] = False
+        controls.write_text(json.dumps(changed)); require(evidence.finalize(root) == 1, "concurrent session crossing accepted by finalization")
+        controls.write_text(saved_controls)
+        focused = root / "nov25-candidate.json"; saved_focused = focused.read_text()
+        for fault in ("missing", "duplicate", "request", "headers", "status"):
+            snapshot = json.loads(saved_focused)
+            if fault == "missing": snapshot["exchanges"].pop()
+            elif fault == "duplicate": snapshot["exchanges"].append(snapshot["exchanges"][0])
+            elif fault == "request": snapshot["exchanges"][0]["request"]["sha256"] = "0" * 64
+            elif fault == "headers": snapshot["exchanges"][0]["requestHeadersSha256"] = "0" * 64
+            else: snapshot["cases"][0]["status"] = "FAIL"
+            focused.write_text(json.dumps(snapshot)); require(bool(evidence.nov25_errors(root, inputs)), "November invalid evidence accepted: " + fault)
+        focused.write_text(saved_focused)
         path = root / "compat-candidate.json"; original = json.loads(path.read_text())
         for field in ("cases", "exchanges"):
             damaged = {**original, field: original[field][:-1]}; path.write_text(json.dumps(damaged))
@@ -386,7 +559,7 @@ def evidence_checks():
 
 
 def main():
-    strict_peer_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
+    strict_peer_checks(); concurrent_control_checks(); nov25_focused_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
     print("unified compatibility fixture/oracle self-tests passed")
 
 

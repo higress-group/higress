@@ -252,7 +252,9 @@ Legacy and Modern share a **100 MiB** limit for the complete UTF-8 JSON-RPC body
 
 ## Protocol Support and Backend Connections
 
-The plugin supports tool services using MCP `2024-11-05`, `2025-03-26`, `2025-06-18`, and `2026-07-28`.
+The plugin supports tool services using MCP `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and `2026-07-28`.
+
+`2025-11-25` support covers the existing `initialize` → `notifications/initialized` → `tools/list` / `tools/call` workflow, negotiating the same version when requested. An unknown initialize-body version without a version header still falls back to `2025-06-18`; unknown version headers remain rejected. This compatibility addition does not expand Tasks, Sampling, URL Elicitation, OAuth or transport capabilities, or change backend version selection.
 
 Built-in tools and REST-to-MCP do not require a backend MCP protocol strategy. When proxying an existing MCP server, configure `transport` and `protocolStrategy` according to the backend's capabilities.
 

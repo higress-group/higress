@@ -3668,7 +3668,7 @@ func TestPlugin_McpProtocolVersionUnsupportedRejected(t *testing.T) {
 				"code": -32022,
 				"message": "unsupported MCP protocol version",
 				"data": {
-					"supported": ["2024-11-05", "2025-03-26", "2025-06-18", "2026-07-28"],
+					"supported": ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"],
 					"requested": "9999-99-99"
 				}
 			}

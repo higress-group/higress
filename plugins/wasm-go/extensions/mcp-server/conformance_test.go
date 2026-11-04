@@ -138,7 +138,7 @@ func TestOfficial20260728PositiveRequestsAndCapabilityHonesty(t *testing.T) {
 				case "server/discover":
 					minimumTools := readOfficialFixture(t, "tools-minimum-capability.json")
 					require.JSONEq(t, string(minimumTools), gjson.GetBytes(response.Data, "result.capabilities").Raw)
-					require.JSONEq(t, `["2024-11-05","2025-03-26","2025-06-18","2026-07-28"]`, gjson.GetBytes(response.Data, "result.supportedVersions").Raw)
+					require.JSONEq(t, `["2024-11-05","2025-03-26","2025-06-18","2025-11-25","2026-07-28"]`, gjson.GetBytes(response.Data, "result.supportedVersions").Raw)
 					assertCacheWireContract(t, response)
 					for _, path := range []string{
 						"result.capabilities.tools.listChanged",
@@ -152,7 +152,7 @@ func TestOfficial20260728PositiveRequestsAndCapabilityHonesty(t *testing.T) {
 					} {
 						require.False(t, gjson.GetBytes(response.Data, path).Exists(), "%s leaked in %s", path, response.Data)
 					}
-					require.False(t, gjson.GetBytes(response.Data, `result.supportedVersions.#(=="2025-11-25")`).Exists())
+					require.True(t, gjson.GetBytes(response.Data, `result.supportedVersions.#(=="2025-11-25")`).Exists())
 				case "tools/list":
 					require.Equal(t, "get_weather", gjson.GetBytes(response.Data, "result.tools.0.name").String())
 					assertCacheWireContract(t, response)
@@ -358,7 +358,7 @@ func derivedConformanceCases(t *testing.T) []derivedCase {
 		Code:       -32022,
 		Message:    "unsupported MCP protocol version",
 		ID:         `"list-tools-example"`,
-		Data:       `{"supported":["2024-11-05","2025-03-26","2025-06-18","2026-07-28"],"requested":"1900-01-01"}`,
+		Data:       `{"supported":["2024-11-05","2025-03-26","2025-06-18","2025-11-25","2026-07-28"],"requested":"1900-01-01"}`,
 		Reference:  "unsupported-version-error.json",
 	}
 
@@ -369,7 +369,7 @@ func derivedConformanceCases(t *testing.T) []derivedCase {
 		Code:       -32022,
 		Message:    "unsupported MCP protocol version",
 		ID:         "null",
-		Data:       `{"supported":["2024-11-05","2025-03-26","2025-06-18","2026-07-28"],"requested":"1900-01-01"}`,
+		Data:       `{"supported":["2024-11-05","2025-03-26","2025-06-18","2025-11-25","2026-07-28"],"requested":"1900-01-01"}`,
 		Reference:  "unsupported-version-error.json",
 	}
 

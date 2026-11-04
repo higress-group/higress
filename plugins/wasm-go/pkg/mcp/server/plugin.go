@@ -40,10 +40,13 @@ const (
 	DefaultMaxBodyBytes   = protocol.LegacyMaxBodyBytes
 	GlobalToolRegistryKey = "GlobalToolRegistry"
 	DefaultServerVersion  = "1.0.0"
+	// Keep unknown initialize-body versions on the established compatibility
+	// fallback, independently of additions to the accepted handshake versions.
+	initializeFallbackVersion = "2025-06-18"
 )
 
-// SupportedMCPVersions contains all supported MCP protocol versions
-var SupportedMCPVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+// SupportedMCPVersions contains the accepted downstream initialize versions.
+var SupportedMCPVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
 
 // validateURL validates that the given string is a valid URL
 func validateURL(urlStr string) error {
@@ -645,12 +648,12 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		// MCP specification compliant version negotiation:
 		// If the server supports the requested protocol version, it MUST respond with the same version.
 		// Otherwise, the server MUST respond with another protocol version it supports.
-		// This SHOULD be the latest version supported by the server.
+		// The specification recommends the latest alternative; retain the established
+		// fallback here so accepting another handshake version does not change it.
 		negotiatedVersion := requestedVersion
 		if !slices.Contains(SupportedMCPVersions, requestedVersion) {
-			// Return the latest supported version instead of rejecting the request
-			negotiatedVersion = SupportedMCPVersions[len(SupportedMCPVersions)-1]
-			log.Warnf("Client requested unsupported version %s, responding with latest supported version %s",
+			negotiatedVersion = initializeFallbackVersion
+			log.Warnf("Client requested unsupported version %s, responding with compatibility fallback version %s",
 				requestedVersion, negotiatedVersion)
 		}
 
