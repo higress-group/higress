@@ -1,5 +1,9 @@
 # mcp-server
 
+## 升级说明
+
+仍在运行旧版本插件的部署会继续读取 `x-higress-mcpserver-config` 请求头。在控制器生成的路由上，网关的路由级请求头移除规则会在请求到达插件前删除该请求头，因此这些部署仍受保护。对于直接应用的原生 Istio VirtualService，路由级移除不生效，旧版插件在部署升级前仍会采用客户端提供的值。迁移时请升级插件 OCI 版本（或添加路由/请求头操作规则）；升级插件后将完全移除该行为。
+
 [English](./README_EN.md)
 
 ## 功能说明
@@ -42,6 +46,7 @@
 | `server.defaultUpstreamSecurity` | object | 选填 | - | 默认的后端认证配置，可被工具级 `requestTemplate.security` 覆盖。`id` 引用认证方案；REST-to-MCP 还支持通过 `credential` 覆盖默认凭证。MCP 代理的固定凭证使用认证方案的 `defaultCredential`。 |
 | `server.version` | string | 选填 | `1.0.0` | 服务版本号，用于旧版 MCP 的初始化响应。此字段不用于选择 MCP 协议版本。 |
 | `server.protocolStrategy` | string | 选填 | `legacy` | MCP 代理访问后端时使用的协议策略：`legacy`、`modern` 或 `auto`。仅适用于 `mcp-proxy`，详见“协议支持与后端连接”。 |
+| `server.passthroughInstructions` | boolean | 选填 | false | 仅在单个显式 `mcp-proxy`、`transport: http`、`protocolStrategy: modern` 配置下可设为 `true`。从上游成功 discover 结果中提取 instructions，详见下文。 |
 | `server.autoDetection.probeTimeoutMs` | integer | 选填 | `1000` | 自动识别后端协议时的探测超时，单位为毫秒，必须为正整数。仅在 `protocolStrategy: auto` 且 `transport: http` 时使用；实际探测超时不超过 `server.timeout`。 |
 
 ### 工具集配置
@@ -207,8 +212,8 @@ proxywasm.AddHttpRequestHeader("x-envoy-allow-mcp-tools", "tool1,tool2,tool3")
 | `tools[].requestTemplate.security.id` | string  | 当 `tools[].requestTemplate.security` 配置时必填 | - | 引用在 `server.securitySchemes` 中定义的认证方案 ID。 |
 | `tools[].requestTemplate.security.credential` | string | 选填 | - | REST-to-MCP 的后端凭证，覆盖所引用方案的 `defaultCredential`。启用透传且成功提取到非空凭证时，优先使用透传凭证。 |
 | `tools[].errorResponseTemplate` | string | 选填 | - | HTTP 响应状态码大于等于 300 或小于 200 时使用的错误响应转换模板。 |
-| `tools[].legacyOnly` | boolean | 选填 | `false` | 仅供旧版 MCP 客户端使用。设为 `true` 后，工具不会出现在 MCP `2026-07-28` 的工具列表中，也不能通过该版本调用。 |
-| `tools[].outputSchema` | object | 选填 | - | 工具结构化输出的 JSON Schema。当前旧版工具列表会返回该字段，MCP `2026-07-28` 的工具列表暂不返回；插件不会据此校验输出是否符合 Schema。 |
+| `tools[].legacyOnly` | boolean | 选填 | `false` | 已废弃，仍兼容解析省略、`false` 和 `true`，但不再影响工具可见性或调用。 |
+| `tools[].outputSchema` | object | 选填 | - | 工具结构化输出的 JSON Schema；所有支持的协议版本都会返回。插件不会据此校验输出是否符合 Schema。 |
 
 ### 直接响应
 
@@ -235,11 +240,17 @@ tools:
 
 配置 `outputSchema` 后，如果后端响应为合法 JSON，插件会将后端原始 JSON 同时作为 `structuredContent` 返回；`responseTemplate` 生成的文本不会替换这部分结构化内容。直接响应模式则使用模板生成的合法 JSON 作为结构化内容。
 
-MCP `2026-07-28` 会在调用工具前校验输入参数。如果工具的参数定义无法用于校验，该工具可能仍出现在列表中，但调用会被拒绝。需要暂时保留旧版调用的工具，可设置 `legacyOnly: true`。
+所有支持的协议版本共用历史工具查找、认证、`allowTools`、Create/Call 和 REST 参数转换流程，不在网关处执行 inputSchema 校验、schema 编译或私有 schema 资源门禁。工具描述按正常 JSON 序列化发布，包含 `outputSchema`；工具自身仍负责输入业务约束。
+
+升级前使用 `legacyOnly: true` 的工具现在也会对 Modern 客户端可见、可调用，仍受认证和 `allowTools` 控制。请审阅现有工具授权范围；不再需要用该标记绕过 schema 校验。内置 `mcp-e2bdev` 和 `mcp-firecrawl` 已清理该标记。
+
+Legacy/Modern 的完整 UTF-8 JSON-RPC 请求体上限统一为 **100 MiB**，包含 envelope 和 `_meta`。普通 Content-Type/Accept、非身份元数据、普通重复键、深度和值数量沿历史业务策略；Modern 的原 1 MiB arguments、64 层、65536 值和名称私有限制已移除。合法单对象消息、协议版本/方法/工具名身份冲突及严格探测/协商边界继续保留。代理归一化实际上游请求，并保留客户端 ID token 与精确 JSON 数字；直接工具的原始 Create 输入和 REST 自身的类型转换保持原契约。
 
 ## 协议支持与后端连接
 
-插件支持 MCP `2024-11-05`、`2025-03-26`、`2025-06-18` 和 `2026-07-28` 的工具服务能力。
+插件支持 MCP `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` 和 `2026-07-28` 的工具服务能力。
+
+`2025-11-25` 的支持限定于现有 `initialize` → `notifications/initialized` → `tools/list` / `tools/call` 工作流；明确请求该版本时返回相同版本。无版本头且初始化正文请求未知版本时，兼容回退仍为 `2025-06-18`；未知版本头继续被拒绝。此项兼容不扩展 Tasks、Sampling、URL Elicitation、OAuth 或传输能力，也不改变后端版本选择策略。
 
 使用内置工具或 REST-to-MCP 时，无需配置后端 MCP 协议策略。代理已有 MCP Server 时，需要根据后端能力配置 `transport` 和 `protocolStrategy`。
 
@@ -289,6 +300,16 @@ server:
 - 自动探测会增加后端请求。后端协议已知时，可以直接配置 `legacy` 或 `modern`。
 - 自动探测请求使用配置的后端凭证，后端需要允许对应凭证访问发现接口。同一路由的后端实例应保持协议能力一致。
 - `transport: sse` 表示插件能够接入旧版 SSE 后端，不代表向客户端提供通用的实时订阅或消息推送能力。
+
+
+### 上游 instructions
+
+默认不访问上游，`server/discover` 保持原有的网关本地结果。需要上游使用说明时，可在上述 modern HTTP 代理配置中设置 `server.passthroughInstructions: true`；`auto`、`legacy`、SSE、REST 和 `toolSet` 配置不支持启用，非 boolean 值会导致配置错误。
+
+开启后，每个 modern `server/discover` 请求均沿用当前主请求的路由、超时、重试及 server 级认证规则访问上游，保留原请求 ID 和 `_meta`。只有 HTTP 200、无 JSON-RPC error 且结果为对象的普通成功响应才尝试提取 `instructions`。显式非 `complete` 结果继续走原有代理结果路径；上游错误也保留现有错误路径，不回退为成功的本地 discover。
+
+只合并非空字符串，按解码后的 UTF-8 字节计算，上限为 32768 字节；空白原样保留。字段缺失、空串、类型不符或超限时仅省略该字段，不影响其他本地结果。`supportedVersions`、`capabilities`、`serverInfo`、`resultType`、`ttlMs`、`cacheScope` 继续由网关生成。该字段不缓存；未配置 server 级凭据且未启用 `passthroughAuthHeader` 时保持匿名 discover。启用 `passthroughAuthHeader: true` 时仍按现有规则转发客户端 `Authorization`，不扫描或借用工具级凭据。此选项不改变现有 SDK 日志、读取/写入或 `original-*` 上下文的数据可见范围。上游 instructions 是不可信文本，不执行其中的指令，也不据其授予工具访问权限；`allowTools` 可能隐藏指引中提到的工具。
+
 
 ## 认证与安全
 
@@ -761,6 +782,14 @@ allowTools:
 获取工具列表时使用默认后端密钥；调用 `get-secure-product` 时使用产品工具专用密钥。`allowTools` 将可访问工具限制为指定工具。请将密钥占位符替换为实际凭证。
 
 代理模式下，`tools` 用于工具级配置，不是工具白名单；限制工具访问范围应使用 `allowTools`。
+
+### Origin 与 SSE endpoint 的信任边界
+
+插件恢复历史 Origin 接受策略：缺省、跨域、不同端口及 `null` Origin 均可进入正常处理。插件不再提供这项 Origin 同源拒绝所承担的 DNS rebinding 防护。部署者需在可信网络、网关入口或其他部署边界评估并实施相应防护；CORS 和认证不等价于该防护，升级时必须单独审阅这一取舍。
+
+旧 SSE 的初始 GET 仍复用主请求和既有路由。插件信任配置上游返回的 endpoint，按历史相对/绝对 URL 规则选择后续控制及业务 POST 的 path/query 和 HTTP Authority。完整 endpoint 可以选择不同 Authority；已有静态/透传 Authorization、header/query apiKey 等凭据可能按现有移除和覆盖规则发送给该 Authority。已移除的客户端凭据不会恢复，鉴权失败仍终止后续请求。
+
+实际发送固定在原路由 cluster，endpoint 域名不会新增 DNS 直连或切换 cluster。固定 cluster 不等于固定 HTTP 虚拟主机或全部 TLS 身份：TLS 沿既有 cluster/路由和调用方式。请信任配置的 MCP 上游及其 endpoint，并评估该 cluster 内按 Authority 可达的服务及凭据接收范围。路径配置仍可能产生空 Authority 或 `unknownhost` 等历史失败；插件不会从 cluster 名称猜补 Authority，也不保证所有路径组合可用。
 
 ### MCP 代理服务器示例：使用 SSE 协议
 

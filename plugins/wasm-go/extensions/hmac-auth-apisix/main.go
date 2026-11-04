@@ -139,6 +139,12 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.HmacAuthConfig) ty
 			if !signedHeadersMap[lowerRequiredHeader] {
 				return sendUnauthorizedResponse("expected header \"" + requiredHeader + "\" missing in signing")
 			}
+			if lowerRequiredHeader == "@request-target" {
+				continue
+			}
+			if _, err := proxywasm.GetHttpRequestHeader(requiredHeader); err != nil {
+				return sendUnauthorizedResponse("expected header \"" + requiredHeader + "\" missing in request")
+			}
 		}
 	}
 
@@ -157,6 +163,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.HmacAuthConfig) ty
 
 	// 如果有请求体且需要验证请求体，进入 onHttpRequestBody 方法
 	if ctx.HasRequestBody() && cfg.ValidateRequestBody {
+		ctx.RequireRequestBody()
 		return types.HeaderStopIteration
 	}
 	ctx.DontReadRequestBody()

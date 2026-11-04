@@ -84,7 +84,7 @@ type RestToolResponseTemplate struct {
 type RestTool struct {
 	Name                  string                   `json:"name"`
 	Description           string                   `json:"description"`
-	LegacyOnly            bool                     `json:"legacyOnly,omitempty"` // Keep unsupported historical schemas on legacy profiles only
+	LegacyOnly            bool                     `json:"legacyOnly,omitempty"` // Deprecated: parsed for compatibility; ignored at runtime
 	Security              SecurityRequirement      `json:"security,omitempty"`   // Tool-level security for MCP Client to MCP Server
 	Args                  []RestToolArg            `json:"args"`
 	OutputSchema          map[string]any           `json:"outputSchema,omitempty"` // Output schema for MCP Protocol Version 2025-06-18
@@ -949,13 +949,6 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 // Description implements Tool interface
 func (t *RestMCPTool) Description() string {
 	return t.toolConfig.Description
-}
-
-// legacyOnlyInputSchema reports an explicit compatibility declaration for a
-// historical REST schema that the modern P0 validator must not advertise or
-// execute.
-func (t *RestMCPTool) legacyOnlyInputSchema() bool {
-	return t.toolConfig.LegacyOnly
 }
 
 // InputSchema implements Tool interface

@@ -39,6 +39,7 @@ description: 基于 Key 集群限流插件配置参考
 | show_limit_quota_header | bool | 否 | false | 响应头中是否显示 `X-RateLimit-Limit`（限制的总请求数）和 `X-RateLimit-Remaining`（剩余还可以发送的请求数） |
 | rejected_code           | int | 否 | 429 | 请求被限流时，返回的 HTTP 状态码                                                         |
 | rejected_msg            | string | 否 | Too many requests | 请求被限流时，返回的响应体                                                               |
+| failure_mode            | string | 否 | fail_open | Redis 调用失败、超时或响应异常时的策略：`fail_open` 放行请求；`fail_closed` 返回固定 503。需要严格限流时使用 `fail_closed`。 |
 | redis                   | object          | 是                                                           | -                 | redis 相关配置                                                                  |
 
 `global_threshold` 中每一项的配置字段说明。

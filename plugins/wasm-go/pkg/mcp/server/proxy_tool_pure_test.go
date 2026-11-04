@@ -123,7 +123,7 @@ func TestModernOutboundPreservesValidatedEncodedNameHeaderExactly(t *testing.T) 
 		MCPMethod:       "tools/call",
 		MCPName:         encodedName,
 	}
-	headers := baseOutboundHeaders(ctx, true, "tools/call", "decoded-name", "")
+	headers := baseOutboundHeaders(ctx, true, "tools/call", encodedName, "")
 	assert.Equal(t, encodedName, mustHeaderValue(t, headers, protocol.HeaderName))
 }
 
@@ -218,7 +218,7 @@ func TestParseSSEResponse_MultipleDataLinesReturnsFirst(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// createInitializeRequest / createToolsListRequest / createToolsCallRequest
+// createInitializeRequest
 // -----------------------------------------------------------------------------
 
 func TestCreateInitializeRequest_StableShape(t *testing.T) {
@@ -240,67 +240,6 @@ func TestCreateInitializeRequest_StableShape(t *testing.T) {
 
 	_, hasCaps := params["capabilities"]
 	assert.True(t, hasCaps)
-}
-
-func TestCreateToolsListRequest_NoCursor(t *testing.T) {
-	h := NewMcpProtocolHandler("http://backend.example/mcp", 5000)
-	req := h.createToolsListRequest(nil)
-
-	assert.Equal(t, "2.0", req["jsonrpc"])
-	assert.Equal(t, 2, req["id"])
-	assert.Equal(t, "tools/list", req["method"])
-
-	params, ok := req["params"].(map[string]interface{})
-	require.True(t, ok)
-	_, hasCursor := params["cursor"]
-	assert.False(t, hasCursor, "nil cursor must produce no cursor field")
-}
-
-func TestCreateToolsListRequest_EmptyStringCursor(t *testing.T) {
-	h := NewMcpProtocolHandler("http://backend.example/mcp", 5000)
-	empty := ""
-	req := h.createToolsListRequest(&empty)
-
-	params := req["params"].(map[string]interface{})
-	_, hasCursor := params["cursor"]
-	assert.False(t, hasCursor, "empty-string cursor is treated as absent")
-}
-
-func TestCreateToolsListRequest_WithCursor(t *testing.T) {
-	h := NewMcpProtocolHandler("http://backend.example/mcp", 5000)
-	c := "next-page"
-	req := h.createToolsListRequest(&c)
-
-	params := req["params"].(map[string]interface{})
-	assert.Equal(t, "next-page", params["cursor"])
-}
-
-func TestCreateToolsCallRequest_StableShape(t *testing.T) {
-	h := NewMcpProtocolHandler("http://backend.example/mcp", 5000)
-	args := map[string]interface{}{"q": "hello", "limit": 5}
-	req := h.createToolsCallRequest("search", args)
-
-	assert.Equal(t, "2.0", req["jsonrpc"])
-	assert.Equal(t, 3, req["id"])
-	assert.Equal(t, "tools/call", req["method"])
-
-	params, ok := req["params"].(map[string]interface{})
-	require.True(t, ok)
-	assert.Equal(t, "search", params["name"])
-	gotArgs, ok := params["arguments"].(map[string]interface{})
-	require.True(t, ok)
-	assert.Equal(t, "hello", gotArgs["q"])
-	assert.Equal(t, 5, gotArgs["limit"])
-}
-
-func TestCreateToolsCallRequest_NilArguments(t *testing.T) {
-	h := NewMcpProtocolHandler("http://backend.example/mcp", 5000)
-	req := h.createToolsCallRequest("noop", nil)
-	params := req["params"].(map[string]interface{})
-	assert.Equal(t, "noop", params["name"])
-	args, ok := params["arguments"]
-	require.True(t, ok)
-	assert.Nil(t, args)
 }
 
 // -----------------------------------------------------------------------------

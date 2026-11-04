@@ -209,6 +209,6 @@ def handle_response(handler, request):
             result["_meta"] = {"io.modelcontextprotocol/serverInfo": {"name": "auto-fixture", "version": "1"}}
         value = {"jsonrpc": "2.0", "id": rpc_id, "result": result}
         if mode == "sse":
-            return raw_response(handler, 200, "data:" + json.dumps(value) + "\n\n", "text/event-stream")
+            return raw_response(handler, 200, "data: " + json.dumps(value) + "\n\n", "text/event-stream")
         return handler.send_json(200, value)
     return error(-32601, 404)

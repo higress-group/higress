@@ -33,7 +33,7 @@ func main() {
 	if root == "" {
 		panic("MCP_INTEROP_ROOT is required")
 	}
-	for _, path := range []string{"direct", "proxy-modern", "proxy-legacy", "proxy-auto-modern", "proxy-auto-legacy", "proxy-auto-switch", "proxy-auto-error"} {
+	for _, path := range []string{"direct", "proxy-modern", "proxy-instructions", "proxy-legacy", "proxy-auto-modern", "proxy-auto-legacy", "proxy-auto-switch", "proxy-auto-error"} {
 		if err := exercise(root + "/" + path); err != nil {
 			panic(fmt.Errorf("%s: %w", path, err))
 		}
@@ -62,6 +62,10 @@ func exercise(endpoint string) error {
 	defer session.Close()
 	if got := session.InitializeResult().ProtocolVersion; got != protocolVersion {
 		return fmt.Errorf("negotiated protocol %q, want %q (legacy fallback is forbidden)", got, protocolVersion)
+	}
+
+	if strings.HasSuffix(endpoint, "proxy-instructions") && session.InitializeResult().Instructions != "Use the weather tool for current conditions." {
+		return fmt.Errorf("discovery instructions = %q", session.InitializeResult().Instructions)
 	}
 
 	if strings.HasSuffix(endpoint, "proxy-auto-error") {

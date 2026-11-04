@@ -22,11 +22,13 @@ func GetSSEChannelName(sessionID string) string {
 // It provides real-time communication capabilities over HTTP using the SSE protocol.
 type SSEServer struct {
 	server          *MCPServer
+	serverName      string
 	baseURL         string
 	messageEndpoint string
 	sseEndpoint     string
 	sessions        sync.Map
 	redisClient     *RedisClient // Redis client for pub/sub
+	sessionRegistry SessionRegistry
 }
 
 func (s *SSEServer) GetMessageEndpoint() string {
@@ -38,7 +40,7 @@ func (s *SSEServer) GetSSEEndpoint() string {
 }
 
 func (s *SSEServer) GetServerName() string {
-	return s.server.name
+	return s.serverName
 }
 
 // Option defines a function type for configuring SSEServer
@@ -65,9 +67,24 @@ func WithSSEEndpoint(endpoint string) Option {
 	}
 }
 
+// WithServerName overrides the identity used to bind sessions to a server.
+// The filter sets this per request from the matched MCP server rule so that a
+// session issued for one route cannot be replayed on another.
+func WithServerName(serverName string) Option {
+	return func(s *SSEServer) {
+		s.serverName = serverName
+	}
+}
+
 func WithRedisClient(redisClient *RedisClient) Option {
 	return func(s *SSEServer) {
 		s.redisClient = redisClient
+	}
+}
+
+func WithSessionRegistry(registry SessionRegistry) Option {
+	return func(s *SSEServer) {
+		s.sessionRegistry = registry
 	}
 }
 
@@ -75,6 +92,7 @@ func WithRedisClient(redisClient *RedisClient) Option {
 func NewSSEServer(server *MCPServer, opts ...Option) *SSEServer {
 	s := &SSEServer{
 		server:          server,
+		serverName:      server.name,
 		sseEndpoint:     "/sse",
 		messageEndpoint: "/message",
 	}
@@ -86,10 +104,24 @@ func NewSSEServer(server *MCPServer, opts ...Option) *SSEServer {
 	return s
 }
 
+// registerSession binds a generated session to this server's identity.
+func (s *SSEServer) registerSession(sessionID string) error {
+	if s.sessionRegistry == nil {
+		return nil
+	}
+	return s.sessionRegistry.RegisterSession(s.serverName, sessionID)
+}
+
 // handleSSE handles incoming SSE connection requests.
 // It sets up appropriate headers and creates a new session for the client.
 func (s *SSEServer) HandleSSE(cb api.FilterCallbackHandler, stopChan chan struct{}) {
 	sessionID := uuid.New().String()
+
+	if err := s.registerSession(sessionID); err != nil {
+		api.LogErrorf("Failed to register MCP session: %v", err)
+		cb.EncoderFilterCallbacks().SendLocalReply(http.StatusServiceUnavailable, "", nil, 0, "")
+		return
+	}
 
 	s.sessions.Store(sessionID, true)
 	defer s.sessions.Delete(sessionID)
@@ -218,13 +250,6 @@ func (s *SSEServer) HandleMessage(w http.ResponseWriter, r *http.Request, body j
 	if istiodToken := r.Header.Get("X-Istiod-Token"); istiodToken != "" {
 		ctx = WithIstiodToken(ctx, istiodToken)
 	}
-
-	//TODO： check session id
-	// _, ok := s.sessions.Load(sessionID)
-	// if !ok {
-	// 	s.writeJSONRPCError(w, nil, mcp.INVALID_PARAMS, "Invalid session ID")
-	// 	return
-	// }
 
 	// Process message through MCPServer
 	response := s.server.HandleMessage(ctx, body)

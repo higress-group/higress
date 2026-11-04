@@ -1,0 +1,687 @@
+#!/usr/bin/env python3
+"""Execute registered/REST/proxy compatibility cases through real Envoy.
+
+No candidate output generates expectations. The registry and corresponding old
+path determine assertions; only named ID/number defects are exempted on oracle.
+"""
+import hashlib
+import gzip
+import re
+from collections import Counter
+import base64
+import http.client
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+import compat_contract as contract
+from compat_fixture import PORTS
+from typed_canonical import JSONNumber, canonical_json_sha256, loads_typed
+
+
+def check(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+def integer(value):
+    return int(value.lexeme) if isinstance(value, JSONNumber) else value
+
+
+def business_result_sha256(result):
+    # Normalize only protocol-owned envelope fields and the named historical
+    # opaque number defect. Ordinary result fields and metadata remain compared.
+    payload = dict(result)
+    for key in ("number", "resultType", "ttlMs", "cacheScope"):
+        payload.pop(key, None)
+    if isinstance(payload.get("_meta"), dict):
+        metadata = dict(payload["_meta"])
+        metadata.pop("io.modelcontextprotocol/serverInfo", None)
+        if metadata:
+            payload["_meta"] = metadata
+        else:
+            payload.pop("_meta")
+    return canonical_json_sha256(payload)
+
+
+def capture_sse_auth_response(body, headers):
+    """Capture bytes/fields before decoding; invalid CE never discards red evidence."""
+    captured = {"headerPairs": [list(pair) for pair in headers], "rawBodyBase64": base64.b64encode(body).decode(),
+                **contract.body_record(body), "decodeError": None}
+    encodings = [value.strip().lower() for name, value in headers if name.lower() == "content-encoding"]
+    try:
+        if not encodings: decoded = body
+        elif encodings == ["gzip"]: decoded = gzip.decompress(body)
+        else: raise ValueError("unsupported content encoding")
+    except (OSError, EOFError, ValueError) as error:
+        captured["decodeError"] = type(error).__name__
+        return captured, None
+    captured["decodedBodyBase64"] = base64.b64encode(decoded).decode()
+    captured["decodedBody"] = contract.body_record(decoded)
+    return captured, decoded
+
+
+def auth_challenges(headers):
+    # Fixture realms contain no commas; allow legal combination of its two
+    # challenge schemes without imposing physical HTTP field cardinality.
+    return [part.strip() for name, value in headers if name.lower() == "www-authenticate"
+            for part in re.split(r",\s*(?=(?:Bearer|Basic)\s)", value)]
+
+
+def inspect_sse_get_auth(case, exchange, response, ledger):
+    """Separate invariant failures (invalid red) from the targeted isolation bug."""
+    invariant, isolation = [], []
+    captured = exchange["rawResponse"]
+    raw = base64.b64decode(captured["rawBodyBase64"], validate=True)
+    headers = captured["headerPairs"]
+    if exchange["httpStatus"] != case["status"]: invariant.append("wrong_auth_status")
+    if captured["decodeError"]: isolation.append("content_encoding_decode_failure")
+    for name in contract.SSE_GET_AUTH_FORBIDDEN:
+        if any(key.lower() == name for key, _ in headers): isolation.append("inherited_" + name)
+    if Counter(auth_challenges(headers)) != Counter(contract.SSE_GET_AUTH_CHALLENGES): isolation.append("challenge_loss_or_change")
+    if case["profile"] == "notification":
+        if raw: invariant.append("notification_body")
+    else:
+        # A stale gzip label is the targeted red defect. Validate the original
+        # ID/error from raw JSON only as a diagnostic fallback, never as a pass.
+        if response is None and captured["decodeError"]:
+            try: response = loads_typed(raw)
+            except ValueError: pass
+        wanted_id = loads_typed(case["rpcId"])
+        if not isinstance(response, dict) or response.get("jsonrpc") != "2.0" or "result" in response:
+            invariant.append("invalid_rpc_envelope")
+        else:
+            if "id" not in response or type(response["id"]) is not type(wanted_id) or response["id"] != wanted_id: invariant.append("wrong_client_id")
+            error = response.get("error", {})
+            if not isinstance(error, dict) or integer(error.get("code")) != -32603 or error.get("message") != "upstream authorization failed" or "data" in error:
+                invariant.append("wrong_auth_error")
+    media = [value.split(";", 1)[0].strip().lower() for name, value in headers if name.lower() == "content-type"]
+    if media != ["application/json"]: invariant.append("wrong_gateway_media")
+    lengths = [value for name, value in headers if name.lower() == "content-length"]
+    if lengths and (len(lengths) != 1 or not lengths[0].isdigit() or int(lengths[0]) != len(raw)): invariant.append("invalid_body_framing")
+    events = ledger["events"]
+    if ledger["attempts"] != {"transport": 1, "probe": 0, "control": 0, "business": 0} or len(events) != 1 or events[0].get("method") != "GET" or events[0].get("kind") != "transport" or events[0].get("case") != case["id"] or events[0].get("path") != "/unified/sse" or events[0].get("authority") != "initial.virtual" or events[0].get("backendOrigin") != "primary":
+        invariant.append("unexpected_backend_dispatch")
+    else:
+        fixture = events[0].get("authFixture", {})
+        try:
+            compressed = base64.b64decode(fixture["rawBodyBase64"], validate=True)
+            check(fixture["status"] == case["status"] and contract.body_record(compressed) == {key: fixture[key] for key in ("utf8Bytes", "sha256")}, "fixture identity")
+            check(gzip.decompress(compressed) == contract.SSE_GET_AUTH_BODY, "fixture body")
+            check(auth_challenges(fixture["headerPairs"]) == list(contract.SSE_GET_AUTH_CHALLENGES), "fixture challenges")
+            check([v for k, v in fixture["headerPairs"] if k.lower() == "content-encoding"] == ["gzip"], "fixture encoding")
+            check(all(any(k.lower() == name for k, _ in fixture["headerPairs"]) for name in contract.SSE_GET_AUTH_FORBIDDEN), "fixture headers")
+        except (KeyError, TypeError, ValueError, OSError, EOFError, AssertionError): invariant.append("invalid_upstream_fixture")
+    return invariant, isolation
+
+
+class Compatibility:
+    def __init__(self, variant, out):
+        self.variant, self.out = variant, Path(out)
+        self.rows, self.exchanges = [], []
+        self.exchange_counts = {}
+        self.case = "readiness"
+
+    def exchange(self, port, raw, modern, tool="raw_summary", method="tools/call", extra=(), host="gateway", capture_response=False):
+        count = self.exchange_counts.get(self.case, 0) + 1
+        self.exchange_counts[self.case] = count
+        request_id = "compat-" + hashlib.sha256(self.case.encode()).hexdigest()[:24] + "-" + str(count)
+        headers = [("Host", "mcp.runtime.test"), ("Content-Type", "application/json"),
+                   ("Accept", "application/json,text/event-stream"), ("X-Compat-Case", self.case),
+                   ("X-Request-ID", request_id),
+                   ("X-Ordinary", "first"), ("X-Ordinary", "second")]
+        if modern:
+            headers += [("MCP-Protocol-Version", contract.MODERN), ("Mcp-Method", method)]
+            if method == "tools/call":
+                encoded = tool if tool.isascii() else "=?base64?" + base64.b64encode(tool.encode()).decode() + "?="
+                headers.append(("Mcp-Name", encoded))
+        headers += list(extra)
+        connection = http.client.HTTPConnection(host, port, timeout=300)
+        begin = time.monotonic()
+        try:
+            connection.putrequest("POST", "/mcp", skip_host=True, skip_accept_encoding=True)
+            for name, value in headers:
+                connection.putheader(name, value)
+            connection.putheader("Content-Length", str(len(raw)))
+            connection.endheaders(raw)
+            response = connection.getresponse()
+            body, response_headers = response.read(), response.getheaders()
+            status = response.status
+        finally:
+            connection.close()
+        captured, decoded = capture_sse_auth_response(body, response_headers) if capture_response else (None, body)
+        try:
+            value = loads_typed(decoded) if decoded else None
+        except ValueError:
+            value = None
+        self.exchanges.append({"case": self.case, "accessRequestId": request_id, "port": port, "httpStatus": status,
+                               "request": contract.body_record(raw), "requestHeadersSha256": hashlib.sha256(json.dumps(headers, separators=(",", ":")).encode()).hexdigest(), "response": contract.body_record(body),
+                               "responseHeaders": {k.lower(): v for k, v in response_headers if k.lower() in ("content-type", "www-authenticate", "retry-after")},
+                               "elapsedSecondsDiagnostic": round(time.monotonic() - begin, 3)})
+        if capture_response: self.exchanges[-1]["rawResponse"] = captured
+        return status, {k.lower(): v for k, v in response_headers}, value
+
+    def backend(self, reset=False):
+        connection = http.client.HTTPConnection("backend-primary", 8080, timeout=10)
+        connection.request("POST" if reset else "GET", "/__compat_reset" if reset else "/__compat_state", b"{}" if reset else None)
+        response = connection.getresponse()
+        value = json.loads(response.read())
+        connection.close()
+        check(response.status == 200, "backend ledger unavailable")
+        return value
+
+    def stats(self, port, modern):
+        status, _, response = self.exchange(port, contract.envelope(modern, tool="runtime_counters"), modern, tool="runtime_counters")
+        check(status == 200 and response and "result" in response, "registered execution counter unavailable")
+        observed = {"generation": response["result"]["generation"], **{key: integer(response["result"][key]) for key in ("creates", "calls")}}
+        self.exchanges[-1]["executionCounters"] = observed
+        return tuple(observed[key] for key in ("generation", "creates", "calls"))
+
+    def identity(self, response, raw_id, modern, status, headers):
+        if modern and not raw_id:
+            check(status == (status if status in (401, 403) else 202), "notification status is not an acknowledgement/auth exception")
+            check(response is None and self.exchanges[-1]["response"]["utf8Bytes"] == 0, "notification leaked an RPC body")
+            if status in (401, 403):
+                check(headers.get("www-authenticate") == 'Bearer realm="compat"', "notification lost auth challenge")
+            return
+        check(isinstance(response, dict) and "id" in response, "determinable client ID missing")
+        wanted = loads_typed(raw_id or "0")
+        if self.variant == "oracle" and (raw_id in ("1.50", "1E+03", "-0", "null", "9223372036854775808")):
+            # D2 fixes these explicitly named historical ID defects. Preserve
+            # the observed token in evidence; never use it as candidate oracle.
+            check(isinstance(response["id"], JSONNumber), "historical ID compatibility view is not numeric")
+            return
+        check(type(response["id"]) is type(wanted) and response["id"] == wanted, "client ID token/type was not restored")
+
+    def ledger(self):
+        events = [row for row in self.backend()["events"] if row["case"] == self.case]
+        return {"events": events, "attempts": {kind: sum(row["kind"] == kind for row in events)
+                                                for kind in ("transport", "probe", "control", "business")}}
+
+    def body_case(self, case):
+        modern = case["profile"] == "modern"
+        raw, arguments = contract.sized_body(modern, case["size"], case["location"])
+        check(len(raw) == case["size"], "full UTF-8 body size differs from independent case registry")
+        raw.decode("utf-8")
+        port = PORTS["http-legacy"] if case["size"] > contract.LIMIT else PORTS["registered-body"]
+        status, _, response = self.exchange(port, raw, modern)
+        if case["size"] > contract.LIMIT:
+            check(status == 413, "complete body above 100 MiB was accepted")
+            check(self.ledger()["attempts"]["business"] == 0, "oversized body reached business")
+            return {"status": status, "businessAttempts": 0}
+        check(status == 200 and response and "result" in response, "admissible full body did not execute")
+        result = response["result"]
+        check(integer(result["rawLength"]) == len(arguments) and result["rawSha256"] == hashlib.sha256(arguments).hexdigest(), "direct Create bytes changed")
+        return {"rawLength": str(integer(result["rawLength"])), "rawSha256": result["rawSha256"]}
+
+    def input_case(self, case):
+        modern, shape = case["profile"] == "modern", case["shape"]
+        arguments, tool, port = b"{}", "raw_summary", PORTS["registered"]
+        if shape == "depth70": arguments = b'{"deep":' + b'[' * 70 + b'0' + b']' * 70 + b'}'
+        elif shape == "values65537": arguments = b'{"values":[' + b','.join([b'0'] * 65537) + b']}'
+        elif shape == "duplicates": arguments = b'{"choice":1,"choice":2,"nested":{"a":1,"a":2},"number":900719925474099312345}'
+        elif shape == "long-name": tool = "n" * 5000
+        elif shape == "encoded-name": tool = "界" * 3000
+        elif shape == "schema-mismatch": arguments = b'{"schemaOnly":7}'
+        elif shape == "allowTools": tool, port = "n" * 5000, PORTS["restricted"]
+        elif shape == "local-error": tool = "unregistered-tool"
+        raw_id = contract.IDS[case["id_index"]] if "id_index" in case else '"case"'
+        raw = contract.envelope(modern, tool=tool, arguments=arguments, rpc_id=raw_id)
+        if shape == "invalid": raw = raw[:-1]
+        elif shape == "concatenated": raw += b'{}'
+        elif shape == "batch": raw = b'[' + raw + b']'
+        positive, _, completed = self.exchange(port, contract.envelope(modern), modern)
+        check(positive == 200 and completed and "result" in completed, "positive counter control did not execute")
+        before = self.stats(port, modern)
+        check(bool(before[0]) and before[1] > 0 and before[1] == before[2], "positive execution counter evidence missing")
+        status, _, response = self.exchange(port, raw, modern, tool=tool)
+        if shape == "local-error": self.identity(response, raw_id, modern, status, {})
+        after = self.stats(port, modern)
+        check(before[0] == after[0], "registered VM recycled between counter observations")
+        if shape in ("invalid", "concatenated", "batch") and self.variant == "oracle":
+            return {"basicMessageBoundaryException": True, "observedStatus": status,
+                    "createsDelta": after[1] - before[1], "callsDelta": after[2] - before[2],
+                    "observedResult": bool(response and "result" in response),
+                    "observedError": bool(response and "error" in response)}
+        if shape in ("invalid", "concatenated", "batch", "allowTools", "local-error"):
+            check(before == after, "rejected request executed Create/Call")
+            if shape == "local-error" and modern and not raw_id:
+                return {"zeroCreateCall": True, "boundary": "ordinary notification acknowledgement"}
+            check(response and "error" in response, "invalid/denied input produced no error")
+            if shape == "local-error":
+                check(status == 200 and integer(response["error"]["code"]) == -32602, "historical local error changed")
+                return {"zeroCreateCall": True, "boundary": "local tool lookup"}
+            if shape != "allowTools":
+                check(status == 400 and integer(response["error"]["code"]) in (-32700, -32600), "basic-message admission status/code changed")
+            return {"zeroCreateCall": True, "boundary": "basic-message" if shape != "allowTools" else "authorization"}
+        check(after[1] == before[1] + 1 and after[2] == before[2] + 1, "Create/Call positive increment missing")
+        check(status == 200 and response and "result" in response, "historically admissible input rejected")
+        result = response["result"]
+        check(result["rawSha256"] == hashlib.sha256(arguments).hexdigest(), "raw direct-tool arguments were normalized")
+        return {"rawSha256": result["rawSha256"]}
+
+    def descriptors(self, case):
+        modern = case["profile"] == "modern"
+        status, _, response = self.exchange(PORTS["registered"], contract.envelope(modern, method="tools/list"), modern, method="tools/list")
+        check(status == 200 and response and "result" in response, "tool descriptors unavailable")
+        tools = {row["name"]: row for row in response["result"]["tools"]}
+        check({"raw_summary", "runtime_counters", "numeric_comparison", "n" * 5000, "界" * 3000} <= set(tools), "serializable descriptors filtered")
+        summary = tools["raw_summary"]
+        check("outputSchema" in summary and summary["inputSchema"]["custom"]["value"] == "serialized", "RawMessage/Marshaler/outputSchema lost")
+        digest = canonical_json_sha256(summary)
+        status, _, composed = self.exchange(PORTS["composed"], contract.envelope(modern, method="tools/list"), modern, method="tools/list")
+        check(status == 200 and composed and "result" in composed, "composed descriptors unavailable")
+        composed_summary = next(row for row in composed["result"]["tools"] if row["name"] == "runtime-schema-fixtures___raw_summary")
+        check(canonical_json_sha256({**composed_summary, "name": "raw_summary"}) == digest, "composed descriptor lost source fields")
+        status, _, rejected = self.exchange(PORTS["composed"], contract.envelope(modern, tool="runtime-schema-fixtures___raw_summary"), modern, tool="runtime-schema-fixtures___raw_summary")
+        check(rejected and "error" in rejected and self.ledger()["attempts"]["business"] == 0, "historical composed call rejection changed")
+        status, _, rest = self.exchange(PORTS["rest"], contract.envelope(modern, method="tools/list"), modern, method="tools/list")
+        rest_descriptors = {row["name"]: row for row in rest["result"]["tools"]}
+        names = set(rest_descriptors)
+        check({"legacy-false", "legacy-true", "getTransactionRecordListV2"} <= names, "legacyOnly/schema descriptor gate remains")
+        for tool in ("legacy-false", "legacy-true"):
+            status, _, visible = self.exchange(PORTS["rest"], contract.envelope(modern, tool=tool), modern, tool=tool)
+            check(status == 200 and visible and "result" in visible, "legacyOnly still blocks business execution")
+        raw = contract.envelope(modern, tool="getTransactionRecordListV2", arguments=b'{"transactionId":"fixture","page":2,"businessType":["SALE"],"payload":{"amount":7}}')
+        status, _, converted = self.exchange(PORTS["rest"], raw, modern, tool="getTransactionRecordListV2")
+        check(status == 200 and converted and "result" in converted, "historical REST conversion rejected")
+        ledger = self.ledger()
+        check(ledger["attempts"]["business"] == 1, "REST conversion did not reach its backend")
+        request = next(row for row in ledger["events"] if row["kind"] == "business")
+        expected_body = loads_typed(b'{"businessType":["SALE"],"payload":{"amount":7}}')
+        check(request["method"] == "POST" and request["path"] == "/unified/rest/converted/fixture" and request["query"] == {"fixed": ["yes"], "page": ["2"]}, "REST path/query conversion changed")
+        check(request["restFlag"] == "false" and request["argumentsTypedSha256"] == canonical_json_sha256(expected_body), "REST body/header conversion changed")
+        return {"descriptorSha256": digest, "restDescriptorSha256": canonical_json_sha256(rest_descriptors),
+                "restBusinessAttempts": 1, "restMapping": {key: request[key] for key in ("method", "path", "query", "restFlag", "argumentsTypedSha256")}}
+
+    def builtin(self, case):
+        modern, name = case["profile"] == "modern", case["builtin"]
+        manifest = json.loads((self.out / "builtin-manifest.json").read_text())[name]
+        status, _, response = self.exchange(PORTS[name], contract.envelope(modern, method="tools/list"), modern, method="tools/list")
+        check(status == 200 and response and "result" in response, "actual builtin configuration did not load")
+        names = {row["name"] for row in response["result"]["tools"]}
+        check(set(manifest["tools"]) == names, "actual builtin descriptor visibility differs")
+        tool = manifest["tools"][0]
+        status, _, response = self.exchange(PORTS[name], contract.envelope(modern, tool=tool, arguments=b'{"url":"https://fixture.invalid","timeout":1}'), modern, tool=tool)
+        check(status == 200 and response and "result" in response, "actual builtin tool failed before the fixture route")
+        check(self.ledger()["attempts"]["business"] == 1, "actual builtin tool made no observable backend call")
+        return {"sourceSha256": manifest["sourceSha256"], "tools": sorted(names), "businessAttempts": 1}
+
+    def proxy_case(self, case):
+        modern, route = case["profile"] == "modern", case.get("route", "sse")
+        rpc_id = contract.IDS[case["id_index"]] if "id_index" in case else "" if case.get("notification") else '"case"'
+        arguments = b'{"number":900719925474099312345,"decimal":1.50,"exponent":1E+03,"choice":1,"choice":2,"nested":{"x":1,"x":2}}'
+        method = case.get("method", "tools/call")
+        tool = "界" * 3000 if case.get("response") == "encoded-name" else "echo"
+        raw = contract.envelope(modern, method=method, tool=tool, arguments=arguments, rpc_id=rpc_id)
+        raw = raw.replace(b'"arguments":' + arguments, b'"arguments":' + arguments + b',"arguments":{"ignored":true}', 1)
+        if modern:
+            raw = raw.replace(b'"io.modelcontextprotocol/clientCapabilities":{}', b'"io.modelcontextprotocol/clientCapabilities":false,"io.modelcontextprotocol/clientInfo":7,"vendor":{"ignored":true},"vendor":{"choice":1,"choice":2}', 1)
+            raw = raw[:-2] + b',"ordinary":{"choice":1,"choice":2},"ordinary":{"ignored":true}}}'
+        raw = raw[:-1] + b',"params":{"ignored":true}}'
+        extra = [("X-Compat-Response", case.get("response", "success"))]
+        if case["kind"] == "sse-url":
+            endpoint = case["endpoint"]
+            route = "sse-path" if endpoint == "path-config" else "sse-path-rewrite" if endpoint == "path-config-absolute" else "sse-rewrite" if endpoint == "host-rewrite" else "sse"
+            extra.append(("X-Compat-Endpoint", endpoint))
+        if case["kind"] == "sse-auth":
+            route = "sse-" + case["credential"]
+            extra += [("X-Compat-Endpoint", "cross-authority"), ("Authorization", "Bearer compat-forward"), ("X-Client-Key", "compat-pass")]
+        if case["kind"] == "sse-stage-auth":
+            extra.append(("X-Compat-Fail-Stage", case["stage"]))
+        if case["kind"] == "discovery":
+            raw = contract.envelope(True, method="server/discover", rpc_id=rpc_id)
+        port, method = (14000, "server/discover") if case["kind"] == "discovery" else (PORTS[route], method)
+        status, headers, response = self.exchange(port, raw, modern, tool=tool, method=method, extra=extra)
+        evidence = self.ledger()
+        if case["kind"] == "sse-url" and case["endpoint"] in ("path-config", "unknownhost"):
+            check(status >= 400 or response and "error" in response, "empty-Authority/unknownhost failure was silently guessed into success")
+            check(all(row["accepted"] for row in evidence["events"]), "strict peer rejected a failure-boundary request")
+            check(evidence["attempts"]["business"] == 0, "failed SSE handshake reached business")
+            if case["endpoint"] == "unknownhost":
+                check(evidence["attempts"]["control"] == 1 and evidence["events"][-1]["authority"] == "unknownhost", "unknownhost control boundary not reached")
+                self.identity(response, rpc_id, modern, status, headers)
+            return {"historicalFailureStatus": status, "stages": [{k: row[k] for k in ("kind", "authority", "path", "query")} for row in evidence["events"]]}
+        self.identity(response, rpc_id, modern, status, headers)
+        mode = case.get("response", "success")
+        business_digest = None
+        if mode.startswith("http"):
+            expected = int(mode[4:])
+            check(status == (expected if expected in (401, 403) else 202 if modern and not rpc_id else 200), "business/auth HTTP policy changed")
+            if expected in (401, 403): check(headers.get("www-authenticate") == 'Bearer realm="compat"', "auth challenge lost")
+            retained_business_headers = not route.startswith("sse") and case["kind"] != "discovery" and expected not in (401, 403) and not (modern and not rpc_id)
+            check(headers.get("retry-after") == ("5" if retained_business_headers else None), "corresponding business Retry-After changed")
+            check(headers.get("www-authenticate") == ('Bearer realm="compat"' if retained_business_headers or expected in (401, 403) else None), "corresponding business challenge header changed")
+            if not (modern and not rpc_id):
+                check(response and "error" in response and integer(response["error"]["code"]) == -32603 and "data" not in response["error"], "business HTTP error/data mapping changed")
+                if expected not in (401, 403):
+                    expected_message = "SSE tool request failed with status " + str(expected) if route.startswith("sse") else "backend " + method + " failed"
+                    check(response["error"]["message"] == expected_message, "business HTTP error message changed")
+        elif modern and not rpc_id:
+            check(status == 202, "ordinary notification completion changed")
+        else:
+            check(status == 200 and response, "business response unavailable")
+            if mode == "rpc-error":
+                check(integer(response["error"]["code"]) == -32603 and "data" not in response["error"], "business error code/data policy changed")
+                expected_message = "invalid server/discover result" if case["kind"] == "discovery" else "backend tool call failed" if route.startswith("sse") else "invalid tools/list response" if method == "tools/list" else "fixture error"
+                check(response["error"]["message"] == expected_message, "historical business error message changed")
+            else:
+                check("result" in response, "business success rejected")
+                if case["kind"] == "discovery":
+                    check(response["result"].get("instructions") == "fixture instructions" and "unimplemented" not in response["result"].get("capabilities", {}), "instructions field isolation changed")
+                else:
+                    result = response["result"]
+                    check(isinstance(result.get("number"), JSONNumber), "opaque result number missing")
+                    if self.variant != "oracle": check(result["number"].lexeme == "900719925474099312345", "opaque result number rounded")
+                    expected_result = loads_typed(b'{"tools":[{"name":"echo","inputSchema":{"type":"object"}}],"content":[],"value":2}')
+                    expected_result["recipient"] = next(row["authority"] for row in evidence["events"] if row["kind"] == "business")
+                    if mode == "deep":
+                        deep = JSONNumber("0")
+                        for _ in range(70): deep = [deep]
+                        expected_result["deep"] = deep
+                    if mode == "over-probe-limit": expected_result["padding"] = "x" * ((1 << 20) + 1)
+                    business_digest = business_result_sha256(result)
+                    check(business_digest == canonical_json_sha256(expected_result), "successful business result content changed")
+        check(all(row["accepted"] for row in evidence["events"]), "strict peer rejected an outbound request")
+        if self.variant != "oracle":
+            expected_arguments = loads_typed(b'{"number":900719925474099312345,"decimal":1.50,"exponent":1E+03,"choice":2,"nested":{"x":2}}')
+            check(all(row.get("argumentsTypedSha256") == canonical_json_sha256(expected_arguments) for row in evidence["events"] if row["rpcMethod"] == "tools/call"), "proxy argument number/duplicate semantics changed")
+            check(all(not row["initializeCapabilityKeys"] for row in evidence["events"] if row["rpcMethod"] == "initialize"), "gateway advertised unsupported callbacks")
+            if case.get("route") in ("http-modern", "auto-modern"):
+                for row in evidence["events"]:
+                    if row["kind"] == "business":
+                        check(row["ordinaryChoice"] == "2" and row["metaVendorChoice"] == "2", "ordinary/meta carrier selection changed")
+        if route.startswith("sse"):
+            # The pinned oracle used 2 for either business operation. Preserve
+            # its evidence while independently requiring candidate list2/call3.
+            expected_business_id = "2" if self.variant == "oracle" or method == "tools/list" else "3"
+            for row in evidence["events"]:
+                if row["rpcMethod"] == "initialize": check(row["rpcId"] == "1", "SSE initialize ID changed")
+                if row["kind"] == "business": check(row["rpcId"] == expected_business_id, "SSE business correlation ID changed")
+        if case["kind"] not in ("discovery", "sse-stage-auth"):
+            check(evidence["attempts"]["business"] == 1, "business attempt count is not exactly one")
+        if case["kind"] == "discovery":
+            check(evidence["attempts"] == {"transport": 0, "probe": 1, "control": 0, "business": 0}, "explicit discovery left its one-request scope")
+        if case["kind"] == "sse-stage-auth":
+            count = {"get": 0, "initialize": 1, "notifications/initialized": 2}[case["stage"]]
+            check(evidence["attempts"]["business"] == 0 and evidence["attempts"]["control"] == count, "terminal SSE authentication failure advanced business")
+        if case["kind"] == "sse-url":
+            endpoint = case["endpoint"]
+            expected_get = "fixed.virtual" if endpoint in ("host-rewrite", "path-config-absolute") else "initial.virtual"
+            expected_post = "initial.virtual" if endpoint in ("relative", "absolute") else "never-resolve.invalid" if endpoint == "external-domain" else "other.virtual"
+            for row in evidence["events"]:
+                check(row["backendOrigin"] == "primary", "endpoint changed the actual route backend")
+                check(row["authority"] == (expected_get if row["kind"] == "transport" else expected_post), "historical SSE stage Authority changed")
+                check(row["path"] == ("/unified/sse" if row["kind"] == "transport" else "/unified/messages"), "historical SSE stage path changed")
+                expected_query = ({} if endpoint == "path-config-absolute" else {"initial": ["one"]}) if row["kind"] == "transport" else {"case": [self.case]}
+                check(row["query"] == expected_query, "historical SSE stage query changed")
+            if response and "result" in response:
+                check(response["result"]["recipient"] == expected_post, "same-cluster virtual host recipient did not change")
+        if case["kind"] == "sse-auth":
+            credential = case["credential"]
+            for row in evidence["events"]:
+                if credential == "static-header": check(row["upstreamKeyMatches"], "static header key changed recipient/value")
+                elif credential == "static-query": check(row["queryCredentialMatches"], "query key changed recipient/value")
+                elif credential == "static-authorization": check(row["authorizationAlias"] == "static", "static Authorization changed recipient/value")
+                elif credential in ("forward", "passthrough"): check(row["authorizationAlias"] == credential, "authorized credential forwarding changed")
+                else: check(row["authorizationAlias"] is None, "removed Authorization restored")
+                if credential == "passthrough": check(not row["clientKeyPresent"], "removed downstream key restored")
+        if case["kind"].startswith("sse-") and self.variant != "oracle":
+            for row in evidence["events"]:
+                check([part.strip() for field in row["ordinaryHeaders"] for part in field.split(",")] == ["first", "second"], "ordinary multivalue headers lost")
+        projection = {"status": status, "businessAttempts": evidence["attempts"]["business"],
+                      "responseHeaders": {name: headers[name] for name in ("retry-after", "www-authenticate") if name in headers}}
+        if business_digest is not None: projection["businessResultSha256"] = business_digest
+        if response and "error" in response:
+            projection.update(errorCode=token_number(response["error"]["code"]), errorMessage=response["error"]["message"])
+        return {"projection": projection, "ledger": evidence,
+                "clientIDObserved": contract.token(response["id"]) if response and "id" in response else None,
+                "precisionExceptions": ["id", "params.arguments.number", "params.arguments.decimal", "params.arguments.exponent", "result.number"] if self.variant == "oracle" else [],
+                "retainedFixExceptions": ["SSE ordinary-header multiplicity", "HTTP authentication fidelity"] if self.variant == "oracle" else []}
+
+    def red_case(self, case):
+        name = case["red"]
+        if name == "modern-over-one-mib": raw, _ = contract.sized_body(True, (1 << 20) + 1, "arguments")
+        else: raw = contract.envelope(True, rpc_id="1.50" if name == "fractional-id" else '"case"', tool="legacy-true" if name == "legacyOnly" else "raw_summary")
+        port = PORTS["rest"] if name == "legacyOnly" else PORTS["registered"]
+        extra = [("Origin", "https://other.example")] if name == "cross-origin" else []
+        status, _, response = self.exchange(port, raw, True, tool="legacy-true" if name == "legacyOnly" else "raw_summary", extra=extra)
+        expected = {"modern-over-one-mib": 413, "cross-origin": 403, "fractional-id": 400, "schema-call": 200, "legacyOnly": 200}[name]
+        if name == "legacyOnly":
+            message = 'tool "legacy-true" is unavailable in the modern profile because its input schema cannot be validated: configured as legacy-only'
+            result = (response or {}).get("result", {})
+            check(status == expected and result.get("isError") is True and result.get("content") == [{"type": "text", "text": message}], "pre-fix legacyOnly tool error result did not reproduce its named gate")
+            check(self.ledger()["attempts"]["business"] == 0, "legacyOnly diagnostic reached business")
+        else:
+            check(status == expected and (name == "modern-over-one-mib" or response and "error" in response), "pre-fix diagnostic did not reproduce its named gate")
+        return {"diagnosticRedReproduced": True, "status": status, "notBusinessOracle": True}
+
+    def run(self):
+        import verify as existing
+        existing.wait_http("http://backend-primary:8080/healthz")
+        existing.wait_http("http://gateway:9901/ready")
+        expected = contract.registry(self.variant)
+        for case in expected:
+            self.case = case["id"]
+            self.backend(reset=True)
+            row = {"id": self.case, "acceptance": case["acceptance"], "status": "FAIL"}
+            try:
+                kind = case["kind"]
+                if kind == "body": detail = self.body_case(case)
+                elif kind == "input": detail = self.input_case(case)
+                elif kind == "descriptors": detail = self.descriptors(case)
+                elif kind == "builtin": detail = self.builtin(case)
+                elif kind == "legacy-version":
+                    status, _, response = self.exchange(PORTS["registered"], contract.envelope(False), False, extra=[("MCP-Protocol-Version", case["version"])])
+                    check(status == 200 and response and "result" in response, "supported Legacy version rejected")
+                    detail = {"supportedVersion": case["version"]}
+                elif kind == "origin":
+                    extra = [] if case["origin"] == "missing" else [("Origin", {"cross-host": "https://other.example", "cross-port": "https://mcp.runtime.test:8443", "null": "null"}[case["origin"]])]
+                    modern = case["profile"] == "modern"
+                    status, _, response = self.exchange(PORTS["registered"], contract.envelope(modern), modern, extra=extra)
+                    check(status == 200 and response and "result" in response, "historical Origin acceptance changed")
+                    detail = {"accepted": True}
+                elif kind == "red": detail = self.red_case(case)
+                else: detail = self.proxy_case(case)
+                row.update(status="PASS", detail=detail)
+            except Exception as error:
+                row["error"] = str(error)
+                row["ledger"] = self.ledger()
+            self.rows.append(row)
+            # Flush each independent case so interruption cannot turn a partial
+            # run into a complete-looking result or discard the first failure.
+            self.write(expected)
+        return 0 if contract.complete(expected, self.rows) and all(row["status"] == "PASS" for row in self.rows) else 1
+
+    def write(self, expected):
+        (self.out / f"compat-{self.variant}.json").write_text(json.dumps({"variant": self.variant, "expectedCases": expected,
+            "cases": self.rows, "exchanges": self.exchanges}, indent=2, sort_keys=True) + "\n")
+
+
+    def run_nov25(self):
+        """Exercise the same compatibility traffic and record the expected red baseline."""
+        import verify as existing
+        expected = contract.nov25_cases()
+        existing.wait_http("http://backend-primary:8080/healthz")
+        existing.wait_http("http://gateway:9901/ready")
+        for case in expected:
+            self.case = case["id"]
+            self.backend(reset=True)
+            row = {"id": self.case, "status": "FAIL"}
+            try:
+                row.update(status="PASS", detail=self.nov25_case(case))
+            except Exception as error:
+                row.update(error=str(error), ledger=self.ledger())
+            self.rows.append(row)
+            (self.out / f"nov25-{self.variant}.json").write_text(json.dumps({"variant": self.variant, "baseline": contract.NOV25_BASELINE,
+                "expectedCases": expected, "cases": self.rows, "exchanges": self.exchanges}, indent=2, sort_keys=True, default=lambda value: {"numberToken": value.lexeme}) + "\n")
+        return 0 if contract.complete(expected, self.rows) and all(row["status"] == "PASS" for row in self.rows) else 1
+
+    def nov25_case(self, case):
+        baseline = self.variant == "nov25-baseline"
+        versions = contract.NOV25_OLD_VERSIONS if baseline else contract.NOV25_VERSIONS
+        port, kind = PORTS["http-legacy"], case["kind"]
+        common = [("X-Compat-Nov25", "1")]
+        version_header = [("MCP-Protocol-Version", contract.NOV25)]
+
+        def send(method, params=None, extra=(), modern=False):
+            raw = contract.nov25_request(method, params)
+            status, headers, response = self.exchange(port, raw, modern, method=method, tool="echo", extra=common + list(extra))
+            self.exchanges[-1]["observedResponse"] = response
+            return status, headers, response
+
+        def success(status, response):
+            check(status == 200 and response and response.get("jsonrpc") == "2.0" and response.get("id") == "nov25-client" and "result" in response and "error" not in response, "invalid successful RPC envelope/ID")
+            return response["result"]
+
+        def rejected(status, response, code):
+            check(status == 400 and response and integer(response.get("error", {}).get("code")) == code and "result" not in response, "strict identity/version rejection changed")
+            if code == -32022:
+                check(response["error"]["data"]["supported"] == versions, "unsupported-version list differs")
+
+        if kind == "tools-workflow":
+            status, _, response = send("initialize", {"protocolVersion": contract.NOV25, "capabilities": {}}, version_header)
+            if baseline: rejected(status, response, -32022)
+            else: check(success(status, response)["protocolVersion"] == contract.NOV25, "initialize did not negotiate November version")
+            status, _, response = send("notifications/initialized", extra=version_header)
+            if baseline: rejected(status, response, -32022)
+            else: check(status == 202 and response is None, "initialized is not an empty acknowledgement")
+            status, _, response = send("tools/list", extra=version_header)
+            if baseline: rejected(status, response, -32022)
+            else: check(success(status, response)["tools"] == [contract.NOV25_TOOL], "tool descriptor/input schema changed")
+            for fail in (False, True):
+                status, _, response = send("tools/call", {"name": "echo", "arguments": {"value": "nov25", "fail": fail}}, version_header)
+                if baseline: rejected(status, response, -32022)
+                else:
+                    result = success(status, response)
+                    check(result == {"content": [{"type": "text", "text": "synthetic execution failed" if fail else "echo:nov25"}], "isError": fail}, "Tools content/execution error changed")
+            ledger = self.ledger()
+            if baseline:
+                check(not ledger["events"], "rejected November workflow reached upstream")
+            else:
+                events = ledger["events"]
+                check(ledger["attempts"] == {"transport": 0, "probe": 0, "control": 6, "business": 3}, "upstream handshake/business was duplicated or omitted")
+                check([row["rpcMethod"] for row in events] == ["initialize", "notifications/initialized", "tools/list", "initialize", "notifications/initialized", "tools/call", "initialize", "notifications/initialized", "tools/call"], "upstream operation sequence changed")
+                check(all(row["accepted"] and row["protocolVersion"] in (None, "2025-03-26") for row in events), "downstream version leaked upstream")
+                check(all(row["initializeVersion"] == "2025-03-26" and row["sessionAlias"] is None if row["rpcMethod"] == "initialize" else row["sessionAlias"] == "nov25-upstream" for row in events), "upstream version/session policy changed")
+            return {"ledger": ledger, "businessCount": ledger["attempts"]["business"]}
+
+        if kind in ("initialize-header", "initialize-body", "fallback", "modern-body-fallback", "old"):
+            version = case.get("version", "2099-01-01" if kind == "fallback" else contract.MODERN if kind == "modern-body-fallback" else contract.NOV25)
+            extra = version_header if kind == "initialize-header" else [("MCP-Protocol-Version", version)] if kind == "old" else []
+            status, _, response = send("initialize", {"protocolVersion": version, "capabilities": {}}, extra)
+            if kind == "initialize-header" and baseline:
+                rejected(status, response, -32022)
+                detail = {"negotiated": None, "rejectedBeforeBody": True}
+            else:
+                result = success(status, response)
+                want = "2025-06-18" if kind in ("fallback", "modern-body-fallback") or kind == "initialize-body" and baseline else version
+                check(result.get("protocolVersion") == want and result.get("capabilities") == {"tools": {}}, "initialize version/capability policy changed")
+                detail = {"negotiated": want}
+        elif kind == "discovery":
+            status, _, response = send("server/discover", {"_meta": contract.META}, modern=True)
+            result = success(status, response)
+            check(result["supportedVersions"] == versions and result["capabilities"] == {"tools": {}}, "discovery versions/capabilities differ")
+            check(result["resultType"] == "complete" and integer(result["ttlMs"]) == 0 and result["cacheScope"] == "private" and result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"] == "compat-http-legacy", "modern result metadata changed")
+            detail = {"supportedVersions": versions}
+        else:
+            extra = {"unknown-header": [("MCP-Protocol-Version", "2099-01-01")],
+                     "missing-version": [("Mcp-Method", "tools/list")],
+                     "empty-version": [("MCP-Protocol-Version", "")],
+                     "duplicate-version": version_header * 2,
+                     "handshake-modern-identity": version_header + [("Mcp-Method", "tools/list")],
+                     "handshake-modern-meta": version_header}.get(kind, [])
+            modern = kind in ("modern-missing-meta", "modern-mismatched-meta")
+            params = {"_meta": {**contract.META, "io.modelcontextprotocol/protocolVersion": contract.NOV25}} if kind in ("handshake-modern-meta", "modern-mismatched-meta") else {}
+            status, _, response = send("tools/list", params, extra, modern=modern)
+            code = -32022 if kind in ("unknown-header", "modern-mismatched-meta") or baseline and kind in ("duplicate-version", "handshake-modern-identity", "handshake-modern-meta") else -32020
+            rejected(status, response, code)
+            detail = {"errorCode": code}
+        check(not self.ledger()["events"], "local negotiation/discovery/rejection reached business")
+        return detail
+
+    def run_sse_get_auth_headers(self):
+        import verify as existing
+        expected = contract.sse_get_auth_cases()
+        startup_error = None
+        if self.variant not in ("affected", "candidate"): startup_error = "invalid focused variant"
+        try:
+            check(startup_error is None, startup_error)
+            existing.wait_http("http://backend-primary:8080/healthz")
+            existing.wait_http("http://gateway:9901/ready")
+        except Exception as error:
+            startup_error = type(error).__name__ + ": " + str(error)
+        if startup_error is None:
+            for case in expected:
+                self.case = case["id"]
+                row = {"id": self.case, "status": "FAIL", "isolationFailures": [], "invariantFailures": [], "validRedReproduction": False}
+                try:
+                    self.backend(reset=True)
+                    self.exchange(PORTS["sse"], contract.envelope(case["profile"] != "legacy", method=case["method"], tool="echo", rpc_id=case["rpcId"]),
+                                  case["profile"] != "legacy", tool="echo", method=case["method"], capture_response=True,
+                                  extra=(("X-Compat-Fail-Stage", "get"), ("X-Compat-Response", "http" + str(case["status"])), ("X-Compat-Auth-Fixture", "gzip-headers")))
+                    exchange = self.exchanges[-1]
+                    captured = exchange["rawResponse"]
+                    decoded = base64.b64decode(captured["decodedBodyBase64"]) if "decodedBodyBase64" in captured else None
+                    try: response = loads_typed(decoded) if decoded else None
+                    except ValueError: response = None
+                    events = self.backend()["events"]
+                    ledger = {"events": events, "attempts": {kind: sum(event["kind"] == kind for event in events) for kind in ("transport", "probe", "control", "business")}}
+                    invariant, isolation = inspect_sse_get_auth(case, exchange, response, ledger)
+                    row.update(invariantFailures=invariant, isolationFailures=isolation, detail={"ledger": ledger})
+                    row["status"] = "PASS" if not invariant and not isolation else "FAIL"
+                    row["validRedReproduction"] = not invariant and bool(isolation)
+                except Exception as error:
+                    row["invariantFailures"].append("unobserved_or_failed_case: " + type(error).__name__ + ": " + str(error))
+                self.rows.append(row)
+                self.write_sse_get_auth_headers(expected, startup_error)
+        snapshot = self.write_sse_get_auth_headers(expected, startup_error)
+        return 0 if snapshot["passed"] else 1
+
+    def write_sse_get_auth_headers(self, expected, startup_error):
+        access_ids = [row.get("accessRequestId") for row in self.exchanges]
+        complete = (contract.complete(expected, self.rows) and Counter(row["id"] for row in expected) == Counter(row["case"] for row in self.exchanges)
+                    and all(access_ids) and len(access_ids) == len(set(access_ids)))
+        snapshot = {"mode": "sse-get-auth-headers", "variant": self.variant, "affectedSource": contract.SSE_GET_AUTH_AFFECTED,
+                    "expectedCases": expected, "cases": self.rows, "exchanges": self.exchanges, "complete": complete,
+                    "startupError": startup_error,
+                    "passed": not startup_error and complete and all(row["status"] == "PASS" for row in self.rows),
+                    "validRedReproduction": self.variant == "affected" and not startup_error and complete and all(row["status"] == "FAIL" and row["validRedReproduction"] for row in self.rows)}
+        (self.out / f"sse-get-auth-{self.variant}.json").write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
+        return snapshot
+
+
+def token_number(value):
+    return value.lexeme if isinstance(value, JSONNumber) else str(value)
+
+
+def supplements(variant, out):
+    """Retained control/cancellation and instructions oracles remain independent."""
+    import verify as existing
+    import verify_auto
+    existing.RESULTS.clear()
+    existing.EXCHANGES.clear()
+    expected = [name for name, _ in verify_auto.cases(existing)]
+    for name, callback in verify_auto.cases(existing):
+        existing.record(name, callback)
+    Path(out, f"controls-{variant}.json").write_text(json.dumps({"expectedCases": expected, "cases": existing.RESULTS,
+        "exchanges": existing.EXCHANGES}, indent=2, sort_keys=True) + "\n")
+    auto_passed = all(row["status"] == "PASS" for row in existing.RESULTS)
+    existing.RESULTS.clear()
+    existing.EXCHANGES.clear()
+    instructions_status = existing.instructions_verification()
+    return 0 if auto_passed and instructions_status == 0 else 1
+
+
+if __name__ == "__main__":
+    variant = os.environ["COMPAT_VARIANT"]
+    out = os.environ.get("RUNTIME_EVIDENCE", "/evidence")
+    if "--sse-get-auth-headers" in sys.argv:
+        raise SystemExit(Compatibility(variant, out).run_sse_get_auth_headers())
+    if "--nov25" in sys.argv:
+        raise SystemExit(Compatibility(variant, out).run_nov25())
+    if "--supplements" in sys.argv:
+        raise SystemExit(supplements(variant, out))
+    raise SystemExit(Compatibility(variant, out).run())

@@ -47,6 +47,7 @@ type milvusData struct {
 	Vector   []float64 `json:"vector"`
 	Question string    `json:"question,omitempty"`
 	Answer   string    `json:"answer,omitempty"`
+	Consumer string    `json:"consumer"`
 }
 
 type milvusInsertRequest struct {
@@ -61,6 +62,10 @@ func (d *milvusProvider) UploadAnswerAndEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 	// 最少需要填写的参数为 collectionName, data 和 Authorization. question, answer 可选
 	// 需要填写 id，否则 v2.4.13-hotfix 提示 invalid syntax: invalid parameter[expected=Int64][actual=]
 	// 如果不填写 id，要在创建 collection 的时候设置 autoId 为 true
@@ -86,6 +91,7 @@ func (d *milvusProvider) UploadAnswerAndEmbedding(
 				Question: queryString,
 				Answer:   queryAnswer,
 				Vector:   queryEmb,
+				Consumer: consumer,
 			},
 		},
 	})
@@ -116,6 +122,7 @@ type milvusQueryRequest struct {
 	AnnsField      string      `json:"annsField"`
 	Limit          int         `json:"limit"`
 	OutputFields   []string    `json:"outputFields"`
+	Filter         string      `json:"filter"`
 }
 
 func (d *milvusProvider) QueryEmbedding(
@@ -123,6 +130,10 @@ func (d *milvusProvider) QueryEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(results []QueryResult, ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 	// 最少需要填写的参数为 collectionName, data, annsField. outputFields 为可选参数
 	// 下面是一个例子
 	// {
@@ -142,6 +153,10 @@ func (d *milvusProvider) QueryEmbedding(
 	// 		"color"
 	// 	]
 	// }
+	consumerString, err := json.Marshal(consumer)
+	if err != nil {
+		return err
+	}
 	requestBody, err := json.Marshal(milvusQueryRequest{
 		CollectionName: d.config.collectionID,
 		Data:           [][]float64{emb},
@@ -150,7 +165,9 @@ func (d *milvusProvider) QueryEmbedding(
 		OutputFields: []string{
 			"question",
 			"answer",
+			TenantField,
 		},
+		Filter: fmt.Sprintf("consumer == %s", consumerString),
 	})
 	if err != nil {
 		log.Errorf("[Milvus] Failed to marshal query embedding: %v", err)
@@ -196,9 +213,10 @@ func (d *milvusProvider) parseQueryResponse(responseBody []byte, log log.Log) ([
 	results := make([]QueryResult, 0, resultNum)
 	for i := 0; i < int(resultNum); i++ {
 		result := QueryResult{
-			Text:   gjson.GetBytes(responseBody, fmt.Sprintf("data.%d.question", i)).String(),
-			Score:  gjson.GetBytes(responseBody, fmt.Sprintf("data.%d.distance", i)).Float(),
-			Answer: gjson.GetBytes(responseBody, fmt.Sprintf("data.%d.answer", i)).String(),
+			Text:     gjson.GetBytes(responseBody, fmt.Sprintf("data.%d.question", i)).String(),
+			Score:    gjson.GetBytes(responseBody, fmt.Sprintf("data.%d.distance", i)).Float(),
+			Answer:   gjson.GetBytes(responseBody, fmt.Sprintf("data.%d.answer", i)).String(),
+			Consumer: gjson.GetBytes(responseBody, fmt.Sprintf("data.%d.consumer", i)).String(),
 		}
 		results = append(results, result)
 	}
