@@ -194,7 +194,7 @@ type usage struct {
 
 type promptTokensDetails struct {
 	AudioTokens  int `json:"audio_tokens,omitempty"`
-	CachedTokens int `json:"cached_tokens,omitempty"`
+	CachedTokens int `json:"cached_tokens"`
 }
 
 type completionTokensDetails struct {
