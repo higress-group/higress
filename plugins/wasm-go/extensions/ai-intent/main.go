@@ -217,8 +217,8 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 	log.Infof("[onHttpRequestBody] proxyUrl is:  %s", proxyPath)
 	log.Infof("[onHttpRequestBody] proxyRequestBody is:  %s", string(proxyRequestBody))
 	//调用大模型 获取意向类型
-	llmProxyErr := config.LLMInfo.ProxyClient.Post(
-		proxyUrl,
+	llmProxyErr := postIntentRequest(
+		config.LLMInfo, proxyUrl,
 		proxyRequestHeader,
 		proxyRequestBody,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
@@ -356,4 +356,36 @@ func getProxyResponseByExtractor(c *PluginConfig, responseBody []byte, log log.L
 	// llm返回的结果
 	originalAnswer, _ := zhToUnicode([]byte(responseContent))
 	return string(originalAnswer)
+}
+
+// postIntentRequest preserves the already parsed request-target verbatim. The
+// shared HttpClient reparses URL.Path and loses escaped path separators.
+func postIntentRequest(llm LLMInfo, requestURI string, headers [][2]string, body []byte, callback wrapper.ResponseCallback, timeout uint32) error {
+	// Preserve the previous client's origin-form handling for relative paths.
+	if !strings.HasPrefix(requestURI, "/") {
+		requestURI = "/" + requestURI
+	}
+	authority := llm.ProxyDomain
+	if authority == "" {
+		authority = llm.ProxyServiceName
+	}
+	headers = append(headers, [2]string{":method", http.MethodPost}, [2]string{":path", requestURI}, [2]string{":authority", authority})
+	_, err := proxywasm.DispatchHttpCall(llm.ProxyClient.ClusterName(), headers, body, nil, timeout, func(numHeaders, bodySize, numTrailers int) {
+		responseBody, _ := proxywasm.GetHttpCallResponseBody(0, bodySize)
+		responseHeaders, _ := proxywasm.GetHttpCallResponseHeaders()
+		status := http.StatusBadGateway
+		parsedHeaders := make(http.Header)
+		for _, header := range responseHeaders {
+			if header[0] == ":status" {
+				var err error
+				status, err = strconv.Atoi(header[1])
+				if err != nil {
+					status = http.StatusInternalServerError
+				}
+			}
+			parsedHeaders.Add(header[0], header[1])
+		}
+		callback(status, parsedHeaders, responseBody)
+	})
+	return err
 }
