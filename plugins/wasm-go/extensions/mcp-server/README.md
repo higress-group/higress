@@ -248,7 +248,9 @@ Legacy/Modern 的完整 UTF-8 JSON-RPC 请求体上限统一为 **100 MiB**，�
 
 ## 协议支持与后端连接
 
-插件支持 MCP `2024-11-05`、`2025-03-26`、`2025-06-18` 和 `2026-07-28` 的工具服务能力。
+插件支持 MCP `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` 和 `2026-07-28` 的工具服务能力。
+
+`2025-11-25` 的支持限定于现有 `initialize` → `notifications/initialized` → `tools/list` / `tools/call` 工作流；明确请求该版本时返回相同版本。无版本头且初始化正文请求未知版本时，兼容回退仍为 `2025-06-18`；未知版本头继续被拒绝。此项兼容不扩展 Tasks、Sampling、URL Elicitation、OAuth 或传输能力，也不改变后端版本选择策略。
 
 使用内置工具或 REST-to-MCP 时，无需配置后端 MCP 协议策略。代理已有 MCP Server 时，需要根据后端能力配置 `transport` 和 `protocolStrategy`。
 

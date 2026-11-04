@@ -54,6 +54,7 @@ def main():
                              "RUNTIME_LIFECYCLE_DIAGNOSTICS": str(out / "lifecycle-diagnostics.log")})
     log = (out / "commands.jsonl").open("w")
     inputs = {"candidate": candidate, "businessOracle": contract.ORACLE, "controlScopeBaseline": contract.CONTROL,
+              "nov25Baseline": contract.NOV25_BASELINE, "nov25Configs": {},
               "tokenOverridesUnset": True, "project": project, "versions": {}, "images": {},
               "harness": {str(path.relative_to(harness)): sha(path) for path in sorted(harness.rglob("*")) if path.is_file()},
               "registeredFixtureSha256": sha(harness / "registered_fixture.go.txt"), "routingRequired": not args.skip_routing}
@@ -130,6 +131,37 @@ def main():
             compose("exec", "-T", "gateway", "/usr/local/bin/envoy", "--version", target=out / f"envoy-{variant}-version.txt")
             lifecycle("stop_runtime_service gateway")
             compose("logs", "--no-color", "gateway", target=out / f"gateway-{variant}.log")
+            compose("rm", "-f", "gateway")
+        # The new bug has its own exact pre-fix module. Never retarget the
+        # historical business oracle or scope-control baseline above.
+        with tempfile.TemporaryDirectory(prefix="mcp-nov25-source-", dir=out) as temporary:
+            source = Path(temporary)
+            archive = source / "source.tar"
+            run(["git", "archive", "--format=tar", "--output=" + str(archive), contract.NOV25_BASELINE, "plugins/wasm-go"], cwd=ROOT)
+            with tarfile.open(archive) as bundle:
+                bundle.extractall(source, filter="data")
+            extension = source / "plugins/wasm-go/extensions/mcp-server"
+            wasm = out / "plain-nov25-baseline.wasm"
+            recorded_run(["go", "build", "-trimpath", "-buildmode=c-shared", "-o", str(wasm), "."], log, cwd=extension,
+                         env={**env, "GOOS": "wasip1", "GOARCH": "wasm"}, target=out / "build-nov25-baseline.log")
+            inputs["versions"]["nov25-baseline"] = {"source": contract.NOV25_BASELINE, "go": run(["go", "version"], cwd=extension).stdout.strip(),
+                "wasm": {"plain": sha(wasm)}, "moduleFiles": {str(path.relative_to(source)): sha(path) for path in sorted(source.rglob("go.*")) if path.name in ("go.mod", "go.sum")}}
+        from compat_fixture import nov25_config
+        for variant in ("nov25-baseline", "candidate"):
+            shutil.copyfile(out / f"plain-{variant}.wasm", out / "plugin.wasm")
+            nov25_config(out)
+            config = out / f"envoy-nov25-{variant}.yaml"
+            shutil.copyfile(out / "envoy.yaml", config)
+            inputs["nov25Configs"][variant] = sha(config)
+            compose("up", "-d", "backend-primary", "backend-secondary")
+            lifecycle("reset_primary_backend")
+            compose("up", "-d", "gateway")
+            result = compose("--profile", "verify", "run", "--rm", "--no-deps", "-e", "COMPAT_VARIANT=" + variant,
+                             "verifier", "python", "/harness/verify_compat.py", "--nov25", allow_failure=True, target=out / f"verify-nov25-{variant}.log")
+            verifier_failed |= result.returncode != 0
+            compose("exec", "-T", "gateway", "/usr/local/bin/envoy", "--version", target=out / f"envoy-nov25-{variant}-version.txt")
+            lifecycle("stop_runtime_service gateway")
+            compose("logs", "--no-color", "gateway", target=out / f"gateway-nov25-{variant}.log")
             compose("rm", "-f", "gateway")
         if not args.skip_routing:
             result = run([sys.executable, str(harness / "run_routing.py"), "--oracle", contract.ORACLE, "--skip-affected", "--candidate", candidate,

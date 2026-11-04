@@ -157,7 +157,7 @@ class Compatibility:
         except ValueError:
             value = None
         self.exchanges.append({"case": self.case, "accessRequestId": request_id, "port": port, "httpStatus": status,
-                               "request": contract.body_record(raw), "response": contract.body_record(body),
+                               "request": contract.body_record(raw), "requestHeadersSha256": hashlib.sha256(json.dumps(headers, separators=(",", ":")).encode()).hexdigest(), "response": contract.body_record(body),
                                "responseHeaders": {k.lower(): v for k, v in response_headers if k.lower() in ("content-type", "www-authenticate", "retry-after")},
                                "elapsedSecondsDiagnostic": round(time.monotonic() - begin, 3)})
         if capture_response: self.exchanges[-1]["rawResponse"] = captured
@@ -500,6 +500,108 @@ class Compatibility:
             "cases": self.rows, "exchanges": self.exchanges}, indent=2, sort_keys=True) + "\n")
 
 
+    def run_nov25(self):
+        """Exercise the same compatibility traffic and record the expected red baseline."""
+        import verify as existing
+        expected = contract.nov25_cases()
+        existing.wait_http("http://backend-primary:8080/healthz")
+        existing.wait_http("http://gateway:9901/ready")
+        for case in expected:
+            self.case = case["id"]
+            self.backend(reset=True)
+            row = {"id": self.case, "status": "FAIL"}
+            try:
+                row.update(status="PASS", detail=self.nov25_case(case))
+            except Exception as error:
+                row.update(error=str(error), ledger=self.ledger())
+            self.rows.append(row)
+            (self.out / f"nov25-{self.variant}.json").write_text(json.dumps({"variant": self.variant, "baseline": contract.NOV25_BASELINE,
+                "expectedCases": expected, "cases": self.rows, "exchanges": self.exchanges}, indent=2, sort_keys=True, default=lambda value: {"numberToken": value.lexeme}) + "\n")
+        return 0 if contract.complete(expected, self.rows) and all(row["status"] == "PASS" for row in self.rows) else 1
+
+    def nov25_case(self, case):
+        baseline = self.variant == "nov25-baseline"
+        versions = contract.NOV25_OLD_VERSIONS if baseline else contract.NOV25_VERSIONS
+        port, kind = PORTS["http-legacy"], case["kind"]
+        common = [("X-Compat-Nov25", "1")]
+        version_header = [("MCP-Protocol-Version", contract.NOV25)]
+
+        def send(method, params=None, extra=(), modern=False):
+            raw = contract.nov25_request(method, params)
+            status, headers, response = self.exchange(port, raw, modern, method=method, tool="echo", extra=common + list(extra))
+            self.exchanges[-1]["observedResponse"] = response
+            return status, headers, response
+
+        def success(status, response):
+            check(status == 200 and response and response.get("jsonrpc") == "2.0" and response.get("id") == "nov25-client" and "result" in response and "error" not in response, "invalid successful RPC envelope/ID")
+            return response["result"]
+
+        def rejected(status, response, code):
+            check(status == 400 and response and integer(response.get("error", {}).get("code")) == code and "result" not in response, "strict identity/version rejection changed")
+            if code == -32022:
+                check(response["error"]["data"]["supported"] == versions, "unsupported-version list differs")
+
+        if kind == "tools-workflow":
+            status, _, response = send("initialize", {"protocolVersion": contract.NOV25, "capabilities": {}}, version_header)
+            if baseline: rejected(status, response, -32022)
+            else: check(success(status, response)["protocolVersion"] == contract.NOV25, "initialize did not negotiate November version")
+            status, _, response = send("notifications/initialized", extra=version_header)
+            if baseline: rejected(status, response, -32022)
+            else: check(status == 202 and response is None, "initialized is not an empty acknowledgement")
+            status, _, response = send("tools/list", extra=version_header)
+            if baseline: rejected(status, response, -32022)
+            else: check(success(status, response)["tools"] == [contract.NOV25_TOOL], "tool descriptor/input schema changed")
+            for fail in (False, True):
+                status, _, response = send("tools/call", {"name": "echo", "arguments": {"value": "nov25", "fail": fail}}, version_header)
+                if baseline: rejected(status, response, -32022)
+                else:
+                    result = success(status, response)
+                    check(result == {"content": [{"type": "text", "text": "synthetic execution failed" if fail else "echo:nov25"}], "isError": fail}, "Tools content/execution error changed")
+            ledger = self.ledger()
+            if baseline:
+                check(not ledger["events"], "rejected November workflow reached upstream")
+            else:
+                events = ledger["events"]
+                check(ledger["attempts"] == {"transport": 0, "probe": 0, "control": 6, "business": 3}, "upstream handshake/business was duplicated or omitted")
+                check([row["rpcMethod"] for row in events] == ["initialize", "notifications/initialized", "tools/list", "initialize", "notifications/initialized", "tools/call", "initialize", "notifications/initialized", "tools/call"], "upstream operation sequence changed")
+                check(all(row["accepted"] and row["protocolVersion"] in (None, "2025-03-26") for row in events), "downstream version leaked upstream")
+                check(all(row["initializeVersion"] == "2025-03-26" and row["sessionAlias"] is None if row["rpcMethod"] == "initialize" else row["sessionAlias"] == "nov25-upstream" for row in events), "upstream version/session policy changed")
+            return {"ledger": ledger, "businessCount": ledger["attempts"]["business"]}
+
+        if kind in ("initialize-header", "initialize-body", "fallback", "modern-body-fallback", "old"):
+            version = case.get("version", "2099-01-01" if kind == "fallback" else contract.MODERN if kind == "modern-body-fallback" else contract.NOV25)
+            extra = version_header if kind == "initialize-header" else [("MCP-Protocol-Version", version)] if kind == "old" else []
+            status, _, response = send("initialize", {"protocolVersion": version, "capabilities": {}}, extra)
+            if kind == "initialize-header" and baseline:
+                rejected(status, response, -32022)
+                detail = {"negotiated": None, "rejectedBeforeBody": True}
+            else:
+                result = success(status, response)
+                want = "2025-06-18" if kind in ("fallback", "modern-body-fallback") or kind == "initialize-body" and baseline else version
+                check(result.get("protocolVersion") == want and result.get("capabilities") == {"tools": {}}, "initialize version/capability policy changed")
+                detail = {"negotiated": want}
+        elif kind == "discovery":
+            status, _, response = send("server/discover", {"_meta": contract.META}, modern=True)
+            result = success(status, response)
+            check(result["supportedVersions"] == versions and result["capabilities"] == {"tools": {}}, "discovery versions/capabilities differ")
+            check(result["resultType"] == "complete" and integer(result["ttlMs"]) == 0 and result["cacheScope"] == "private" and result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"] == "compat-http-legacy", "modern result metadata changed")
+            detail = {"supportedVersions": versions}
+        else:
+            extra = {"unknown-header": [("MCP-Protocol-Version", "2099-01-01")],
+                     "missing-version": [("Mcp-Method", "tools/list")],
+                     "empty-version": [("MCP-Protocol-Version", "")],
+                     "duplicate-version": version_header * 2,
+                     "handshake-modern-identity": version_header + [("Mcp-Method", "tools/list")],
+                     "handshake-modern-meta": version_header}.get(kind, [])
+            modern = kind in ("modern-missing-meta", "modern-mismatched-meta")
+            params = {"_meta": {**contract.META, "io.modelcontextprotocol/protocolVersion": contract.NOV25}} if kind in ("handshake-modern-meta", "modern-mismatched-meta") else {}
+            status, _, response = send("tools/list", params, extra, modern=modern)
+            code = -32022 if kind in ("unknown-header", "modern-mismatched-meta") or baseline and kind in ("duplicate-version", "handshake-modern-identity", "handshake-modern-meta") else -32020
+            rejected(status, response, code)
+            detail = {"errorCode": code}
+        check(not self.ledger()["events"], "local negotiation/discovery/rejection reached business")
+        return detail
+
     def run_sse_get_auth_headers(self):
         import verify as existing
         expected = contract.sse_get_auth_cases()
@@ -578,6 +680,8 @@ if __name__ == "__main__":
     out = os.environ.get("RUNTIME_EVIDENCE", "/evidence")
     if "--sse-get-auth-headers" in sys.argv:
         raise SystemExit(Compatibility(variant, out).run_sse_get_auth_headers())
+    if "--nov25" in sys.argv:
+        raise SystemExit(Compatibility(variant, out).run_nov25())
     if "--supplements" in sys.argv:
         raise SystemExit(supplements(variant, out))
     raise SystemExit(Compatibility(variant, out).run())

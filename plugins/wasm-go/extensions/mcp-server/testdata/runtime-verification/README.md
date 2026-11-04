@@ -1,7 +1,7 @@
 # MCP compatibility runtime verification
 
 The default `run.sh` entry delegates to `run-compat.sh`. This loop builds a clean
-exact candidate and two pinned sources, uses the existing Compose backend,
+exact candidate and three pinned sources, uses the existing Compose backend,
 Envoy renderer, bounded lifecycle helpers and evidence finalizer, then runs the
 existing routing regression runner. It does not certify native, official-client
 or kind acceptance; those checks remain separate verification commands.
@@ -40,6 +40,7 @@ name; it neither reads provider credentials nor operates on a Kubernetes cluster
 | --- | --- | --- |
 | Business oracle | `958b5e7f8e0062d1e26963d008e7be4b707fa715` | Corresponding historical Legacy business path |
 | Control/scope baseline | `bde990b4bfc7ecb581338e2d0ae858aaedb2fd69` | Retained probe/handshake/cancellation and instructions scope |
+| November compatibility baseline | `03a91cb3fbe2664ac190868ee062ca6bccbba4e2` | Same-input rejection/fallback comparison for downstream `2025-11-25` |
 | Candidate | Clean checkout HEAD | Independent acceptance assertions and corresponding business comparison |
 
 The control binary also runs five explicitly labelled diagnostic red cases:
@@ -59,6 +60,34 @@ exported with their descriptors/arguments intact; only test server identity,
 external request target/method and vendor response templates are adapted to the
 observable local backend. Their source and derived fixture hashes and exact
 adaptations are recorded in `builtin-manifest.json`.
+
+## Downstream `2025-11-25` comparison
+
+The normal entry also builds the dedicated pre-fix module and runs 17 focused
+cases (21 exchanges) against that module and the candidate. The historical
+business oracle and control/scope baseline retain their original roles and
+expectations. Both new variants load `plugin.wasm` through byte-identical Envoy
+configuration and receive the same request bodies and headers; their config,
+request and header hashes must match during finalization.
+
+`nov25-<variant>.json` preserves the responses and assertions separately. It
+checks initialize with/without a version header, older same-version negotiation,
+unknown-body fallback fixed at `2025-06-18`, unknown-header and strict modern
+identity rejection, and exact discovery versions/capabilities/result metadata.
+The complete initialize -> initialized -> list -> successful call -> failed call
+sequence uses a deterministic legacy RealMCP peer. Its descriptor/input schema,
+client IDs, content and `isError` are asserted. The baseline rejects every
+November-header request before any backend operation; the candidate records
+three upstream handshakes and exactly three business operations. The ledger
+records upstream protocol/initialize versions and a synthetic session alias to
+prove the downstream version is not copied upstream or executed twice.
+
+This is existing handshake-based Tools coverage. It adds no optional MCP
+capabilities or upstream version policy, and preserves the upstream-only
+`2025-11-25` auto-detection rejection tests. Finalization requires both complete
+focused exchange/access ledgers, source/module/toolchain/Wasm identities,
+equivalent config/input hashes and successful cleanup. Native fixture self-tests
+do not claim real Envoy acceptance.
 
 ## Independent cases and observability
 

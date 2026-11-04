@@ -29,7 +29,7 @@ import (
 func TestDiscoveryResultAdvertisesOnlyEffectiveProfilesAndCapabilities(t *testing.T) {
 	semantic := DiscoveryResult(true)
 	value := semantic.Value.(map[string]any)
-	wantVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18", "2026-07-28"}
+	wantVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"}
 	if got := value["supportedVersions"]; !reflect.DeepEqual(got, wantVersions) {
 		t.Fatalf("supportedVersions = %#v, want %#v", got, wantVersions)
 	}
@@ -111,7 +111,7 @@ func TestProductionDiscoveryAndToolsListResultContracts(t *testing.T) {
 	t.Run("modern discovery", func(t *testing.T) {
 		result := modernExchange(t, "server/discover", modernBody("server/discover"))
 		assertModernCompleteResult(t, result, "catalog", true)
-		if got, want := stringSlice(result["supportedVersions"]), []string{"2024-11-05", "2025-03-26", "2025-06-18", "2026-07-28"}; !reflect.DeepEqual(got, want) {
+		if got, want := stringSlice(result["supportedVersions"]), []string{"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("supportedVersions = %v, want %v", got, want)
 		}
 		capabilities := result["capabilities"].(map[string]any)

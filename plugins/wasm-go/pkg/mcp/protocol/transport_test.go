@@ -176,6 +176,26 @@ func TestHasModernIdentityHeaders(t *testing.T) {
 			want: true,
 		},
 		{
+			name:    "November handshake protocol only",
+			headers: [][2]string{{HeaderProtocolVersion, string(Version20251125)}},
+			want:    false,
+		},
+		{
+			name:    "November version with explicit modern identity",
+			headers: [][2]string{{HeaderProtocolVersion, string(Version20251125)}, {HeaderMethod, "tools/list"}},
+			want:    true,
+		},
+		{
+			name:    "duplicate November version",
+			headers: [][2]string{{HeaderProtocolVersion, string(Version20251125)}, {HeaderProtocolVersion, string(Version20251125)}},
+			want:    true,
+		},
+		{
+			name:    "unknown protocol only",
+			headers: [][2]string{{HeaderProtocolVersion, "2099-01-01"}},
+			want:    true,
+		},
+		{
 			name:    "legacy protocol only",
 			headers: [][2]string{{HeaderProtocolVersion, string(Version20250618)}},
 			want:    false,

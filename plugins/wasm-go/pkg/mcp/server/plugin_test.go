@@ -34,10 +34,49 @@ import (
 )
 
 func TestSupportedMCPVersionsRemainLegacyOnly(t *testing.T) {
-	want := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+	want := []string{"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
 	assert.Equal(t, want, SupportedMCPVersions)
 	assert.False(t, slices.Contains(SupportedMCPVersions, "2026-07-28"), "modern must not enter legacy initialize negotiation")
-	assert.False(t, slices.Contains(SupportedMCPVersions, "2025-11-25"), "deferred profile must not be advertised")
+	assert.Equal(t, protocol.LegacyVersions(), discoverySupportedVersions[:len(discoverySupportedVersions)-1])
+	assert.Equal(t, protocol.SupportedVersions(), discoverySupportedVersions[:])
+}
+
+// TestInitializeVersionCompatibility exercises the production header/body entry,
+// including the fixed unknown-body fallback and unchanged legacy mismatches.
+func TestInitializeVersionCompatibility(t *testing.T) {
+	saved := globalContext
+	globalContext = Context{servers: make(map[string]Server)}
+	Initialize()
+	t.Cleanup(func() { globalContext = saved })
+	for _, tc := range []struct{ header, body, want string }{
+		{"2024-11-05", "2024-11-05", "2024-11-05"},
+		{"2025-03-26", "2025-03-26", "2025-03-26"},
+		{"2025-06-18", "2025-06-18", "2025-06-18"},
+		{"2025-11-25", "2025-11-25", "2025-11-25"},
+		{"", "2025-11-25", "2025-11-25"},
+		{"", "2099-01-01", "2025-06-18"},
+		{"", "2026-07-28", "2025-06-18"},
+		{"2025-11-25", "2025-03-26", "2025-03-26"},
+	} {
+		t.Run(tc.header+"/"+tc.body, func(t *testing.T) {
+			host, status := wasmtest.NewTestHost(json.RawMessage(`{"toolSet":{"name":"compat","serverTools":[]}}`))
+			t.Cleanup(host.Reset)
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			headers := [][2]string{{":authority", "mcp.example.com"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}}
+			if tc.header != "" {
+				headers = append(headers, [2]string{protocol.HeaderProtocolVersion, tc.header})
+			}
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+			body := fmt.Sprintf(`{"jsonrpc":"2.0","id":"initialize-compat","method":"initialize","params":{"protocolVersion":%q,"capabilities":{}}}`, tc.body)
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(body)))
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			require.Equal(t, uint32(200), response.StatusCode)
+			assert.Equal(t, "initialize-compat", gjson.GetBytes(response.Data, "id").String())
+			assert.Equal(t, tc.want, gjson.GetBytes(response.Data, "result.protocolVersion").String())
+			assert.JSONEq(t, `{"tools":{}}`, gjson.GetBytes(response.Data, "result.capabilities").Raw)
+		})
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -887,7 +926,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		host := newHost(t)
 		headers := append(commonHeaders(),
 			[2]string{"origin", "https://evil.example"},
-			[2]string{protocol.HeaderProtocolVersion, "2025-11-25"},
+			[2]string{protocol.HeaderProtocolVersion, "2099-01-01"},
 			[2]string{protocol.HeaderMethod, "tools/list"},
 		)
 		action := host.CallOnHttpRequestHeaders(headers)
