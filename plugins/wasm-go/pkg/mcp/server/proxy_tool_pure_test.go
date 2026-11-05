@@ -210,6 +210,17 @@ func TestParseSSEResponse_TooLongLine(t *testing.T) {
 	assert.Contains(t, err.Error(), "32MB", "must surface the max-token overflow as a clear error")
 }
 
+// TestParseSSEResponse_CandidateCannotHideScannerError 验证回退候选不掩盖超长行，原格式仍不扫描尾部。
+func TestParseSSEResponse_CandidateCannotHideScannerError(t *testing.T) {
+	tail := strings.Repeat("x", 33*1024*1024)
+	out, err := parseSSEResponse([]byte("data:candidate\n" + tail))
+	require.ErrorContains(t, err, "SSE response line exceeds maximum token size (32MB)")
+	assert.Nil(t, out)
+	out, err = parseSSEResponse([]byte("data: original\n" + tail))
+	require.NoError(t, err)
+	assert.Equal(t, "original", string(out))
+}
+
 func TestParseSSEResponse_MultipleDataLinesReturnsFirst(t *testing.T) {
 	body := "data: first\n\ndata: second\n\n"
 	out, err := parseSSEResponse([]byte(body))

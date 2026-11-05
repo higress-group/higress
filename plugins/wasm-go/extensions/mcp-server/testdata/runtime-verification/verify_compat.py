@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 import compat_contract as contract
-from compat_fixture import PORTS
+from compat_fixture import PORTS, sse_no_space_cases
 from typed_canonical import JSONNumber, canonical_json_sha256, loads_typed
 
 
@@ -500,6 +500,76 @@ class Compatibility:
             "cases": self.rows, "exchanges": self.exchanges}, indent=2, sort_keys=True) + "\n")
 
 
+    def sse_no_space_case(self, case):
+        """Assert stage/count identity before recognizing a targeted baseline red."""
+        modern = case["route"] == "auto-modern"
+        raw = contract.envelope(modern, method=case["method"], tool="echo", rpc_id='"sse-client"')
+        if modern:
+            raw = raw.replace(b'"_meta":{', b'"_meta":{"progressToken":"sse-progress",', 1)
+        else:
+            raw = raw[:-2] + b',"_meta":{"progressToken":"sse-progress"}}}'
+        extra = [("X-Compat-SSE-Format", case["format"]), ("X-Compat-SSE-Stage", case.get("stage", "business"))]
+        status, headers, response = self.exchange(PORTS[case["route"]], raw, modern, tool="echo", method=case["method"], extra=extra)
+        self.exchanges[-1]["observedResponse"] = response
+        ledger = self.ledger()
+        baseline_red = self.variant == "sse-baseline" and case["target"]
+        init_red = baseline_red and case.get("stage") == "initialize"
+        methods = ["server/discover", case["method"]] if modern else ["initialize"] if init_red else ["initialize", "notifications/initialized", case["method"]]
+        counts = {"transport": 0, "probe": int(modern), "control": 0 if modern else 1 if init_red else 2, "business": 0 if init_red else 1}
+        check(ledger["attempts"] == counts and [row["rpcMethod"] for row in ledger["events"]] == methods, "missing/duplicate/unexpected backend dispatch")
+        check(all(row["accepted"] and row["backendOrigin"] == "primary" for row in ledger["events"]), "strict peer rejection or wrong backend")
+        check(all(row["protocolVersion"] == contract.MODERN if modern else row["protocolVersion"] in (None, "2025-03-26") for row in ledger["events"]), "upstream version policy changed")
+        fixtures = [row["sseFixture"] for row in ledger["events"] if "sseFixture" in row]
+        check(len(fixtures) == (2 if case.get("stage") == "all" else 1), "target SSE response was not observed")
+        for fixture in fixtures:
+            wire = base64.b64decode(fixture["rawBase64"], validate=True)
+            check(fixture["format"] == case["format"] and contract.body_record(wire) == {key: fixture[key] for key in ("utf8Bytes", "sha256")}, "wire fixture mismatch")
+        check(status == 200 and isinstance(response, dict) and response.get("jsonrpc") == "2.0" and response.get("id") == "sse-client", "HTTP/envelope/client ID changed")
+        check(headers.get("content-type", "").split(";", 1)[0] == "application/json", "gateway media changed")
+        if baseline_red or case["format"] == "invalid":
+            error = response.get("error", {})
+            check(integer(error.get("code")) == -32603 and "result" not in response, "controlled error missing")
+            message = error.get("message", "")
+            extraction = self.variant == "sse-baseline"
+            check("no data field found in SSE response" in message if extraction else message == "invalid JSON response", "wrong extraction/JSON failure stage")
+            return {"ledger": ledger, "stage": "extraction" if extraction else "json", "validRedReproduction": baseline_red,
+                    "positiveAssertion": "normal business result missing" if baseline_red else None}
+        check("error" not in response and "result" in response, "normal business result missing")
+        result = response["result"]
+        check(integer(result.get("number")) == 900719925474099312345 and integer(result.get("value")) == 2 and result.get("content") == [], "precise business result changed")
+        check(result.get("tools") == [{"name": "echo", "inputSchema": {"type": "object"}}], "tool list changed")
+        return {"ledger": ledger, "stage": "business", "validRedReproduction": False, "resultSha256": canonical_json_sha256(result)}
+
+    def run_sse_no_space(self):
+        import verify as existing
+        expected = sse_no_space_cases()
+        startup_error = None
+        try:
+            existing.wait_http("http://backend-primary:8080/healthz")
+            existing.wait_http("http://gateway:9901/ready")
+        except Exception as error:
+            startup_error = str(error)
+        for case in expected:
+            self.case = case["id"]
+            row = {"id": self.case, "status": "FAIL", "validRedReproduction": False}
+            try:
+                check(not startup_error, "startup failed: " + str(startup_error))
+                self.backend(reset=True)
+                detail = self.sse_no_space_case(case)
+                row.update(detail=detail, validRedReproduction=detail["validRedReproduction"])
+                if detail["validRedReproduction"]:
+                    row["error"] = detail["positiveAssertion"]
+                else:
+                    row["status"] = "PASS"
+            except Exception as error:
+                row["error"] = type(error).__name__ + ": " + str(error)
+            self.rows.append(row)
+            snapshot = {"variant": self.variant, "expectedCases": expected, "cases": self.rows, "exchanges": self.exchanges, "startupError": startup_error}
+            (self.out / f"sse-no-space-{self.variant}.json").write_text(json.dumps(snapshot, indent=2, sort_keys=True, default=lambda value: {"numberToken": value.lexeme}) + "\n")
+        # Target positive assertions remain actual failures on baseline. The
+        # outer runner separately validates the red/green matrix.
+        return 0 if contract.complete(expected, self.rows) and all(row["status"] == "PASS" for row in self.rows) else 1
+
     def run_nov25(self):
         """Exercise the same compatibility traffic and record the expected red baseline."""
         import verify as existing
@@ -678,6 +748,8 @@ def supplements(variant, out):
 if __name__ == "__main__":
     variant = os.environ["COMPAT_VARIANT"]
     out = os.environ.get("RUNTIME_EVIDENCE", "/evidence")
+    if "--sse-no-space" in sys.argv:
+        raise SystemExit(Compatibility(variant, out).run_sse_no_space())
     if "--sse-get-auth-headers" in sys.argv:
         raise SystemExit(Compatibility(variant, out).run_sse_get_auth_headers())
     if "--nov25" in sys.argv:
