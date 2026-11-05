@@ -558,8 +558,135 @@ def evidence_checks():
         require(json.loads((root / "compat-manifest.json").read_text())["checksums"] != evidence.checksums(root), "post-finalization mutation hidden")
 
 
+
+def sse_no_space_focused_checks():
+    """Run the focused verifier/finalizer with injected observations, never Wasm."""
+    import contextlib
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    import run_compat
+    import verify
+    cases = compat_fixture.sse_no_space_cases()
+    require(len(cases) == 10 and len({row["id"] for row in cases}) == 10 and sum(row["target"] for row in cases) == 5, "focused matrix incomplete")
+    # Actual backend selection must preserve default/control JSON responses.
+    for method in ("server/discover", "initialize", "notifications/initialized", "tools/list", "tools/call"):
+        for stage in (None, "business", "initialize", "all"):
+            h = parse_headers(io.BytesIO(b"Content-Type: application/json\r\n\r\n"))
+            if stage:
+                h["X-Compat-SSE-Format"], h["X-Compat-SSE-Stage"] = "no-space", stage
+            handler = SimpleNamespace(headers=h, command="POST", path="/unified/modern")
+            compat_backend.reset()
+            with patch.object(compat_backend, "raw_response") as send:
+                require(compat_backend.post(handler, c.envelope(False, method=method, tool="echo").decode()), "backend request missing")
+                event = compat_backend.state()["events"][-1]
+                formatted = bool(stage and method != "notifications/initialized" and
+                                 (stage == method or stage == "all" and method != "server/discover" or stage == "business" and method.startswith("tools/")))
+                require(("sseFixture" in event) == formatted, "focused format poisoned controls/default")
+                if formatted: require(send.call_args.args[3] == "text/event-stream", "focused media mismatch")
+    for framing in {row["format"] for row in cases}:
+        wire = compat_backend.sse_no_space_wire(b'{"result":{}}', framing)
+        require(wire.endswith(b"\r\n\r\n") if framing.endswith("crlf") else wire.endswith(b"\n\n"), "SSE wire incomplete")
+    rejected(lambda: compat_backend.sse_no_space_wire(b'{}', "unknown"))
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        result = {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}], "content": [], "number": c.JSONNumber("900719925474099312345"), "value": c.JSONNumber("2")}
+        def attach(verifier, fault=None):
+            state = {}
+            def exchange(port, raw, modern, **options):
+                case = next(row for row in cases if row["id"] == verifier.case)
+                require(c.loads_typed(raw)["params"]["_meta"]["progressToken"] == "sse-progress", "progressToken omitted")
+                require(port == compat_fixture.PORTS[case["route"]] and modern == (case["route"] == "auto-modern"), "focused route changed")
+                init_red = verifier.variant == "sse-baseline" and case.get("stage") == "initialize"
+                methods = ["server/discover", case["method"]] if modern else ["initialize"] if init_red else ["initialize", "notifications/initialized", case["method"]]
+                events = []
+                for method in methods:
+                    event = {"case": verifier.case, "rpcMethod": method, "kind": "probe" if method == "server/discover" else "control" if method in ("initialize", "notifications/initialized") else "business",
+                             "accepted": True, "backendOrigin": "primary", "protocolVersion": c.MODERN if modern else "2025-03-26"}
+                    stage = case.get("stage", "business")
+                    if method != "notifications/initialized" and (stage == "all" or stage == method or stage == "business" and method.startswith("tools/")):
+                        wire = compat_backend.sse_no_space_wire(b'{"jsonrpc":"2.0","id":2,"result":{}}', case["format"])
+                        event["sseFixture"] = {"format": case["format"], "stage": method, **c.body_record(wire), "rawBase64": base64.b64encode(wire).decode()}
+                    events.append(event)
+                state["events"] = events
+                failed = verifier.variant == "sse-baseline" and case["target"] or case["format"] == "invalid"
+                response = {"jsonrpc": "2.0", "id": "sse-client"}
+                if failed: response["error"] = {"code": c.JSONNumber("-32603"), "message": "no data field found in SSE response" if verifier.variant == "sse-baseline" else "invalid JSON response"}
+                else: response["result"] = copy.deepcopy(result)
+                if fault == "dispatch": events.append(copy.deepcopy(events[-1]))
+                elif fault == "id": response["id"] = "wrong"
+                elif fault == "number" and not failed: response["result"]["number"] = c.JSONNumber("1")
+                elif fault == "stage" and failed: response["error"]["message"] = "unrelated failure"
+                verifier.exchanges.append({"case": verifier.case, "accessRequestId": "test-" + verifier.case, "request": c.body_record(raw), "requestHeadersSha256": "same", "httpStatus": 200})
+                return 200, {"content-type": "application/json"}, response
+            verifier.exchange = exchange
+            verifier.backend = lambda reset=False: {"events": []} if reset else state
+        for role in ("sse-baseline", "candidate"):
+            verifier = Compatibility(role, root); attach(verifier)
+            with patch.object(verify, "wait_http", return_value=None):
+                require(verifier.run_sse_no_space() == (1 if role == "sse-baseline" else 0), "focused exit semantics changed")
+            snapshot = json.loads((root / f"sse-no-space-{role}.json").read_text())
+            require(c.complete(cases, snapshot["cases"]) and sum(row["validRedReproduction"] for row in snapshot["cases"]) == (5 if role == "sse-baseline" else 0), "focused red/green misclassified: " + repr(snapshot["cases"]))
+        for role, fault in (("candidate", "dispatch"), ("candidate", "id"), ("candidate", "number"), ("sse-baseline", "stage")):
+            verifier = Compatibility(role, root); attach(verifier, fault); verifier.case = cases[2]["id"]
+            rejected(lambda: verifier.sse_no_space_case(cases[2]))
+        inputs = {"candidate": "a" * 40, "sseBaseline": compat_fixture.SSE_NO_SPACE_BASELINE, "sourceStillClean": True, "tokenOverridesUnset": True, "cleanupComplete": True,
+                  "verifierExits": {"sse-baseline": 1, "candidate": 0}, "versions": {}, "configs": {}, "harness": {}, "images": {"gateway@sha256:" + "b" * 64: {}, "python@sha256:" + "c" * 64: {}}}
+        compat_fixture.sse_no_space_config(root); config = (root / "envoy.yaml").read_bytes()
+        compat_fixture.sse_no_space_config(root)
+        require((root / "envoy.yaml").read_bytes() == config and b"/runtime/plugin.wasm" in config, "role configuration differs")
+        for role, revision in (("sse-baseline", compat_fixture.SSE_NO_SPACE_BASELINE), ("candidate", inputs["candidate"])):
+            wasm = root / f"plain-{role}.wasm"; wasm.write_bytes(role.encode())
+            inputs["versions"][role] = {"source": revision, "go": "same-go", "moduleFiles": {"go.mod": "same"}, "wasm": {"plain": run_compat.sha(wasm)}}
+            cfg = root / f"envoy-{role}.yaml"; cfg.write_bytes(config); inputs["configs"][role] = run_compat.sha(cfg)
+            snapshot = json.loads((root / f"sse-no-space-{role}.json").read_text())
+            (root / f"gateway-{role}.log").write_text("\n".join("access request_id=" + row["accessRequestId"] + " listener=test" for row in snapshot["exchanges"]))
+        require(not run_compat.sse_no_space_errors(root, inputs), "valid focused evidence rejected")
+        path = root / "sse-no-space-candidate.json"; original = path.read_text()
+        for field in ("cases", "exchanges"):
+            for duplicate in (False, True):
+                changed = json.loads(original); changed[field] = changed[field] + changed[field][:1] if duplicate else changed[field][:-1]
+                path.write_text(json.dumps(changed)); require(bool(run_compat.sse_no_space_errors(root, inputs)), "missing/duplicate observation accepted")
+        path.write_text(original)
+        changed = json.loads(original)
+        next(row for row in changed["cases"] if row["id"] == "sse-no-space/mixed")["detail"]["resultSha256"] = "wrong"
+        path.write_text(json.dumps(changed))
+        require(bool(run_compat.sse_no_space_errors(root, inputs)), "changed control result accepted")
+        path.write_text(original)
+        for field, value in (("cleanupComplete", False), ("sseBaseline", "wrong"), ("verifierExits", {"sse-baseline": 0, "candidate": 0})):
+            require(bool(run_compat.sse_no_space_errors(root, {**inputs, field: value})), "bad focused identity/cleanup accepted")
+        changed = copy.deepcopy(inputs); changed["versions"]["sse-baseline"]["go"] = "different"
+        require(bool(run_compat.sse_no_space_errors(root, changed)), "inequivalent toolchain accepted")
+        verifier = Compatibility("sse-baseline", root)
+        with patch.object(verify, "wait_http", side_effect=RuntimeError("startup failure")):
+            require(verifier.run_sse_no_space() == 1 and not any(row["validRedReproduction"] for row in verifier.rows), "startup counted as red")
+    for flags in (["--sse-no-space"], ["--sse-baseline", compat_fixture.SSE_NO_SPACE_BASELINE], ["--sse-no-space", "--sse-baseline", "wrong"]):
+        with patch.object(sys, "argv", ["run_compat.py", "--output", "/unused", *flags]), contextlib.redirect_stderr(io.StringIO()):
+            try: run_compat.main()
+            except SystemExit as error: require(error.code == 2, "invalid selection accepted")
+            else: raise AssertionError("invalid selection accepted")
+    # Exercise real main/finally, injecting failure before any containers start.
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory); harness = root / "harness"; harness.mkdir()
+        (harness / "registered_fixture.go.txt").write_text("fixture")
+        for cleanup_status in (0, 1):
+            output = root / str(cleanup_status); commands = []
+            def fake_run(command, log, **options):
+                commands.append(command)
+                if command[:3] == ["podman", "image", "inspect"]: raise RuntimeError("image failure")
+                if options.get("target"): Path(options["target"]).write_text("")
+                return subprocess.CompletedProcess(command, cleanup_status if "down" in command else 0, stdout="")
+            with patch.object(run_compat, "HERE", harness), patch.object(run_compat, "source_is_clean", return_value=True), \
+                 patch.object(run_compat.subprocess, "check_output", return_value="a" * 40), patch.object(run_compat, "recorded_run", side_effect=fake_run), \
+                 patch.object(sys, "argv", ["run_compat.py", "--output", str(output), "--sse-no-space", "--sse-baseline", compat_fixture.SSE_NO_SPACE_BASELINE]), contextlib.redirect_stdout(io.StringIO()):
+                require(run_compat.main() == 1, "focused runner swallowed image failure")
+            recorded = json.loads((output / "compat-inputs.json").read_text())
+            require(recorded["cleanupComplete"] == (cleanup_status == 0), "cleanup failure hidden")
+            require(any(command[:3] == ["podman", "network", "ls"] for command in commands) and any(command[:3] == ["podman", "volume", "ls"] for command in commands), "cleanup inventories missing")
+
 def main():
-    strict_peer_checks(); concurrent_control_checks(); nov25_focused_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
+    sse_no_space_focused_checks(); strict_peer_checks(); concurrent_control_checks(); nov25_focused_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
     print("unified compatibility fixture/oracle self-tests passed")
 
 

@@ -259,6 +259,77 @@ func TestProxyLooseClientIDsReachStrictUpstreamsAndRestoreClientSemantics(t *tes
 	}
 }
 
+// TestSSENoSpaceHTTPCompatibility 验证显式 HTTP 握手、list/call 和 auto 后业务均沿用原调用方策略。
+// 输入仅改变 SSE data 字段空格；输出必须保留客户端 ID、精确数字和既有 JSON 错误边界。
+func TestSSENoSpaceHTTPCompatibility(t *testing.T) {
+	for _, strategy := range []ProtocolStrategy{ProtocolStrategyLegacy, ProtocolStrategyAuto} {
+		for _, operation := range []string{string(OpToolsList), string(OpToolsCall)} {
+			for _, framing := range []string{"initialize", "LF", "CRLF", "mixed", "empty", "invalid"} {
+				t.Run(fmt.Sprintf("%s/%s/%s", strategy, operation, framing), func(t *testing.T) {
+					var host wasmtest.TestHost
+					if strategy == ProtocolStrategyAuto {
+						host = newAutoTestHost(t, "")
+					} else {
+						host = newProxyBridgeHost(t, strategy)
+					}
+					headers, body := looseProxyRequest(true, operation, `"sse-client"`)
+					body = bytes.Replace(body, []byte(`"_meta":{`), []byte(`"_meta":{"progressToken":"sse-progress",`), 1)
+					require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+					host.CallOnHttpRequestBody(body)
+					if strategy == ProtocolStrategyAuto {
+						finishProxyControls(t, host, strategy, true, true)
+					} else {
+						initialize := calloutAt(t, host, 0)
+						initBody := autoResult(gjson.GetBytes(initialize.Body, "id").Raw, validAutoInitResult)
+						initPrefix := "data: "
+						if framing == "initialize" {
+							initPrefix = "data:"
+						}
+						completeCallout(host, initialize, "200", [][2]string{{"Content-Type", "text/event-stream"}}, append(append([]byte(initPrefix), initBody...), []byte("\n\n")...))
+						notification := calloutAt(t, host, 0)
+						require.Equal(t, "notifications/initialized", gjson.GetBytes(notification.Body, "method").String())
+						completeCallout(host, notification, "202", nil, nil)
+					}
+					business := routedRequest(t, host)
+					result := autoResult(gjson.GetBytes(business.Body, "id").Raw, `{"tools":[],"content":[],"number":900719925474099312345}`)
+					wire := append(append([]byte("data:"), result...), []byte("\n\n")...)
+					switch framing {
+					case "initialize":
+						wire = append(append([]byte("data: "), result...), []byte("\n\n")...)
+					case "CRLF":
+						wire = bytes.ReplaceAll(wire, []byte("\n"), []byte("\r\n"))
+					case "mixed":
+						wire = append(append([]byte("data:{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"sse-progress\",\"progress\":1}}\n\ndata: "), result...), []byte("\n\n")...)
+					case "empty":
+						wire = append(append([]byte("data:\n\ndata: "), result...), []byte("\n\n")...)
+					case "invalid":
+						wire = []byte("data:{invalid json}\n\n")
+					}
+					completeCallout(host, business, "200", [][2]string{{"Content-Type", "text/event-stream"}}, wire)
+					response := proxyTestResponse(host)
+					require.NotNil(t, response)
+					assert.Equal(t, `"sse-client"`, gjson.GetBytes(response.Data, "id").Raw)
+					if framing == "invalid" {
+						assert.Equal(t, int64(utils.ErrInternalError), gjson.GetBytes(response.Data, "error.code").Int())
+						assert.NotContains(t, string(response.Data), "no data field found")
+						if operation == string(OpToolsCall) {
+							assert.Contains(t, string(response.Data), "invalid JSON response")
+						} else {
+							assert.Contains(t, string(response.Data), "invalid character")
+						}
+					} else {
+						assert.Equal(t, uint32(200), response.StatusCode)
+						assert.False(t, gjson.GetBytes(response.Data, "error").Exists())
+						assert.Equal(t, "900719925474099312345", gjson.GetBytes(response.Data, "result.number").Raw)
+						assert.Equal(t, "[]", gjson.GetBytes(response.Data, "result.tools").Raw)
+					}
+					require.Empty(t, host.GetHttpCalloutAttributes())
+				})
+			}
+		}
+	}
+}
+
 func TestHTTPBusinessResponsePolicyDoesNotInheritControlRestrictions(t *testing.T) {
 	deep := strings.Repeat("[", 70) + "0" + strings.Repeat("]", 70)
 	for _, strategy := range []ProtocolStrategy{ProtocolStrategyLegacy, ProtocolStrategyModern, ProtocolStrategyAuto} {
