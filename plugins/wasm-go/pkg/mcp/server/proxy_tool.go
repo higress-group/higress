@@ -289,12 +289,15 @@ func sendUpstreamAuthFailure(ctx wrapper.HttpContext, statusCode int, responseHe
 	return true
 }
 
-// parseSSEResponse parses Server-Sent Events format and extracts data field content
+// parseSSEResponse 从完整 SSE 响应 sseData 中提取 data 字段，返回原始内容或扫描/缺失错误。
+// 原有 "data: " 格式仍立即返回；仅在完整扫描无错误且没有原格式时，回退到第一个非空 "data:" 内容。
+// 本函数沿用行级 TrimSpace 和 32MB 扫描上限，不校验 JSON、不选择通知或最终响应，也不拼接多行事件。
 func parseSSEResponse(sseData []byte) ([]byte, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(sseData))
 	// Set max token size to 32MB to handle large messages
 	maxTokenSize := 32 * 1024 * 1024 // 32MB
 	scanner.Buffer(make([]byte, 0, 64*1024), maxTokenSize)
+	var fallback string
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -309,6 +312,11 @@ func parseSSEResponse(sseData []byte) ([]byte, error) {
 			dataContent := strings.TrimPrefix(line, "data: ")
 			return []byte(dataContent), nil
 		}
+
+		// 无空格内容只作为候选，继续扫描以保留后续原格式的优先级。
+		if fallback == "" && strings.HasPrefix(line, "data:") {
+			fallback = strings.TrimPrefix(line, "data:")
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -318,6 +326,10 @@ func parseSSEResponse(sseData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("error reading SSE data: %v", err)
 	}
 
+	// 候选不能掩盖扫描错误；空 data 字段不会占据回退位置。
+	if fallback != "" {
+		return []byte(fallback), nil
+	}
 	return nil, fmt.Errorf("no data field found in SSE response")
 }
 

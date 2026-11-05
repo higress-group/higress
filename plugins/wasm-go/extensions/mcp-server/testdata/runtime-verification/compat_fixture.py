@@ -94,6 +94,33 @@ def nov25_config(out):
     Path(out, "envoy.yaml").write_text("admin:\n  address:\n    socket_address: {address: 0.0.0.0, port_value: 9901}\nstatic_resources:\n  listeners:\n" + listener + "  clusters:\n" + cluster)
 
 
+SSE_NO_SPACE_BASELINE = "a89b18dc12882f06fe4ac9fe33cfa8c03d11292a"
+
+
+def sse_no_space_cases():
+    """Closed #5308 matrix; positive targets stay red on the affected source."""
+    return [
+        {"id": "sse-no-space/initialize", "route": "http-legacy", "method": "tools/call", "format": "no-space", "stage": "initialize", "target": True},
+        {"id": "sse-no-space/list", "route": "http-legacy", "method": "tools/list", "format": "no-space", "target": True},
+        {"id": "sse-no-space/call", "route": "http-legacy", "method": "tools/call", "format": "no-space", "target": True},
+        {"id": "sse-no-space/crlf", "route": "http-legacy", "method": "tools/call", "format": "no-space-crlf", "target": True},
+        {"id": "sse-no-space/post-auto", "route": "auto-modern", "method": "tools/call", "format": "no-space", "target": True},
+        {"id": "sse-no-space/original-list", "route": "http-legacy", "method": "tools/list", "format": "original", "stage": "all", "target": False},
+        {"id": "sse-no-space/original-call", "route": "http-legacy", "method": "tools/call", "format": "original", "stage": "all", "target": False},
+        {"id": "sse-no-space/mixed", "route": "http-legacy", "method": "tools/call", "format": "mixed", "target": False},
+        {"id": "sse-no-space/empty", "route": "http-legacy", "method": "tools/call", "format": "empty", "target": False},
+        {"id": "sse-no-space/invalid", "route": "http-legacy", "method": "tools/call", "format": "invalid", "target": False},
+    ]
+
+
+def sse_no_space_config(out):
+    # Fixed VM identities/module path make baseline and candidate config identical.
+    listeners = "".join(base.listener_yaml(PORTS[name], "sse-no-space-" + name, "compat-route", proxy(name), "plugin.wasm")
+                        for name in ("http-legacy", "auto-modern"))
+    cluster = base.cluster_yaml("compat-route").replace("address: compat-route,", "address: backend-primary,")
+    Path(out, "envoy.yaml").write_text("admin:\n  address:\n    socket_address: {address: 0.0.0.0, port_value: 9901}\nstatic_resources:\n  listeners:\n" + listeners + "  clusters:\n" + cluster)
+
+
 if __name__ == "__main__":
     import sys
     if "--sse-get-auth-headers" in sys.argv[3:]:

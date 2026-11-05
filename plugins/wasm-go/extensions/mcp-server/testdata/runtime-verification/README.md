@@ -275,3 +275,67 @@ as red reproduction. Candidate acceptance requires all 12 PASS and exit zero.
 The external recorder must additionally validate exact sources/hashes, access
 records, successful Wasm loading and cleanup; this focused output does not claim
 the full compatibility matrix or update previous source-scoped results.
+
+
+## Focused SSE no-space fallback (#5308)
+
+From a clean, committed candidate checkout, select only the ten-case parser
+matrix. This mode builds plain Wasm for the exact affected source
+`a89b18dc12882f06fe4ac9fe33cfa8c03d11292a` and candidate. It reuses the existing
+Compose services, backend, renderer, build and bounded lifecycle, with one
+`plugin.wasm` mount path. It does not run or retarget the normal business
+oracle, control, November-version or routing matrices.
+
+```sh
+env -u GH_TOKEN -u GITHUB_TOKEN PYTHONDONTWRITEBYTECODE=1 python3.12 \
+  plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/run_compat.py \
+  --sse-no-space \
+  --sse-baseline a89b18dc12882f06fe4ac9fe33cfa8c03d11292a \
+  --candidate HEAD \
+  --gateway-image higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway@sha256:2b00548e16aafc5ee51314a0de8c4df4369877b1d0f9eaec13becc3675dd04b7 \
+  --backend-image docker.io/library/python:3.12-alpine \
+  --output "$SSE_EVIDENCE/runtime"
+```
+
+Use an empty absolute external output directory. Python 3.12+ is needed for
+archive extraction; on this macOS host use `/opt/homebrew/bin/python3.12`.
+Images must already resolve locally to immutable RepoDigests. Both roles use
+the same resolved gateway/Python image identities and frozen harness.
+
+The five positive targets are no-space upstream initialization, HTTP list,
+HTTP call, CRLF call, and business after successful auto controls. The five
+controls are original-format list/call (including initialization), an earlier
+no-space progress notification followed by an original-format result, empty
+data followed by an original result, and invalid no-space JSON. Mixed traffic
+supplies `progressToken`. Formatting is selected only by synthetic fixture
+headers; default responses and unrelated probe/handshake controls stay intact.
+
+`verify-sse-baseline.log` retains verifier exit 1 and five actual failed
+positive assertions; its controls must pass. `verify-candidate.log` must exit
+0 with all ten cases passing. Invalid JSON remains an error on both roles:
+extraction on baseline, existing JSON decoding on candidate. An overall runner
+exit 0 means this expected red/green matrix was observed, not that baseline
+positive targets succeeded.
+
+`sse-no-space-{sse-baseline,candidate}.json` separates assertions, exact client
+requests, gateway access IDs and backend ledgers, including upstream wire bytes
+and hashes. `compat-inputs.json` records source, selected Go/module inputs,
+Wasm/harness/config hashes and image inspections. Finalization rejects missing,
+duplicate or unobserved cases, changed requests/configs/wire data, mismatched
+Go/module inputs, stale hashes and incomplete cleanup.
+`sse-no-space-manifest.json` seals all completed evidence files. Cleanup uses
+Compose down with volumes/orphans and inventories only this run's labelled
+containers, networks and volumes. The Compose fixture publishes no host ports;
+its listeners and server processes disappear with those containers.
+
+Before containers, run the fixture checks from this directory:
+
+```sh
+env -u GH_TOKEN -u GITHUB_TOKEN PYTHONDONTWRITEBYTECODE=1 python3.12 compat_self_test.py
+```
+
+The new checks exercise selection, complete registry, format isolation,
+assertion fault injection, source/config/request equivalence and failed cleanup.
+They run alongside all retained normal-mode fixture assertions. These injected
+self-tests establish harness behavior; real Wasm evidence requires the command
+above.
