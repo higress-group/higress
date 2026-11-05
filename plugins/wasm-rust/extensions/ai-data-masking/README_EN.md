@@ -43,6 +43,58 @@ Plugin Execution Priority: `991`
 |  replace_roles.restore  | bool             | false          | Whether to restore                   |
 |  replace_roles.value    | string          |   -            | Replacement value (supports regex variables) |
 
+## Tool definitions and arguments (opt in)
+
+`tool_arguments.check`, `tool_arguments.restore`, and `tool_definitions.check` default to `false` and do not imply each other. Existing configurations keep the original OpenAI, JSONPath, and raw behavior. A rule's `restore: true` does not authorize tool argument restoration.
+
+| Field | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `tool_arguments.check` | bool | false | Deny/mask request arguments; deny response arguments |
+| `tool_arguments.restore` | bool | false | Restore response arguments through a separate allowlist |
+| `tool_arguments.restore_allowlist` | array | [] | `{tool, paths}` entries; required when tool restore is enabled |
+| `tool_definitions.check` | bool | false | Deny matching tools/functions definitions; no new definition masking |
+| `tool_arguments.limits.max_call_bytes` | positive integer | 1048576 | Per-call input and rewritten arguments, in UTF-8 bytes after outer JSON decoding |
+| `tool_arguments.limits.max_buffer_bytes` | positive integer | 4194304 | Retained response parameters: input, rewritten/queued arguments, name and id |
+| `tool_arguments.limits.max_calls` | positive integer | 128 | Registered calls requiring processing, including completed calls |
+
+These values are development candidates pending capacity verification before release. The buffer budget is not an RSS cap: parsing trees, protocol encoding, legacy text windows, and HTTP buffering have additional costs. Request history uses only the per-call limit, not response byte/count quotas. Disabled features do not impose these limits on legacy traffic.
+
+The checks use existing `deny_words`, `system_deny`, and `replace_roles`. Arguments include modern `tool_calls[].function.arguments` and legacy `function_call.arguments` in request history, JSON responses, and SSE deltas, independently of `deny_openai`. Definition-only checks do not take over responses. Definitions include string leaves and dynamic schema names under properties, patternProperties, $defs, definitions and related dependency fields.
+
+```yaml
+deny_openai: false
+tool_arguments:
+  check: true
+  restore: true
+  restore_allowlist:
+    - tool: lookup_customer
+      paths: ["/email", "/contacts/0/email"]
+  limits:
+    max_call_bytes: 1048576
+    max_buffer_bytes: 4194304
+    max_calls: 128
+tool_definitions:
+  check: false
+replace_roles:
+  - regex: "%{EMAILADDRESS}"
+    type: hash
+    restore: true
+```
+
+Tool names are case sensitive. Paths are raw RFC 6901 JSON Pointers (`~0` for `~`, `~1` for `/`); an empty pointer selects only a root string. Only exact string values are restored. Wildcards, subtree grants, URI fragments, array append `-`, and leading-zero array indices are unsupported. Invalid escapes, duplicate tools/paths and an empty required allowlist reject configuration. Missing or non-string targets are not restored.
+
+Inner JSON string literals are decoded before inspection. Keys are checked but never masked. Only changed values are encoded again; unchanged key order, whitespace, escapes, duplicate keys and numeric spelling remain intact. Duplicate keys that make an allowlisted target ambiguous reject processing. Missing, null and empty outer arguments mean no parameters. Other arguments requiring processing must be strings containing valid JSON.
+
+SSE arguments are buffered per choice/call until a non-null `finish_reason` (including an empty string), `[DONE]`, or HTTP end. Metadata is forwarded promptly; the complete delta-concatenated tool name authorizes restoration only at completion. Pending text precedes arguments, which precede termination. Full arguments therefore arrive later. Choice indices must be native nonnegative i64 integers; tool indices may also be decimal strings representable as u64. A missing tool index requires an existing id association; array position is not an identity. Legacy calls have separate identities.
+
+Only the delta contract is supported. Cumulative fragments are not guessed or deduplicated, and cannot always be detected reliably; confirm the upstream protocol before enabling this feature. Known non-allowlisted calls in restore-only mode retain their parameters without new restoration quotas. Calls still eligible for restoration fail on quota overflow.
+
+Malformed JSON/SSE, ambiguous identities/restoration, or quota overflow fail the enabled path. Requests use the existing refusal body and `deny_code` (200 by default); JSON responses are replaced; SSE pending output is discarded and subsequent callbacks remain rejected. Already emitted metadata/text cannot be withdrawn. Legal SSE comments, heartbeat/control fields and upstream errors are retained without fabricating successful termination.
+
+New argument masking and legacy rewriting each run the rule table once in their owned scope. Legacy deny retains its original scope. Managed response arguments are restored only under the new switch/allowlist; legacy global restoration cannot cross their boundaries. A legacy rewrite that spans a managed boundary is rejected.
+
+Tool restoration requires actual same-request mappings from rules with `restore: true`. Tool-generated mappings do not expand ordinary content restoration. Conflicting originals are not arbitrarily selected, and restoration is not recursive. Prefer hashes or unique placeholders over static values such as `***`. An allowlist cannot prevent a model or prompt injection from placing secrets into an allowed parameter; the tool executor must still validate authorization, purpose and destinations.
+
 ## Configuration Example
 ```yaml
 system_deny: true
