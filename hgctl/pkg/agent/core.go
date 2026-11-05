@@ -259,7 +259,7 @@ func (c *AgenticCore) AddMCPServer(arg MCPAddArg) error {
 	}
 	err := c.run(args...)
 
-	// Allow to add duplicate mcp server name (core will return error)
+	// Allow adding a duplicate mcp server name (core will return error)
 	if err == nil || strings.Contains(err.Error(), "already exists") {
 		return nil
 	}
