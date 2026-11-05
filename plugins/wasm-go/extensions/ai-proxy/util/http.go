@@ -47,6 +47,7 @@ const (
 var (
 	RegRetrieveBatchPath                        = regexp.MustCompile(`^.*/v1/batches/(?P<batch_id>[^/]+)$`)
 	RegCancelBatchPath                          = regexp.MustCompile(`^.*/v1/batches/(?P<batch_id>[^/]+)/cancel$`)
+	RegRetrieveModelPath                        = regexp.MustCompile(`^.*/v1/models/(?P<model_id>[^/]+)$`)
 	RegRetrieveFilePath                         = regexp.MustCompile(`^.*/v1/files/(?P<file_id>[^/]+)$`)
 	RegRetrieveFileContentPath                  = regexp.MustCompile(`^.*/v1/files/(?P<file_id>[^/]+)/content$`)
 	RegRetrieveVideoPath                        = regexp.MustCompile(`^.*/v1/videos/(?P<video_id>[^/]+)$`)
@@ -136,6 +137,7 @@ func MapRequestPathByCapability(apiName string, originPath string, mapping map[s
 			{RegRetrieveFileContentPath, "file_id"},
 			{RegRetrieveBatchPath, "batch_id"},
 			{RegCancelBatchPath, "batch_id"},
+			{RegRetrieveModelPath, "model_id"},
 			{RegRetrieveVideoPath, "video_id"},
 			{RegRetrieveVideoContentPath, "video_id"},
 			{RegVideoRemixPath, "video_id"},
