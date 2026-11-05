@@ -53,6 +53,9 @@ jobs:
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
+          # Transient ACR transport failures are retried; 404/authorization
+          # responses still fail fast for the classifier below.
+          source tools/hack/oras-retry.sh
           [[ "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$TARGET_REF"
           attempted=0
@@ -173,10 +176,11 @@ jobs:
           PREVIOUS: ${{ inputs.previous_snapshot }}
           BOOTSTRAP_BASE: ${{ inputs.bootstrap_comparison_base }}
           CANDIDATE_REGISTRY: ${{ vars.PLUGIN_CANDIDATE_REGISTRY }}
-          REGISTRY_USERNAME: ${{ secrets.CANDIDATE_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CANDIDATE_REGISTRY_PASSWORD }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           (cd tools/plugin-release && go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json)
           mkdir -p plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence
           if [ -z "$PREVIOUS" ]; then
@@ -226,11 +230,12 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           CANDIDATE_REGISTRY: ${{ vars.PLUGIN_CANDIDATE_REGISTRY }}
-          REGISTRY_USERNAME: ${{ secrets.CANDIDATE_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CANDIDATE_REGISTRY_PASSWORD }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           test -n "$CANDIDATE_REGISTRY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
           echo "$REGISTRY_PASSWORD" | oras login "$CANDIDATE_REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
           (cd tools/plugin-release && GOMAXPROCS=1 go build -p 1 -o /tmp/plugin-release-prepare .)
@@ -567,7 +572,9 @@ jobs:
           # without it, so the label must exist before the PR is opened. Label
           # management requires the release App installation to hold label write
           # permission alongside its contents/pull-requests permissions.
-          label_ref=$(jq -rn --arg label "$label" '$label | @uri')
+          # jq 1.6 resolves $label as the label keyword; name the variable
+          # $label_id so the filter parses on both jq 1.6 and 1.7.
+          label_ref=$(jq -rn --arg label_id "$label" '$label_id | @uri')
           if ! gh api "repos/$GITHUB_REPOSITORY/labels/$label_ref" >/dev/null 2>&1; then
             gh label create "$label" --color "0969da" --description "Authorizes promote-plugin-release for plugin snapshot $GATEWAY_VERSION"
           fi

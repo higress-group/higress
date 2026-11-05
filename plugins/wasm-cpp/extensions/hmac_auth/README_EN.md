@@ -14,6 +14,9 @@ Plugin execution priority: `330`
 **Note:**  
 - In a rule, authentication and authorization configurations cannot coexist.  
 - For requests that pass authentication and authorization, the request header will be added with an `X-Mse-Consumer` field to identify the caller's name.
+  The gateway **replaces** this header instead of appending to it: any client-supplied `X-Mse-Consumer` is removed
+  before the consumer name from this authentication is set. Downstream therefore always reads the gateway's own
+  assertion, so a caller cannot forge its identity by sending the header itself.
 
 ### Authentication Configuration
 | Name          | Data Type        | Requirement         | Default Value | Description                                                                                                             |

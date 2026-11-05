@@ -108,13 +108,16 @@ func CreateServiceFQDN(namespace, name string) string {
 	return fmt.Sprintf("%s.%s.svc.%s", name, namespace, domainSuffix)
 }
 
-func BuildPatchStruct(config string) *_struct.Struct {
+// BuildPatchStruct unmarshals an Envoy patch value into a protobuf Struct.
+// The error must be handled by callers: falling back to an empty Struct would
+// emit a degenerate patch that silently drops the intended configuration.
+func BuildPatchStruct(config string) (*_struct.Struct, error) {
 	val := &_struct.Struct{}
-	err := jsonpb.Unmarshal(strings.NewReader(config), val)
-	if err != nil {
+	if err := jsonpb.Unmarshal(strings.NewReader(config), val); err != nil {
 		IngressLog.Errorf("build patch struct failed, err:%v", err)
+		return nil, fmt.Errorf("failed to build patch struct: %v", err)
 	}
-	return val
+	return val, nil
 }
 
 type ServiceInfo struct {

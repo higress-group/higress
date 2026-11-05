@@ -17,6 +17,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -237,9 +238,38 @@ func calloutAt(t *testing.T, host test.TestHost, index int) proxytest.HttpCallou
 	return callouts[index]
 }
 
+func routedRequest(t *testing.T, host test.TestHost) proxytest.HttpCalloutAttribute {
+	t.Helper()
+	require.Empty(t, host.GetHttpCalloutAttributes())
+	require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+	return proxytest.HttpCalloutAttribute{CalloutID: ^uint32(0), Headers: host.GetRequestHeaders(), Body: host.GetRequestBody()}
+}
+
+func proxyTestResponse(host test.TestHost) *proxytest.LocalHttpResponse {
+	if local := host.GetLocalResponse(); local != nil {
+		return local
+	}
+	headers := host.GetResponseHeaders()
+	if len(headers) == 0 {
+		return nil
+	}
+	code := 0
+	for _, header := range headers {
+		if header[0] == ":status" {
+			code, _ = strconv.Atoi(header[1])
+		}
+	}
+	return &proxytest.LocalHttpResponse{StatusCode: uint32(code), Headers: headers, Data: host.GetResponseBody()}
+}
+
 func completeCallout(host test.TestHost, callout proxytest.HttpCalloutAttribute, status string, headers [][2]string, body []byte) {
 	allHeaders := append([][2]string{{":status", status}}, headers...)
-	host.CallOnHttpCallResponse(callout.CalloutID, allHeaders, nil, body)
+	if callout.CalloutID == ^uint32(0) {
+		host.CallOnHttpResponseHeaders(allHeaders)
+		host.CallOnHttpResponseBody(body)
+	} else {
+		host.CallOnHttpCallResponse(callout.CalloutID, allHeaders, nil, body)
+	}
 }
 
 // TestRestMCPServerConfig 测试REST MCP服务器配置解析
@@ -274,7 +304,7 @@ func TestSchemaCompatibilityConfigurationLoadsGloballyAndAtRuleLevel(t *testing.
 	})
 }
 
-func TestSchemaPreparationResourceLimitLoadsGloballyAndAtRuleLevel(t *testing.T) {
+func TestLargeSchemaDescriptionsLoadGloballyAndAtRuleLevel(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		for _, fixture := range []struct {
 			name   string
@@ -294,7 +324,7 @@ func TestSchemaPreparationResourceLimitLoadsGloballyAndAtRuleLevel(t *testing.T)
 
 func TestSchemaCompatibilityModernListAndCallBehavior(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		t.Run("modern list preserves degraded and valid descriptors", func(t *testing.T) {
+		t.Run("modern list preserves all serializable descriptors", func(t *testing.T) {
 			host, status := test.NewTestHost(schemaCompatibilityConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -307,7 +337,7 @@ func TestSchemaCompatibilityModernListAndCallBehavior(t *testing.T) {
 			require.Equal(t, types.HeaderStopIteration, action)
 			body := []byte(`{"jsonrpc":"2.0","id":"list","method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
 			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
-			response := host.GetLocalResponse()
+			response := proxyTestResponse(host)
 			require.NotNil(t, response)
 			var envelope map[string]interface{}
 			require.NoError(t, json.Unmarshal(response.Data, &envelope))
@@ -323,7 +353,7 @@ func TestSchemaCompatibilityModernListAndCallBehavior(t *testing.T) {
 			host.CompleteHttp()
 		})
 
-		t.Run("modern degraded call returns exact server error without routing", func(t *testing.T) {
+		t.Run("schema interpretation does not block historical REST conversion", func(t *testing.T) {
 			host, status := test.NewTestHost(schemaCompatibilityConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -335,19 +365,11 @@ func TestSchemaCompatibilityModernListAndCallBehavior(t *testing.T) {
 				{"Mcp-Method", "tools/call"}, {"Mcp-Name", "getTransactionRecordListV2"},
 			})
 			require.Equal(t, types.HeaderStopIteration, action)
-			body := []byte(`{"jsonrpc":"2.0","id":"blocked","method":"tools/call","params":{"name":"getTransactionRecordListV2","arguments":{"businessType":["SALE"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
+			body := []byte(`{"jsonrpc":"2.0","id":"schema-call","method":"tools/call","params":{"name":"getTransactionRecordListV2","arguments":{"transactionId":"fixture","businessType":["SALE"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
 			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
-			response := host.GetLocalResponse()
-			require.NotNil(t, response)
-			require.Equal(t, uint32(200), response.StatusCode)
-			var envelope map[string]interface{}
-			require.NoError(t, json.Unmarshal(response.Data, &envelope))
-			require.Equal(t, "blocked", envelope["id"])
-			errorObject := envelope["error"].(map[string]interface{})
-			require.Equal(t, float64(-32603), errorObject["code"])
-			require.Equal(t, "tool input schema validation is unavailable", errorObject["message"])
-			require.Equal(t, "schema_validation_unavailable", errorObject["data"].(map[string]interface{})["reason"])
-			require.Empty(t, host.GetHttpCalloutAttributes())
+			require.Nil(t, proxyTestResponse(host), "schema descriptions do not introduce an admission gate")
+			require.Empty(t, host.GetHttpCalloutAttributes(), "REST keeps the original routed request")
+			require.Contains(t, string(host.GetRequestBody()), "SALE")
 			host.CompleteHttp()
 		})
 
@@ -365,59 +387,9 @@ func TestSchemaCompatibilityModernListAndCallBehavior(t *testing.T) {
 			require.Equal(t, types.HeaderStopIteration, action)
 			body := []byte(`{"jsonrpc":"2.0","id":"valid","method":"tools/call","params":{"name":"health","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
 			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
-			require.Nil(t, host.GetLocalResponse(), "valid tool must not be rejected before routing")
+			require.Nil(t, proxyTestResponse(host), "valid tool must not be rejected before routing")
 			host.CompleteHttp()
 		})
-	})
-}
-
-func TestSchemaCompatibilityMetricsGlobalAndRuleLevel(t *testing.T) {
-	const (
-		publishedMetric = "mcp_server_schema_validation_unavailable_published_total"
-		blockedMetric   = "mcp_server_schema_validation_unavailable_call_blocked_total"
-	)
-	test.RunTest(t, func(t *testing.T) {
-		for _, fixture := range []struct {
-			name   string
-			config json.RawMessage
-		}{
-			{name: "global", config: schemaCompatibilityConfig},
-			{name: "rule-level", config: ruleLevelSchemaCompatibilityConfig},
-		} {
-			t.Run(fixture.name, func(t *testing.T) {
-				host, status := test.NewTestHost(fixture.config)
-				defer host.Reset()
-				require.Equal(t, types.OnPluginStartStatusOK, status)
-				published, err := host.GetCounterMetric(publishedMetric)
-				require.NoError(t, err)
-				require.Equal(t, uint64(1), published, "one degraded tool must be counted once for its published generation")
-				blocked, err := host.GetCounterMetric(blockedMetric)
-				require.NoError(t, err)
-				require.Zero(t, blocked)
-
-				for call := 1; call <= 2; call++ {
-					host.InitHttp()
-					action := host.CallOnHttpRequestHeaders([][2]string{
-						{":authority", "compat.example.com"}, {":method", "POST"}, {":path", "/mcp"},
-						{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"},
-						{"origin", "http://compat.example.com"}, {"MCP-Protocol-Version", "2026-07-28"},
-						{"Mcp-Method", "tools/call"}, {"Mcp-Name", "getTransactionRecordListV2"},
-					})
-					require.Equal(t, types.HeaderStopIteration, action)
-					body := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":"blocked-%d","method":"tools/call","params":{"name":"getTransactionRecordListV2","arguments":{"businessType":["SALE"]},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`, call))
-					require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
-					require.NotNil(t, host.GetLocalResponse())
-					require.Empty(t, host.GetHttpCalloutAttributes())
-					host.CompleteHttp()
-					blocked, err = host.GetCounterMetric(blockedMetric)
-					require.NoError(t, err)
-					require.Equal(t, uint64(call), blocked, "each blocked modern call must increment exactly once")
-				}
-				published, err = host.GetCounterMetric(publishedMetric)
-				require.NoError(t, err)
-				require.Equal(t, uint64(1), published, "calls must not recount generation publication")
-			})
-		}
 	})
 }
 
@@ -465,7 +437,7 @@ func TestRestMCPServerBasicFlow(t *testing.T) {
 			action = host.CallOnHttpRequestBody([]byte(initializeRequest))
 			require.Equal(t, types.ActionContinue, action)
 
-			localResponse := host.GetLocalResponse()
+			localResponse := proxyTestResponse(host)
 			require.NotNil(t, localResponse)
 			require.NotEmpty(t, localResponse.Data)
 
@@ -512,7 +484,7 @@ func TestRestMCPServerBasicFlow(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			// 验证响应
-			localResponse := host.GetLocalResponse()
+			localResponse := proxyTestResponse(host)
 			if localResponse != nil && len(localResponse.Data) > 0 {
 				var response map[string]interface{}
 				err := json.Unmarshal(localResponse.Data, &response)
@@ -706,12 +678,12 @@ func TestMcpProxyServerToolsList(t *testing.T) {
 			}
 		}`
 
-		toolCall := calloutAt(t, host, 0)
+		toolCall := routedRequest(t, host)
 		require.Contains(t, string(toolCall.Body), `"method":"tools/list"`)
 		completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(toolsListResponse))
 
 		// 验证最终MCP响应
-		localResp := host.GetLocalResponse()
+		localResp := proxyTestResponse(host)
 		require.NotNil(t, localResp)
 		responseBody := localResp.Data
 		require.NotEmpty(t, responseBody)
@@ -824,12 +796,12 @@ func TestMcpProxyServerToolsCall(t *testing.T) {
 			}
 		}`
 
-		toolCall := calloutAt(t, host, 0)
+		toolCall := routedRequest(t, host)
 		require.Contains(t, string(toolCall.Body), `"method":"tools/call"`)
 		completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(toolsCallResponse))
 
 		// 验证最终MCP响应
-		localResp := host.GetLocalResponse()
+		localResp := proxyTestResponse(host)
 		require.NotNil(t, localResp)
 		responseBody := localResp.Data
 		require.NotEmpty(t, responseBody)
@@ -954,7 +926,7 @@ func TestMcpProxyServerAuthentication(t *testing.T) {
 			}`
 
 			// Inspect the actual DispatchHttpCall request sent to the backend.
-			toolCall := calloutAt(t, host, 0)
+			toolCall := routedRequest(t, host)
 			requestHeaders := toolCall.Headers
 			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
 			require.True(t, hasPath, "Path header should exist")
@@ -967,7 +939,7 @@ func TestMcpProxyServerAuthentication(t *testing.T) {
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(toolsListResponse))
 
 			// 验证响应
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			require.NotEmpty(t, responseBody)
@@ -1074,7 +1046,7 @@ func TestMcpProxyServerAuthentication(t *testing.T) {
 			}`
 
 			// Inspect the actual DispatchHttpCall request sent to the backend.
-			toolCall := calloutAt(t, host, 0)
+			toolCall := routedRequest(t, host)
 			requestHeaders := toolCall.Headers
 			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
 			require.True(t, hasPath, "Path header should exist")
@@ -1087,7 +1059,7 @@ func TestMcpProxyServerAuthentication(t *testing.T) {
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(secureToolResponse))
 
 			// 验证响应
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			require.NotEmpty(t, responseBody)
@@ -1166,7 +1138,7 @@ func TestMcpProxyServerErrorHandling(t *testing.T) {
 			}, []byte(versionErrorResponse))
 
 			// 验证错误响应
-			localResponse := host.GetLocalResponse()
+			localResponse := proxyTestResponse(host)
 			if localResponse != nil && len(localResponse.Data) > 0 {
 				var response map[string]interface{}
 				err := json.Unmarshal(localResponse.Data, &response)
@@ -1296,11 +1268,11 @@ func TestMcpProxyServerErrorHandling(t *testing.T) {
 				}
 			}`
 
-			toolCall := calloutAt(t, host, 0)
+			toolCall := routedRequest(t, host)
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(toolErrorResponse))
 
 			// 验证错误被正确传播
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			if len(responseBody) > 0 {
@@ -1407,11 +1379,11 @@ func TestMcpProxyServerSessionManagement(t *testing.T) {
 				}
 			}`
 
-			toolCall := calloutAt(t, host, 0)
+			toolCall := routedRequest(t, host)
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(toolsListResponse))
 
 			// 验证tools/list响应
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			if len(responseBody) > 0 {
@@ -1495,11 +1467,11 @@ func TestMcpProxyServerSessionManagement(t *testing.T) {
 				}
 			}`
 
-			toolCall := calloutAt(t, host, 0)
+			toolCall := routedRequest(t, host)
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(toolsCallResponse1))
 
 			// 验证第一个请求的响应
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			if len(responseBody) > 0 {
@@ -1566,11 +1538,11 @@ func TestMcpProxyServerSessionManagement(t *testing.T) {
 				}
 			}`
 
-			toolCall = calloutAt(t, host, 0)
+			toolCall = routedRequest(t, host)
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(toolsCallResponse2))
 
 			// 验证第二个请求的响应
-			localResp = host.GetLocalResponse()
+			localResp = proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody = localResp.Data
 			require.NotEmpty(t, responseBody)
@@ -1639,7 +1611,7 @@ func TestMcpProxyServerSessionManagement(t *testing.T) {
 			}, []byte(initErrorResponse))
 
 			// 验证错误被正确处理
-			localResponse := host.GetLocalResponse()
+			localResponse := proxyTestResponse(host)
 			if localResponse != nil && len(localResponse.Data) > 0 {
 				var response map[string]interface{}
 				err := json.Unmarshal(localResponse.Data, &response)
@@ -1772,8 +1744,8 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 				"result": {}
 			}`))
 
-			// Complete the actual tools/list DispatchHttpCall.
-			toolCall := calloutAt(t, host, 0)
+			// Complete the routed tools/list response.
+			toolCall := routedRequest(t, host)
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(`{
 				"jsonrpc": "2.0",
 				"id": 2,
@@ -1801,7 +1773,7 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 			host.CompleteHttp()
 
 			// 验证响应只包含允许的工具
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			require.NotEmpty(t, responseBody)
@@ -1884,8 +1856,8 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 				"result": {}
 			}`))
 
-			// Complete the actual tools/list DispatchHttpCall.
-			toolCall := calloutAt(t, host, 0)
+			// Complete the routed tools/list response.
+			toolCall := routedRequest(t, host)
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(`{
 				"jsonrpc": "2.0",
 				"id": 2, 
@@ -1908,7 +1880,7 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 			host.CompleteHttp()
 
 			// 验证响应只包含请求头中允许的工具
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			require.NotEmpty(t, responseBody)
@@ -1986,8 +1958,8 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 				"result": {}
 			}`))
 
-			// Complete the actual tools/list DispatchHttpCall.
-			toolCall := calloutAt(t, host, 0)
+			// Complete the routed tools/list response.
+			toolCall := routedRequest(t, host)
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(`{
 				"jsonrpc": "2.0",
 				"id": 3,
@@ -2015,7 +1987,7 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 			host.CompleteHttp()
 
 			// 验证响应只包含交集中的工具
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			require.NotEmpty(t, responseBody)
@@ -2091,8 +2063,8 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 				"result": {}
 			}`))
 
-			// Complete the actual tools/list DispatchHttpCall.
-			toolCall := calloutAt(t, host, 0)
+			// Complete the routed tools/list response.
+			toolCall := routedRequest(t, host)
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(`{
 				"jsonrpc": "2.0",
 				"id": 4,
@@ -2115,7 +2087,7 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 			host.CompleteHttp()
 
 			// 验证响应不包含任何工具（空白header应该被当作配置为空，禁止所有工具）
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			require.NotEmpty(t, responseBody)
@@ -2188,8 +2160,8 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 				"result": {}
 			}`))
 
-			// Complete the actual tools/list DispatchHttpCall.
-			toolCall := calloutAt(t, host, 0)
+			// Complete the routed tools/list response.
+			toolCall := routedRequest(t, host)
 			completeCallout(host, toolCall, "200", [][2]string{{"content-type", "application/json"}}, []byte(`{
 				"jsonrpc": "2.0",
 				"id": 5,
@@ -2217,7 +2189,7 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 			host.CompleteHttp()
 
 			// 验证响应包含所有工具（header不存在时允许所有工具）
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp)
 			responseBody := localResp.Data
 			require.NotEmpty(t, responseBody)
@@ -2470,7 +2442,7 @@ data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabili
 		}, []byte(notificationResponse))
 
 		// Step 6: Mock tools/call response via RouteCluster callback
-		toolsCallResponse := `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Product ID: 12345, Name: Sample Product, Price: $99.99"}]}}`
+		toolsCallResponse := `{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Product ID: 12345, Name: Sample Product, Price: $99.99"}]}}`
 		host.CallOnHttpCall([][2]string{
 			{":status", "200"},
 			{"content-type", "application/json"},
@@ -2478,7 +2450,7 @@ data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabili
 
 		// Step 7: Send SSE tools/call response in the stream
 		toolsCallSSEMessage := `event: message
-data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Product ID: 12345, Name: Sample Product, Price: $99.99"}]}}
+data: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Product ID: 12345, Name: Sample Product, Price: $99.99"}]}}
 
 `
 		action = host.CallOnHttpStreamingResponseBody([]byte(toolsCallSSEMessage), true)
@@ -3020,14 +2992,14 @@ data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabili
 			require.Contains(t, string(toolsCallCallout.Body), "secret-123", "Request body should contain arguments")
 
 			// Mock tools/call response
-			toolsCallResponse := `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Secure data for secret-123"}]}}`
+			toolsCallResponse := `{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Secure data for secret-123"}]}}`
 			host.CallOnHttpCall([][2]string{
 				{":status", "200"},
 				{"content-type", "application/json"},
 			}, []byte(toolsCallResponse))
 
 			toolsCallSSEMessage := `event: message
-data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Secure data for secret-123"}]}}
+data: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Secure data for secret-123"}]}}
 
 `
 			host.CallOnHttpStreamingResponseBody([]byte(toolsCallSSEMessage), true)
@@ -3178,7 +3150,7 @@ func TestRestMCPServer_CallBranches(t *testing.T) {
 			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{"name":"world"}}}`))
 
 			// Direct-response writes via SendLocalResponse, not the streaming response body.
-			localResp := host.GetLocalResponse()
+			localResp := proxyTestResponse(host)
 			require.NotNil(t, localResp, "direct-response must emit a local response with no backend call")
 			require.Contains(t, string(localResp.Data), "hello world")
 			host.CompleteHttp()
@@ -3456,7 +3428,7 @@ func TestMcpProxyServerSSE_CharsetSuffixAccepted(t *testing.T) {
 
 		// No injected error yet — buffer is just being consumed.
 		// Local response should NOT have been set with an error.
-		localResp := host.GetLocalResponse()
+		localResp := proxyTestResponse(host)
 		if localResp != nil {
 			require.NotContains(t, string(localResp.Data), "invalid content-type",
 				"text/event-stream with charset suffix must NOT be rejected")
@@ -3519,7 +3491,7 @@ func TestMcpProxyServer_InitializeBackend500(t *testing.T) {
 		host.CallOnHttpCall([][2]string{{":status", "500"}, {"content-type", "application/json"}}, []byte(`{"error":"down"}`))
 
 		// Errors go through SendLocalResponse, not the streaming body.
-		localResp := host.GetLocalResponse()
+		localResp := proxyTestResponse(host)
 		require.NotNil(t, localResp, "non-200 initialize response must inject a local error response")
 		require.Contains(t, string(localResp.Data), "error")
 		host.CompleteHttp()
@@ -3539,7 +3511,7 @@ func TestMcpProxyServer_InitializeMalformedJSON(t *testing.T) {
 
 		host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}}, []byte(`{not valid json`))
 
-		localResp := host.GetLocalResponse()
+		localResp := proxyTestResponse(host)
 		require.NotNil(t, localResp, "unparseable initialize response must inject a local error response")
 		require.Contains(t, string(localResp.Data), "error")
 		host.CompleteHttp()
@@ -3595,7 +3567,7 @@ func TestMcpProxyServer_InitializeUnknownErrorCode(t *testing.T) {
 		host.CallOnHttpCall([][2]string{{":status", "200"}, {"content-type", "application/json"}},
 			[]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"internal"}}`))
 
-		localResp := host.GetLocalResponse()
+		localResp := proxyTestResponse(host)
 		require.NotNil(t, localResp, "unknown error code must inject a local error response")
 		require.Contains(t, string(localResp.Data), "error")
 		host.CompleteHttp()
@@ -3618,7 +3590,7 @@ func TestPlugin_GetMethodRejected(t *testing.T) {
 		})
 		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
-		localResp := host.GetLocalResponse()
+		localResp := proxyTestResponse(host)
 		require.NotNil(t, localResp, "GET must produce a local 405 response")
 		require.Equal(t, uint32(405), localResp.StatusCode)
 		host.CompleteHttp()
@@ -3637,7 +3609,7 @@ func TestPlugin_DeleteMethodRejected(t *testing.T) {
 		})
 		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
-		localResp := host.GetLocalResponse()
+		localResp := proxyTestResponse(host)
 		require.NotNil(t, localResp, "DELETE must produce a local 405 response")
 		require.Equal(t, uint32(405), localResp.StatusCode)
 		host.CompleteHttp()
@@ -3686,7 +3658,7 @@ func TestPlugin_McpProtocolVersionUnsupportedRejected(t *testing.T) {
 		})
 		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
-		localResp := host.GetLocalResponse()
+		localResp := proxyTestResponse(host)
 		require.NotNil(t, localResp, "unsupported protocol version must produce a local error")
 		require.Equal(t, uint32(400), localResp.StatusCode)
 		require.JSONEq(t, `{
@@ -3696,7 +3668,7 @@ func TestPlugin_McpProtocolVersionUnsupportedRejected(t *testing.T) {
 				"code": -32022,
 				"message": "unsupported MCP protocol version",
 				"data": {
-					"supported": ["2024-11-05", "2025-03-26", "2025-06-18", "2026-07-28"],
+					"supported": ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"],
 					"requested": "9999-99-99"
 				}
 			}

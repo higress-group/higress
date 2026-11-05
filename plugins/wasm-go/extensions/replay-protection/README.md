@@ -34,6 +34,7 @@ description: 防重放攻击插件配置参考
 | `reject_code`        | int    | 否   | 429        | 拒绝请求时返回的状态码             |
 | `reject_msg`         | string | 否   | `Replay Attack Detected` | 拒绝请求时返回的错误信息           |
 | `validate_base64`    | bool    | 否   | false | 是否校验 nonce 的 base64 编码格式 |
+| `failure_mode` | string | 否 | `fail_closed` | Redis 调用失败、超时或响应异常时的策略：`fail_closed` 返回固定 503；`fail_open` 放行请求。可用性优先且接受暂时跳过 nonce 去重时可选择 `fail_open`。 |
 | `redis` | Object | 是   | -              | redis 相关配置 |
 
 `redis` 中每一项的配置字段说明

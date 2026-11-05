@@ -349,8 +349,8 @@ func calculateSingleParentStatus(
 	// Build the final status
 	return inferencev1.ParentStatus{
 		ParentRef: inferencev1.ParentReference{
-			Group:     (*inferencev1.Group)(&gvk.Gateway.Group),
-			Kind:      inferencev1.Kind(gvk.Gateway.Kind),
+			Group:     (*inferencev1.Group)(&gvk.KubernetesGateway.Group),
+			Kind:      inferencev1.Kind(gvk.KubernetesGateway.Kind),
 			Namespace: inferencev1.Namespace(gatewayParent.Namespace),
 			Name:      inferencev1.ObjectName(gatewayParent.Name),
 		},

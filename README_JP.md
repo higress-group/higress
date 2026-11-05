@@ -26,7 +26,7 @@
 
 ## Higressとは？
 
-Higressは、IstioとEnvoyをベースにしたクラウドネイティブAPIゲートウェイで、Go/Rust/JSなどを使用してWasmプラグインを作成できます。数十の既製の汎用プラグインと、すぐに使用できるコンソールを提供しています（デモは[こちら](http://demo.higress.io/)）。
+Higressは、IstioとEnvoyをベースにしたクラウドネイティブAPIゲートウェイで、Go/Rust/JSなどを使用してWasmプラグインを作成できます。数十の既製の汎用プラグインと、すぐに使用できるコンソールを提供しています（デモは[こちら](https://demo.higress.io/)）。
 
 ### 主な使用シナリオ
 

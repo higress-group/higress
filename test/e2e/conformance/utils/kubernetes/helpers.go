@@ -30,7 +30,7 @@ import (
 	"github.com/alibaba/higress/v2/test/e2e/conformance/utils/config"
 )
 
-// FilterStaleConditions returns the list of status condition whos observedGeneration does not
+// FilterStaleConditions returns the list of status condition whose observedGeneration does not
 // match the objects metadata.Generation
 func FilterStaleConditions(obj metav1.Object, conditions []metav1.Condition) []metav1.Condition {
 	stale := make([]metav1.Condition, 0, len(conditions))

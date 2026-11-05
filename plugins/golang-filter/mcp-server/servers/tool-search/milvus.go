@@ -90,22 +90,36 @@ func (c *MilvusVectorStoreProvider) ListAllDocs(ctx context.Context, limit int) 
 		for _, col := range queryResult {
 			switch col.Name() {
 			case "id":
-				if v, err := col.(*entity.ColumnVarChar).Get(i); err == nil {
-					id = v.(string)
+				if varcharCol, ok := col.(*entity.ColumnVarChar); ok {
+					if v, err := varcharCol.Get(i); err == nil {
+						if s, ok := v.(string); ok {
+							id = s
+						}
+					}
 				}
 			case "content":
-				if v, err := col.(*entity.ColumnVarChar).Get(i); err == nil {
-					content = v.(string)
+				if varcharCol, ok := col.(*entity.ColumnVarChar); ok {
+					if v, err := varcharCol.Get(i); err == nil {
+						if s, ok := v.(string); ok {
+							content = s
+						}
+					}
 				}
 			case "metadata":
-				if v, err := col.(*entity.ColumnJSONBytes).Get(i); err == nil {
-					if bytes, ok := v.([]byte); ok {
-						_ = json.Unmarshal(bytes, &metadata)
+				if jsonCol, ok := col.(*entity.ColumnJSONBytes); ok {
+					if v, err := jsonCol.Get(i); err == nil {
+						if bytes, ok := v.([]byte); ok {
+							_ = json.Unmarshal(bytes, &metadata)
+						}
 					}
 				}
 			case "created_at":
-				if v, err := col.(*entity.ColumnInt64).Get(i); err == nil {
-					createdAt = v.(int64)
+				if int64Col, ok := col.(*entity.ColumnInt64); ok {
+					if v, err := int64Col.Get(i); err == nil {
+						if n, ok := v.(int64); ok {
+							createdAt = n
+						}
+					}
 				}
 			}
 		}

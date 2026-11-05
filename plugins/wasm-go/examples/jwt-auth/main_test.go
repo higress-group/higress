@@ -595,3 +595,82 @@ func remoteJWKsService(endpoint string) map[string]any {
 		"path":         parsed.RequestURI(),
 	}
 }
+
+// The consumer identity published in X-Mse-Consumer must REPLACE anything the
+// caller sent rather than be appended to it: downstream readers take the first
+// value for the header, so an appended client-supplied copy would be trusted as
+// the caller's identity.
+func TestClientSuppliedConsumerHeaderIsReplaced(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(remoteMissThenInlineConfig())
+		defer host.Reset()
+		if status != types.OnPluginStartStatusOK {
+			t.Fatalf("unexpected plugin start status: %v", status)
+		}
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/"},
+			{":method", "GET"},
+			{"authorization", "Bearer " + remoteES256Allow},
+			{"X-Mse-Consumer", "spoofed-admin"},
+		})
+		if action != types.ActionContinue {
+			t.Fatalf("expected later inline consumer to continue request, got: %v", action)
+		}
+
+		found, value := consumerHeaderEntries(host.GetRequestHeaders())
+		if found != 1 {
+			t.Fatalf("expected exactly one X-Mse-Consumer to reach downstream, got %d", found)
+		}
+		if value != "inline-consumer" {
+			t.Fatalf("expected gateway-asserted inline-consumer, got %q", value)
+		}
+		host.CompleteHttp()
+	})
+}
+
+// With no client-supplied header, authentication still publishes exactly one.
+func TestNoClientConsumerHeaderAddsExactlyOne(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(remoteMissThenInlineConfig())
+		defer host.Reset()
+		if status != types.OnPluginStartStatusOK {
+			t.Fatalf("unexpected plugin start status: %v", status)
+		}
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/"},
+			{":method", "GET"},
+			{"authorization", "Bearer " + remoteES256Allow},
+		})
+		if action != types.ActionContinue {
+			t.Fatalf("expected later inline consumer to continue request, got: %v", action)
+		}
+
+		found, value := consumerHeaderEntries(host.GetRequestHeaders())
+		if found != 1 {
+			t.Fatalf("expected exactly one X-Mse-Consumer, got %d", found)
+		}
+		if value != "inline-consumer" {
+			t.Fatalf("expected inline-consumer, got %q", value)
+		}
+		host.CompleteHttp()
+	})
+}
+
+// consumerHeaderEntries returns how many X-Mse-Consumer entries are present
+// (case-insensitively) and the last value seen, so a duplicated header is
+// caught rather than silently tolerated.
+func consumerHeaderEntries(headers [][2]string) (int, string) {
+	found := 0
+	value := ""
+	for _, h := range headers {
+		if strings.EqualFold(h[0], "X-Mse-Consumer") {
+			found++
+			value = h[1]
+		}
+	}
+	return found, value
+}

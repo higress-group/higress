@@ -13,13 +13,13 @@ import (
 )
 
 const (
-	FixedQueueSize = 100
+	FixedQueueSize = 100 // default max entries in the sliding window
 )
 
 type MetricsEndpointLoadBalancer struct {
 	metricPolicy     string
 	targetMetric     string
-	endpointRequests *utils.FixedQueue[string]
+	endpointRequests *utils.SlidingWindow[string]
 	maxRate          float64
 }
 
@@ -38,7 +38,21 @@ func NewMetricsEndpointLoadBalancer(json gjson.Result) (MetricsEndpointLoadBalan
 	} else {
 		lb.maxRate = 1.0
 	}
-	lb.endpointRequests = utils.NewFixedQueue[string](FixedQueueSize)
+	windowSize := FixedQueueSize
+	if json.Get("window_size").Exists() {
+		windowSize = int(json.Get("window_size").Int())
+		if windowSize <= 0 {
+			windowSize = FixedQueueSize
+		}
+	}
+	windowSeconds := 60
+	if json.Get("window_seconds").Exists() {
+		windowSeconds = int(json.Get("window_seconds").Int())
+		if windowSeconds <= 0 {
+			windowSeconds = 60
+		}
+	}
+	lb.endpointRequests = utils.NewSlidingWindow[string](windowSize, windowSeconds)
 	return lb, nil
 }
 
@@ -86,19 +100,17 @@ func (lb MetricsEndpointLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpCont
 			otherHosts = append(otherHosts, k)
 		}
 	}
-	if lb.endpointRequests.Size() != 0 {
-		count := 0.0
-		lb.endpointRequests.ForEach(func(i int, item string) {
-			if item == finalAddress {
-				count += 1
-			}
+	windowSize := lb.endpointRequests.Size()
+	if windowSize != 0 {
+		count := lb.endpointRequests.CountInWindow(func(item string) bool {
+			return item == finalAddress
 		})
-		currentRate = count / float64(lb.endpointRequests.Size())
+		currentRate = float64(count) / float64(windowSize)
 	}
 	if currentRate > lb.maxRate && len(otherHosts) > 0 {
 		finalAddress = otherHosts[rand.Intn(len(otherHosts))]
 	}
-	lb.endpointRequests.Enqueue(finalAddress)
+	lb.endpointRequests.Push(finalAddress)
 	log.Debugf("pod %s is selected", finalAddress)
 	proxywasm.SetUpstreamOverrideHost([]byte(finalAddress))
 	return types.ActionContinue

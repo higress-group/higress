@@ -255,6 +255,24 @@ func (t *TracingController) ConstructEnvoyFilters() ([]*config.Config, error) {
 		return configs, nil
 	}
 
+	tracerPatchValue, err := util.BuildPatchStruct(tracingConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Internal-only static patch: the JSON is a compile-time constant, so an
+	// error here indicates a programming mistake rather than bad user input.
+	routerPatchValue, err := util.BuildPatchStruct(`{
+				"name":"envoy.filters.http.router",
+				"typed_config":{
+					"@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
+					"start_child_span": true
+				}
+			}`)
+	if err != nil {
+		return nil, err
+	}
+
 	configPatches := []*networking.EnvoyFilter_EnvoyConfigObjectPatch{
 		{
 			ApplyTo: networking.EnvoyFilter_NETWORK_FILTER,
@@ -272,7 +290,7 @@ func (t *TracingController) ConstructEnvoyFilters() ([]*config.Config, error) {
 			},
 			Patch: &networking.EnvoyFilter_Patch{
 				Operation: networking.EnvoyFilter_Patch_MERGE,
-				Value:     util.BuildPatchStruct(tracingConfig),
+				Value:     tracerPatchValue,
 			},
 		},
 		{
@@ -294,18 +312,15 @@ func (t *TracingController) ConstructEnvoyFilters() ([]*config.Config, error) {
 			},
 			Patch: &networking.EnvoyFilter_Patch{
 				Operation: networking.EnvoyFilter_Patch_MERGE,
-				Value: util.BuildPatchStruct(`{
-							"name":"envoy.filters.http.router",
-							"typed_config":{
-								"@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
-								"start_child_span": true
-							}
-						}`),
+				Value:     routerPatchValue,
 			},
 		},
 	}
 
-	patches := t.constructTracingExtendPatches(tracing)
+	patches, err := t.constructTracingExtendPatches(tracing)
+	if err != nil {
+		return nil, err
+	}
 	configPatches = append(configPatches, patches...)
 
 	config := &config.Config{
@@ -327,7 +342,9 @@ func tracingClusterName(port, service string) string {
 	return fmt.Sprintf("outbound|%s||%s", port, service)
 }
 
-func (t *TracingController) constructHTTP2ProtocolOptionsPatch(port, service string) *networking.EnvoyFilter_EnvoyConfigObjectPatch {
+func (t *TracingController) constructHTTP2ProtocolOptionsPatch(port, service string) (*networking.EnvoyFilter_EnvoyConfigObjectPatch, error) {
+	// Internal-only static patch: the JSON is a compile-time constant, so an
+	// error here indicates a programming mistake rather than bad user input.
 	http2ProtocolOptions := `{"typed_extension_protocol_options": {
   "envoy.extensions.upstreams.http.v3.HttpProtocolOptions": {
       "@type": "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
@@ -336,6 +353,11 @@ func (t *TracingController) constructHTTP2ProtocolOptionsPatch(port, service str
 		  }
   }
 }}`
+
+	http2PatchValue, err := util.BuildPatchStruct(http2ProtocolOptions)
+	if err != nil {
+		return nil, err
+	}
 
 	return &networking.EnvoyFilter_EnvoyConfigObjectPatch{
 		ApplyTo: networking.EnvoyFilter_CLUSTER,
@@ -349,24 +371,32 @@ func (t *TracingController) constructHTTP2ProtocolOptionsPatch(port, service str
 		},
 		Patch: &networking.EnvoyFilter_Patch{
 			Operation: networking.EnvoyFilter_Patch_MERGE,
-			Value:     util.BuildPatchStruct(http2ProtocolOptions),
+			Value:     http2PatchValue,
 		},
-	}
+	}, nil
 }
 
-func (t *TracingController) constructTracingExtendPatches(tracing *Tracing) []*networking.EnvoyFilter_EnvoyConfigObjectPatch {
+func (t *TracingController) constructTracingExtendPatches(tracing *Tracing) ([]*networking.EnvoyFilter_EnvoyConfigObjectPatch, error) {
 	if tracing == nil {
-		return nil
+		return nil, nil
 	}
 	var patches []*networking.EnvoyFilter_EnvoyConfigObjectPatch
 	if skywalking := tracing.Skywalking; skywalking != nil {
-		patches = append(patches, t.constructHTTP2ProtocolOptionsPatch(skywalking.Port, skywalking.Service))
+		patch, err := t.constructHTTP2ProtocolOptionsPatch(skywalking.Port, skywalking.Service)
+		if err != nil {
+			return nil, err
+		}
+		patches = append(patches, patch)
 	}
 	if otel := tracing.OpenTelemetry; otel != nil {
-		patches = append(patches, t.constructHTTP2ProtocolOptionsPatch(otel.Port, otel.Service))
+		patch, err := t.constructHTTP2ProtocolOptionsPatch(otel.Port, otel.Service)
+		if err != nil {
+			return nil, err
+		}
+		patches = append(patches, patch)
 	}
 
-	return patches
+	return patches, nil
 }
 
 func (t *TracingController) constructTracingTracer(tracing *Tracing, namespace string) string {

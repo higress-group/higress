@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"mime"
 	"net"
 	"net/url"
 	"strconv"
@@ -40,11 +41,16 @@ func init() {
 		"ai-token-ratelimit",
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
+		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingBody),
+		wrapper.ProcessResponseBody(onHttpResponseBody),
 	)
 }
 
 const (
+	// Keep JSON buffering consistent with the other AI gateway plugins.
+	defaultMaxResponseBodyBytes uint32 = 100 * 1024 * 1024
+
 	RedisKeyPrefix string = "higress-token-ratelimit"
 	// 使用 {rule_name} hash tag 让多规则多键操作在 Redis Cluster 下落到同一 slot
 	// AiTokenGlobalRateLimitFormat  全局限流模式 redis key 为 RedisKeyPrefix:{限流规则名称}:global_threshold:时间窗口
@@ -217,40 +223,83 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 	return types.HeaderStopAllIterationAndWatermark
 }
 
+func onHttpResponseHeaders(ctx wrapper.HttpContext, _ config.AiTokenRateLimitConfig) types.Action {
+	if !ctx.HasResponseBody() {
+		ctx.DontReadResponseBody()
+		return types.ActionContinue
+	}
+	matched, ok := ctx.GetContext(LimitRedisContextKey).(LimitRedisContext)
+	if !ok || len(matched.rules) == 0 {
+		return types.ActionContinue
+	}
+	contentType, _ := proxywasm.GetHttpResponseHeader("content-type")
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err == nil && mediaType == "application/json" {
+		ctx.BufferResponseBody()
+		ctx.SetResponseBodyBufferLimit(defaultMaxResponseBodyBytes)
+	}
+	return types.ActionContinue
+}
+
 func onHttpStreamingBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig, data []byte, endOfStream bool) []byte {
-	if usage := tokenusage.GetTokenUsage(ctx, data); usage.TotalToken > 0 {
+	return processResponseBody(ctx, cfg, data, endOfStream)
+}
+
+func onHttpResponseBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig, body []byte) types.Action {
+	// A complete JSON response is one document; blank lines are not SSE boundaries.
+	usage := tokenusage.TokenUsage{
+		InputTokenDetails:  make(map[string]int64),
+		OutputTokenDetails: make(map[string]int64),
+	}
+	tokenusage.ExtractModel(ctx, body, &usage)
+	tokenusage.ExtractInputTokens(ctx, body, &usage)
+	tokenusage.ExtractOutputTokens(ctx, body, &usage)
+	tokenusage.ExtractInputTokenDetails(ctx, body, &usage)
+	tokenusage.ExtractOutputTokenDetails(ctx, body, &usage)
+	tokenusage.ExtractTotalTokens(ctx, body, &usage)
+	processTokenUsage(ctx, cfg, usage, true)
+	return types.ActionContinue
+}
+
+func processResponseBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig, data []byte, endOfStream bool) []byte {
+	processTokenUsage(ctx, cfg, tokenusage.GetTokenUsage(ctx, data), endOfStream)
+	return data
+}
+
+func processTokenUsage(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig, usage tokenusage.TokenUsage, endOfStream bool) {
+	if usage.TotalToken > 0 {
 		log.Debugf("ai-token-ratelimit: token usage detected input=%d output=%d total=%d",
 			usage.InputToken, usage.OutputToken, usage.TotalToken)
 		ctx.SetContext(tokenusage.CtxKeyInputToken, usage.InputToken)
 		ctx.SetContext(tokenusage.CtxKeyOutputToken, usage.OutputToken)
 	}
 	if !endOfStream {
-		return data
+		return
 	}
 
 	inputTokenRaw := ctx.GetContext(tokenusage.CtxKeyInputToken)
 	outputTokenRaw := ctx.GetContext(tokenusage.CtxKeyOutputToken)
 	if inputTokenRaw == nil || outputTokenRaw == nil {
 		log.Debugf("ai-token-ratelimit: response phase end-of-stream reached but no token usage recorded, skipping")
-		return data
+		return
 	}
 	inputToken, ok1 := inputTokenRaw.(int64)
 	outputToken, ok2 := outputTokenRaw.(int64)
 	if !ok1 || !ok2 {
 		log.Errorf("ai-token-ratelimit: response phase token usage context has unexpected types: input=%T output=%T",
 			inputTokenRaw, outputTokenRaw)
-		return data
+		return
 	}
 
 	limitRedisContextRaw := ctx.GetContext(LimitRedisContextKey)
 	if limitRedisContextRaw == nil {
 		log.Debugf("ai-token-ratelimit: response phase reached with no LimitRedisContext, skipping accumulation")
-		return data
+		return
 	}
 	limitRedisContext, ok := limitRedisContextRaw.(LimitRedisContext)
 	if !ok || len(limitRedisContext.rules) == 0 {
 		log.Debugf("ai-token-ratelimit: response phase LimitRedisContext is empty, skipping accumulation")
-		return data
+		return
 	}
 
 	// 多键 INCRBY：每条规则一组 (threshold, window, added)
@@ -274,7 +323,6 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCon
 	if err != nil {
 		log.Errorf("redis call failed: %v", err)
 	}
-	return data
 }
 
 // collectMatchedRules 遍历 global_threshold 和 rule_items，返回所有命中规则。

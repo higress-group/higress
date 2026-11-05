@@ -115,6 +115,9 @@ func retrieveVersion(w io.Writer, v *VersionInfo, containerName string, cmd stri
 		if err != nil {
 			return err
 		}
+		if info == nil {
+			continue
+		}
 
 		v.ServerVersions = append(v.ServerVersions, &ServerVersion{
 			NamespacedName: nn,

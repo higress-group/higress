@@ -95,7 +95,7 @@ type AgentConfig struct {
 	AppName         string   //  "app"
 	AppDescription  string   //  "A helpful assistant and useful agent"
 	AgentName       string   //  "Friday"
-	AvailableTools  []string //   availiable tools (built-in agentscope)
+	AvailableTools  []string //   available tools (built-in agentscope)
 	SysPromptPath   string   //  "You are a helpful assistant"
 	ChatModel       string   //  "qwen-max"
 	Provider        string   //  "Aliyun"

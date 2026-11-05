@@ -13,6 +13,7 @@ require (
 )
 
 require (
+	github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody v0.0.0
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -22,3 +23,5 @@ require (
 	github.com/tidwall/resp v0.1.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody => ../../pkg/jsonbody

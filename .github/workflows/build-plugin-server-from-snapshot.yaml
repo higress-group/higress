@@ -68,6 +68,7 @@ jobs:
           SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           [[ "$GATEWAY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$HIGRESS_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$PLUGIN_SERVER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
@@ -118,6 +119,7 @@ jobs:
           PLUGIN_PUBLIC_REGISTRY: ${{ vars.PLUGIN_PUBLIC_REGISTRY }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           # BEGIN plugin-server-index-contract
           verify_plugin_server_index() {
             jq -e '

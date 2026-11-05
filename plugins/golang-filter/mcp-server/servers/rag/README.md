@@ -70,6 +70,8 @@ Higress RAG MCP Server 提供以下工具，根据配置不同，可用工具也
 
 | 名称                         | 数据类型 | 填写要求 | 默认值 | 描述 |
 |----------------------------|----------|-----------|---------|--------|
+| **username**               | string | 必填 | - | 访问本 MCP Server 所需的 HTTP Basic 认证用户名（未配置则 Server 不会加载） |
+| **password**               | string | 必填 | - | 访问本 MCP Server 所需的 HTTP Basic 认证密码（未配置则 Server 不会加载） |
 | **rag**                    | object | 必填 | - | RAG系统基础配置 |
 | rag.splitter.provider      | string | 必填 | recursive | 分块器类型：recursive或nosplitter |
 | rag.splitter.chunk_size    | integer | 可选 | 500 | 块大小 |
@@ -110,6 +112,32 @@ Higress RAG MCP Server 提供以下工具，根据配置不同，可用工具也
 | vectordb.mapping.search.params | object | 可选 | - | 搜索参数（如 nprobe, ef_search 等）
 
 
+### 认证要求（必填）
+
+RAG MCP Server 提供 `create-chunks-from-text`、`delete-chunk` 等写入/删除工具，直接操作共享向量数据库。
+若不加认证，任何能访问该 MCP 端点的客户端都可以向知识库注入内容，形成**持久化的提示词注入（stored prompt injection）**风险，
+后续所有检索与 `chat` 回答都会被污染。因此本 Server 强制要求 HTTP Basic 认证：
+
+- `username` 与 `password` 均为**必填**项，由 mcp-server 网关过滤器在请求进入 MCP 处理逻辑之前统一校验；
+- 认证失败（缺失 `Authorization` 头、凭证错误、或使用非 Basic 方案）时直接返回 `401 Unauthorized`，
+  并带上 `WWW-Authenticate: Basic realm="MCP Server"`，请求体不会被解析，任何工具都不会执行；
+- **未配置凭证时采用 fail-closed 策略**：该 Server 不会被注册，对应的 MCP 端点不可用，
+  同时网关日志中会输出 `RAG server rejected config: missing username/password` 错误，便于排查。
+
+客户端调用示例：
+
+```bash
+curl -u admin:your-password \
+  -X POST 'http://<higress-gateway>/mcp-servers/rag' \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search-chunks","arguments":{"query":"hello"}}}'
+```
+
+MCP 客户端（如 CherryStudio、Claude Desktop）在配置该 Server 时，需填写 Basic Auth 的用户名与密码。
+
+> 注意：`username`/`password` 是访问本 MCP Server 的凭证，与 `vectordb.username`/`vectordb.password`
+> （连接 Milvus 数据库的凭证）是两个不同的配置项，请勿混用。
+
 ### higress-config 配置样例
 
 ```yaml
@@ -140,6 +168,9 @@ data:
         name: "rag"
         type: "rag"
         config:
+          # 必填：访问本 MCP Server 的 HTTP Basic 认证凭证，缺失则该 Server 不会加载
+          username: "admin"
+          password: "your-password"
           rag:
             splitter:
               provider: recursive
@@ -822,6 +853,10 @@ langchain-milvus>=0.2.2
 ### 3. Higress RAG mcp server config 配置
 
 ```yaml
+# 必填：访问本 MCP Server 的 HTTP Basic 认证凭证，缺失则该 Server 不会加载
+username: "admin"
+password: "your-password"
+
 rag:
   splitter:
     provider: "nosplitter"

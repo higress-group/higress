@@ -2,6 +2,8 @@
 
 `jwt-auth` 插件基于 JWT 对请求进行认证鉴权，支持内联 JWKS 或远程 JWKS 拉取，可从请求头、URL 参数或 Cookie 中提取 Token，校验通过后可把 Payload 中的 Claim 写入请求头转发给后端。
 
+认证通过后，插件会把 Consumer 名称写入 `X-Mse-Consumer` 请求头。该请求头由网关**覆盖写入**而非追加：客户端请求中自带的 `X-Mse-Consumer` 会先被移除，再写入本次认证得到的 Consumer 名称，因此下游读取到的始终是网关的认证结果，调用方无法通过自带该请求头伪造身份。
+
 更完整的说明见官方文档：[JWT 认证插件](https://higress.io/zh-cn/docs/plugins/jwt-auth)。
 
 # 运行属性

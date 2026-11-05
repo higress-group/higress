@@ -26,7 +26,6 @@ import (
 
 	prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"istio.io/api/mesh/v1alpha1"
 	configaggregate "istio.io/istio/pilot/pkg/config/aggregate"
 	"istio.io/istio/pilot/pkg/features"
@@ -415,7 +414,6 @@ func (s *Server) initGrpcServer() error {
 	grpcOptions := istiogrpc.ServerOptions(s.GrpcKeepAliveOptions, interceptors...)
 	s.grpcServer = grpc.NewServer(grpcOptions...)
 	s.xdsServer.Register(s.grpcServer)
-	reflection.Register(s.grpcServer)
 	return nil
 }
 

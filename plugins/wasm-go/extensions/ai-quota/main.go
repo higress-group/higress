@@ -21,7 +21,9 @@ import (
 )
 
 const (
-	pluginName = "ai-quota"
+	pluginName           = "ai-quota"
+	ctxKeyQuotaDeducted  = "quotaDeducted"
+	streamingContentType = "text/event-stream"
 )
 
 type ChatMode string
@@ -49,7 +51,9 @@ func init() {
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
+		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingResponseBody),
+		wrapper.ProcessResponseBody(onHttpResponseBody),
 	)
 }
 
@@ -236,13 +240,38 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config QuotaConfig, body []byte)
 	return types.ActionContinue
 }
 
-func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, data []byte, endOfStream bool) []byte {
+func onHttpResponseHeaders(ctx wrapper.HttpContext, _ QuotaConfig) types.Action {
 	chatMode, ok := ctx.GetContext("chatMode").(ChatMode)
-	if !ok {
-		return data
+	if !ok || chatMode != ChatModeCompletion {
+		ctx.DontReadResponseBody()
+		return types.ActionContinue
 	}
-	if chatMode == ChatModeNone || chatMode == ChatModeAdmin {
-		return data
+
+	contentType, _ := proxywasm.GetHttpResponseHeader("content-type")
+	if !strings.Contains(strings.ToLower(contentType), streamingContentType) {
+		ctx.BufferResponseBody()
+	}
+	return types.ActionContinue
+}
+
+func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, data []byte, endOfStream bool) []byte {
+	processResponseUsage(ctx, config, data, endOfStream)
+	return data
+}
+
+func onHttpResponseBody(ctx wrapper.HttpContext, config QuotaConfig, data []byte) types.Action {
+	processResponseUsage(ctx, config, data, true)
+	return types.ActionContinue
+}
+
+func processResponseUsage(ctx wrapper.HttpContext, config QuotaConfig, data []byte, endOfStream bool) {
+	if deducted, _ := ctx.GetContext(ctxKeyQuotaDeducted).(bool); deducted {
+		return
+	}
+
+	chatMode, ok := ctx.GetContext("chatMode").(ChatMode)
+	if !ok || chatMode != ChatModeCompletion {
+		return
 	}
 	if usage := tokenusage.GetTokenUsage(ctx, data); usage.TotalToken > 0 {
 		ctx.SetContext(tokenusage.CtxKeyInputToken, usage.InputToken)
@@ -251,29 +280,26 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, da
 
 	// chat completion mode
 	if !endOfStream {
-		return data
+		return
 	}
 
-	if ctx.GetContext(tokenusage.CtxKeyInputToken) == nil || ctx.GetContext(tokenusage.CtxKeyOutputToken) == nil || ctx.GetContext("consumer") == nil {
-		return data
+	inputToken, inputTokenOK := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
+	outputToken, outputTokenOK := ctx.GetContext(tokenusage.CtxKeyOutputToken).(int64)
+	consumer, consumerOK := ctx.GetContext("consumer").(string)
+	if !inputTokenOK || !outputTokenOK || !consumerOK || consumer == "" {
+		return
 	}
 
-	inputToken, ok := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
-	if !ok {
-		return data
-	}
-	outputToken, ok := ctx.GetContext(tokenusage.CtxKeyOutputToken).(int64)
-	if !ok {
-		return data
-	}
-	consumer, ok := ctx.GetContext("consumer").(string)
-	if !ok {
-		return data
-	}
 	totalToken := int(inputToken + outputToken)
 	log.Debugf("update consumer:%s, totalToken:%d", consumer, totalToken)
-	config.redisClient.DecrBy(config.RedisKeyPrefix+consumer, totalToken, nil)
-	return data
+
+	// Mark the request before dispatching so repeated end-of-stream callbacks cannot
+	// issue duplicate decrements. A synchronous dispatch failure is safe to retry.
+	ctx.SetContext(ctxKeyQuotaDeducted, true)
+	if err := config.redisClient.DecrBy(config.RedisKeyPrefix+consumer, totalToken, nil); err != nil {
+		ctx.SetContext(ctxKeyQuotaDeducted, false)
+		log.Errorf("failed to update consumer:%s quota: %v", consumer, err)
+	}
 }
 
 func deniedNoKeyAuthData() types.Action {

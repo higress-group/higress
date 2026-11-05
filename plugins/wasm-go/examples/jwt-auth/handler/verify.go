@@ -285,6 +285,8 @@ func deniedNotAllow() types.Action {
 }
 
 func authenticated(name string) types.Action {
+	// Replace rather than append: a client-supplied identity must never survive.
+	_ = proxywasm.RemoveHttpRequestHeader("X-Mse-Consumer")
 	_ = proxywasm.AddHttpRequestHeader("X-Mse-Consumer", name)
 	return types.ActionContinue
 }

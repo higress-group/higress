@@ -1,6 +1,6 @@
 <a name="readme-top"></a>
 <h1 align="center">
-    <img src="https://img.alicdn.com/imgextra/i2/O1CN01NwxLDd20nxfGBjxmZ_!!6000000006895-2-tps-960-290.png" alt="Higress" width="240" height="72.5">
+    <img src="https://github.com/user-attachments/assets/14dbde2b-e1f3-414b-b694-aa81952eea00" alt="Higress" width="240" height="72.5">
   <br>
   AI Gateway
 </h1>
@@ -14,7 +14,7 @@
 [![CNCF Sandbox](https://img.shields.io/badge/CNCF-Sandbox-30638E?logo=linuxfoundation&logoColor=white)](https://www.cncf.io/projects/)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12667/badge)](https://www.bestpractices.dev/projects/12667)
 
-<a href="https://trendshift.io/repositories/26458" target="_blank"><img src="https://trendshift.io/api/badge/repositories/26458" alt="higress-group%2Fhigress | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a> <a href="https://www.producthunt.com/posts/higress?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-higress" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=951287&theme=light&t=1745492822283" alt="Higress - Global&#0032;APIs&#0032;as&#0032;MCP&#0032;powered&#0032;by&#0032;AI&#0032;Gateway | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
+<a href="https://trendshift.io/repositories/26458" target="_blank"><img src="https://trendshift.io/api/badge/repositories/26458" alt="higress-group%2Fhigress | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a> <a href="https://www.producthunt.com/posts/higress?embed=true&utm_source=badge-featured&utm_medium=badge&utm_source=badge-higress" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=951287&theme=light&t=1745492822283" alt="Higress - Global&#0032;APIs&#0032;as&#0032;MCP&#0032;powered&#0032;by&#0032;AI&#0032;Gateway | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
 
 </div>
 
@@ -32,7 +32,7 @@
 
 ## What is Higress?
 
-Higress is a cloud-native API gateway based on Istio and Envoy, which can be extended with Wasm plugins written in Go/Rust/JS. It provides dozens of ready-to-use general-purpose plugins and an out-of-the-box console (try the [demo here](http://demo.higress.io/)).
+Higress is a cloud-native API gateway based on Istio and Envoy, which can be extended with Wasm plugins written in Go/Rust/JS. It provides dozens of ready-to-use general-purpose plugins and an out-of-the-box console (try the [demo here](https://demo.higress.io/)).
 
 ### Core Use Cases
 
@@ -226,8 +226,8 @@ Higress would not be possible without the valuable open-source work of projects 
 
 - Higress Console: https://github.com/higress-group/higress-console
 - Higress Standalone: https://github.com/higress-group/higress-standalone
-- Higress Plugin Server：https://github.com/higress-group/plugin-server
-- Higress Wasm Plugin Golang SDK：https://github.com/higress-group/wasm-go
+- Higress Plugin Server: https://github.com/higress-group/plugin-server
+- Higress Wasm Plugin Golang SDK: https://github.com/higress-group/wasm-go
 
 ### Contributors
 

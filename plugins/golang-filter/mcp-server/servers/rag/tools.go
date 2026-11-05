@@ -143,9 +143,9 @@ func HandleSearch(ragClient *RAGClient) common.ToolHandlerFunc {
 		if !ok {
 			return nil, fmt.Errorf("invalid query argument")
 		}
-		topK, ok := arguments["topk"].(int)
+		topK, ok := arguments["topk"].(float64)
 		if !ok {
-			topK = ragClient.config.RAG.TopK
+			topK = float64(ragClient.config.RAG.TopK)
 		}
 
 		threshold, ok := arguments["threshold"].(float64)

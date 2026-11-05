@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -71,7 +72,7 @@ func parseConfig(json gjson.Result, config *MyConfig, log log.Log) error {
 	}
 	config.HumanId = json.Get("HumanId").String()
 	if config.HumanId == "" {
-		config.HumanId = json.Get("HumainId").String()  // for compatible
+		config.HumanId = json.Get("HumainId").String() // for compatible
 	}
 	if config.HumanId == "" {
 		config.HumanId = "Human:"
@@ -85,17 +86,38 @@ func parseConfig(json gjson.Result, config *MyConfig, log log.Log) error {
 
 const bodyTemplate string = `
 {
-"model":"%s",
-"prompt":"%s",
+"model":%s,
+"prompt":%s,
 "temperature":0.9,
 "max_tokens": 150,
 "top_p": 1,
 "frequency_penalty": 0.0,
 "presence_penalty": 0.6,
-"stop": [" %s", " %s"]
+"stop": [%s, %s]
 }
 `
 
+// jsonString renders s as a JSON string literal, so that config values and the
+// user supplied prompt cannot terminate the surrounding JSON document or be
+// reinterpreted through JSON escape sequences.
+func jsonString(s string) string {
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		// json.Marshal of a string cannot fail; keep the document well-formed if
+		// that ever changes.
+		return `""`
+	}
+	return string(encoded)
+}
+
+// buildUpstreamBody renders the upstream completions request body.
+func buildUpstreamBody(config MyConfig, prompt string) []byte {
+	return []byte(fmt.Sprintf(bodyTemplate,
+		jsonString(config.Model),
+		jsonString(prompt),
+		jsonString(" "+config.HumanId),
+		jsonString(" "+config.AIId)))
+}
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config MyConfig, log log.Log) types.Action {
 	pairs := strings.SplitN(ctx.Path(), "?", 2)
 
@@ -114,7 +136,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config MyConfig, log log.Log)
 		proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "chatgpt-proxy.no_prompt", nil, []byte("3-need prompt param"), -1)
 		return types.ActionContinue
 	}
-	body := fmt.Sprintf(bodyTemplate, config.Model, prompt[0], config.HumanId, config.AIId)
+	body := buildUpstreamBody(config, prompt[0])
 	err = config.client.Post(config.ChatgptPath, [][2]string{
 		{"Content-Type", "application/json"},
 		{"Authorization", "Bearer " + config.ApiKey},

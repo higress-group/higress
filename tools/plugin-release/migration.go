@@ -37,18 +37,38 @@ func migrationPreflight(catalogPath, planPath, previousPath, candidateEvidencePa
 	if err := validatePlanProvenance(plan, catalogData); err != nil {
 		return MigrationReportFile{}, err
 	}
-	controlRef, controlDigest, err := migrationControlTag(previousPath)
+	controlCandidates, err := migrationControlTags(previousPath)
 	if err != nil {
 		return MigrationReportFile{}, err
 	}
-	control, err := ociManifestResolver(controlRef)
-	if err != nil {
+	var controlRef, controlDigest string
+	var control ociManifest
+	calibrated := false
+	for _, candidate := range controlCandidates {
+		controlRef, controlDigest = candidate.ref, candidate.digest
+		resolved, err := ociManifestResolver(controlRef)
+		if err == nil {
+			control = resolved
+			calibrated = true
+			break
+		}
 		switch classifyOCIFailure(err, controlRef) {
+		case ociFailureNotFound:
+			// The previous snapshot was prepared but its promote never ran, so
+			// its pipeline-published tag is legitimately absent from the public
+			// registry yet. Fall through to the next calibration candidate; a
+			// re-prepared snapshot carries identical digests for every
+			// unaffected plugin, so a published tag of any provenance still
+			// calibrates the probe.
+			continue
 		case ociFailureUnauthorized:
 			return MigrationReportFile{}, fmt.Errorf("migration preflight control tag %s: registry authorization failed; authorization failure is never absence: %w", controlRef, err)
 		default:
 			return MigrationReportFile{}, fmt.Errorf("migration preflight cannot calibrate its probe against control tag %s: %w", controlRef, err)
 		}
+	}
+	if !calibrated {
+		return MigrationReportFile{}, fmt.Errorf("migration preflight has no calibratable control tag: %s is unpublished and no published candidate remains", controlRef)
 	}
 	if control.Digest != controlDigest {
 		return MigrationReportFile{}, fmt.Errorf("migration preflight probe is not trustworthy: control tag %s resolved to %s, expected the reviewed %s", controlRef, control.Digest, controlDigest)
@@ -131,25 +151,35 @@ func migrationEntryRecommendation(manifest ociManifest, planned PlanEntry, sourc
 	return migrationRecommendation(manifest, planned, sourceCommit)
 }
 
-// migrationControlTag selects the known-good public artifact the probe is
-// validated against: a pipeline-published tag of the previous snapshot that this
-// release's batch is not excluding, preferring an entry this pipeline built over
-// one adopted from a pre-existing public artifact. Those tags are immutable
-// published artifacts, so a probe that cannot reproduce the reviewed digest is
-// measuring the registry incorrectly.
+// migrationControlCandidate is one calibratable public artifact of the previous
+// snapshot, in preference order: pipeline-published (candidate) entries first,
+// then tags adopted from pre-existing public artifacts.
+type migrationControlCandidate struct {
+	ref    string
+	digest string
+}
+
+// migrationControlTags selects the known-good public artifacts the probe can be
+// validated against: pipeline-published tags of the previous snapshot first,
+// then tags adopted from pre-existing public artifacts, none of which this
+// release's batch is excluding. Those tags are immutable published artifacts,
+// so a probe that cannot reproduce the reviewed digest is measuring the
+// registry incorrectly. The resolver falls back down the list only on explicit
+// absence: a prepared-but-not-promoted previous snapshot has no pipeline tag
+// published yet.
 //
 // An entry carrying a migration exclusion is never eligible: its public tag
 // still serves the legacy artifact that caused the exclusion, not the digest its
 // snapshot records, so calibrating against it would fail every later prepare.
-func migrationControlTag(previousPath string) (string, string, error) {
+func migrationControlTags(previousPath string) ([]migrationControlCandidate, error) {
 	if previousPath == "" {
-		return "", "", errors.New("migration preflight requires the reviewed previous snapshot to calibrate its registry probe")
+		return nil, errors.New("migration preflight requires the reviewed previous snapshot to calibrate its registry probe")
 	}
 	var previous Snapshot
 	if _, err := readJSON(previousPath, &previous); err != nil {
-		return "", "", err
+		return nil, err
 	}
-	adoptedRef, adoptedDigest := "", ""
+	var built, adopted []migrationControlCandidate
 	for _, entry := range previous.Plugins {
 		if entry.Migration != nil {
 			continue
@@ -159,17 +189,16 @@ func migrationControlTag(previousPath string) (string, string, error) {
 		}
 		switch entryProvenance(entry) {
 		case "candidate":
-			return entry.OCIRef, entry.Digest, nil
+			built = append(built, migrationControlCandidate{ref: entry.OCIRef, digest: entry.Digest})
 		case "public":
-			if adoptedRef == "" {
-				adoptedRef, adoptedDigest = entry.OCIRef, entry.Digest
-			}
+			adopted = append(adopted, migrationControlCandidate{ref: entry.OCIRef, digest: entry.Digest})
 		}
 	}
-	if adoptedRef != "" {
-		return adoptedRef, adoptedDigest, nil
+	candidates := append(built, adopted...)
+	if len(candidates) == 0 {
+		return nil, errors.New("previous snapshot carries no published, non-excluded public control tag; migration preflight cannot calibrate its probe")
 	}
-	return "", "", errors.New("previous snapshot carries no published, non-excluded public control tag; migration preflight cannot calibrate its probe")
+	return candidates, nil
 }
 
 // validatePlanProvenance re-checks the immutable plan identity the sweep binds

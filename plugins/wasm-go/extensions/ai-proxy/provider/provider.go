@@ -8,13 +8,13 @@ import (
 	"hash/fnv"
 	"math/rand"
 	"net/http"
-	"path"
 	"regexp"
 	"strconv"
 
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/pathutil"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -954,6 +954,24 @@ func (c *ProviderConfig) applyProviderBasePath(path string) string {
 	return path
 }
 
+// prependBasePath puts c.basePath in front of the request path. The request path
+// carries the query string, so joining it whole would let dot segments hidden in
+// a query value resolve as path segments and escape basePath; pathutil.SafeJoin
+// joins the path portion only and rejects results outside basePath.
+//
+// The already-prefixed branch is validated as well: a path that starts with
+// basePath can still climb back out of it, and returning it untouched would skip
+// every check.
+func (c *ProviderConfig) prependBasePath(currentPath string) (string, error) {
+	if strings.HasPrefix(currentPath, c.basePath) {
+		if err := pathutil.ValidateWithin(c.basePath, currentPath); err != nil {
+			return "", err
+		}
+		return currentPath, nil
+	}
+	return pathutil.SafeJoin(c.basePath, currentPath)
+}
+
 func (c *ProviderConfig) parseRequestAndMapModel(ctx wrapper.HttpContext, request interface{}, body []byte) error {
 	switch req := request.(type) {
 	case *chatCompletionRequest:
@@ -1396,8 +1414,15 @@ func (c *ProviderConfig) handleRequestHeaders(provider Provider, ctx wrapper.Htt
 		headers.Set(":path", removePrefixPath)
 	}
 
-	if c.basePath != "" && c.basePathHandling == basePathHandlingPrepend && !strings.HasPrefix(headers.Get(":path"), c.basePath) {
-		headers.Set(":path", path.Join(c.basePath, headers.Get(":path")))
+	if c.basePath != "" && c.basePathHandling == basePathHandlingPrepend {
+		prependedPath, err := c.prependBasePath(headers.Get(":path"))
+		if err != nil {
+			log.Errorf("rejecting request path %q for basePath %q: %v", headers.Get(":path"), c.basePath, err)
+			_ = proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "ai-proxy.path_traversal",
+				util.CreateHeaders(util.HeaderContentType, util.MimeTypeTextPlain), []byte("invalid request path"), -1)
+			return
+		}
+		headers.Set(":path", prependedPath)
 	}
 
 	// Apply providerBasePath if configured

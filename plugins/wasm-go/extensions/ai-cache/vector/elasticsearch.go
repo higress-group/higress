@@ -48,6 +48,10 @@ func (d *ESProvider) QueryEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(results []QueryResult, ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 
 	requestBody, err := json.Marshal(esQueryRequest{
 		Source: Source{Excludes: []string{"embedding"}},
@@ -55,6 +59,7 @@ func (d *ESProvider) QueryEmbedding(
 			Field:       "embedding",
 			QueryVector: emb,
 			K:           d.config.topK,
+			Filter:      map[string]map[string]string{"term": {TenantField: consumer}},
 		},
 		Size: d.config.topK,
 	})
@@ -102,6 +107,10 @@ func (d *ESProvider) UploadAnswerAndEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 	// 最少需要填写的参数为 index, embeddings 和 question
 	// 下面是一个例子
 	// POST /<index>/_doc
@@ -117,6 +126,7 @@ func (d *ESProvider) UploadAnswerAndEmbedding(
 		Embedding: queryEmb,
 		Question:  queryString,
 		Answer:    queryAnswer,
+		Consumer:  consumer,
 	})
 	if err != nil {
 		log.Errorf("[ES] Failed to marshal upload embedding request body: %v", err)
@@ -142,12 +152,14 @@ type esInsertRequest struct {
 	Embedding []float64 `json:"embedding"`
 	Question  string    `json:"question"`
 	Answer    string    `json:"answer"`
+	Consumer  string    `json:"consumer"`
 }
 
 type knn struct {
-	Field       string    `json:"field"`
-	QueryVector []float64 `json:"query_vector"`
-	K           int       `json:"k"`
+	Field       string                       `json:"field"`
+	QueryVector []float64                    `json:"query_vector"`
+	K           int                          `json:"k"`
+	Filter      map[string]map[string]string `json:"filter"`
 }
 
 type Source struct {
@@ -178,22 +190,36 @@ type esQueryResponse struct {
 }
 
 func (d *ESProvider) parseQueryResponse(responseBody []byte, log log.Log) ([]QueryResult, error) {
-	log.Infof("[ES] responseBody: %s", string(responseBody))
+	if log != nil {
+		log.Infof("[ES] responseBody: %s", string(responseBody))
+	}
 	var queryResp esQueryResponse
 	err := json.Unmarshal(responseBody, &queryResp)
 	if err != nil {
 		return []QueryResult{}, err
 	}
-	log.Debugf("[ES] queryResp Hits len: %d", len(queryResp.Hits.Hits))
+	if log != nil {
+		log.Debugf("[ES] queryResp Hits len: %d", len(queryResp.Hits.Hits))
+	}
 	if len(queryResp.Hits.Hits) == 0 {
 		return nil, errors.New("no query results found in response")
 	}
 	results := make([]QueryResult, 0, queryResp.Hits.Total.Value)
 	for _, hit := range queryResp.Hits.Hits {
+		question, ok := hit.Source["question"].(string)
+		if !ok {
+			return nil, fmt.Errorf("[ES] hit %q has missing or non-string question", hit.ID)
+		}
+		answer, ok := hit.Source["answer"].(string)
+		if !ok {
+			return nil, fmt.Errorf("[ES] hit %q has missing or non-string answer", hit.ID)
+		}
+		consumer, _ := hit.Source[TenantField].(string)
 		result := QueryResult{
-			Text:   hit.Source["question"].(string),
-			Score:  hit.Score,
-			Answer: hit.Source["answer"].(string),
+			Text:     question,
+			Score:    hit.Score,
+			Answer:   answer,
+			Consumer: consumer,
 		}
 		results = append(results, result)
 	}

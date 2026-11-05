@@ -50,10 +50,28 @@ func TestHeaderPresenceMatchRequestFlow(t *testing.T) {
 			host := newHeaderMatchTestHost(t)
 			action := host.CallOnHttpRequestHeaders([][2]string{
 				{":authority", "example.com"}, {":path", "/users"}, {":method", "POST"}, {"x-custom-auth", ""},
-			})
+			}, test.WithEndOfStream(true))
 
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 			require.Len(t, host.GetHttpCalloutAttributes(), 1)
+			host.CompleteHttp()
+		})
+
+		t.Run("body without content headers buffers before authorization", func(t *testing.T) {
+			host := newHeaderMatchTestHost(t)
+			// No content-length/content-type/transfer-encoding, but endOfStream was
+			// not received in the header phase, so a body still follows.
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"}, {":path", "/users"}, {":method", "POST"}, {"x-custom-auth", ""},
+			})
+
+			require.Equal(t, types.HeaderStopIteration, action)
+			require.Empty(t, host.GetHttpCalloutAttributes())
+
+			require.Equal(t, types.DataStopIterationAndBuffer, host.CallOnHttpRequestBody([]byte(`{"a":1}`)))
+			callouts := host.GetHttpCalloutAttributes()
+			require.Len(t, callouts, 1)
+			require.Equal(t, `{"a":1}`, string(callouts[0].Body))
 			host.CompleteHttp()
 		})
 	})

@@ -26,6 +26,6 @@ docker::image::pull() {
     docker pull "$@"
 }
 
-# Pull the docker image to the the local.
+# Pull the docker image to the local.
 echo "Pulling image ${IMAGE}:${TAG} to local ..."
 docker::image::pull "${IMAGE}:${TAG}"

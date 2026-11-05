@@ -176,6 +176,18 @@ def proxy(name, strategy=None, target="backend-primary", auth=False):
     return {"server": server, "tools": TOOLS}
 
 
+def auto_proxy(name="proxy-auto", auth=None):
+    config = proxy(name, "auto", auth=auth == "fixed")
+    config["server"]["mcpServerURL"] = "http://backend-primary:8080/auto/mcp"
+    config["server"]["autoDetection"] = {"probeTimeoutMs": 5000}
+    config["server"]["timeout"] = 10000
+    if auth == "passthrough":
+        config["server"]["passthroughAuthHeader"] = True
+        config["server"]["securitySchemes"] = [{"id": "AutoToolAuth", "type": "http", "scheme": "bearer", "defaultCredential": "auto-tool"}]
+        config["tools"] = deepcopy(TOOLS) + [{"name": "proxy_override", "requestTemplate": {"security": {"id": "AutoToolAuth"}}}]
+    return config
+
+
 LISTENERS = [
     (10000, "registered-amap", "backend-primary", {"server": {"name": "amap-tools", "config": {"apiKey": "runtime-key"}}}),
     (10001, "runtime-rest", "backend-primary", {
@@ -199,6 +211,9 @@ LISTENERS = [
     (10006, "proxy-auth-modern", "backend-primary", proxy("proxy-auth-modern", "modern", auth=True)),
     (10007, "proxy-secondary-modern", "backend-secondary", proxy("proxy-secondary-modern", "modern", target="backend-secondary")),
     (10008, "schema-compatibility", "backend-primary", SCHEMA_COMPATIBILITY),
+    (10009, "proxy-auto", "backend-primary", auto_proxy()),
+    (10010, "proxy-auto-fixed", "backend-primary", auto_proxy("proxy-auto-fixed", "fixed")),
+    (10011, "proxy-auto-passthrough", "backend-primary", auto_proxy("proxy-auto-passthrough", "passthrough")),
 ]
 
 
@@ -314,8 +329,53 @@ static_resources:
     return rendered + cluster_yaml("backend-primary")
 
 
+
+def instructions_configs():
+    """Focused instructions mode shares listener/cluster rendering with the full matrix."""
+    for variant in ("baseline", "candidate"):
+        rendered = "admin:\n  address:\n    socket_address: {address: 0.0.0.0, port_value: 9901}\nstatic_resources:\n  listeners:\n"
+        for port in (range(14000, 14010) if variant == "candidate" else (14001, 14002)):
+            config = proxy(f"instructions-{port}", "modern", auth=port == 14003)
+            server = config["server"]
+            server["mcpServerURL"] = "http://backend-primary:8080/instructions"
+            if port != 14002 and variant == "candidate":
+                server["passthroughInstructions"] = port != 14001
+            if port == 14004:
+                server["securitySchemes"] = [{"id": "QueryKey", "type": "apiKey", "in": "query", "name": "api_key", "defaultCredential": "runtime-key"}]
+                server["defaultUpstreamSecurity"] = {"id": "QueryKey"}
+            if port == 14005:
+                server["passthroughAuthHeader"] = True
+            if port == 14006:
+                server["securitySchemes"] = [{"id": "ToolOnly", "type": "http", "scheme": "bearer", "defaultCredential": "tool-only-token"}]
+                config["tools"] = deepcopy(TOOLS)
+                config["tools"][0]["requestTemplate"] = {"security": {"id": "ToolOnly"}}
+            listener = listener_yaml(port, f"instructions-{port}", "backend-primary", config,
+                                     "instructions-baseline-plugin.wasm" if variant == "baseline" else "plugin.wasm")
+            if port == 14007:
+                listener = listener.replace("timeout: 30s}", "timeout: 30s, retry_policy: {retry_on: 5xx, num_retries: 1}}")
+            if port == 14008:
+                listener = listener.replace("timeout: 30s}", "timeout: 0.2s}")
+            if port == 14009:
+                listener = listener.replace("                - name: envoy.filters.http.router", """                - name: envoy.filters.http.lua
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                    inline_code: |
+                      function envoy_on_request(handle)
+                        if handle:headers():get("x-instructions-deny") == "yes" then
+                          handle:respond({[":status"] = "403"}, "fixture deny")
+                        end
+                      end
+                - name: envoy.filters.http.router""")
+            rendered += listener
+        rendered += "  clusters:\n" + cluster_yaml("backend-primary")
+        (OUT / f"envoy-instructions-{variant}.yaml").write_text(rendered)
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
+    if os.environ.get("RUNTIME_VERIFY_INSTRUCTIONS") == "1":
+        instructions_configs()
+        return
     main_config = '''admin:
   address:
     socket_address: {address: 0.0.0.0, port_value: 9901}
@@ -325,17 +385,30 @@ static_resources:
     main_config += "".join(listener_yaml(*entry) for entry in LISTENERS)
     main_config += "  clusters:\n" + cluster_yaml("backend-primary") + cluster_yaml("backend-secondary")
     (OUT / "envoy.yaml").write_text(main_config)
+    explicit_baseline = """admin:
+  address:
+    socket_address: {address: 0.0.0.0, port_value: 9901}
+static_resources:
+  listeners:
+"""
+    explicit_baseline += "".join(listener_yaml(*entry, wasm_file="explicit-baseline-plugin.wasm") for entry in LISTENERS if entry[0] < 10009)
+    explicit_baseline += "  clusters:\n" + cluster_yaml("backend-primary") + cluster_yaml("backend-secondary")
+    (OUT / "envoy-auto-explicit-baseline.yaml").write_text(explicit_baseline)
 
-    auto = proxy("proxy-auto-rejected", "auto")
+
+    auto = proxy("proxy-unknown-rejected", "unknown")
     auto_config = '''admin:
   address:
     socket_address: {address: 0.0.0.0, port_value: 9911}
 static_resources:
   listeners:
 '''
-    auto_config += listener_yaml(11000, "proxy-auto-rejected", "backend-primary", auto)
+    auto_config += listener_yaml(11000, "proxy-unknown-rejected", "backend-primary", auto)
     auto_config += "  clusters:\n" + cluster_yaml("backend-primary")
     (OUT / "envoy-auto.yaml").write_text(auto_config)
+    (OUT / "envoy-auto-baseline.yaml").write_text(single_listener_config(
+        9912, 11001, "proxy-auto-baseline", auto_proxy(), "auto-baseline-plugin.wasm",
+    ))
 
     (OUT / "envoy-baseline.yaml").write_text(single_listener_config(
         9931, 13008, "schema-compatibility-baseline", SCHEMA_COMPATIBILITY, "baseline-plugin.wasm",

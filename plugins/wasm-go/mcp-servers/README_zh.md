@@ -182,7 +182,7 @@ all-in-one 插件的配置方式与所有 MCP server 插件都是一样的，都
 
 ## REST-to-MCP 配置
 
-Higress 支持一种特殊的 REST-to-MCP 配置，允许您无需编写任何代码即可将 REST API 转换为 MCP 工具。这对于快速将现有 REST API 与 AI 助手集成非常有用。这个能力是所有 MCP 服务器内置的，可以基于 all-in-one 这个插件来使用。内置的逻辑实现在 [rest_server.go](https://github.com/alibaba/higress/blob/wasm-go-1.24/plugins/wasm-go/pkg/mcp/server/rest_server.go)。
+Higress 支持一种特殊的 REST-to-MCP 配置，允许您无需编写任何代码即可将 REST API 转换为 MCP 工具。这对于快速将现有 REST API 与 AI 助手集成非常有用。这个能力是所有 MCP 服务器内置的，可以基于 all-in-one 这个插件来使用。内置的逻辑实现在 [rest_server.go](https://github.com/higress-group/higress/blob/wasm-go-1.24/plugins/wasm-go/pkg/mcp/server/rest_server.go)。
 
 ### 配置格式
 
@@ -400,13 +400,15 @@ server:
 
 > **重要提示**：server 配置中的 `name` 字段必须与代码中 `mcp.AddMCPServer()` 调用时使用的服务器名称完全一致。系统通过这个名称来识别应该由哪个 MCP 服务器处理请求。
 
+> **重要提示**：`allowTools` 只对挂载了 `mcp-server` 插件的路由生效，它保护的不是后端服务本身。如果同一后端还能通过未挂载该插件的普通 HTTP 路由访问，发往那条路由的 MCP `tools/call` 请求不会经过任何白名单校验。提供敏感工具的后端不要挂到非 MCP 路由上；如果无法避免，请在其他所有可达该后端的路由上施加等效控制（认证、鉴权、网络策略）。
+
 ## 依赖项
 
 您的 MCP 服务器必须使用支持 Go 1.24 WebAssembly 编译功能的特定版本的 wasm-go SDK：
 
 ```bash
 # 添加必需的依赖项
-go get github.com/alibaba/higress/plugins/wasm-go
+go get github.com/higress-group/higress/plugins/wasm-go
 ```
 
 确保您的 go.mod 文件指定 Go 1.24：
@@ -417,7 +419,7 @@ module my-mcp-server
 go 1.24
 
 require (
-    github.com/alibaba/higress/plugins/wasm-go v1.4.4-0.20250324133957-dab499f6ade6
+    github.com/higress-group/higress/plugins/wasm-go v1.4.4-0.20250324133957-dab499f6ade6
     // 其他依赖项
 )
 ```

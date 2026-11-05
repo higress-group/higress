@@ -96,6 +96,7 @@ jobs:
           APPROVED_EVIDENCE_SHA256: ${{ inputs.approved_readiness_evidence_sha256 }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           # BEGIN plugin-server-index-contract
           verify_plugin_server_index() {
             jq -e '

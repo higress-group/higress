@@ -283,8 +283,8 @@ jobs:
           REGISTRY: ${{ needs.validate.outputs.public_registry }}
           REPOSITORY: ${{ needs.validate.outputs.public_repository }}
           CONFIGURED_REGISTRY: ${{ vars.PLUGIN_PUBLIC_REGISTRY }}
-          REGISTRY_USERNAME: ${{ secrets.PRODUCTION_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.PRODUCTION_REGISTRY_PASSWORD }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
           LOGICAL_ID: ${{ inputs.logical_id }}
           VERSION: ${{ inputs.version }}
@@ -295,6 +295,7 @@ jobs:
           INPUT_HASH: ${{ needs.validate.outputs.input_hash }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           test -n "$REGISTRY"; test -n "$REPOSITORY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
           # BEGIN emergency-registry-binding-contract
           validate_emergency_repository() {
@@ -567,6 +568,7 @@ jobs:
           DIGEST: ${{ steps.publish.outputs.digest }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           oras cp "$REPOSITORY@$DIGEST" "$REPOSITORY:latest"
           test "$(oras manifest fetch "$REPOSITORY:latest" --descriptor | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))')" = "$DIGEST"
           echo "Emergency latest moved to \`$DIGEST\` after evidence PR publication." >> "$GITHUB_STEP_SUMMARY"

@@ -22,4 +22,17 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 )
 
-require github.com/tidwall/sjson v1.2.5 // indirect
+require (
+	github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody v0.0.0
+	github.com/tidwall/sjson v1.2.5 // indirect
+)
+
+require (
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/stretchr/testify v1.10.0 // indirect
+	github.com/tetratelabs/wazero v1.7.2 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
+
+replace github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody => ../../pkg/jsonbody

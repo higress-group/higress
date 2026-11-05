@@ -341,6 +341,10 @@ func TestMainEdgeCases(t *testing.T) {
 	test.RunMainEdgeCaseTests(t)
 }
 
+func TestDuplicateModelMember(t *testing.T) {
+	test.RunDuplicateModelMemberTests(t)
+}
+
 func TestApiPathRegression(t *testing.T) {
 	test.RunApiPathRegressionTests(t)
 }

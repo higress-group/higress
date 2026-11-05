@@ -28,10 +28,10 @@ description: 生成 Higress 项目每日报告，追踪 issue/PR 动态，沉淀
 
 ```bash
 # 获取昨日 issues
-gh search issues --repo alibaba/higress --created yesterday --json number,title,author,url,body,state,labels --limit 50
+gh search issues --repo higress-group/higress --created yesterday --json number,title,author,url,body,state,labels --limit 50
 
 # 获取昨日 PRs
-gh search prs --repo alibaba/higress --created yesterday --json number,title,author,url,body,state,additions,deletions,reviewDecision --limit 50
+gh search prs --repo higress-group/higress --created yesterday --json number,title,author,url,body,state,additions,deletions,reviewDecision --limit 50
 ```
 
 ### 2. Issue 追踪状态管理
@@ -235,19 +235,19 @@ Higress 插件执行阶段优先级：AUTHN (310) > AUTHZ (340) > STATS
 
 ```bash
 # 查看 issue 详情和评论
-gh issue view <number> --repo alibaba/higress --json number,title,state,comments,author,createdAt,labels,url
+gh issue view <number> --repo higress-group/higress --json number,title,state,comments,author,createdAt,labels,url
 
 # 查看 issue 评论
-gh issue view <number> --repo alibaba/higress --comments
+gh issue view <number> --repo higress-group/higress --comments
 
 # 发送 issue 评论
-gh issue comment <number> --repo alibaba/higress --body "评论内容"
+gh issue comment <number> --repo higress-group/higress --body "评论内容"
 
 # 关闭 issue
-gh issue close <number> --repo alibaba/higress --reason completed
+gh issue close <number> --repo higress-group/higress --reason completed
 
 # 添加标签
-gh issue edit <number> --repo alibaba/higress --add-label "bug"
+gh issue edit <number> --repo higress-group/higress --add-label "bug"
 ```
 
 ## Discord 输出

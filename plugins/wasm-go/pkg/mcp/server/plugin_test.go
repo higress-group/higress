@@ -17,7 +17,9 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
@@ -32,10 +34,49 @@ import (
 )
 
 func TestSupportedMCPVersionsRemainLegacyOnly(t *testing.T) {
-	want := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+	want := []string{"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
 	assert.Equal(t, want, SupportedMCPVersions)
 	assert.False(t, slices.Contains(SupportedMCPVersions, "2026-07-28"), "modern must not enter legacy initialize negotiation")
-	assert.False(t, slices.Contains(SupportedMCPVersions, "2025-11-25"), "deferred profile must not be advertised")
+	assert.Equal(t, protocol.LegacyVersions(), discoverySupportedVersions[:len(discoverySupportedVersions)-1])
+	assert.Equal(t, protocol.SupportedVersions(), discoverySupportedVersions[:])
+}
+
+// TestInitializeVersionCompatibility exercises the production header/body entry,
+// including the fixed unknown-body fallback and unchanged legacy mismatches.
+func TestInitializeVersionCompatibility(t *testing.T) {
+	saved := globalContext
+	globalContext = Context{servers: make(map[string]Server)}
+	Initialize()
+	t.Cleanup(func() { globalContext = saved })
+	for _, tc := range []struct{ header, body, want string }{
+		{"2024-11-05", "2024-11-05", "2024-11-05"},
+		{"2025-03-26", "2025-03-26", "2025-03-26"},
+		{"2025-06-18", "2025-06-18", "2025-06-18"},
+		{"2025-11-25", "2025-11-25", "2025-11-25"},
+		{"", "2025-11-25", "2025-11-25"},
+		{"", "2099-01-01", "2025-06-18"},
+		{"", "2026-07-28", "2025-06-18"},
+		{"2025-11-25", "2025-03-26", "2025-03-26"},
+	} {
+		t.Run(tc.header+"/"+tc.body, func(t *testing.T) {
+			host, status := wasmtest.NewTestHost(json.RawMessage(`{"toolSet":{"name":"compat","serverTools":[]}}`))
+			t.Cleanup(host.Reset)
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+			headers := [][2]string{{":authority", "mcp.example.com"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}}
+			if tc.header != "" {
+				headers = append(headers, [2]string{protocol.HeaderProtocolVersion, tc.header})
+			}
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+			body := fmt.Sprintf(`{"jsonrpc":"2.0","id":"initialize-compat","method":"initialize","params":{"protocolVersion":%q,"capabilities":{}}}`, tc.body)
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(body)))
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			require.Equal(t, uint32(200), response.StatusCode)
+			assert.Equal(t, "initialize-compat", gjson.GetBytes(response.Data, "id").String())
+			assert.Equal(t, tc.want, gjson.GetBytes(response.Data, "result.protocolVersion").String())
+			assert.JSONEq(t, `{"tools":{}}`, gjson.GetBytes(response.Data, "result.capabilities").Raw)
+		})
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -221,25 +262,24 @@ func TestGlobalToolRegistryMarksCyclicSchemaNonSerializable(t *testing.T) {
 	assert.Nil(t, info.InputSchema)
 }
 
-func TestGlobalToolRegistryDoesNotTraverseOpaqueSchemaValues(t *testing.T) {
-	marshalCalls := 0
-	opaque := opaqueSchemaValue{values: []string{"original"}, calls: &marshalCalls}
-	cycle := &hiddenCycleSchemaMarshaler{calls: &marshalCalls}
-	cycle.next = cycle
+func TestGlobalToolRegistryFreezesCustomMarshalerOutput(t *testing.T) {
+	calls := 0
+	state := map[string]any{"value": "original"}
 	r := &GlobalToolRegistry{}
 	r.Initialize()
-
-	require.NotPanics(t, func() {
-		r.RegisterTool("srv", "opaque", &stubTool{desc: "d", input: map[string]any{
-			"type": "object", "opaque": opaque, "cycle": cycle,
-		}})
-	})
-	opaque.values[0] = "mutated"
+	r.RegisterTool("srv", "opaque", &stubTool{desc: "d", input: map[string]any{
+		"type": "object", "opaque": descriptorMarshaler{state: state, calls: &calls},
+	}})
+	require.Equal(t, 1, calls)
+	state["value"] = "mutated"
 	info, ok := r.GetToolInfo("srv", "opaque")
 	require.True(t, ok)
-	assert.False(t, info.inputSchemaSerializable)
-	assert.Nil(t, info.InputSchema)
-	assert.Zero(t, marshalCalls, "registry snapshotting must not execute custom MarshalJSON")
+	require.True(t, info.inputSchemaSerializable)
+	encoded, err := json.Marshal(info.InputSchema)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"value":"original"`)
+	assert.NotContains(t, string(encoded), "mutated")
+	assert.Equal(t, 1, calls, "reads use captured JSON instead of calling the source again")
 }
 
 func TestGlobalToolRegistry_RegisterTool_PlainToolHasNoOutputSchema(t *testing.T) {
@@ -251,7 +291,7 @@ func TestGlobalToolRegistry_RegisterTool_PlainToolHasNoOutputSchema(t *testing.T
 	assert.Nil(t, info.OutputSchema)
 }
 
-func TestGlobalToolRegistry_RegisterTool_CapturesLegacyOnlyCompatibility(t *testing.T) {
+func TestGlobalToolRegistry_RegisterTool_IgnoresDeprecatedLegacyOnly(t *testing.T) {
 	r := &GlobalToolRegistry{}
 	r.Initialize()
 	r.RegisterTool("rest", "legacy", &RestMCPTool{
@@ -270,7 +310,7 @@ func TestGlobalToolRegistry_RegisterTool_CapturesLegacyOnlyCompatibility(t *test
 
 	info, ok := r.GetToolInfo("rest", "legacy")
 	require.True(t, ok)
-	assert.True(t, info.LegacyOnly)
+	assert.False(t, info.LegacyOnly)
 }
 
 func TestGlobalToolRegistry_GetToolInfo_Misses(t *testing.T) {
@@ -373,7 +413,7 @@ func TestSetupMcpProxyServer_InvalidTransport(t *testing.T) {
 }
 
 func TestSetupMcpProxyServer_InvalidProtocolStrategy(t *testing.T) {
-	j := mustGJSON(t, `{"transport":"http","protocolStrategy":"auto","mcpServerURL":"http://b"}`)
+	j := mustGJSON(t, `{"transport":"http","protocolStrategy":"unknown","mcpServerURL":"http://b"}`)
 	_, err := setupMcpProxyServer("s", j, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "protocolStrategy")
@@ -850,8 +890,8 @@ func TestModernMethodPolicyEnablesMCPProxyHandlers(t *testing.T) {
 		isComposed:     true,
 		methodHandlers: utils.MethodHandlers{"tools/call": handler},
 	}
-	assert.False(t, modernMethodPolicy(composedConfig, "tools/call").Available,
-		"modern requests must not enter the legacy composed tools/call handler")
+	assert.True(t, modernMethodPolicy(composedConfig, "tools/call").Available,
+		"both profiles use the historical composed handler rejection")
 }
 
 func TestProductionEntryModernBoundary(t *testing.T) {
@@ -882,20 +922,80 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		}
 	}
 
-	t.Run("origin rejection precedes version disclosure", func(t *testing.T) {
+	t.Run("Origin does not suppress version validation", func(t *testing.T) {
 		host := newHost(t)
 		headers := append(commonHeaders(),
 			[2]string{"origin", "https://evil.example"},
-			[2]string{protocol.HeaderProtocolVersion, "2025-11-25"},
+			[2]string{protocol.HeaderProtocolVersion, "2099-01-01"},
 			[2]string{protocol.HeaderMethod, "tools/list"},
 		)
 		action := host.CallOnHttpRequestHeaders(headers)
 		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 		response := host.GetLocalResponse()
 		require.NotNil(t, response)
-		assert.Equal(t, uint32(403), response.StatusCode)
-		assert.Equal(t, int64(protocol.CodeInvalidRequest), gjson.GetBytes(response.Data, "error.code").Int())
+		assert.Equal(t, uint32(400), response.StatusCode)
+		assert.Equal(t, int64(protocol.CodeUnsupportedVersion), gjson.GetBytes(response.Data, "error.code").Int())
 	})
+
+	for index, origin := range []string{"", "https://mcp.example.com", "https://other.example", "https://mcp.example.com:8443", "null"} {
+		for _, modern := range []bool{false, true} {
+			t.Run(fmt.Sprintf("Origin acceptance/%d/modern=%t", index, modern), func(t *testing.T) {
+				host := newHost(t)
+				headers := commonHeaders()
+				body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+				if modern {
+					headers = modernProxyListHeaders()
+					body = modernProxyListBody(1)
+				}
+				if origin != "" {
+					headers = append(headers, [2]string{"Origin", origin})
+				}
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+				response := host.GetLocalResponse()
+				require.NotNil(t, response)
+				assert.Equal(t, uint32(200), response.StatusCode)
+				assert.True(t, gjson.GetBytes(response.Data, "result.tools").Exists())
+			})
+		}
+	}
+
+	for _, test := range []struct {
+		name, method, nameHeader, params string
+		status                           uint32
+		code                             int
+	}{
+		{"body version", "tools/list", "", `{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-03-26"}}`, 400, protocol.CodeUnsupportedVersion},
+		{"missing metadata", "tools/list", "", `{}`, 400, protocol.CodeHeaderMismatch},
+		{"method conflict", "tools/call", "echo", `{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`, 400, protocol.CodeHeaderMismatch},
+		{"name conflict", "tools/call", "different", `{"name":"echo","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`, 400, protocol.CodeHeaderMismatch},
+		{"unknown method", "ordinary/unknown", "", `{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`, 202, 0},
+		{"cancel notification", "notifications/cancelled", "", `{"requestId":1,"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`, 202, 0},
+	} {
+		t.Run("notification admission/"+test.name, func(t *testing.T) {
+			host := newHost(t)
+			headers := append(commonHeaders(), [2]string{protocol.HeaderProtocolVersion, "2026-07-28"}, [2]string{protocol.HeaderMethod, test.method})
+			if test.nameHeader != "" {
+				headers = append(headers, [2]string{protocol.HeaderName, test.nameHeader})
+			}
+			method := test.method
+			if test.name == "method conflict" {
+				method = "tools/list"
+			}
+			body := []byte(`{"jsonrpc":"2.0","method":"` + method + `","params":` + test.params + `}`)
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+			host.CallOnHttpRequestBody(body)
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			assert.Equal(t, test.status, response.StatusCode)
+			if test.status == 202 {
+				assert.Empty(t, response.Data)
+			} else {
+				assert.Equal(t, int64(test.code), gjson.GetBytes(response.Data, "error.code").Int())
+			}
+			assert.Empty(t, host.GetHttpCalloutAttributes(), "admission must not dispatch upstream")
+		})
+	}
 
 	t.Run("large legacy marker string remains legacy", func(t *testing.T) {
 		host := newHost(t)
@@ -903,7 +1003,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		require.Equal(t, types.ActionPause, action)
 
 		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"note":"` + protocol.MetaProtocolVersion + `"},"padding":"`)
-		body = append(body, bytes.Repeat([]byte("x"), int(protocol.ModernMaxBodyBytes)+128)...)
+		body = append(body, bytes.Repeat([]byte("x"), 1024*1024+128)...)
 		body = append(body, []byte(`"}`)...)
 		action = host.CallOnHttpRequestBody(body)
 		require.Equal(t, types.ActionContinue, action)
@@ -925,7 +1025,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		response := host.GetLocalResponse()
 		require.NotNil(t, response)
 		assert.Equal(t, uint32(400), response.StatusCode)
-		assert.Equal(t, int64(protocol.CodeHeaderMismatch), gjson.GetBytes(response.Data, "error.code").Int())
+		assert.Equal(t, int64(protocol.CodeParseError), gjson.GetBytes(response.Data, "error.code").Int())
 		assert.False(t, gjson.GetBytes(response.Data, "result").Exists())
 	})
 
@@ -945,7 +1045,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		assert.False(t, gjson.GetBytes(response.Data, "result").Exists())
 	})
 
-	t.Run("late direct modern metadata is rejected at modern limit", func(t *testing.T) {
+	t.Run("late direct modern metadata is rejected at shared complete-body limit", func(t *testing.T) {
 		host := newHost(t)
 		action := host.CallOnHttpRequestHeaders(commonHeaders())
 		require.Equal(t, types.ActionPause, action)
@@ -961,7 +1061,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		assert.Equal(t, int64(protocol.CodeInvalidRequest), gjson.GetBytes(response.Data, "error.code").Int())
 	})
 
-	t.Run("composed tools call uses modern unavailable mapping", func(t *testing.T) {
+	t.Run("composed tools call retains historical handler policy", func(t *testing.T) {
 		host := newHost(t)
 		headers := append(commonHeaders(),
 			[2]string{protocol.HeaderProtocolVersion, string(protocol.Version20260728)},
@@ -976,7 +1076,7 @@ func TestProductionEntryModernBoundary(t *testing.T) {
 		require.Equal(t, types.ActionContinue, action)
 		response := host.GetLocalResponse()
 		require.NotNil(t, response)
-		assert.Equal(t, uint32(404), response.StatusCode)
+		assert.Equal(t, uint32(200), response.StatusCode)
 		assert.Equal(t, int64(protocol.CodeMethodNotFound), gjson.GetBytes(response.Data, "error.code").Int())
 	})
 }
@@ -1060,5 +1160,119 @@ func TestModernDisconnectCancelsPendingToolOnce(t *testing.T) {
 	case <-request.Cancellation.Done():
 	default:
 		t.Fatal("modern request cancellation channel was not closed")
+	}
+}
+
+func TestProductionEntryClientIDSemantics(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	for _, modern := range []bool{false, true} {
+		for _, token := range []string{`"client\\id"`, `9007199254740993`, `9223372036854775808`, `1.50`, `1E+03`, `null`, ``} {
+			for _, method := range []string{"tools/list", "unknown"} {
+				name := fmt.Sprintf("modern=%t/id=%s/method=%s", modern, token, method)
+				t.Run(name, func(t *testing.T) {
+					host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+					headers := legacyToolHeaders()
+					meta := ""
+					if modern {
+						headers = modernToolListHeaders()
+						for i := range headers {
+							if headers[i][0] == protocol.HeaderMethod {
+								headers[i][1] = method
+							}
+						}
+						meta = `"_meta":{"` + protocol.MetaProtocolVersion + `":"2026-07-28"}`
+					}
+					idField := ""
+					if token != "" {
+						idField = `,"id":` + token
+					}
+					body := []byte(`{"jsonrpc":"2.0"` + idField + `,"method":"` + method + `","params":{` + meta + `}}`)
+					require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+					require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+					response := host.GetLocalResponse()
+					require.NotNil(t, response)
+					if modern && token == "" {
+						assert.Equal(t, uint32(202), response.StatusCode)
+						assert.Empty(t, response.Data)
+						return
+					}
+					wantID := token
+					if wantID == "" {
+						wantID = "0"
+					}
+					assert.Equal(t, wantID, gjson.GetBytes(response.Data, "id").Raw)
+					assert.Equal(t, method == "unknown", gjson.GetBytes(response.Data, "error").Exists())
+					assert.True(t, json.Valid(response.Data))
+				})
+			}
+		}
+	}
+}
+
+func TestProductionEntryRetainsIDOnEnvelopeError(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	for _, token := range []string{`null`, `1.50`, `1E+03`, `9223372036854775808`} {
+		t.Run(token, func(t *testing.T) {
+			host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+			body := []byte(`{"jsonrpc":"2.0","id":` + token + `,"method":false,"params":{}}`)
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(modernToolListHeaders()))
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			assert.Equal(t, uint32(400), response.StatusCode)
+			assert.Equal(t, token, gjson.GetBytes(response.Data, "id").Raw)
+			assert.Zero(t, counters.create)
+			assert.Zero(t, counters.call)
+		})
+	}
+}
+
+func TestProductionEntryRejectsInvalidMessagesWithoutToolSideEffects(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	for _, modern := range []bool{false, true} {
+		valid := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"count","arguments":{"count":2}}}`
+		headers := legacyToolHeaders()
+		if modern {
+			valid = string(modernToolCallBody("count", `{"count":2}`))
+			headers = modernToolHeaders("count")
+		}
+		for i, body := range []string{valid + `{}`, `[` + valid + `]`, strings.TrimSuffix(valid, "}"), "true"} {
+			t.Run(fmt.Sprintf("modern=%t/case=%d", modern, i), func(t *testing.T) {
+				host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(body)))
+				response := host.GetLocalResponse()
+				require.NotNil(t, response)
+				assert.Equal(t, uint32(400), response.StatusCode)
+				assert.Zero(t, counters.create)
+				assert.Zero(t, counters.call)
+				assert.Empty(t, host.GetHttpCalloutAttributes())
+			})
+		}
+	}
+}
+
+func TestProductionEntryModernUsesLegacyOrdinaryHTTPPolicy(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	for _, method := range []string{"PUT", "PATCH", "OPTIONS"} {
+		t.Run(method, func(t *testing.T) {
+			host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+			headers := [][2]string{
+				{":authority", "mcp.example.com"}, {":method", method}, {":path", "/mcp"},
+				{"content-type", "text/plain"}, {"content-type", "custom/type"}, {"accept", "text/plain"},
+				{protocol.HeaderProtocolVersion, string(protocol.Version20260728)}, {protocol.HeaderMethod, "tools/list"},
+			}
+			body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"` + protocol.MetaProtocolVersion + `":"2026-07-28","` + protocol.MetaClientCapabilities + `":false,"` + protocol.MetaClientInfo + `":null}}}`)
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+			require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			assert.Equal(t, uint32(200), response.StatusCode)
+			assert.True(t, gjson.GetBytes(response.Data, "result.tools").IsArray())
+		})
 	}
 }
