@@ -109,9 +109,6 @@ x-envoy-allow-mcp-tools: tool1,tool2,tool3
 
 **使用场景示例**：
 
-<<<<<<< HEAD
-出站头基于现有认证处理后的请求继承：`Cookie`、租户头、自定义业务头和前置插件添加的普通头默认保留，无需新增配置。已被认证逻辑移除的凭据不会恢复；`Authorization` 继续遵循 `downstreamSecurity`、`passthroughAuthHeader` 和显式上游凭据规则。下游 session、`Last-Event-ID` 和内部控制头按操作清理；MCP 协议头重新生成。格式合法的 `Mcp-Param-*` 仅透传到当前 modern tools/call，不进入 discover、initialize 或 legacy RPC。
-=======
 1. **基于用户角色的权限控制**
    ```yaml
    # 配置中定义所有可用工具
@@ -121,7 +118,6 @@ x-envoy-allow-mcp-tools: tool1,tool2,tool3
    - delete-user-info
    - admin-operation
    ```
->>>>>>> origin/main
 
    前置认证插件可以根据用户角色设置不同的工具权限：
    - 普通用户：`x-envoy-allow-mcp-tools: get-user-info`
@@ -289,11 +285,9 @@ server:
     probeTimeoutMs: 1000
 ```
 
-<<<<<<< HEAD
 `autoDetection.probeTimeoutMs` 仅在 `auto + http` 下解析：缺省 1000 ms，必须是可表示为 uint32 的正整数，实际探测超时取它与有效 `timeout` 的较小值。单独配置 autoDetection 不启用 auto；插件 `timeout` 约束探测/握手等独立子请求（缺省 5000ms），最终 HTTP 业务请求由原路由的 timeout 控制，整条链路总耗时可能更长。
-=======
+
 使用时注意：
->>>>>>> origin/main
 
 - MCP `2026-07-28` 客户端可以通过插件访问旧版后端；旧版客户端不能通过插件访问仅支持 MCP `2026-07-28` 的后端。
 - `auto` 的自动探测仅用于 MCP `2026-07-28` 客户端请求；旧版客户端请求仍按旧版流程处理。
@@ -301,6 +295,7 @@ server:
 - 自动探测请求使用配置的后端凭证，后端需要允许对应凭证访问发现接口。同一路由的后端实例应保持协议能力一致。
 - `transport: sse` 表示插件能够接入旧版 SSE 后端，不代表向客户端提供通用的实时订阅或消息推送能力。
 
+同一上游池实例必须提供一致协议能力；探测与业务仍可能落到不同实例。HTTP JSON/SSE 在完整业务响应后解析，不提供实时进度或订阅。1 MiB 限制在复制探测 body 到 Wasm 前检查，不限制 Envoy 已接收的全部缓冲，也不限制 Tool 结果大小。取消阻止后续阶段，不宣称能撤回已提交的工具副作用。取消后的有效连接明确终止响应，断连后的回调不再访问流。
 
 ### 上游 instructions
 
@@ -317,31 +312,11 @@ server:
 
 `defaultDownstreamSecurity` 和工具级 `security` 定义从客户端请求中提取凭证的方式，不负责校验凭证有效性。客户端身份校验和访问授权需要通过 Higress 的认证、鉴权插件配置。
 
-<<<<<<< HEAD
-同一上游池实例必须提供一致协议能力；探测与业务仍可能落到不同实例。HTTP JSON/SSE 在完整业务响应后解析，不提供实时进度或订阅。1 MiB 限制在复制探测 body 到 Wasm 前检查，不限制 Envoy 已接收的全部缓冲，也不限制 Tool 结果大小。取消阻止后续阶段，不宣称能撤回已提交的工具副作用。取消后的有效连接明确终止响应，断连后的回调不再访问流。
-=======
 `defaultUpstreamSecurity` 和工具级 `requestTemplate.security` 定义访问后端时使用的认证方案。
->>>>>>> origin/main
 
 ### 定义认证方案 (`server.securitySchemes`)
 
-<<<<<<< HEAD
-### 主请求转发兼容性
-
-HTTP `legacy`、`modern`、`auto` 的最终 `tools/list` / `tools/call` 使用当前 SDK 的 `RouteCall` 继续原请求，后置请求插件和原路由的 header/path rewrite、timeout、retry、hash policy 因此生效。继续保留 `DisableReroute`：本插件修改 host/path 不主动重新匹配路由。插件只提交一次业务请求；Envoy 路由重试可能产生多次后端尝试，不承诺工具恰好执行一次。
-
-initialize、initialized、auto discover 仍是独立子请求，不经过后置插件；后置插件添加的凭据不能反向作用于已完成的握手。旧 SSE 仍使用主请求 GET 建立通道和独立 POST RPC，同时恢复普通头继承。上游协议识别要求后续插件不把最终业务改到另一个逻辑服务。
-
-同步 modern 通过 Continue 放行，异步握手成功才 Resume 一次。响应转换和取消清理在 RouteCall 回调及 stream-done 中完成，覆盖无 body 的响应头阶段和完整 body 的响应体阶段。插件使用 wasm-go v1.1.1，并在启动时固定启用 SafeLog：SDK 的请求及异步响应载荷日志由 INFO 降为 DEBUG，无需新增配置。SafeLog 不脱敏或删除 DEBUG 报文，也不自动过滤普通 Infof；开启 DEBUG 时仍可能看到完整凭据、参数和结果。RouteCall 内部改写操作未逐项检查返回错误的既有行为保持。
-
-安全兼容性调整：客户端 `Proxy-Authorization` 不再默认继承到 HTTP 控制/业务请求或旧 SSE GET/POST，以免把代理认证凭据发送到 MCP 源站。显式配置的上游鉴权仍按原优先级生成凭据；普通多值业务头和 Cookie 的继承不受影响。
-
-旧配置无需迁移。回滚时将 WasmPlugin 的 `url` 恢复为之前记录的插件镜像 digest（本地挂载环境恢复原 Wasm 文件并重新加载），保留原路由配置；回滚后最终业务的 sidecall 差异与普通头限制也会恢复。真实数据面三版本验证入口见 [runtime-verification](testdata/runtime-verification/README.md#routing-compatibility-4597)。
-
-### 明确暂缓范围
-=======
 您可以在服务器级别定义一组可重用的认证方案。这些方案之后可以被各个工具引用，用于配置 MCP Server 向后端 REST API 发起请求时的认证方式。
->>>>>>> origin/main
 
 **配置字段 (`server.securitySchemes[]`)**:
 
@@ -502,6 +477,22 @@ tools:
 
 - REST-to-MCP：使用所选上游认证配置中的 `credential`；未配置时使用对应认证方案的 `defaultCredential`。
 - MCP 代理：使用认证方案中的 `defaultCredential`。不同工具需要不同固定凭证时，定义不同的认证方案并分别引用。
+
+### 主请求转发兼容性
+
+HTTP `legacy`、`modern`、`auto` 的最终 `tools/list` / `tools/call` 使用当前 SDK 的 `RouteCall` 继续原请求，后置请求插件和原路由的 header/path rewrite、timeout、retry、hash policy 因此生效。继续保留 `DisableReroute`：本插件修改 host/path 不主动重新匹配路由。插件只提交一次业务请求；Envoy 路由重试可能产生多次后端尝试，不承诺工具恰好执行一次。
+
+initialize、initialized、auto discover 仍是独立子请求，不经过后置插件；后置插件添加的凭据不能反向作用于已完成的握手。旧 SSE 仍使用主请求 GET 建立通道和独立 POST RPC，同时恢复普通头继承。上游协议识别要求后续插件不把最终业务改到另一个逻辑服务。
+
+出站头基于现有认证处理后的请求继承：`Cookie`、租户头、自定义业务头和前置插件添加的普通头默认保留，无需新增配置。已被认证逻辑移除的凭据不会恢复；`Authorization` 继续遵循 `downstreamSecurity`、`passthroughAuthHeader` 和显式上游凭据规则。下游 session、`Last-Event-ID` 和内部控制头按操作清理；MCP 协议头重新生成。格式合法的 `Mcp-Param-*` 仅透传到当前 modern tools/call，不进入 discover、initialize 或 legacy RPC。
+
+同步 modern 通过 Continue 放行，异步握手成功才 Resume 一次。响应转换和取消清理在 RouteCall 回调及 stream-done 中完成，覆盖无 body 的响应头阶段和完整 body 的响应体阶段。插件使用 wasm-go v1.1.1，并在启动时固定启用 SafeLog：SDK 的请求及异步响应载荷日志由 INFO 降为 DEBUG，无需新增配置。SafeLog 不脱敏或删除 DEBUG 报文，也不自动过滤普通 Infof；开启 DEBUG 时仍可能看到完整凭据、参数和结果。RouteCall 内部改写操作未逐项检查返回错误的既有行为保持。
+
+安全兼容性调整：客户端 `Proxy-Authorization` 不再默认继承到 HTTP 控制/业务请求或旧 SSE GET/POST，以免把代理认证凭据发送到 MCP 源站。显式配置的上游鉴权仍按原优先级生成凭据；普通多值业务头和 Cookie 的继承不受影响。
+
+旧配置无需迁移。回滚时将 WasmPlugin 的 `url` 恢复为之前记录的插件镜像 digest（本地挂载环境恢复原 Wasm 文件并重新加载），保留原路由配置；回滚后最终业务的 sidecall 差异与普通头限制也会恢复。真实数据面三版本验证入口见 [runtime-verification](testdata/runtime-verification/README.md#routing-compatibility-4597)。
+
+### 明确暂缓范围
 
 ## 参数类型支持
 
