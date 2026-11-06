@@ -211,6 +211,37 @@ func TestOnHttpRequestBody(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+
+		// 测试嵌入服务返回空/错误时的优雅处理
+		t.Run("empty embeddings in embedding response", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+
+			body := `{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "What is AI?"}]}`
+			action := host.CallOnHttpRequestBody([]byte(body))
+			require.Equal(t, types.ActionPause, action)
+
+			// 模拟嵌入服务返回错误/空 output（如内容过滤、限流或畸形响应）
+			embeddingResponse := `{
+				"code": "InvalidArgument",
+				"message": "input is too long",
+				"request_id": "req-err"
+			}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(embeddingResponse))
+
+			// 空 embeddings 不应导致索引越界 panic；请求应被安全恢复（不挂起）
+			host.CompleteHttp()
+		})
 	})
 }
 

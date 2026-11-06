@@ -126,6 +126,14 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIRagConfig, body []byte,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			var responseEmbedding dashscope.Response
 			_ = json.Unmarshal(responseBody, &responseEmbedding)
+			// Guard against empty embeddings to avoid an index-out-of-range panic when
+			// the embedding service returns an error or empty output. Resume the request
+			// so it does not hang (the plugin only resumes inside the dashvector callback).
+			if len(responseEmbedding.Output.Embeddings) == 0 {
+				log.Errorf("[ai-rag] empty embeddings in response: %s", string(responseBody))
+				proxywasm.ResumeHttpRequest()
+				return
+			}
 			requestQuery := dashvector.Request{
 				TopK:         config.DashVectorTopK,
 				OutputFileds: []string{config.DashVectorField},
