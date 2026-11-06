@@ -100,7 +100,12 @@ func (r retry) Parse(annotations Annotations, config *Ingress, _ *GlobalContext)
 					}
 				}
 
-				retryConfig.retryOn = strings.TrimSuffix(stringBuilder.String(), ",")
+				// A value that contains none of the recognised conditions used to
+				// leave retryOn empty, which silently disables retries while
+				// Attempts keeps its default of 3.
+				if built := strings.TrimSuffix(stringBuilder.String(), ","); built != "" {
+					retryConfig.retryOn = built
+				}
 			}
 		}
 	}
