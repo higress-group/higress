@@ -80,6 +80,11 @@ func getSplitPos(header string) int {
 
 func extraceHttpFrame(frame string) ([][2]string, []byte, error) {
 	pos := strings.Index(frame, "\n\n")
+	// The frame is the LLM's output.text, so it may not contain a blank
+	// line at all; frame[:pos] with pos == -1 would panic.
+	if pos == -1 {
+		return nil, nil, errors.New("invalid http frame.")
+	}
 	headers := [][2]string{}
 	for _, header := range strings.Split(frame[:pos], "\n") {
 		splitPos := getSplitPos(header)
@@ -119,7 +124,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AITransformerConfig, body
 	llmRequestBody, _ = sjson.Set(llmRequestBody, "input.messages.2.content", headerStr+"\n"+string(body))
 	hds := [][2]string{{"Authorization", "Bearer " + config.providerAPIKey}, {"Content-Type", "application/json"}}
 	log.Info(headerStr + "\n" + string(body))
-	config.client.Post(
+	if err := config.client.Post(
 		"/api/v1/services/aigc/text-generation/generation",
 		hds,
 		[]byte(llmRequestBody),
@@ -132,7 +137,12 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AITransformerConfig, body
 			proxywasm.ResumeHttpRequest()
 		},
 		50000,
-	)
+	); err != nil {
+		// A synchronous dispatch failure means the callback above will
+		// never run, so pausing here would hang the request forever.
+		log.Errorf("ai-transformer request dispatch failed: %v", err)
+		return types.ActionContinue
+	}
 
 	return types.ActionPause
 }
@@ -161,7 +171,7 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config AITransformerConfig, bod
 	llmRequestBody, _ = sjson.Set(llmRequestBody, "input.messages.2.content", headerStr+"\n"+string(body))
 	hds := [][2]string{{"Authorization", "Bearer " + config.providerAPIKey}, {"Content-Type", "application/json"}}
 	log.Info(headerStr + "\n" + string(body))
-	config.client.Post(
+	if err := config.client.Post(
 		"/api/v1/services/aigc/text-generation/generation",
 		hds,
 		[]byte(llmRequestBody),
@@ -174,7 +184,12 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config AITransformerConfig, bod
 			proxywasm.ResumeHttpResponse()
 		},
 		50000,
-	)
+	); err != nil {
+		// A synchronous dispatch failure means the callback above will
+		// never run, so pausing here would hang the response forever.
+		log.Errorf("ai-transformer response dispatch failed: %v", err)
+		return types.ActionContinue
+	}
 
 	return types.ActionPause
 }
