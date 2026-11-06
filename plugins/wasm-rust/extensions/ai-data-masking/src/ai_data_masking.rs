@@ -520,6 +520,10 @@ struct ContentPart {
     raw: serde_json::Map<String, Value>,
 }
 
+fn is_textual_content_part_kind(kind: &str) -> bool {
+    matches!(kind, "text" | "input_text")
+}
+
 impl<'de> Deserialize<'de> for ContentPart {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -533,18 +537,23 @@ impl<'de> Deserialize<'de> for ContentPart {
             .and_then(Value::as_str)
             .ok_or_else(|| D::Error::custom("content part must have a string type"))?
             .to_string();
-        let text = match object.get("text") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(text)) => Some(text.clone()),
-            Some(_) => return Err(D::Error::custom("content part text must be a string")),
+        let textual = is_textual_content_part_kind(&kind);
+        let text = if textual {
+            match object.get("text") {
+                Some(Value::String(text)) => Some(text.clone()),
+                _ => {
+                    return Err(D::Error::custom(
+                        "textual content part must have a string text",
+                    ))
+                }
+            }
+        } else {
+            None
         };
-        if kind == "text" && text.is_none() {
-            return Err(D::Error::custom(
-                "text content part must have a string text",
-            ));
-        }
         object.remove("type");
-        object.remove("text");
+        if textual {
+            object.remove("text");
+        }
         Ok(Self {
             kind,
             text,
@@ -554,7 +563,20 @@ impl<'de> Deserialize<'de> for ContentPart {
 }
 
 impl ContentPart {
+    fn is_textual(&self) -> bool {
+        is_textual_content_part_kind(&self.kind)
+    }
+
+    fn scan_text(&self) -> Option<&str> {
+        if self.is_textual() {
+            self.text.as_deref()
+        } else {
+            None
+        }
+    }
+
     fn with_text(&self, text: String) -> Value {
+        debug_assert!(self.is_textual());
         let mut part = self.raw.clone();
         part.insert("type".to_string(), Value::String(self.kind.clone()));
         part.insert("text".to_string(), Value::String(text));
@@ -580,7 +602,7 @@ impl Message {
             match content {
                 MessageContent::Text(text) => segments.push(text.as_str()),
                 MessageContent::Parts(parts) => {
-                    segments.extend(parts.iter().filter_map(|part| part.text.as_deref()));
+                    segments.extend(parts.iter().filter_map(ContentPart::scan_text));
                 }
             }
         }
@@ -1056,7 +1078,7 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
                                             .deny_request_parse_error("content must be an array");
                                     };
                                     for (part_index, part) in parts.iter().enumerate() {
-                                        let Some(text) = &part.text else {
+                                        let Some(text) = part.scan_text() else {
                                             continue;
                                         };
                                         if self.check_message(text) {
@@ -1068,7 +1090,7 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
                                                 return self.deny_request_masking_error(&error)
                                             }
                                         };
-                                        if new_text != *text {
+                                        if new_text != text {
                                             if let Some(part_value) =
                                                 parts_value.get_mut(part_index)
                                             {
@@ -1480,9 +1502,19 @@ mod tests {
                 vec![],
             ),
             (
-                "non-text part with string text",
+                "input_text content part",
                 r#"{"messages":[{"role":"user","content":[{"type":"input_text","text":"third"}]}]}"#,
                 vec!["third"],
+            ),
+            (
+                "image_url part with extra text",
+                r#"{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"},"text":"fourth"}]}]}"#,
+                vec![],
+            ),
+            (
+                "unknown part kind with text",
+                r#"{"messages":[{"role":"user","content":[{"type":"custom_part","text":"fifth"}]}]}"#,
+                vec![],
             ),
             ("empty messages", r#"{"messages":[]}"#, vec![]),
         ];
@@ -1524,6 +1556,18 @@ mod tests {
             (
                 "text part numeric text",
                 r#"{"messages":[{"content":[{"type":"text","text":42}]}]}"#,
+            ),
+            (
+                "input_text part missing text",
+                r#"{"messages":[{"content":[{"type":"input_text"}]}]}"#,
+            ),
+            (
+                "input_text part null text",
+                r#"{"messages":[{"content":[{"type":"input_text","text":null}]}]}"#,
+            ),
+            (
+                "input_text part numeric text",
+                r#"{"messages":[{"content":[{"type":"input_text","text":42}]}]}"#,
             ),
             (
                 "part is not an object",
@@ -1652,6 +1696,28 @@ mod tests {
         assert_eq!(replaced["type"], "text");
         assert_eq!(replaced["text"], "masked");
         assert_eq!(replaced["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn non_textual_parts_preserve_text_fields_and_are_not_scanned() {
+        let req = parse_req(
+            r#"{"messages":[{"content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"},"text":"keep image text"},{"type":"custom_part","text":"keep unknown text"}]}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let Some(MessageContent::Parts(parts)) = &req.messages[0].content else {
+            panic!("expected content parts");
+        };
+
+        assert_eq!(req_text_segments(&req), Vec::<String>::new());
+        assert!(parts.iter().all(|part| !part.is_textual()));
+        assert!(parts.iter().all(|part| part.scan_text().is_none()));
+        assert_eq!(parts[0].raw["text"], "keep image text");
+        assert_eq!(
+            parts[0].raw["image_url"]["url"],
+            "https://example.com/a.png"
+        );
+        assert_eq!(parts[1].raw["text"], "keep unknown text");
     }
 
     #[test]
