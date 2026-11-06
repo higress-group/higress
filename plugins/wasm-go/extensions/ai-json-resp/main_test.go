@@ -16,6 +16,8 @@ package main
 
 import (
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -889,4 +891,19 @@ func TestExtractJson(t *testing.T) {
 		// 这不是有效的JSON，因为"Second: {"age": 30}"不是有效的JSON语法
 		require.Contains(t, err.Error(), "invalid character 'S' after top-level value")
 	})
+}
+
+func TestConfigStructTagsAreWellFormed(t *testing.T) {
+	typ := reflect.TypeOf(PluginConfig{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		// Runtime-only fields deliberately carry no json tag at all; only the
+		// ones that declare a json tag must have a well-formed one.
+		if !strings.Contains(string(f.Tag), "json:") {
+			continue
+		}
+		if _, ok := f.Tag.Lookup("json"); !ok {
+			t.Errorf("config field %s has a malformed json tag: %q", f.Name, string(f.Tag))
+		}
+	}
 }
