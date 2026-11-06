@@ -216,3 +216,52 @@ func TestEditorContext_IsResponseHeadersDirty(t *testing.T) {
 		t.Errorf("ResponseHeadersDirty should be true after DeleteRefValues")
 	}
 }
+
+func TestEditorContext_QueryEditsPreserveEscapedPath(t *testing.T) {
+	paths := []string{
+		"/objects/a%2Fb",
+		"/objects/a%2fb",
+		"/objects/a%3Fb",
+		"/objects/a%23b",
+		"/objects/a%25b",
+		"/objects/%252F",
+		"/objects/hello%20world",
+		"/objects/%E4%BD%A0%E5%A5%BD",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			ctx := NewEditorContext()
+			ctx.SetRequestHeaders(map[string][]string{":path": {path + "?old=1"}})
+			ctx.ResetDirtyFlags()
+
+			ref := newTestRef(RefTypeRequestQuery, "new")
+			ctx.SetRefValues(ref, []string{"2", "3"})
+			if got, want := ctx.GetRequestHeader(":path")[0], path+"?new=2&new=3&old=1"; got != want {
+				t.Fatalf("setting query changed escaped path: got %q, want %q", got, want)
+			}
+			if !ctx.IsRequestHeadersDirty() {
+				t.Fatal("query edit did not mark request headers dirty")
+			}
+
+			ctx.DeleteRefValues(ref)
+			if got, want := ctx.GetRequestHeader(":path")[0], path+"?old=1"; got != want {
+				t.Fatalf("deleting query changed escaped path: got %q, want %q", got, want)
+			}
+
+			ctx.SetRequestQueries(map[string][]string{"replacement": {"a&b"}})
+			if got, want := ctx.GetRequestHeader(":path")[0], path+"?replacement=a%26b"; got != want {
+				t.Fatalf("replacing queries changed escaped path: got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestEditorContext_SetRequestPathPreservesEscapesAcrossQueryEdits(t *testing.T) {
+	ctx := NewEditorContext()
+	ctx.SetRequestHeaders(map[string][]string{":path": {"/old?keep=1"}})
+	ctx.SetRequestPath("/new/a%2Fb%3Fc%23d%25")
+	ctx.SetRefValue(newTestRef(RefTypeRequestQuery, "next"), "2")
+	if got, want := ctx.GetRequestHeader(":path")[0], "/new/a%2Fb%3Fc%23d%25?keep=1&next=2"; got != want {
+		t.Fatalf("query edit changed replacement path: got %q, want %q", got, want)
+	}
+}
