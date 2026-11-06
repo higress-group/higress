@@ -419,7 +419,11 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 			case "prefix":
 				m["matcher"] = Matcher{Prefix: fmt.Sprint(consumerName)}
 			case "regexp":
-				m["matcher"] = Matcher{Re: regexp.MustCompile(fmt.Sprint(consumerName))}
+				re, err := regexp.Compile(fmt.Sprint(consumerName))
+				if err != nil {
+					return errors.New(fmt.Sprintf("invalid regexp pattern %q for consumerName: %v", consumerName, err))
+				}
+				m["matcher"] = Matcher{Re: re}
 			}
 			config.ConsumerRequestCheckService = append(config.ConsumerRequestCheckService, m)
 		}
@@ -441,7 +445,11 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 			case "prefix":
 				m["matcher"] = Matcher{Prefix: fmt.Sprint(consumerName)}
 			case "regexp":
-				m["matcher"] = Matcher{Re: regexp.MustCompile(fmt.Sprint(consumerName))}
+				re, err := regexp.Compile(fmt.Sprint(consumerName))
+				if err != nil {
+					return errors.New(fmt.Sprintf("invalid regexp pattern %q for consumerName: %v", consumerName, err))
+				}
+				m["matcher"] = Matcher{Re: re}
 			}
 			config.ConsumerResponseCheckService = append(config.ConsumerResponseCheckService, m)
 		}
@@ -466,7 +474,11 @@ func (config *AISecurityConfig) Parse(json gjson.Result) error {
 			case "prefix":
 				m["matcher"] = Matcher{Prefix: fmt.Sprint(consumerName)}
 			case "regexp":
-				m["matcher"] = Matcher{Re: regexp.MustCompile(fmt.Sprint(consumerName))}
+				re, err := regexp.Compile(fmt.Sprint(consumerName))
+				if err != nil {
+					return errors.New(fmt.Sprintf("invalid regexp pattern %q for consumerName: %v", consumerName, err))
+				}
+				m["matcher"] = Matcher{Re: re}
 			}
 			if ra, ok := m["riskAction"]; ok {
 				raStr := fmt.Sprint(ra)
