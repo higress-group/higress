@@ -232,6 +232,11 @@ func jsonFormat(llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonSchema map[st
 			// 得到gpt的返回结果
 			var responseCompletion dashscope.CompletionResponse
 			_ = json.Unmarshal(responseBody, &responseCompletion)
+			// Guard against empty choices to avoid an index-out-of-range panic.
+			if len(responseCompletion.Choices) == 0 {
+				log.Errorf("[jsonFormat] empty choices in LLM response")
+				return
+			}
 			log.Infof("[jsonFormat] content: %s", responseCompletion.Choices[0].Message.Content)
 			content = responseCompletion.Choices[0].Message.Content
 			jsonStr, err := extractJson(content)
@@ -316,6 +321,12 @@ func toolsCallResult(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmI
 			// 得到gpt的返回结果
 			var responseCompletion dashscope.CompletionResponse
 			_ = json.Unmarshal(responseBody, &responseCompletion)
+			// Guard against empty choices to avoid an index-out-of-range panic.
+			if len(responseCompletion.Choices) == 0 {
+				log.Errorf("[toolsCall] empty choices in LLM response")
+				proxywasm.ResumeHttpRequest()
+				return
+			}
 			log.Infof("[toolsCall] content: %s", responseCompletion.Choices[0].Message.Content)
 
 			if responseCompletion.Choices[0].Message.Content != "" {
@@ -549,6 +560,12 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byt
 	err := json.Unmarshal(body, &rawResponse)
 	if err != nil {
 		log.Debugf("[onHttpResponseBody] body to json err: %s", err.Error())
+		return types.ActionContinue
+	}
+	// Guard against empty choices (e.g. upstream error / empty response) to avoid
+	// an index-out-of-range panic on rawResponse.Choices[0].
+	if len(rawResponse.Choices) == 0 {
+		log.Errorf("[onHttpResponseBody] empty choices in LLM response: %s", string(body))
 		return types.ActionContinue
 	}
 	log.Infof("first content: %s", rawResponse.Choices[0].Message.Content)
