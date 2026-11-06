@@ -1,0 +1,56 @@
+{
+  "base": "36f2f1ac5c7305c5a46c296c617b45d1fbacb7d3",
+  "environment": "go1.26.3 darwin/arm64 Apple M4 Pro",
+  "command": "go test ./pkg/ingress/config -run '^$' -bench '^BenchmarkIndependentPluginSnapshot$' -benchtime=100x -count=1 -timeout=90s",
+  "fixture": "Metadata-only ingress configs, empty plugin output, INFO logging enabled. Local microbenchmark, not gateway convergence/load evidence.",
+  "measurements": [
+    {
+      "phase": "before",
+      "ingress_count": 100,
+      "iterations": 100,
+      "ns_per_op": 216614.0,
+      "bytes_per_op": 325041,
+      "allocs_per_op": 4725
+    },
+    {
+      "phase": "before",
+      "ingress_count": 1000,
+      "iterations": 100,
+      "ns_per_op": 2327446.0,
+      "bytes_per_op": 3227339,
+      "allocs_per_op": 47034
+    },
+    {
+      "phase": "before",
+      "ingress_count": 5000,
+      "iterations": 100,
+      "ns_per_op": 10206395.0,
+      "bytes_per_op": 16139533,
+      "allocs_per_op": 235050
+    },
+    {
+      "phase": "after",
+      "ingress_count": 100,
+      "iterations": 100,
+      "ns_per_op": 53.75,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0
+    },
+    {
+      "phase": "after",
+      "ingress_count": 1000,
+      "iterations": 100,
+      "ns_per_op": 65.83,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0
+    },
+    {
+      "phase": "after",
+      "ingress_count": 5000,
+      "iterations": 100,
+      "ns_per_op": 88.75,
+      "bytes_per_op": 0,
+      "allocs_per_op": 0
+    }
+  ]
+}
