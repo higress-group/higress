@@ -47,11 +47,12 @@ type HttpService struct {
 }
 
 type AuthorizationRequest struct {
-	AllowedHeaders      expr.Matcher
-	HeadersToAdd        map[string]string
-	WithRequestBody     bool
-	MaxRequestBodyBytes uint32
-	AllowedProperties   []AllowedProperty
+	AllowedHeaders                    expr.Matcher
+	HeadersToAdd                      map[string]string
+	WithRequestBody                   bool
+	MaxRequestBodyBytes               uint32
+	AllowedProperties                 []AllowedProperty
+	PreserveHeadersOnInternalRedirect []string
 }
 
 type AllowedProperty struct {
@@ -199,6 +200,23 @@ func parseAuthorizationRequestConfig(json gjson.Result, httpService *HttpService
 		}
 
 		authorizationRequest.HeadersToAdd = convertToStringMap(authorizationRequestConfig.Get("headers_to_add"))
+		preserved := authorizationRequestConfig.Get("preserve_headers_on_internal_redirect")
+		if preserved.Exists() {
+			if !preserved.IsArray() {
+				return errors.New("preserve_headers_on_internal_redirect must be an array")
+			}
+			seen := map[string]bool{}
+			for _, item := range preserved.Array() {
+				name := strings.ToLower(item.String())
+				if item.Type != gjson.String || !validHeaderName(name) {
+					return errors.New("preserve_headers_on_internal_redirect contains an invalid header name")
+				}
+				if !seen[name] {
+					seen[name] = true
+					authorizationRequest.PreserveHeadersOnInternalRedirect = append(authorizationRequest.PreserveHeadersOnInternalRedirect, name)
+				}
+			}
+		}
 
 		withRequestBody := authorizationRequestConfig.Get("with_request_body")
 		if withRequestBody.Exists() {
@@ -226,6 +244,19 @@ func parseAuthorizationRequestConfig(json gjson.Result, httpService *HttpService
 		httpService.AuthorizationRequest = authorizationRequest
 	}
 	return nil
+}
+
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", c) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func parseAuthorizationResponseConfig(json gjson.Result, httpService *HttpService) error {
