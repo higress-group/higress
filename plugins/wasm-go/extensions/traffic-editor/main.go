@@ -96,7 +96,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig) types.A
 	log.Debugf("onHttpResponseHeaders called with config")
 
 	editorContext := loadEditorContext(ctx)
-	if editorContext.GetEffectiveCommandSet() == nil {
+	if editorContext == nil || editorContext.GetEffectiveCommandSet() == nil {
 		log.Debugf("no effective command set found for request %s", ctx.Path())
 		return types.ActionContinue
 	}
