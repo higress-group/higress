@@ -628,10 +628,6 @@ controller:
       protocol: TCP
       port: 8889
       targetPort: 8889
-    - name: grpc
-      protocol: TCP
-      port: 15051
-      targetPort: 15051
 
   service:
     type: ClusterIP
