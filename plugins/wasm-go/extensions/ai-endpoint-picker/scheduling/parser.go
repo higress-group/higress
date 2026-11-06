@@ -86,9 +86,12 @@ func ParseCompactVLLMMetrics(relevant []byte) (VLLMMetrics, error) {
 	if value, ok := latestFiniteValue(families[queueMetric]); ok && value >= 0 {
 		result.BaseSignals[SignalQueue] = available(value, queueMetric)
 	}
-	if value, ok := latestFiniteValue(families[currentKVMetric]); ok {
+	// Both KV branches carry the same lower bound as the queue guard above: a
+	// negative utilisation is not a usable sample (design #5156), while 0 and 1
+	// stay valid.
+	if value, ok := latestFiniteValue(families[currentKVMetric]); ok && value >= 0 {
 		result.BaseSignals[SignalKVCache] = available(value, currentKVMetric)
-	} else if value, ok := latestFiniteValue(families[legacyKVMetric]); ok {
+	} else if value, ok := latestFiniteValue(families[legacyKVMetric]); ok && value >= 0 {
 		result.BaseSignals[SignalKVCache] = available(value, legacyKVMetric)
 	}
 	if family := families[loraMetric]; family != nil {
