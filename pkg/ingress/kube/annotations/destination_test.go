@@ -163,3 +163,14 @@ func TestDestinationParse(t *testing.T) {
 		})
 	}
 }
+
+func TestParseDestinationNegativeWeight(t *testing.T) {
+	config := &Ingress{}
+	annotations := Annotations{
+		buildHigressAnnotationKey(destinationKey): "-50% my-svc.DEFAULT-GROUP.xxxx.nacos:8080",
+	}
+	_ = (destination{}).Parse(annotations, config, nil)
+	if config.Destination != nil {
+		t.Fatalf("a negative weight must be rejected, got %+v", config.Destination)
+	}
+}

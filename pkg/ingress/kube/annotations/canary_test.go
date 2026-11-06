@@ -292,3 +292,20 @@ func TestApplyWeight(t *testing.T) {
 		})
 	}
 }
+
+func TestCanaryParseNegativeWeight(t *testing.T) {
+	config := &Ingress{}
+	annotations := Annotations{
+		buildNginxAnnotationKey(enableCanary): "true",
+		buildNginxAnnotationKey(canaryWeight): "-5",
+	}
+	if err := (canary{}).Parse(annotations, config, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if config.Canary == nil {
+		t.Fatal("expected canary config")
+	}
+	if config.Canary.Weight != 0 {
+		t.Fatalf("a negative weight must be ignored, got %d", config.Canary.Weight)
+	}
+}
