@@ -99,17 +99,22 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 }
 
 func executeReadImage(imageUrls []string, config Config, query string, queryIndex int, body []byte) types.Action {
-	var imageContents []string
+	// OCR callouts are asynchronous and complete in an arbitrary order, so each result is
+	// stored in the slot of the image it was dispatched for instead of being appended in
+	// completion order. The prompt below labels the slots by position, which only matches
+	// the images when the stored order is the dispatch order.
+	imageContents := make([]string, len(imageUrls))
 	var totalImages int
 	var finished int
-	for _, imageUrl := range imageUrls {
+	for imageIndex, imageUrl := range imageUrls {
+		imageSlot := imageIndex
 		err := config.ocrProvider.DoOCR(imageUrl, func(imageContent string, err error) {
 			defer func() {
 				finished++
 				if totalImages == finished {
 					var processedContents []string
 					for idx := len(imageContents) - 1; idx >= 0; idx-- {
-						processedContents = append(processedContents, fmt.Sprintf("第%d张图片内容为 %s", totalImages-idx, imageContents[idx]))
+						processedContents = append(processedContents, fmt.Sprintf("第%d张图片内容为 %s", len(imageContents)-idx, imageContents[idx]))
 					}
 					imageSummary := fmt.Sprintf("总共有 %d 张图片。\n", totalImages)
 					prompt := strings.Replace(config.promptTemplate, "{image_content}", imageSummary+strings.Join(processedContents, "\n"), 1)
@@ -128,7 +133,7 @@ func executeReadImage(imageUrls []string, config Config, query string, queryInde
 				log.Errorf("do ocr failed, err:%v", err)
 				return
 			}
-			imageContents = append(imageContents, imageContent)
+			imageContents[imageSlot] = imageContent
 		})
 		if err != nil {
 			log.Errorf("ocr call failed, err:%v", err)
