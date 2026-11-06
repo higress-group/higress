@@ -27,7 +27,7 @@ func main() {}
 func init() {
 	wrapper.SetCtx(
 		"custom-log",
-		wrapper.ProcessRequestHeadersBy(onHttpRequestHeaders),
+		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 	)
 }
 
@@ -57,7 +57,7 @@ func writeTraceAttribute(ctx wrapper.HttpContext) {
 	ctx.WriteUserAttributeToTrace()
 }
 
-func onHttpRequestHeaders(ctx wrapper.HttpContext, config CustomLogConfig, log wrapper.Log) types.Action {
+func onHttpRequestHeaders(ctx wrapper.HttpContext, config CustomLogConfig) types.Action {
 	if rand.Intn(10)%3 == 1 {
 		writeLog(ctx)
 	} else if rand.Intn(10)%3 == 2 {
