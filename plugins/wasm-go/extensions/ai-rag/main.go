@@ -125,7 +125,17 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIRagConfig, body []byte,
 		reqEmbeddingSerialized,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			var responseEmbedding dashscope.Response
-			_ = json.Unmarshal(responseBody, &responseEmbedding)
+			if err := json.Unmarshal(responseBody, &responseEmbedding); err != nil {
+				log.Errorf("[ai-rag] failed to parse embedding response: %s", err.Error())
+				return
+			}
+			if len(responseEmbedding.Output.Embeddings) == 0 {
+				// DashScope answers with an error body (quota, auth) that has no
+				// embeddings; indexing it below would panic the plugin.
+				log.Errorf("[ai-rag] embedding response carried no embeddings (status=%d): %s",
+					statusCode, string(responseBody))
+				return
+			}
 			requestQuery := dashvector.Request{
 				TopK:         config.DashVectorTopK,
 				OutputFileds: []string{config.DashVectorField},
