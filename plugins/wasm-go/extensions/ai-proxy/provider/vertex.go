@@ -48,7 +48,7 @@ const (
 	contextOpenAICompatibleMarker      = "isOpenAICompatibleRequest"
 	contextVertexRawMarker             = "isVertexRawRequest"
 	contextVertexStreamDoneMarker      = "vertexStreamDoneSent"
-	contextVertexStreamToolCallIDs     = "vertexStreamToolCallIDs"
+	contextVertexStreamResponseStates  = "vertexStreamResponseStates"
 	vertexAnthropicVersion             = "vertex-2023-10-16"
 	vertexImageVariationDefaultPrompt  = "Create variations of the provided image."
 )
@@ -860,36 +860,19 @@ func (v *vertexProvider) buildChatCompletionResponse(ctx wrapper.HttpContext, re
 		},
 	}
 	for _, candidate := range response.Candidates {
+		state := &vertexResponseState{}
+		message := buildVertexResponseMessage(candidate.Content.Parts, state)
+		message.Role = roleAssistant
+		if len(candidate.Content.Parts) == 0 {
+			message.Content = ""
+		}
 		choice := chatCompletionChoice{
-			Index: candidate.Index,
-			Message: &chatMessage{
-				Role: roleAssistant,
-			},
+			Index:        candidate.Index,
+			Message:      message,
 			FinishReason: util.Ptr(candidate.FinishReason),
 		}
-		if len(candidate.Content.Parts) > 0 {
-			part := candidate.Content.Parts[0]
-			if part.FunctionCall != nil {
-				args, _ := json.Marshal(part.FunctionCall.Args)
-				choice.Message.ToolCalls = []toolCall{
-					{
-						Id:               newOpenAIToolCallID(),
-						Type:             "function",
-						ThoughtSignature: part.ThoughtSignature,
-						ExtraContent:     buildGoogleThoughtSignatureExtraContent(part.ThoughtSignature),
-						Function: functionCall{
-							Name:      part.FunctionCall.Name,
-							Arguments: string(args),
-						},
-					},
-				}
-			} else if part.Thounght != nil && len(candidate.Content.Parts) > 1 {
-				choice.Message.Content = reasoningStartTag + part.Text + reasoningEndTag + candidate.Content.Parts[1].Text
-			} else if part.Text != "" {
-				choice.Message.Content = part.Text
-			}
-		} else {
-			choice.Message.Content = ""
+		if candidate.FinishReason == "STOP" && len(message.ToolCalls) > 0 {
+			choice.FinishReason = util.Ptr(finishReasonToolCall)
 		}
 		fullTextResponse.Choices = append(fullTextResponse.Choices, choice)
 	}
@@ -975,48 +958,33 @@ func (v *vertexProvider) buildImageGenerationResponseFromJSON(body []byte) *imag
 }
 
 func (v *vertexProvider) buildChatCompletionStreamResponse(ctx wrapper.HttpContext, vertexResp *vertexChatResponse) *chatCompletionResponse {
-	var choice chatCompletionChoice
-	choice.Delta = &chatMessage{}
-	if len(vertexResp.Candidates) > 0 && len(vertexResp.Candidates[0].Content.Parts) > 0 {
-		part := vertexResp.Candidates[0].Content.Parts[0]
-		if part.FunctionCall != nil {
-			args, _ := json.Marshal(part.FunctionCall.Args)
-			choice.Delta = &chatMessage{
-				ToolCalls: []toolCall{
-					{
-						Id:               getVertexStreamToolCallID(ctx, 0),
-						Type:             "function",
-						ThoughtSignature: part.ThoughtSignature,
-						ExtraContent:     buildGoogleThoughtSignatureExtraContent(part.ThoughtSignature),
-						Function: functionCall{
-							Name:      part.FunctionCall.Name,
-							Arguments: string(args),
-						},
-					},
-				},
-			}
-		} else if part.Thounght != nil {
-			if ctx.GetContext("thinking_start") == nil {
-				choice.Delta = &chatMessage{Content: reasoningStartTag + part.Text}
-				ctx.SetContext("thinking_start", true)
-			} else {
-				choice.Delta = &chatMessage{Content: part.Text}
-			}
-		} else if part.Text != "" {
-			if ctx.GetContext("thinking_start") != nil && ctx.GetContext("thinking_end") == nil {
-				choice.Delta = &chatMessage{Content: reasoningEndTag + part.Text}
-				ctx.SetContext("thinking_end", true)
-			} else {
-				choice.Delta = &chatMessage{Content: part.Text}
-			}
+	states, _ := ctx.GetContext(contextVertexStreamResponseStates).(map[int]*vertexResponseState)
+	if states == nil {
+		states = make(map[int]*vertexResponseState)
+		ctx.SetContext(contextVertexStreamResponseStates, states)
+	}
+	choices := make([]chatCompletionChoice, 0, len(vertexResp.Candidates))
+	for _, candidate := range vertexResp.Candidates {
+		state := states[candidate.Index]
+		if state == nil {
+			state = &vertexResponseState{}
+			states[candidate.Index] = state
 		}
+		choice := chatCompletionChoice{
+			Index: candidate.Index,
+			Delta: buildVertexResponseMessage(candidate.Content.Parts, state),
+		}
+		if candidate.FinishReason == "STOP" && state.nextToolIndex > 0 {
+			choice.FinishReason = util.Ptr(finishReasonToolCall)
+		}
+		choices = append(choices, choice)
 	}
 	streamResponse := chatCompletionResponse{
 		Id:      vertexResp.ResponseId,
 		Object:  objectChatCompletionChunk,
 		Created: time.Now().UnixMilli() / 1000,
 		Model:   ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
-		Choices: []chatCompletionChoice{choice},
+		Choices: choices,
 		Usage: &usage{
 			PromptTokens:     vertexResp.UsageMetadata.PromptTokenCount,
 			CompletionTokens: vertexResp.UsageMetadata.CandidatesTokenCount,
@@ -1033,18 +1001,55 @@ func newOpenAIToolCallID() string {
 	return fmt.Sprintf("call_%s", uuid.New().String())
 }
 
-func getVertexStreamToolCallID(ctx wrapper.HttpContext, index int) string {
-	toolCallIDs, _ := ctx.GetContext(contextVertexStreamToolCallIDs).(map[int]string)
-	if toolCallIDs == nil {
-		toolCallIDs = make(map[int]string)
-		ctx.SetContext(contextVertexStreamToolCallIDs, toolCallIDs)
+type vertexResponseState struct {
+	nextToolIndex   int
+	thinkingStarted bool
+	thinkingEnded   bool
+}
+
+func buildVertexResponseMessage(parts []vertexPart, state *vertexResponseState) *chatMessage {
+	message := &chatMessage{}
+	var content strings.Builder
+	for _, part := range parts {
+		if part.FunctionCall != nil {
+			if state.thinkingStarted && !state.thinkingEnded {
+				content.WriteString(reasoningEndTag)
+				state.thinkingEnded = true
+			}
+			args, _ := json.Marshal(part.FunctionCall.Args)
+			message.ToolCalls = append(message.ToolCalls, toolCall{
+				Index:            state.nextToolIndex,
+				Id:               newOpenAIToolCallID(),
+				Type:             "function",
+				ThoughtSignature: part.ThoughtSignature,
+				ExtraContent:     buildGoogleThoughtSignatureExtraContent(part.ThoughtSignature),
+				Function: functionCall{
+					Name:      part.FunctionCall.Name,
+					Arguments: string(args),
+				},
+			})
+			// This provider does not request streamFunctionCallArguments. Each
+			// functionCall therefore contains complete args and starts a new call,
+			// including when it arrives in a later SSE event at parts[0].
+			state.nextToolIndex++
+		} else if part.Thounght != nil && *part.Thounght {
+			if !state.thinkingStarted {
+				content.WriteString(reasoningStartTag)
+				state.thinkingStarted = true
+			}
+			content.WriteString(part.Text)
+		} else if part.Text != "" {
+			if state.thinkingStarted && !state.thinkingEnded {
+				content.WriteString(reasoningEndTag)
+				state.thinkingEnded = true
+			}
+			content.WriteString(part.Text)
+		}
 	}
-	if id := toolCallIDs[index]; id != "" {
-		return id
+	if content.Len() > 0 {
+		message.Content = content.String()
 	}
-	id := newOpenAIToolCallID()
-	toolCallIDs[index] = id
-	return id
+	return message
 }
 
 func (v *vertexProvider) appendResponse(responseBuilder *strings.Builder, responseBody string) {
@@ -1152,60 +1157,65 @@ func (v *vertexProvider) buildVertexChatRequest(request *chatCompletionRequest) 
 		}
 	}
 	shouldAddDummyModelMessage := false
-	var lastFunctionName string
-	for _, message := range request.Messages {
+	var pendingToolCalls []toolCall
+	for i := 0; i < len(request.Messages); i++ {
+		message := request.Messages[i]
+		if message.Role == roleTool {
+			end := i + 1
+			for end < len(request.Messages) && request.Messages[end].Role == roleTool {
+				end++
+			}
+			parts, err := buildVertexToolResponses(request.Messages[i:end], pendingToolCalls)
+			if err != nil {
+				return nil, err
+			}
+			vertexRequest.Contents = append(vertexRequest.Contents, vertexChatContent{
+				Role:  roleUser,
+				Parts: parts,
+			})
+			pendingToolCalls = nil
+			i = end - 1
+			continue
+		}
+		pendingToolCalls = message.ToolCalls
 		content := vertexChatContent{
 			Role:  message.Role,
 			Parts: []vertexPart{},
 		}
-		if len(message.ToolCalls) > 0 {
-			lastFunctionName = message.ToolCalls[0].Function.Name
+		for _, part := range message.ParseContent() {
+			switch part.Type {
+			case contentTypeText:
+				if part.Text == "" && len(message.ToolCalls) > 0 {
+					continue
+				}
+				content.Parts = append(content.Parts, vertexPart{Text: part.Text})
+			case contentTypeImageUrl:
+				vpart, err := convertMediaContent(part.ImageUrl.Url)
+				if err != nil {
+					log.Errorf("unable to convert image content: %v", err)
+				} else {
+					content.Parts = append(content.Parts, vpart)
+				}
+			}
+		}
+		for _, call := range message.ToolCalls {
 			args := make(map[string]interface{})
-			if err := json.Unmarshal([]byte(message.ToolCalls[0].Function.Arguments), &args); err != nil {
+			if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 				log.Errorf("unable to unmarshal function arguments: %v", err)
 			}
 			content.Parts = append(content.Parts, vertexPart{
 				FunctionCall: &vertexFunctionCall{
-					Name: lastFunctionName,
+					Name: call.Function.Name,
 					Args: args,
 				},
-				ThoughtSignature: message.ToolCalls[0].getThoughtSignature(),
+				ThoughtSignature: call.getThoughtSignature(),
 			})
-		} else {
-			for _, part := range message.ParseContent() {
-				switch part.Type {
-				case contentTypeText:
-					if message.Role == roleTool {
-						content.Parts = append(content.Parts, vertexPart{
-							FunctionResponse: &vertexFunctionResponse{
-								Name: lastFunctionName,
-								Response: vertexFunctionResponseDetail{
-									Output: part.Text,
-								},
-							},
-						})
-					} else {
-						content.Parts = append(content.Parts, vertexPart{
-							Text: part.Text,
-						})
-					}
-				case contentTypeImageUrl:
-					vpart, err := convertMediaContent(part.ImageUrl.Url)
-					if err != nil {
-						log.Errorf("unable to convert image content: %v", err)
-					} else {
-						content.Parts = append(content.Parts, vpart)
-					}
-				}
-			}
 		}
 
 		// there's no assistant role in vertex and API shall vomit if role is not user or model
 		switch content.Role {
 		case roleAssistant:
 			content.Role = "model"
-		case roleTool:
-			content.Role = roleUser
 		case roleSystem: // converting system prompt to prompt from user for the same reason
 			content.Role = roleUser
 			shouldAddDummyModelMessage = true
@@ -1227,6 +1237,52 @@ func (v *vertexProvider) buildVertexChatRequest(request *chatCompletionRequest) 
 	}
 
 	return &vertexRequest, nil
+}
+
+// Vertex expects the results of parallel calls in one user turn, in the same
+// order as the calls. OpenAI clients identify results by tool_call_id and may
+// return them in completion order, including multiple calls to the same name.
+func buildVertexToolResponses(messages []chatMessage, calls []toolCall) ([]vertexPart, error) {
+	if len(calls) == 0 {
+		return nil, errors.New("tool response has no preceding assistant tool calls")
+	}
+	callIndexes := make(map[string]int, len(calls))
+	for i, call := range calls {
+		if call.Id == "" {
+			continue
+		}
+		if _, exists := callIndexes[call.Id]; exists {
+			return nil, fmt.Errorf("duplicate tool call id %q", call.Id)
+		}
+		callIndexes[call.Id] = i
+	}
+	responses := make([]*vertexFunctionResponse, len(calls))
+	for _, message := range messages {
+		index, found := callIndexes[message.ToolCallId]
+		// Preserve legacy single-call histories without IDs. For parallel calls
+		// a missing or unknown ID cannot be resolved safely by function name.
+		if len(calls) == 1 && message.ToolCallId == "" {
+			index, found = 0, true
+		}
+		if !found {
+			return nil, fmt.Errorf("tool response has unknown or missing tool_call_id %q", message.ToolCallId)
+		}
+		if responses[index] != nil {
+			return nil, fmt.Errorf("duplicate tool response for tool_call_id %q", message.ToolCallId)
+		}
+		responses[index] = &vertexFunctionResponse{
+			Name:     calls[index].Function.Name,
+			Response: vertexFunctionResponseDetail{Output: message.StringContent()},
+		}
+	}
+	parts := make([]vertexPart, 0, len(responses))
+	for i, response := range responses {
+		if response == nil {
+			return nil, fmt.Errorf("missing tool response for tool call %q", calls[i].Id)
+		}
+		parts = append(parts, vertexPart{FunctionResponse: response})
+	}
+	return parts, nil
 }
 
 // applyResponseFormatToGenerationConfig maps OpenAI response_format into Vertex generationConfig.
