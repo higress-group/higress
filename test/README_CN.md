@@ -43,11 +43,11 @@ Higress 提供了运行 Ingress API 一致性测试和 wasmplugin 测试的 make
 
 ### 如何编写测试用例
 
-要添加新的测试用例，首先需要在 `test/ingress/conformance/tests` 中添加 `xxx.go` 和 `xxx.yaml`。`xxx.yaml` 是您需要在集群中应用的 Ingress 资源，`xxx.go` 定义了 HigressConformanceTest。
+要添加新的测试用例，首先需要在 `test/e2e/conformance/tests` 中添加 `xxx.go` 和 `xxx.yaml`。`xxx.yaml` 是您需要在集群中应用的资源配置，`xxx.go` 定义了 `suite.ConformanceTest` 值。
 
-然后，您应该将您定义的测试用例注册到`ConformanceTests`中，方法是在xxx.go中使用`init()` 函数调用`Register(YOUR_PLUGIN_SHORT_NAME)`。
+然后，您应该在 `xxx.go` 中通过 `init()` 函数调用 `Register(XXX)`，将您定义的测试用例注册到 `ConformanceTests` 中。`Register` 会把该用例追加到全局切片 `ConformanceTests`。
 
-通过查看 `test/ingress/conformance/tests/httproute-simple-same-namespace.go` 和 `test/ingress/conformance/tests/httproute-simple-same-namespace.yaml` 中的代码，您可以快速了解并尝试编写一个测试用例。
+通过查看 `test/e2e/conformance/tests/httproute-simple-same-namespace.go` 和 `test/e2e/conformance/tests/httproute-simple-same-namespace.yaml` 中的代码，您可以快速了解并尝试编写一个测试用例。
 
 ### 如何实现测试环境的复用
 
