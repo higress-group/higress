@@ -370,3 +370,37 @@ func TestOnHttpResponseBody(t *testing.T) {
 		})
 	})
 }
+
+// A dispatch that fails synchronously (here: an endpoint that makes the
+// wrapper's URL parsing fail) never invokes the callback, so the plugin
+// must respond and continue instead of pausing forever.
+func TestSyncDispatchFailureDoesNotHang(t *testing.T) {
+	syncFailConfig := func() json.RawMessage {
+		data, _ := json.Marshal(map[string]interface{}{
+			"gql": `query { repository(owner: "alibaba", name: "higress") { name } }`,
+			// %zz is not a valid percent-encoding, so constructing the
+			// request URL fails before DispatchHttpCall is issued.
+			"endpoint": "/%zz",
+			"timeout":  5000,
+			"domain":   "api.github.com",
+		})
+		return data
+	}
+
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("sync dispatch failure responds and continues", func(t *testing.T) {
+			host, status := test.NewTestHost(syncFailConfig())
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api?owner=alibaba&name=higress"},
+				{":method", "GET"},
+			})
+
+			// Must not be ActionPause: the callback will never fire.
+			require.Equal(t, types.ActionContinue, action)
+		})
+	})
+}

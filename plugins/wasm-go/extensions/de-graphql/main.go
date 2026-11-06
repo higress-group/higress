@@ -88,7 +88,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.DeGraphQLConfig
 	headers = append(headers, [2]string{"Content-Type", "application/json"})
 	client := wrapper.NewClusterClient(wrapper.RouteCluster{Host: config.GetDomain()})
 	// Call upstream graphql endpoint
-	client.Post(config.GetEndpoint(), headers, []byte(replaceBody),
+	if err := client.Post(config.GetEndpoint(), headers, []byte(replaceBody),
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			// Pass response headers and body to client
 			headers := make([][2]string, 0, len(responseHeaders)+3)
@@ -101,7 +101,14 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.DeGraphQLConfig
 			headers = append(headers, [2]string{"x-degraphql-version", config.GetVersion()})
 			proxywasm.SendHttpResponseWithDetail(uint32(statusCode), "de-graphql", headers, responseBody, -1)
 			return
-		}, config.GetTimeout())
+		}, config.GetTimeout()); err != nil {
+		// A synchronous dispatch failure means the callback above will
+		// never run, so pausing here would hang the request forever.
+		log.Errorf("de-graphql dispatch failed: %v", err)
+		proxywasm.SendHttpResponse(http.StatusInternalServerError,
+			[][2]string{{"content-type", "text/plain"}}, []byte("de-graphql dispatch fail"), -1)
+		return types.ActionContinue
+	}
 
 	return types.ActionPause
 }
