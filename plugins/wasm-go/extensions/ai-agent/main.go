@@ -229,9 +229,19 @@ func jsonFormat(llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonSchema map[st
 		headers,
 		completionSerialized,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			if statusCode != 200 {
+				log.Errorf("[jsonFormat] completion failed with status %d, body: %s", statusCode, string(responseBody))
+				proxywasm.ResumeHttpResponse()
+				return
+			}
 			// 得到gpt的返回结果
 			var responseCompletion dashscope.CompletionResponse
 			_ = json.Unmarshal(responseBody, &responseCompletion)
+			if len(responseCompletion.Choices) == 0 {
+				log.Errorf("[jsonFormat] completion choices empty, body: %s", string(responseBody))
+				proxywasm.ResumeHttpResponse()
+				return
+			}
 			log.Infof("[jsonFormat] content: %s", responseCompletion.Choices[0].Message.Content)
 			content = responseCompletion.Choices[0].Message.Content
 			jsonStr, err := extractJson(content)
@@ -248,7 +258,7 @@ func jsonFormat(llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonSchema map[st
 		}, uint32(llmInfo.MaxExecutionTime))
 	if err != nil {
 		log.Debugf("[onHttpRequestBody] completion err: %s", err.Error())
-		proxywasm.ResumeHttpRequest()
+		proxywasm.ResumeHttpResponse()
 	}
 	return content
 }
@@ -256,7 +266,11 @@ func jsonFormat(llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonSchema map[st
 func noneStream(assistantMessage Message, actionInput string, rawResponse Response, log log.Log) {
 	assistantMessage.Role = "assistant"
 	assistantMessage.Content = actionInput
-	rawResponse.Choices[0].Message = assistantMessage
+	if len(rawResponse.Choices) == 0 {
+		rawResponse.Choices = append(rawResponse.Choices, Choice{Message: assistantMessage})
+	} else {
+		rawResponse.Choices[0].Message = assistantMessage
+	}
 	newbody, err := json.Marshal(rawResponse)
 	if err != nil {
 		proxywasm.ResumeHttpResponse()
@@ -313,9 +327,19 @@ func toolsCallResult(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmI
 		headers,
 		completionSerialized,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+			if statusCode != 200 {
+				log.Errorf("[toolsCall] completion failed with status %d, body: %s", statusCode, string(responseBody))
+				proxywasm.ResumeHttpResponse()
+				return
+			}
 			// 得到gpt的返回结果
 			var responseCompletion dashscope.CompletionResponse
 			_ = json.Unmarshal(responseBody, &responseCompletion)
+			if len(responseCompletion.Choices) == 0 {
+				log.Errorf("[toolsCall] completion choices empty, body: %s", string(responseBody))
+				proxywasm.ResumeHttpResponse()
+				return
+			}
 			log.Infof("[toolsCall] content: %s", responseCompletion.Choices[0].Message.Content)
 
 			if responseCompletion.Choices[0].Message.Content != "" {
@@ -341,12 +365,12 @@ func toolsCallResult(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmI
 					}
 				}
 			} else {
-				proxywasm.ResumeHttpRequest()
+				proxywasm.ResumeHttpResponse()
 			}
 		}, uint32(llmInfo.MaxExecutionTime))
 	if err != nil {
 		log.Debugf("[onHttpRequestBody] completion err: %s", err.Error())
-		proxywasm.ResumeHttpRequest()
+		proxywasm.ResumeHttpResponse()
 	}
 }
 
@@ -549,6 +573,10 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byt
 	err := json.Unmarshal(body, &rawResponse)
 	if err != nil {
 		log.Debugf("[onHttpResponseBody] body to json err: %s", err.Error())
+		return types.ActionContinue
+	}
+	if len(rawResponse.Choices) == 0 {
+		log.Debugf("[onHttpResponseBody] rawResponse choices is empty")
 		return types.ActionContinue
 	}
 	log.Infof("first content: %s", rawResponse.Choices[0].Message.Content)
