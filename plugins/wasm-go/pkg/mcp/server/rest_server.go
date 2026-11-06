@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	_ "time/tzdata"
@@ -106,19 +107,23 @@ type RestTool struct {
 	isDirectResponseTool bool
 }
 
-// parseIP
+// parseIP extracts a client IP from a socket address or X-Forwarded-For value.
+// Unparseable input returns an empty string; the function must not panic.
 func parseIP(source string, fromHeader bool) string {
 	if fromHeader {
 		source = strings.Split(source, ",")[0]
 	}
 	source = strings.Trim(source, " ")
-	if strings.Contains(source, ".") {
-		// parse ipv4
-		return strings.Split(source, ":")[0]
+	if source == "" {
+		return ""
 	}
-	//parse ipv6
-	if strings.Contains(source, "]") {
-		return strings.Split(source, "]")[0][1:]
+	if host, _, err := net.SplitHostPort(source); err == nil {
+		source = host
+	} else if strings.HasPrefix(source, "[") && strings.HasSuffix(source, "]") {
+		source = source[1 : len(source)-1]
+	}
+	if net.ParseIP(source) == nil {
+		return ""
 	}
 	return source
 }
