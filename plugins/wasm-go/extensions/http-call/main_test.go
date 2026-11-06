@@ -382,3 +382,47 @@ func TestK8sOnHttpRequestHeadersWithNewlines(t *testing.T) {
 		host.CompleteHttp()
 	})
 }
+
+// A dispatch that fails synchronously (here: a requestPath that makes the
+// wrapper's URL parsing fail) never invokes the callback, so the request
+// must not be left paused at the watermark.
+func TestSyncDispatchFailureDoesNotHang(t *testing.T) {
+	syncFailConfig := func() json.RawMessage {
+		data, _ := json.Marshal(map[string]interface{}{
+			"bodyHeader":  "x-response-body",
+			"tokenHeader": "x-auth-token",
+			// %zz is not a valid percent-encoding, so constructing the
+			// request URL fails before DispatchHttpCall is issued.
+			"requestPath":   "/%zz",
+			"serviceSource": "k8s",
+			"serviceName":   "auth-service",
+			"servicePort":   8080,
+			"namespace":     "default",
+		})
+		return data
+	}
+
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("sync dispatch failure continues the request", func(t *testing.T) {
+			host, status := test.NewTestHost(syncFailConfig())
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "test.com"},
+				{":path", "/api/test"},
+				{":method", "GET"},
+			})
+
+			// Must not be HeaderStopAllIterationAndWatermark: the callback
+			// will never fire, so nothing would ever resume the request.
+			require.Equal(t, types.ActionContinue, action)
+
+			// No headers should have been added by the failed call.
+			for _, header := range host.GetRequestHeaders() {
+				require.NotEqual(t, "x-response-body", header[0])
+				require.NotEqual(t, "x-auth-token", header[0])
+			}
+		})
+	})
+}

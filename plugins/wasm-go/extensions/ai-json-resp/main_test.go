@@ -890,3 +890,59 @@ func TestExtractJson(t *testing.T) {
 		require.Contains(t, err.Error(), "invalid character 'S' after top-level value")
 	})
 }
+
+// A dispatch that fails synchronously (here: a servicePath that makes the
+// wrapper's URL parsing fail) never invokes the response callback, so the
+// plugin must respond and continue instead of pausing forever.
+func TestSyncDispatchFailureDoesNotHang(t *testing.T) {
+	syncFailConfig := func() json.RawMessage {
+		data, _ := json.Marshal(map[string]interface{}{
+			"serviceName":   "ai-service",
+			"serviceDomain": "api.openai.com",
+			"servicePort":   443,
+			// %zz is not a valid percent-encoding, so constructing the
+			// request URL fails before DispatchHttpCall is issued.
+			"servicePath":    "/%zz",
+			"apiKey":         "sk-test123",
+			"serviceTimeout": 30000,
+			"maxRetry":       3,
+			"contentPath":    "choices.0.message.content",
+			// A valid schema keeps rejectStruct at OK, so the request
+			// really reaches the dispatch call.
+			"jsonSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"content": map[string]interface{}{
+						"type": "string",
+					},
+				},
+			},
+		})
+		return data
+	}
+
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("sync dispatch failure responds and continues", func(t *testing.T) {
+			host, status := test.NewTestHost(syncFailConfig())
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+				{"Content-Type", "application/json"},
+			})
+
+			action := host.CallOnHttpRequestBody([]byte(`{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"Hello"}]}`))
+
+			// Must not be ActionPause: the callback will never fire.
+			require.Equal(t, types.ActionContinue, action)
+
+			// The plugin must have answered the request instead of leaving it hanging.
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.Equal(t, HTTP_STATUS_INTERNAL_SERVER_ERROR, localResponse.StatusCode)
+		})
+	})
+}
