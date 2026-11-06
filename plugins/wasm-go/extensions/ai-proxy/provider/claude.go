@@ -920,6 +920,13 @@ func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, or
 		return nil
 
 	case "content_block_delta":
+		// A non-conformant upstream (e.g. a Claude-compatible relay) may omit the
+		// delta field entirely; dereferencing it would panic and take down the
+		// whole Wasm VM, so skip the event instead.
+		if origResponse.Delta == nil {
+			log.Errorf("skip claude streaming event %q with missing delta", origResponse.Type)
+			return nil
+		}
 		var index int
 		if origResponse.Index != nil {
 			index = *origResponse.Index
@@ -986,10 +993,17 @@ func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, or
 		if origResponse.Index != nil {
 			index = *origResponse.Index
 		}
+		// Delta may be absent on non-conformant upstreams; the usage accumulated
+		// above must still be kept for the message_stop chunk, and an absent
+		// stop reason maps to an empty finish_reason instead of a nil panic.
+		var stopReason string
+		if origResponse.Delta != nil {
+			stopReason = stopReasonClaude2OpenAI(origResponse.Delta.StopReason)
+		}
 		choice := chatCompletionChoice{
 			Index:        index,
 			Delta:        &chatMessage{},
-			FinishReason: util.Ptr(stopReasonClaude2OpenAI(origResponse.Delta.StopReason)),
+			FinishReason: util.Ptr(stopReason),
 		}
 		return c.createChatCompletionResponse(ctx, origResponse, choice)
 	case "message_stop":
