@@ -107,6 +107,20 @@ var invalidConfigInvalidTimeout = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：同步 dispatch 失败（policy 含非法 URL 转义，HttpCall 在
+// url.Parse 阶段同步返回错误，不会有任何回调触发）
+var syncDispatchFailConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"policy":        "bad%zzpolicy",
+		"timeout":       "5s",
+		"serviceSource": "k8s",
+		"serviceName":   "opa",
+		"servicePort":   "8181",
+		"namespace":     "higress-backend",
+	})
+	return data
+}()
+
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		// 测试基本配置解析
@@ -358,6 +372,35 @@ func TestOnHttpRequestBody(t *testing.T) {
 			}, []byte(`{"result": true}`))
 
 			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+			host.CompleteHttp()
+		})
+	})
+}
+
+// 回归测试（higress-group/higress#5207）：DispatchHttpCall 同步失败时，
+// 插件不能返回 pause 干等一个永远不会触发的回调，而应返回终止性的
+// 本地 500 响应（fail-closed），让请求进入有界的最终状态。
+func TestSyncDispatchFailure(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("sync dispatch failure sends terminal 500 instead of pausing", func(t *testing.T) {
+			host, status := test.NewTestHost(syncDispatchFailConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// policy 含非法 URL 转义（%zz），HttpCall 在 url.Parse 阶段同步
+			// 返回错误，rspCall 永远不会被调用。
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "GET"},
+				{"Content-Type", "application/json"},
+			})
+
+			// 必须产生终止性的本地 500 响应，而不是把请求挂起。
+			response := host.GetLocalResponse()
+			require.Equal(t, uint32(http.StatusInternalServerError), response.StatusCode)
+			require.Equal(t, "opa.dispatch_failed", response.StatusCodeDetail)
+			require.Equal(t, "opa dispatch fail", string(response.Data))
 			host.CompleteHttp()
 		})
 	})

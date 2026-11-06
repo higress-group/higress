@@ -111,7 +111,13 @@ func opaCall(ctx wrapper.HttpContext, config OpaConfig, body []byte, log log.Log
 		[][2]string{{"Content-Type", "application/json"}},
 		data, rspCall, config.timeout); err != nil {
 		log.Errorf("client opa fail %v", err)
-		return types.ActionPause
+		// A synchronous dispatch failure means rspCall will never fire, so
+		// pausing here would leave the request hanging until the client
+		// times out (higress-group/higress#5207). Fail closed with a
+		// terminal local response instead.
+		proxywasm.SendHttpResponseWithDetail(http.StatusInternalServerError,
+			"opa.dispatch_failed", nil, []byte("opa dispatch fail"), -1)
+		return types.ActionContinue
 	}
 	return types.ActionPause
 }
