@@ -231,7 +231,12 @@ func jsonFormat(llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonSchema map[st
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			// 得到gpt的返回结果
 			var responseCompletion dashscope.CompletionResponse
-			_ = json.Unmarshal(responseBody, &responseCompletion)
+			if err := json.Unmarshal(responseBody, &responseCompletion); err != nil || len(responseCompletion.Choices) == 0 {
+				// The upstream may answer with an error body or a non-JSON payload; indexing
+				// Choices here would panic the plugin, so leave the response untouched.
+				log.Errorf("[jsonFormat] unexpected completion response (status=%d): %s", statusCode, string(responseBody))
+				return
+			}
 			log.Infof("[jsonFormat] content: %s", responseCompletion.Choices[0].Message.Content)
 			content = responseCompletion.Choices[0].Message.Content
 			jsonStr, err := extractJson(content)
@@ -256,6 +261,10 @@ func jsonFormat(llmClient wrapper.HttpClient, llmInfo LLMInfo, jsonSchema map[st
 func noneStream(assistantMessage Message, actionInput string, rawResponse Response, log log.Log) {
 	assistantMessage.Role = "assistant"
 	assistantMessage.Content = actionInput
+	if len(rawResponse.Choices) == 0 {
+		// The request body came from the client and may not carry any choice.
+		rawResponse.Choices = append(rawResponse.Choices, Choice{})
+	}
 	rawResponse.Choices[0].Message = assistantMessage
 	newbody, err := json.Marshal(rawResponse)
 	if err != nil {
@@ -315,7 +324,10 @@ func toolsCallResult(ctx wrapper.HttpContext, llmClient wrapper.HttpClient, llmI
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			// 得到gpt的返回结果
 			var responseCompletion dashscope.CompletionResponse
-			_ = json.Unmarshal(responseBody, &responseCompletion)
+			if err := json.Unmarshal(responseBody, &responseCompletion); err != nil || len(responseCompletion.Choices) == 0 {
+				log.Errorf("[toolsCall] unexpected completion response (status=%d): %s", statusCode, string(responseBody))
+				return
+			}
 			log.Infof("[toolsCall] content: %s", responseCompletion.Choices[0].Message.Content)
 
 			if responseCompletion.Choices[0].Message.Content != "" {
@@ -549,6 +561,11 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config PluginConfig, body []byt
 	err := json.Unmarshal(body, &rawResponse)
 	if err != nil {
 		log.Debugf("[onHttpResponseBody] body to json err: %s", err.Error())
+		return types.ActionContinue
+	}
+	if len(rawResponse.Choices) == 0 {
+		// The response body is the client's; it may carry no choice at all.
+		log.Warnf("response has no choices, nothing to do")
 		return types.ActionContinue
 	}
 	log.Infof("first content: %s", rawResponse.Choices[0].Message.Content)
