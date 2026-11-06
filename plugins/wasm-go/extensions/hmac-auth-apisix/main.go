@@ -19,6 +19,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"hash"
@@ -101,8 +102,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.HmacAuthConfig) ty
 		}
 		return sendUnauthorizedResponse(err.Error())
 	}
-	log.Debugf("HMAC params extracted: keyId=%s, algorithm=%s, signature=%s, headers=%v, consumerName=%s",
-		hmacParams.KeyId, hmacParams.Algorithm, hmacParams.Signature, hmacParams.Headers, hmacParams.ConsumerName)
+	log.Debugf("HMAC params extracted: keyId=%s, algorithm=%s, headers=%v, consumerName=%s",
+		hmacParams.KeyId, hmacParams.Algorithm, hmacParams.Headers, hmacParams.ConsumerName)
 
 	// 鉴权：配置了 allow 列表时，仅列表中的消费者可以访问
 	if !noAllow && !contains(cfg.Allow, hmacParams.ConsumerName) {
@@ -319,13 +320,31 @@ func validateSignature(hmacParams *HmacParams, cfg config.HmacAuthConfig) error 
 	}
 
 	// 比较签名
-	if hmacParams.Signature != expectedSignature {
-		log.Warnf("Signature validation failed. Algorithm: %s, Expected: %s, Got: %s, Signing String: %s",
-			hmacParams.Algorithm, expectedSignature, hmacParams.Signature, signingString)
+	if !hmacSignatureEqual(expectedSignature, hmacParams.Signature) {
+		log.Warn("Signature validation failed")
 		return fmt.Errorf("Invalid signature")
 	}
 
 	return nil
+}
+
+// hmacSignatureEqual 以常量时间比较 Base64 编码的 HMAC 签名。
+func hmacSignatureEqual(expectedEncoded, actualEncoded string) bool {
+	if len(expectedEncoded) != len(actualEncoded) ||
+		strings.ContainsAny(actualEncoded, "\r\n") {
+		return false
+	}
+
+	expected, err := base64.StdEncoding.DecodeString(expectedEncoded)
+	if err != nil {
+		return false
+	}
+	actual, err := base64.StdEncoding.Strict().DecodeString(actualEncoded)
+	if err != nil || len(actual) != len(expected) {
+		return false
+	}
+
+	return subtle.ConstantTimeCompare(expected, actual) == 1
 }
 
 // generateSigningString 生成签名字符串
