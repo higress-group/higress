@@ -816,9 +816,37 @@ func (g *geminiProvider) buildToolCalls(candidate *geminiChatCandidate) []toolCa
 func (g *geminiProvider) buildChatCompletionStreamResponse(ctx wrapper.HttpContext, geminiResp *geminiChatResponse) *chatCompletionResponse {
 	var choice chatCompletionChoice
 	if len(geminiResp.Candidates) > 0 && len(geminiResp.Candidates[0].Content.Parts) > 0 {
-		choice.Delta = &chatMessage{Content: geminiResp.Candidates[0].Content.Parts[0].Text}
-		if geminiResp.Candidates[0].FinishReason != "" {
-			choice.FinishReason = util.Ptr(strings.ToLower(geminiResp.Candidates[0].FinishReason))
+		candidate := geminiResp.Candidates[0]
+		delta := &chatMessage{}
+		var content strings.Builder
+		for _, part := range candidate.Content.Parts {
+			switch {
+			case part.FunctionCall != nil:
+				// Function calls are collected below so that one Gemini stream
+				// event remains one OpenAI delta even when it contains multiple
+				// calls, mirroring the non-streaming conversion.
+			case part.InlineData != nil:
+				content.WriteString(part.InlineData.Data)
+			default:
+				content.WriteString(part.Text)
+			}
+		}
+		if content.Len() > 0 {
+			delta.Content = content.String()
+		} else {
+			delta.Content = ""
+		}
+		toolCalls := g.buildToolCalls(&candidate)
+		if len(toolCalls) > 0 {
+			delta.ToolCalls = toolCalls
+		}
+		choice.Delta = delta
+		if candidate.FinishReason != "" {
+			if len(toolCalls) > 0 {
+				choice.FinishReason = util.Ptr(finishReasonToolCall)
+			} else {
+				choice.FinishReason = util.Ptr(strings.ToLower(candidate.FinishReason))
+			}
 		}
 	}
 	streamResponse := chatCompletionResponse{
