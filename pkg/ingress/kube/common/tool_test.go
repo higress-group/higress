@@ -1326,7 +1326,6 @@ func TestGetLbStatusListV1AndV1Beta1(t *testing.T) {
 	})
 }
 
-
 func makeSortRoute(path string, pathType PathType, isDefault bool, match *networking.HTTPMatchRequest) *WrapperHTTPRoute {
 	r := &WrapperHTTPRoute{
 		HTTPRoute: &networking.HTTPRoute{
