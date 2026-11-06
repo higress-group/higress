@@ -12,6 +12,8 @@ description: AI Data Masking Plugin Configuration Reference
   - jsonpath: Only process specified fields
   - raw: Entire request/response body
 
+When `deny_openai` is enabled, a JSON request body with a top-level `messages` field is treated as an OpenAI chat request. If its message or content shapes are invalid, the request is rejected instead of falling through to JSONPath or raw scanning. Requests without a top-level `messages` field continue to use the JSONPath/raw paths unchanged.
+
 ### Sensitive Word Interception
   - Directly intercept sensitive words in the data handling scope and return preset error messages
   - Supports system's built-in sensitive word library and custom sensitive words
