@@ -1,0 +1,130 @@
+server:
+  name: speech-ai-server
+  config:
+    apiKey: ""
+tools:
+- name: assess_pronunciation
+  description: "Evaluate English pronunciation quality by comparing spoken audio against reference text. Returns calibrated 0-100 scores at overall, word, and phoneme levels with IPA notation. 17MB model, <300ms latency."
+  args:
+  - name: audio
+    description: "Base64-encoded audio data (WAV, MP3, OGG, FLAC, or WebM)"
+    type: string
+    required: true
+  - name: text
+    description: "Reference text that was spoken in the audio"
+    type: string
+    required: true
+  - name: format
+    description: "Audio format"
+    type: string
+    required: false
+    default: "wav"
+    enum: ["wav", "mp3", "ogg", "flac", "webm"]
+  requestTemplate:
+    url: "https://api.brainiall.com/v1/pronunciation/assess/base64"
+    method: POST
+    headers:
+    - key: Content-Type
+      value: "application/json"
+    - key: Ocp-Apim-Subscription-Key
+      value: "{{.config.apiKey}}"
+    body: |
+      {
+        "audio": "{{.args.audio}}",
+        "text": "{{.args.text}}",
+        "format": "{{.args.format}}"
+      }
+  responseTemplate:
+    body: |
+      ## Pronunciation Assessment Result
+      - **Overall Score**: {{.overallScore}}/100
+      - **Sentence Score**: {{.sentenceScore}}/100
+      - **Confidence**: {{.confidence}}
+      {{- range $index, $word := .words }}
+      ### Word: {{$word.word}} (Score: {{$word.score}})
+      {{- range $pi, $ph := $word.phonemes }}
+      - {{$ph.phoneme}}: {{$ph.score}}
+      {{- end }}
+      {{- end }}
+
+- name: transcribe_audio
+  description: "Transcribe audio to text with word-level timestamps and confidence scores. Supports WAV, MP3, OGG, FLAC, and WebM formats."
+  args:
+  - name: audio
+    description: "Base64-encoded audio data"
+    type: string
+    required: true
+  - name: format
+    description: "Audio format"
+    type: string
+    required: false
+    default: "wav"
+    enum: ["wav", "mp3", "ogg", "flac", "webm"]
+  requestTemplate:
+    url: "https://api.brainiall.com/v1/stt/transcribe/base64"
+    method: POST
+    headers:
+    - key: Content-Type
+      value: "application/json"
+    - key: Ocp-Apim-Subscription-Key
+      value: "{{.config.apiKey}}"
+    body: |
+      {
+        "audio": "{{.args.audio}}",
+        "format": "{{.args.format}}"
+      }
+  responseTemplate:
+    body: |
+      ## Transcription Result
+      - **Text**: {{.text}}
+      {{- range $index, $word := .words }}
+      - {{$word.word}} ({{$word.start}}s - {{$word.end}}s, confidence: {{$word.confidence}})
+      {{- end }}
+
+- name: synthesize_speech
+  description: "Generate natural speech from text with 12 English voices (US and UK accents). Returns base64-encoded audio. Ranked #1 on TTS Arena."
+  args:
+  - name: text
+    description: "Text to synthesize into speech"
+    type: string
+    required: true
+  - name: voice
+    description: "Voice ID to use for synthesis"
+    type: string
+    required: false
+    default: "af_heart"
+  requestTemplate:
+    url: "https://api.brainiall.com/v1/tts/synthesize"
+    method: POST
+    headers:
+    - key: Content-Type
+      value: "application/json"
+    - key: Ocp-Apim-Subscription-Key
+      value: "{{.config.apiKey}}"
+    body: |
+      {
+        "text": "{{.args.text}}",
+        "voice": "{{.args.voice}}"
+      }
+  responseTemplate:
+    body: |
+      ## Speech Synthesis Result
+      - **Voice**: {{.voice}}
+      - **Duration**: {{.duration_ms}}ms
+      - **Audio**: {{.audio_base64}}
+
+- name: list_tts_voices
+  description: "List all available text-to-speech voices with their names, genders, and accent information."
+  args: []
+  requestTemplate:
+    url: "https://api.brainiall.com/v1/tts/voices"
+    method: GET
+    headers:
+    - key: Ocp-Apim-Subscription-Key
+      value: "{{.config.apiKey}}"
+  responseTemplate:
+    body: |
+      ## Available Voices
+      {{- range $index, $voice := .voices }}
+      - **{{$voice.id}}**: {{$voice.name}} ({{$voice.gender}}, {{$voice.accent}})
+      {{- end }}
