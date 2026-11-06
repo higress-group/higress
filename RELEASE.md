@@ -136,7 +136,7 @@ go version -m ./higress | grep -F 'go1.26.10'
 
 # hgctl linux archive produced by release-hgctl.yaml
 tar -xzf hgctl_<version>_linux_amd64.tar.gz
-go version -m ./linux_amd64/hgctl | grep -F 'go1.26.10'
+go version -m ./out/linux_amd64/hgctl | grep -F 'go1.26.10'
 ```
 
 `go version -m` reports the toolchain recorded in the Go build info; the
