@@ -36,7 +36,7 @@ allow:
 
 ```yaml
 ip_source_type: header
-ip_header_name: x-real-iP
+ip_header_name: x-real-ip
 deny:
   - 10.0.0.1
   - 192.169.0.0/16   
