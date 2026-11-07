@@ -280,6 +280,13 @@ rule_items:
         token_per_day: 1000
 ```
 
+### 真实 IP 请求头缺失或格式非法
+
+当 `limit_by_per_ip` 从请求头读取客户端 IP（`from-header-<header_name>`）时，该请求头由客户端控制。
+如果请求头缺失或其值无法解析为 IP 地址（例如 `]`、`]:80` 或 `abc`），插件会记录错误并使用配置的
+`rejected_code`/`rejected_msg` 拒绝该请求，而不是静默跳过规则。请确保网关前的可信代理始终填充该
+请求头并只放一个客户端 IP；若为逗号分隔的列表，则只取第一个。
+
 ## 诊断
 
 完整排查步骤见[限流插件 FAQ](../../../../docs/faq/rate-limit-plugin-faq.md#rate-limit-not-taking-effect)。
@@ -287,6 +294,7 @@ rule_items:
 | 现象 | 优先判断 |
 | --- | --- |
 | 请求始终返回 200，Redis 中没有限流 key | 规则未匹配，或配置解析失败导致规则未加载 |
+| `limit_by_per_ip` 请求被按配置的状态码拒绝 | 真实 IP 请求头缺失或不是合法 IP；检查该请求头与插件错误日志 |
 | Redis cluster 的 `cx_connect_fail` 大于 0 | 端口、认证或网络连接异常 |
 | Wasm `update_rejected` / `config_fail` 持续增长 | 新配置被解析器拒绝；先检查网关日志中的具体错误 |
 
