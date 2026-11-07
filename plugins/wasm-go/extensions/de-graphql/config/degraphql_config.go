@@ -15,11 +15,14 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"net/url"
-	"strings"
-
 	"regexp"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -28,6 +31,7 @@ const (
 )
 
 var gqlVariableRegex = regexp.MustCompile(`\$(\w+)\s*:\s*(String|Float|Int|Boolean)(!?)`)
+var jsonNumberRegex = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
 type VariableType string
 
@@ -43,6 +47,16 @@ type Variable struct {
 	typ   VariableType
 	blank bool
 	value string
+}
+
+// graphqlRequestBody is the JSON document that is POSTed to the upstream
+// GraphQL endpoint. Variables is a typed map so that encoding/json, not hand
+// written string concatenation, owns the escaping of the operation text and of
+// every variable value, and so that the emitted object can only ever contain
+// the variables declared by the configured gql operation.
+type graphqlRequestBody struct {
+	Query     string         `json:"query"`
+	Variables map[string]any `json:"variables,omitempty"`
 }
 
 type DeGraphQLConfig struct {
@@ -129,9 +143,12 @@ func (d *DeGraphQLConfig) ParseGqlFromUrl(requestUrl string) (string, error) {
 		return "", errors.New("request url can't be empty")
 	}
 
-	url, _ := url.Parse(requestUrl)
+	parsedUrl, err := url.Parse(requestUrl)
+	if err != nil {
+		return "", fmt.Errorf("invalid request url %q: %w", requestUrl, err)
+	}
 
-	queryValues := url.Query()
+	queryValues := parsedUrl.Query()
 	values := make(map[string]string, len(queryValues))
 	for k, v := range queryValues {
 		var v1 string
@@ -143,57 +160,82 @@ func (d *DeGraphQLConfig) ParseGqlFromUrl(requestUrl string) (string, error) {
 		values[k] = v1
 	}
 
-	variables := make([]Variable, 0, len(d.variables))
+	// Build the variables object from the values that were actually supplied,
+	// keeping only the variables declared by the configured gql operation. Any
+	// other query parameter is ignored, so it can never shadow or extend the
+	// operation the operator configured.
+	variables := make(map[string]any, len(d.variables))
 	for _, variable := range d.variables {
 		val, ok := values[variable.name]
-		// TODO validate variable type and blank
-		if ok {
-			variables = append(variables, Variable{
-				name:  variable.name,
-				typ:   variable.typ,
-				blank: variable.blank,
-				value: val,
-			})
+		if !ok {
+			continue
 		}
+		typedValue, err := variable.parseValue(val)
+		if err != nil {
+			return "", err
+		}
+		variables[variable.name] = typedValue
 	}
 
-	var build strings.Builder
-
-	// write query
-	build.WriteString("{\"query\":")
-	build.WriteString("\"")
-	build.WriteString(getJsonStr(d.gql))
-	build.WriteString("\"")
-
-	// write varialbes
+	// Marshal the body with encoding/json instead of concatenating strings.
+	// Hand written JSON corrupted the document whenever a value contained a
+	// backslash or a quote, and writing non-string values verbatim let a caller
+	// inject extra JSON (for example `?id=1,"admin":true`) into the upstream
+	// request body.
+	body := graphqlRequestBody{Query: d.gql}
 	if len(variables) > 0 {
-		index := 0
-		build.WriteString(",")
-		build.WriteString("\"variables\":{")
-		for _, variable := range variables {
-			build.WriteString("\"")
-			build.WriteString(variable.name)
-			build.WriteString("\":")
-			if variable.typ == StringType {
-				build.WriteString("\"")
-				build.WriteString(getJsonStr(variable.value))
-				build.WriteString("\"")
-			} else {
-				build.WriteString(variable.value)
-			}
-			if index < len(variables)-1 {
-				build.WriteString(",")
-			}
-			index++
-		}
-		build.WriteString("}")
+		body.Variables = variables
 	}
-
-	build.WriteString("}")
-	return build.String(), nil
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal graphql request body: %w", err)
+	}
+	return string(encoded), nil
 }
 
-func getJsonStr(str string) string {
-	d := strings.ReplaceAll(str, "\"", "\\\"")
-	return strings.ReplaceAll(d, "\n", "\\n")
+// parseValue converts the raw query string supplied for this variable into the
+// Go value that encoding/json renders as the JSON scalar required by the
+// declared GraphQL type. Values that cannot be represented as that scalar are
+// rejected, so a caller cannot smuggle extra JSON into the upstream request
+// body through a variable the operator declared as Int, Float or Boolean.
+func (v Variable) parseValue(raw string) (any, error) {
+	// A supplied null is a JSON null only for nullable non-String scalars;
+	// String values always retain their literal text.
+	if raw == "null" && v.typ != StringType {
+		if v.blank {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("invalid value %q for non-null %s variable %q", raw, v.typ, v.name)
+	}
+	switch v.typ {
+	case StringType:
+		return raw, nil
+	case IntType:
+		// ParseInt alone accepts +1 and 01, which are invalid JSON numbers.
+		// The 32-bit bound is also the GraphQL Int range.
+		if !jsonNumberRegex.MatchString(raw) {
+			return nil, fmt.Errorf("invalid value %q for Int variable %q", raw, v.name)
+		}
+		if _, err := strconv.ParseInt(raw, 10, 32); err != nil {
+			return nil, fmt.Errorf("invalid value %q for Int variable %q", raw, v.name)
+		}
+		return json.Number(raw), nil
+	case FloatType:
+		if !jsonNumberRegex.MatchString(raw) {
+			return nil, fmt.Errorf("invalid value %q for Float variable %q", raw, v.name)
+		}
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
+			return nil, fmt.Errorf("invalid value %q for Float variable %q", raw, v.name)
+		}
+		// Keep the caller's valid notation, including trailing decimal zeros.
+		return json.Number(raw), nil
+	case BooleanType:
+		if raw != "true" && raw != "false" {
+			return nil, fmt.Errorf("invalid value %q for Boolean variable %q", raw, v.name)
+		}
+		return raw == "true", nil
+	default:
+		return nil, fmt.Errorf("variable %q has unsupported type %q", v.name, v.typ)
+	}
 }
