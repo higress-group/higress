@@ -357,7 +357,7 @@ func outputParser(response string, log log.Log) (string, string) {
 	end := strings.LastIndex(response, "```")
 
 	var jsonStr string
-	if start != -1 && end != -1 {
+	if start != -1 && end != -1 && end >= start+3 {
 		jsonStr = strings.TrimSpace(response[start+3 : end])
 	} else {
 		jsonStr = response
@@ -380,7 +380,11 @@ func outputParser(response string, log log.Log) (string, string) {
 			return actionName, actionInput
 		}
 	}
-	log.Debugf("json parse err: %s", err.Error())
+	if err != nil {
+		log.Debugf("json parse err: %s", err.Error())
+	} else {
+		log.Debug("json parsed but no action and action_input found")
+	}
 	// Fallback to regex parsing if JSON unmarshaling fails
 	pattern := `\{\s*"action":\s*"([^"]+)",\s*"action_input":\s*((?:\{[^}]+\})|"[^"]+")\s*\}`
 	re := regexp.MustCompile(pattern)
