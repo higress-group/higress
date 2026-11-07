@@ -522,7 +522,7 @@ func (lb ClusterEndpointLoadBalancer) selectGlobalAdaptiveScore(ctx wrapper.Http
 		log.Debugf("adaptive score fallback selected service: %s", candidate)
 		return types.ActionContinue
 	}
-	return types.ActionPause
+	return types.HeaderStopAllIterationAndWatermark
 }
 
 // Callbacks which are called in request path
