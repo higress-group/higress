@@ -144,6 +144,38 @@ var missingRequiredConfig = func() json.RawMessage {
 
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			schema     map[string]interface{}
+			validation bool
+		}{
+			{name: "omitted schema"},
+			{name: "empty schema", schema: map[string]interface{}{}, validation: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				configData := map[string]interface{}{"serviceName": "ai-service", "serviceDomain": "api.openai.com"}
+				if tc.schema != nil {
+					configData["jsonSchema"] = tc.schema
+				}
+				data, err := json.Marshal(configData)
+				require.NoError(t, err)
+				host, status := test.NewTestHost(data)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				config, err := host.GetMatchConfig()
+				require.NoError(t, err)
+				pluginConfig := config.(*PluginConfig)
+				require.Equal(t, uint32(HTTP_STATUS_OK), pluginConfig.rejectStruct.RejectCode)
+				require.Equal(t, tc.validation, pluginConfig.enableJsonSchemaValidation)
+				if tc.validation {
+					require.NotNil(t, pluginConfig.compile)
+				} else {
+					require.Nil(t, pluginConfig.jsonSchema)
+					require.Nil(t, pluginConfig.compile)
+				}
+			})
+		}
+
 		// 测试基础配置解析
 		t.Run("basic config", func(t *testing.T) {
 			host, status := test.NewTestHost(basicConfig)
@@ -228,8 +260,8 @@ func TestParseConfig(t *testing.T) {
 			require.NotNil(t, config)
 
 			pluginConfig := config.(*PluginConfig)
-			// 根据插件的实际行为，无效的JSON Schema会导致编译失败
-			require.Equal(t, uint32(JSON_SCHEMA_COMPILE_FAILED_CODE), pluginConfig.rejectStruct.RejectCode)
+			require.Equal(t, uint32(JSON_SCHEMA_INVALID_CODE), pluginConfig.rejectStruct.RejectCode)
+			require.Equal(t, "Json Schema is not valid", pluginConfig.rejectStruct.RejectMsg)
 		})
 
 		// 测试缺少必需字段的配置
@@ -241,10 +273,71 @@ func TestParseConfig(t *testing.T) {
 			require.NotNil(t, config)
 
 			pluginConfig := config.(*PluginConfig)
-			// 根据插件的实际行为，缺少serviceDomain会导致JSON Schema编译失败
-			require.Equal(t, uint32(JSON_SCHEMA_COMPILE_FAILED_CODE), pluginConfig.rejectStruct.RejectCode)
-			require.Contains(t, pluginConfig.rejectStruct.RejectMsg, "Json Schema compile failed")
+			require.Equal(t, uint32(JSON_SCHEMA_INVALID_CODE), pluginConfig.rejectStruct.RejectCode)
+			require.Equal(t, "service domain is empty", pluginConfig.rejectStruct.RejectMsg)
 		})
+	})
+}
+
+func TestRequestSchemaValidation(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			schema    map[string]interface{}
+			responses []string
+			status    uint32
+		}{
+			{name: "omitted schema valid JSON", responses: []string{`{"ok":true}`}, status: HTTP_STATUS_OK},
+			{name: "omitted schema retry succeeds", responses: []string{`not JSON`, `{"ok":true}`}, status: HTTP_STATUS_OK},
+			{name: "omitted schema retry exhausted", responses: []string{`not JSON`, `not JSON`}, status: HTTP_STATUS_INTERNAL_SERVER_ERROR},
+			{name: "empty schema", schema: map[string]interface{}{}, responses: []string{`{"ok":true}`}, status: HTTP_STATUS_OK},
+			{
+				name: "explicit schema mismatch",
+				schema: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{"ok": map[string]interface{}{"type": "boolean"}},
+					"required":   []string{"ok"},
+				},
+				responses: []string{`{"ok":"wrong type"}`, `{"ok":"wrong type"}`},
+				status:    HTTP_STATUS_INTERNAL_SERVER_ERROR,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				configData := map[string]interface{}{"serviceName": "ai-service", "serviceDomain": "api.openai.com", "maxRetry": 1}
+				if tc.schema != nil {
+					configData["jsonSchema"] = tc.schema
+				}
+				data, err := json.Marshal(configData)
+				require.NoError(t, err)
+				host, status := test.NewTestHost(data)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"}, {":path", "/v1/chat/completions"},
+					{":method", "POST"}, {"content-type", "application/json"},
+				}))
+				require.Nil(t, host.GetLocalResponse())
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(`{"messages":[{"role":"user","content":"Return JSON"}]}`)))
+				for i, responseContent := range tc.responses {
+					content, err := json.Marshal(responseContent)
+					require.NoError(t, err)
+					responseBody := []byte(`{"choices":[{"message":{"role":"assistant","content":` + string(content) + `}}]}`)
+					host.CallOnHttpCall([][2]string{{":status", "200"}}, responseBody)
+					if i < len(tc.responses)-1 {
+						require.Nil(t, host.GetLocalResponse())
+					}
+				}
+				response := host.GetLocalResponse()
+				require.NotNil(t, response)
+				require.Equal(t, tc.status, response.StatusCode)
+				if tc.status == HTTP_STATUS_OK {
+					require.JSONEq(t, tc.responses[len(tc.responses)-1], string(response.Data))
+				} else {
+					require.Contains(t, string(response.Data), "retry count exceeds max retry count")
+				}
+				host.CompleteHttp()
+			})
+		}
 	})
 }
 

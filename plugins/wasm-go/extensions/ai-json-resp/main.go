@@ -228,7 +228,7 @@ func parseConfig(result gjson.Result, config *PluginConfig, log log.Log) error {
 		config.enableContentDisposition = enableContentDispositionValue.Bool()
 	}
 
-	config.enableJsonSchemaValidation = true
+	config.enableJsonSchemaValidation = config.jsonSchema != nil
 
 	jsonSchemaBytes, err := json.Marshal(config.jsonSchema)
 	if err != nil {
