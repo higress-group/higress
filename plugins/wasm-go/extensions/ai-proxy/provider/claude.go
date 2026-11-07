@@ -250,7 +250,7 @@ type claudeTextGenResponse struct {
 	StopReason   *string                `json:"stop_reason"`
 	StopSequence *string                `json:"stop_sequence"`
 	Usage        claudeTextGenUsage     `json:"usage"`
-	Error        *claudeTextGenError    `json:"error"`
+	Error        *claudeTextGenError    `json:"error,omitempty"`
 }
 
 type claudeTextGenContent struct {
