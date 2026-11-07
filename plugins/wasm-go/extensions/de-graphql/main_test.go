@@ -385,19 +385,21 @@ func TestOnHttpRequestHeadersRejectsInvalidVariables(t *testing.T) {
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
-			action := host.CallOnHttpRequestHeaders([][2]string{
+			contextID := host.InitializeHttpContext()
+			action := host.CallOnRequestHeaders(contextID, [][2]string{
 				{":authority", "example.com"},
 				{":path", `/api/graphql?id=1,"admin":true&enabled=true&score=1.0&title=ok`},
 				{":method", "GET"},
-			})
+			}, false)
 			require.Equal(t, types.ActionContinue, action)
 
-			local := host.GetLocalResponse()
+			local := host.GetSentLocalResponse(contextID)
 			require.NotNil(t, local, "the malformed variable must produce a local response")
 			require.Equal(t, uint32(http.StatusBadRequest), local.StatusCode)
 			require.Contains(t, string(local.Data), "Int")
+			require.Empty(t, host.GetCalloutAttributesFromContext(contextID))
 
-			host.CompleteHttp()
+			host.CompleteHttpContext(contextID)
 		})
 
 		t.Run("int variable that is not numeric", func(t *testing.T) {
@@ -405,18 +407,20 @@ func TestOnHttpRequestHeadersRejectsInvalidVariables(t *testing.T) {
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
-			action := host.CallOnHttpRequestHeaders([][2]string{
+			contextID := host.InitializeHttpContext()
+			action := host.CallOnRequestHeaders(contextID, [][2]string{
 				{":authority", "example.com"},
 				{":path", `/api/graphql?id=abc&enabled=true&score=1.0&title=ok`},
 				{":method", "GET"},
-			})
+			}, false)
 			require.Equal(t, types.ActionContinue, action)
 
-			local := host.GetLocalResponse()
+			local := host.GetSentLocalResponse(contextID)
 			require.NotNil(t, local)
 			require.Equal(t, uint32(http.StatusBadRequest), local.StatusCode)
+			require.Empty(t, host.GetCalloutAttributesFromContext(contextID))
 
-			host.CompleteHttp()
+			host.CompleteHttpContext(contextID)
 		})
 
 		t.Run("valid typed variables are forwarded", func(t *testing.T) {

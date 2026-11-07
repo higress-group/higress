@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -30,6 +31,7 @@ const (
 )
 
 var gqlVariableRegex = regexp.MustCompile(`\$(\w+)\s*:\s*(String|Float|Int|Boolean)(!?)`)
+var jsonNumberRegex = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
 type VariableType string
 
@@ -197,27 +199,42 @@ func (d *DeGraphQLConfig) ParseGqlFromUrl(requestUrl string) (string, error) {
 // rejected, so a caller cannot smuggle extra JSON into the upstream request
 // body through a variable the operator declared as Int, Float or Boolean.
 func (v Variable) parseValue(raw string) (any, error) {
+	// A supplied null is a JSON null only for nullable non-String scalars;
+	// String values always retain their literal text.
+	if raw == "null" && v.typ != StringType {
+		if v.blank {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("invalid value %q for non-null %s variable %q", raw, v.typ, v.name)
+	}
 	switch v.typ {
 	case StringType:
 		return raw, nil
 	case IntType:
-		value, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
+		// ParseInt alone accepts +1 and 01, which are invalid JSON numbers.
+		// The 32-bit bound is also the GraphQL Int range.
+		if !jsonNumberRegex.MatchString(raw) {
 			return nil, fmt.Errorf("invalid value %q for Int variable %q", raw, v.name)
 		}
-		return value, nil
+		if _, err := strconv.ParseInt(raw, 10, 32); err != nil {
+			return nil, fmt.Errorf("invalid value %q for Int variable %q", raw, v.name)
+		}
+		return json.Number(raw), nil
 	case FloatType:
-		value, err := strconv.ParseFloat(raw, 64)
-		if err != nil {
+		if !jsonNumberRegex.MatchString(raw) {
 			return nil, fmt.Errorf("invalid value %q for Float variable %q", raw, v.name)
 		}
-		return value, nil
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
+			return nil, fmt.Errorf("invalid value %q for Float variable %q", raw, v.name)
+		}
+		// Keep the caller's valid notation, including trailing decimal zeros.
+		return json.Number(raw), nil
 	case BooleanType:
-		value, err := strconv.ParseBool(raw)
-		if err != nil {
+		if raw != "true" && raw != "false" {
 			return nil, fmt.Errorf("invalid value %q for Boolean variable %q", raw, v.name)
 		}
-		return value, nil
+		return raw == "true", nil
 	default:
 		return nil, fmt.Errorf("variable %q has unsupported type %q", v.name, v.typ)
 	}
