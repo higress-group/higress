@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-server/registry"
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
@@ -14,10 +15,27 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/v2/vo"
 )
 
+// NacosMcpRegistry keeps the MCP tool catalogue discovered from Nacos in
+// memory. Tool lookups happen on request-handler goroutines while service and
+// configuration callbacks refresh the catalogue from independent goroutines,
+// so every mutable field is protected by mu.
+//
+// Locking discipline:
+//   - serviceMatcher is immutable after construction and may be read without a
+//     lock.
+//   - mu protects toolsDescription, toolsRpcContext, currentServiceSet and
+//     toolChangeEventListeners.
+//   - mu is never held while talking to Nacos or while invoking a listener.
+//     New tool entries are assembled in local maps first and only published
+//     under the write lock, which keeps the critical section short and avoids
+//     blocking handlers on network I/O.
 type NacosMcpRegistry struct {
-	serviceMatcher           map[string]string
-	configClient             config_client.IConfigClient
-	namingClient             naming_client.INamingClient
+	serviceMatcher map[string]string
+	configClient   config_client.IConfigClient
+	namingClient   naming_client.INamingClient
+
+	mu sync.RWMutex
+
 	toolsDescription         map[string]*registry.ToolDescription
 	toolsRpcContext          map[string]*registry.RpcContext
 	toolChangeEventListeners []registry.ToolChangeEventListener
@@ -30,27 +48,69 @@ const (
 )
 
 func (n *NacosMcpRegistry) ListToolsDescription() []*registry.ToolDescription {
-	if n.toolsDescription == nil {
-		n.refreshToolsList()
+	n.mu.RLock()
+	if n.toolsDescription != nil {
+		result := n.snapshotToolsDescriptionLocked()
+		n.mu.RUnlock()
+		return result
 	}
+	n.mu.RUnlock()
 
-	result := []*registry.ToolDescription{}
+	// Preserve the lazy initialisation behaviour: callers that arrive before
+	// the periodic refresh performed its first pass get an immediate refresh.
+	n.refreshToolsList()
+
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.snapshotToolsDescriptionLocked()
+}
+
+func (n *NacosMcpRegistry) GetToolRpcContext(toolName string) (*registry.RpcContext, bool) {
+	n.mu.RLock()
+	if n.toolsRpcContext != nil {
+		context, ok := n.toolsRpcContext[toolName]
+		n.mu.RUnlock()
+		return context, ok
+	}
+	n.mu.RUnlock()
+
+	// As with ListToolsDescription, do the lazy refresh without holding the
+	// read lock because refreshing acquires the write lock itself.
+	n.refreshToolsList()
+
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	context, ok := n.toolsRpcContext[toolName]
+	return context, ok
+}
+
+func (n *NacosMcpRegistry) RegisterToolChangeEventListener(listener registry.ToolChangeEventListener) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.toolChangeEventListeners = append(n.toolChangeEventListeners, listener)
+}
+
+func (n *NacosMcpRegistry) snapshotToolsDescriptionLocked() []*registry.ToolDescription {
+	result := make([]*registry.ToolDescription, 0, len(n.toolsDescription))
 	for _, tool := range n.toolsDescription {
 		result = append(result, tool)
 	}
 	return result
 }
 
-func (n *NacosMcpRegistry) GetToolRpcContext(toolName string) (*registry.RpcContext, bool) {
-	if n.toolsRpcContext == nil {
-		n.refreshToolsList()
-	}
-	tool, ok := n.toolsRpcContext[toolName]
-	return tool, ok
-}
+// notifyToolChangeListeners copies the listener slice while holding the read
+// lock and invokes the callbacks after releasing it. Listeners commonly call
+// back into the registry to list the new tools, so invoking them under mu
+// would deadlock.
+func (n *NacosMcpRegistry) notifyToolChangeListeners() {
+	n.mu.RLock()
+	listeners := make([]registry.ToolChangeEventListener, len(n.toolChangeEventListeners))
+	copy(listeners, n.toolChangeEventListeners)
+	n.mu.RUnlock()
 
-func (n *NacosMcpRegistry) RegisterToolChangeEventListener(listener registry.ToolChangeEventListener) {
-	n.toolChangeEventListeners = append(n.toolChangeEventListeners, listener)
+	for _, listener := range listeners {
+		listener.OnToolChanged(n)
+	}
 }
 
 func (n *NacosMcpRegistry) refreshToolsList() bool {
@@ -64,6 +124,7 @@ func (n *NacosMcpRegistry) refreshToolsList() bool {
 }
 
 func (n *NacosMcpRegistry) refreshToolsListForGroup(group string, serviceMatcher string) bool {
+	// The Nacos request must run without any registry lock held.
 	services, err := n.namingClient.GetAllServicesInfo(vo.GetAllServiceInfoParam{
 		GroupName: group,
 		PageNo:    1,
@@ -82,7 +143,16 @@ func (n *NacosMcpRegistry) refreshToolsListForGroup(group string, serviceMatcher
 		return false
 	}
 
-	currentServiceList := map[string]bool{}
+	// Snapshot the services that already have tools so the loop below can make
+	// subscription decisions without reading a map that callbacks may mutate.
+	n.mu.RLock()
+	knownServices := make(map[string]bool, len(n.currentServiceSet))
+	for serviceName := range n.currentServiceSet {
+		knownServices[serviceName] = true
+	}
+	n.mu.RUnlock()
+
+	currentServiceList := make(map[string]bool, len(serviceList))
 
 	for _, service := range serviceList {
 		if !pattern.MatchString(service) {
@@ -90,7 +160,7 @@ func (n *NacosMcpRegistry) refreshToolsListForGroup(group string, serviceMatcher
 		}
 
 		formatServiceName := getFormatServiceName(group, service)
-		if _, ok := n.currentServiceSet[formatServiceName]; !ok {
+		if !knownServices[formatServiceName] {
 			refreshed := n.refreshToolsListForService(group, service)
 			n.listenToService(group, service)
 			if refreshed {
@@ -101,31 +171,22 @@ func (n *NacosMcpRegistry) refreshToolsListForGroup(group string, serviceMatcher
 		currentServiceList[formatServiceName] = true
 	}
 
-	serviceShouldBeDeleted := []string{}
+	// Only the in-memory bookkeeping is done under the write lock. Removing a
+	// service and all of its tools is a single atomic catalogue update from a
+	// handler's point of view.
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	for serviceName := range n.currentServiceSet {
 		if !strings.HasPrefix(serviceName, group) {
 			continue
 		}
 
 		if _, ok := currentServiceList[serviceName]; !ok {
-			serviceShouldBeDeleted = append(serviceShouldBeDeleted, serviceName)
 			changed = true
-			toolsShouldBeDeleted := []string{}
-			for toolName := range n.toolsDescription {
-				if strings.HasPrefix(toolName, serviceName) {
-					toolsShouldBeDeleted = append(toolsShouldBeDeleted, toolName)
-				}
-			}
-
-			for _, toolName := range toolsShouldBeDeleted {
-				delete(n.toolsDescription, toolName)
-				delete(n.toolsRpcContext, toolName)
-			}
+			n.deleteToolsByPrefixLocked(serviceName)
+			delete(n.currentServiceSet, serviceName)
 		}
-	}
-
-	for _, service := range serviceShouldBeDeleted {
-		delete(n.currentServiceSet, service)
 	}
 
 	return changed
@@ -136,18 +197,19 @@ func getFormatServiceName(group string, service string) string {
 }
 
 func (n *NacosMcpRegistry) deleteToolForService(group string, service string) {
-	toolsNeedReset := []string{}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.deleteToolsByPrefixLocked(getFormatServiceName(group, service))
+}
 
-	formatServiceName := getFormatServiceName(group, service)
-	for tool := range n.toolsDescription {
-		if strings.HasPrefix(tool, formatServiceName) {
-			toolsNeedReset = append(toolsNeedReset, tool)
+// deleteToolsByPrefixLocked removes every tool belonging to a service. The
+// caller must hold n.mu for writing.
+func (n *NacosMcpRegistry) deleteToolsByPrefixLocked(prefix string) {
+	for toolName := range n.toolsDescription {
+		if strings.HasPrefix(toolName, prefix) {
+			delete(n.toolsDescription, toolName)
+			delete(n.toolsRpcContext, toolName)
 		}
-	}
-
-	for _, tool := range toolsNeedReset {
-		delete(n.toolsDescription, tool)
-		delete(n.toolsRpcContext, tool)
 	}
 }
 
@@ -197,7 +259,7 @@ func (n *NacosMcpRegistry) refreshToolsListForServiceWithContent(group string, s
 		return false
 	}
 
-	wrappedInstances := []registry.Instance{}
+	wrappedInstances := make([]registry.Instance, 0, len(*instances))
 	for _, instance := range *instances {
 		wrappedInstance := registry.Instance{
 			Host: instance.Ip,
@@ -207,15 +269,11 @@ func (n *NacosMcpRegistry) refreshToolsListForServiceWithContent(group string, s
 		wrappedInstances = append(wrappedInstances, wrappedInstance)
 	}
 
-	if n.toolsDescription == nil {
-		n.toolsDescription = map[string]*registry.ToolDescription{}
-	}
-
-	if n.toolsRpcContext == nil {
-		n.toolsRpcContext = map[string]*registry.RpcContext{}
-	}
-
-	n.deleteToolForService(group, service)
+	// Build the replacement catalogue in local maps. Credential lookups in
+	// particular are network calls and must not run while holding n.mu, so the
+	// registry is only updated once everything is ready.
+	tools := make(map[string]*registry.ToolDescription, len(applicationDescription.ToolsDescription))
+	rpcContexts := make(map[string]*registry.RpcContext, len(applicationDescription.ToolsDescription))
 
 	for _, tool := range applicationDescription.ToolsDescription {
 		meta := applicationDescription.ToolsMeta[tool.Name]
@@ -226,7 +284,7 @@ func (n *NacosMcpRegistry) refreshToolsListForServiceWithContent(group string, s
 			cred = n.GetCredential(*credentialRef, group)
 		}
 
-		context := registry.RpcContext{
+		context := &registry.RpcContext{
 			ToolMeta:   meta,
 			Instances:  &wrappedInstances,
 			Protocol:   applicationDescription.Protocol,
@@ -234,8 +292,31 @@ func (n *NacosMcpRegistry) refreshToolsListForServiceWithContent(group string, s
 		}
 
 		tool.Name = makeToolName(group, service, tool.Name)
-		n.toolsDescription[tool.Name] = tool
-		n.toolsRpcContext[tool.Name] = &context
+		tools[tool.Name] = tool
+		rpcContexts[tool.Name] = context
+	}
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if n.toolsDescription == nil {
+		n.toolsDescription = make(map[string]*registry.ToolDescription)
+	}
+	if n.toolsRpcContext == nil {
+		n.toolsRpcContext = make(map[string]*registry.RpcContext)
+	}
+	if n.currentServiceSet == nil {
+		n.currentServiceSet = make(map[string]bool)
+	}
+
+	// Replace this service's entries atomically so readers never observe a
+	// half-refreshed catalogue.
+	n.deleteToolsByPrefixLocked(getFormatServiceName(group, service))
+	for name, tool := range tools {
+		n.toolsDescription[name] = tool
+	}
+	for name, context := range rpcContexts {
+		n.toolsRpcContext[name] = context
 	}
 	n.currentServiceSet[getFormatServiceName(group, service)] = true
 	return true
@@ -273,9 +354,7 @@ func (n *NacosMcpRegistry) listenToService(group string, service string) {
 		Group:  group,
 		OnChange: func(namespace, group, dataId, data string) {
 			n.refreshToolsListForServiceWithContent(group, service, &data, nil)
-			for _, listener := range n.toolChangeEventListeners {
-				listener.OnToolChanged(n)
-			}
+			n.notifyToolChangeListeners()
 		},
 	})
 	if err != nil {
@@ -287,9 +366,7 @@ func (n *NacosMcpRegistry) listenToService(group string, service string) {
 		GroupName:   group,
 		SubscribeCallback: func(services []model.Instance, err error) {
 			n.refreshToolsListForServiceWithContent(group, service, nil, &services)
-			for _, listener := range n.toolChangeEventListeners {
-				listener.OnToolChanged(n)
-			}
+			n.notifyToolChangeListeners()
 		},
 	})
 	if err != nil {
