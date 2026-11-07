@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-server/registry"
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
@@ -15,6 +16,10 @@ import (
 )
 
 type NacosMcpRegistry struct {
+	// mu guards toolsDescription, toolsRpcContext and currentServiceSet, which are
+	// mutated by the background poll goroutine and the Nacos config/naming callback
+	// goroutines while being read on the Envoy request path.
+	mu                       sync.RWMutex
 	serviceMatcher           map[string]string
 	configClient             config_client.IConfigClient
 	namingClient             naming_client.INamingClient
@@ -30,10 +35,8 @@ const (
 )
 
 func (n *NacosMcpRegistry) ListToolsDescription() []*registry.ToolDescription {
-	if n.toolsDescription == nil {
-		n.refreshToolsList()
-	}
-
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	result := []*registry.ToolDescription{}
 	for _, tool := range n.toolsDescription {
 		result = append(result, tool)
@@ -42,9 +45,8 @@ func (n *NacosMcpRegistry) ListToolsDescription() []*registry.ToolDescription {
 }
 
 func (n *NacosMcpRegistry) GetToolRpcContext(toolName string) (*registry.RpcContext, bool) {
-	if n.toolsRpcContext == nil {
-		n.refreshToolsList()
-	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	tool, ok := n.toolsRpcContext[toolName]
 	return tool, ok
 }
@@ -90,7 +92,10 @@ func (n *NacosMcpRegistry) refreshToolsListForGroup(group string, serviceMatcher
 		}
 
 		formatServiceName := getFormatServiceName(group, service)
-		if _, ok := n.currentServiceSet[formatServiceName]; !ok {
+		n.mu.RLock()
+		_, known := n.currentServiceSet[formatServiceName]
+		n.mu.RUnlock()
+		if !known {
 			refreshed := n.refreshToolsListForService(group, service)
 			n.listenToService(group, service)
 			if refreshed {
@@ -101,6 +106,7 @@ func (n *NacosMcpRegistry) refreshToolsListForGroup(group string, serviceMatcher
 		currentServiceList[formatServiceName] = true
 	}
 
+	n.mu.Lock()
 	serviceShouldBeDeleted := []string{}
 	for serviceName := range n.currentServiceSet {
 		if !strings.HasPrefix(serviceName, group) {
@@ -127,6 +133,7 @@ func (n *NacosMcpRegistry) refreshToolsListForGroup(group string, serviceMatcher
 	for _, service := range serviceShouldBeDeleted {
 		delete(n.currentServiceSet, service)
 	}
+	n.mu.Unlock()
 
 	return changed
 }
@@ -135,6 +142,8 @@ func getFormatServiceName(group string, service string) string {
 	return fmt.Sprintf("%s_%s", group, service)
 }
 
+// deleteToolForService removes all tools registered for a service. Callers must
+// hold n.mu for writing.
 func (n *NacosMcpRegistry) deleteToolForService(group string, service string) {
 	toolsNeedReset := []string{}
 
@@ -187,7 +196,9 @@ func (n *NacosMcpRegistry) refreshToolsListForServiceWithContent(group string, s
 
 	// config deleted, tools should be removed
 	if len(*newConfig) == 0 {
+		n.mu.Lock()
 		n.deleteToolForService(group, service)
+		n.mu.Unlock()
 		return true
 	}
 
@@ -207,16 +218,14 @@ func (n *NacosMcpRegistry) refreshToolsListForServiceWithContent(group string, s
 		wrappedInstances = append(wrappedInstances, wrappedInstance)
 	}
 
-	if n.toolsDescription == nil {
-		n.toolsDescription = map[string]*registry.ToolDescription{}
+	// Build the tool entries before taking the lock: GetCredential performs a
+	// blocking Nacos network call and must not run inside the critical section.
+	type toolEntry struct {
+		name    string
+		desc    *registry.ToolDescription
+		context *registry.RpcContext
 	}
-
-	if n.toolsRpcContext == nil {
-		n.toolsRpcContext = map[string]*registry.RpcContext{}
-	}
-
-	n.deleteToolForService(group, service)
-
+	entries := make([]toolEntry, 0, len(applicationDescription.ToolsDescription))
 	for _, tool := range applicationDescription.ToolsDescription {
 		meta := applicationDescription.ToolsMeta[tool.Name]
 
@@ -234,10 +243,17 @@ func (n *NacosMcpRegistry) refreshToolsListForServiceWithContent(group string, s
 		}
 
 		tool.Name = makeToolName(group, service, tool.Name)
-		n.toolsDescription[tool.Name] = tool
-		n.toolsRpcContext[tool.Name] = &context
+		entries = append(entries, toolEntry{name: tool.Name, desc: tool, context: &context})
+	}
+
+	n.mu.Lock()
+	n.deleteToolForService(group, service)
+	for _, entry := range entries {
+		n.toolsDescription[entry.name] = entry.desc
+		n.toolsRpcContext[entry.name] = entry.context
 	}
 	n.currentServiceSet[getFormatServiceName(group, service)] = true
+	n.mu.Unlock()
 	return true
 }
 
