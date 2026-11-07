@@ -107,6 +107,7 @@ const (
 	`
 
 	LimitRedisContextKey = "LimitRedisContext"
+	ctxKeySseFramer      = "sseFramer"
 
 	CookieHeader = "cookie"
 
@@ -262,7 +263,29 @@ func onHttpResponseBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConf
 }
 
 func processResponseBody(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig, data []byte, endOfStream bool) []byte {
-	processTokenUsage(ctx, cfg, tokenusage.GetTokenUsage(ctx, data), endOfStream)
+	// One streaming callback is an arbitrary byte chunk, not a complete SSE
+	// event. Reassemble complete events before GetTokenUsage so a usage field
+	// split across callbacks is recovered the same way as intact delivery
+	// (same approach as ai-statistics' sseFramer).
+	framer, ok := ctx.GetContext(ctxKeySseFramer).(*sseFramer)
+	if !ok || framer == nil {
+		framer = &sseFramer{}
+		ctx.SetContext(ctxKeySseFramer, framer)
+	}
+	for _, event := range framer.frameCallback(data) {
+		processTokenUsage(ctx, cfg, tokenusage.GetTokenUsage(ctx, event), false)
+	}
+	if endOfStream {
+		// Raw JSON (or a final SSE event missing the trailing delimiter) stays
+		// in the framer tail; recover usage before discarding.
+		if tail := framer.incompleteEvent(); len(tail) > 0 {
+			processTokenUsage(ctx, cfg, tokenusage.GetTokenUsage(ctx, wrapper.UnifySSEChunk(tail)), false)
+		}
+		if overflowCount := framer.drain(); overflowCount > 0 {
+			log.Debugf("ai-token-ratelimit: sse framer discarded %d oversized incomplete event(s)", overflowCount)
+		}
+		processTokenUsage(ctx, cfg, tokenusage.TokenUsage{}, true)
+	}
 	return data
 }
 
