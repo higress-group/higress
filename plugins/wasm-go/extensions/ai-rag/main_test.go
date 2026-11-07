@@ -18,6 +18,7 @@ import (
 	"ai-rag/dashscope"
 	"ai-rag/dashvector"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -389,5 +390,210 @@ func TestDashVectorTypes(t *testing.T) {
 		require.Equal(t, "doc1", response.Output[0].ID)
 		require.Equal(t, "AI is artificial intelligence", response.Output[0].Fields.Raw)
 		require.Equal(t, float32(0.75), response.Output[0].Score)
+	})
+}
+
+// dashVectorQueries returns the serialized bodies of the DashVector recall
+// requests that the plugin dispatched during the current test. The test host
+// records every outgoing HTTP callout in its debug log, and that log is the only
+// place where a unit test can observe the request body the plugin sent, so we
+// surface the DashVector entries here. This lets a test assert both that the
+// vector search was skipped on the failure path and that the embedding was
+// forwarded on the success path.
+func dashVectorQueries(host test.TestHost) []string {
+	var queries []string
+	for _, line := range host.GetDebugLogs() {
+		if !strings.Contains(line, "http call start") || !strings.Contains(line, "dashvector-service") {
+			continue
+		}
+		if idx := strings.Index(line, "body: "); idx >= 0 {
+			queries = append(queries, line[idx+len("body: "):])
+		}
+	}
+	return queries
+}
+
+func TestParseEmbeddingVector(t *testing.T) {
+	t.Run("valid single embedding", func(t *testing.T) {
+		body := `{"output":{"embeddings":[{"embedding":[0.1,0.2,0.3],"text_index":0}]},"usage":{"total_tokens":7},"request_id":"req-1"}`
+		vec, err := parseEmbeddingVector(200, []byte(body))
+		require.NoError(t, err)
+		require.Equal(t, []float32{0.1, 0.2, 0.3}, vec)
+	})
+
+	t.Run("first embedding wins when several are returned", func(t *testing.T) {
+		body := `{"output":{"embeddings":[{"embedding":[1.5],"text_index":0},{"embedding":[2.5],"text_index":1}]}}`
+		vec, err := parseEmbeddingVector(200, []byte(body))
+		require.NoError(t, err)
+		require.Equal(t, []float32{1.5}, vec)
+	})
+
+	// Every payload below is one a real provider can return when the request
+	// fails. None of them carries a usable "output.embeddings" array, which is
+	// exactly the shape that used to panic the plugin with "index out of range".
+	t.Run("error documents and malformed bodies are rejected", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			status int
+			body   string
+		}{
+			{"invalid api key", 401, `{"code":"InvalidApiKey","message":"Invalid API-key provided."}`},
+			{"quota exceeded", 429, `{"code":"Throttling","message":"Requests rate limit exceeded."}`},
+			{"server error", 500, `{"code":"InternalError","message":"internal error"}`},
+			{"empty embeddings", 200, `{"output":{"embeddings":[]},"request_id":"req-empty"}`},
+			{"missing output", 200, `{"request_id":"req-no-output"}`},
+			{"malformed json", 200, `{"output":`},
+			{"empty body", 200, ``},
+			{"non-object json", 200, `[]`},
+		}
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				vec, err := parseEmbeddingVector(tc.status, []byte(tc.body))
+				require.Error(t, err)
+				require.Nil(t, vec)
+			})
+		}
+	})
+
+	// An embedding payload delivered with a failing status code must be rejected
+	// too: the provider reports failure through the status code, so trusting the
+	// body would silently mask a broken upstream.
+	t.Run("embeddings are ignored when the status code is not 200", func(t *testing.T) {
+		body := `{"output":{"embeddings":[{"embedding":[0.1],"text_index":0}]}}`
+		vec, err := parseEmbeddingVector(500, []byte(body))
+		require.Error(t, err)
+		require.Nil(t, vec)
+	})
+}
+
+func TestOnHttpRequestBodyEmbeddingFailure(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		cases := []struct {
+			name   string
+			status string
+			body   string
+		}{
+			{"invalid api key error document", "401", `{"code":"InvalidApiKey","message":"Invalid API-key provided."}`},
+			{"quota exceeded error document", "429", `{"code":"Throttling","message":"Requests rate limit exceeded."}`},
+			{"server error document", "500", `{"code":"InternalError","message":"internal error"}`},
+			{"http 200 without embeddings", "200", `{"output":{"embeddings":[]},"request_id":"req-empty"}`},
+			{"malformed json body", "200", `{"output":`},
+		}
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				host, status := test.NewTestHost(basicConfig)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/v1/chat/completions"},
+					{":method", "POST"},
+				})
+				body := `{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "What is AI?"}]}`
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+				// Before the fix this callback indexed Output.Embeddings[0] and
+				// panicked with "index out of range", trapping the plugin and
+				// failing the in-flight request instead of returning a response.
+				require.NotPanics(t, func() {
+					host.CallOnHttpCall([][2]string{
+						{":status", tc.status},
+						{"content-type", "application/json"},
+					}, []byte(tc.body))
+				})
+
+				// The request must be released instead of waiting for a DashVector
+				// callout, and no vector query may have been dispatched.
+				require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+				require.Empty(t, dashVectorQueries(host))
+
+				// The original chat body is forwarded unchanged, so the model is
+				// reached without recalled context.
+				require.JSONEq(t, body, string(host.GetRequestBody()))
+
+				// And the response is marked as "no RAG recall".
+				action := host.CallOnHttpResponseHeaders([][2]string{
+					{":status", "200"},
+					{"content-type", "application/json"},
+				})
+				require.Equal(t, types.ActionContinue, action)
+				require.True(t, test.HasHeaderWithValue(host.GetResponseHeaders(), "x-envoy-rag-recall", "false"))
+
+				host.CompleteHttp()
+			})
+		}
+	})
+}
+
+func TestOnHttpRequestBodyEmbeddingSuccessForwardsVector(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("single embedding is forwarded to DashVector", func(t *testing.T) {
+			host, status := test.NewTestHost(basicConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			body := `{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "What is AI?"}]}`
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(body)))
+
+			embeddingResponse := `{
+				"output": {
+					"embeddings": [{
+						"embedding": [0.1, 0.2, 0.3, 0.4, 0.5],
+						"text_index": 0
+					}]
+				},
+				"usage": {"total_tokens": 10},
+				"request_id": "req-123"
+			}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(embeddingResponse))
+
+			// A valid embedding keeps the request paused while the vector query
+			// is in flight, and that query must carry the embedding just read.
+			require.Equal(t, types.ActionPause, host.GetHttpStreamAction())
+			queries := dashVectorQueries(host)
+			require.Len(t, queries, 1)
+			require.Contains(t, queries[0], "[0.1,0.2,0.3,0.4,0.5]")
+
+			vectorResponse := `{
+				"code": 200,
+				"request_id": "req-456",
+				"message": "success",
+				"output": [{
+					"id": "doc1",
+					"fields": {"raw": "AI is artificial intelligence"},
+					"score": 0.75
+				}]
+			}`
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(vectorResponse))
+
+			// The recall finished and the enriched body was injected.
+			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+			var modifiedRequest Request
+			require.NoError(t, json.Unmarshal(host.GetRequestBody(), &modifiedRequest))
+			require.Len(t, modifiedRequest.Messages, 2)
+			require.Equal(t, "AI is artificial intelligence", modifiedRequest.Messages[0].Content)
+
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			require.True(t, test.HasHeaderWithValue(host.GetResponseHeaders(), "x-envoy-rag-recall", "true"))
+
+			host.CompleteHttp()
+		})
 	})
 }
