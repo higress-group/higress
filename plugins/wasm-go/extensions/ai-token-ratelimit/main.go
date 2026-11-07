@@ -150,7 +150,15 @@ func parseConfig(json gjson.Result, cfg *config.AiTokenRateLimitConfig) error {
 func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig) types.Action {
 	ctx.DisableReroute()
 
-	matched := collectMatchedRules(ctx, cfg)
+	matched, err := collectMatchedRules(ctx, cfg)
+	if err != nil {
+		// Reachable when on_unresolvable_ip=reject and a per-IP rule is present
+		// but its client IP cannot be resolved. Skipping such a rule would let a
+		// caller disable the limit with a missing or malformed source header.
+		log.Errorf("ai-token-ratelimit: rejecting request (on_unresolvable_ip=reject), %v", err)
+		rejectedInvalidClientIp(cfg)
+		return types.HeaderStopAllIterationAndWatermark
+	}
 	if len(matched) == 0 {
 		// 无任何规则命中：直接放行，不发起 Redis 调用
 		log.Debugf("ai-token-ratelimit: no rule matched, path=%s host=%s", ctx.Path(), ctx.Host())
@@ -175,7 +183,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCo
 	// 暂存命中规则，供响应阶段多键 INCRBY 使用
 	ctx.SetContext(LimitRedisContextKey, LimitRedisContext{rules: matched})
 
-	err := cfg.RedisClient.Eval(MultiKeyRequestPhaseScript, n, keys, args, func(response resp.Value) {
+	err = cfg.RedisClient.Eval(MultiKeyRequestPhaseScript, n, keys, args, func(response resp.Value) {
 		arr := response.Array()
 		if len(arr) != n {
 			log.Errorf("redis response length mismatch: got %d, want %d", len(arr), n)
@@ -328,7 +336,14 @@ func processTokenUsage(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfi
 // collectMatchedRules 遍历 global_threshold 和 rule_items，返回所有命中规则。
 // 顺序：global_threshold（如有）→ rule_items 中所有命中项（按数组顺序追加）。
 // 该顺序决定了"触发时优先报告哪条规则"以及"未触发时 tightest 的选择范围"。
-func collectMatchedRules(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig) []MatchedRule {
+// collectMatchedRules resolves every configured rule for the current request.
+//
+// A per-IP rule with an unresolvable client IP is handled according to
+// cfg.OnUnresolvableIP. The default, "skip", preserves the historical behavior:
+// log the failure and leave that rule out. "reject" returns an error so the
+// caller fails closed instead of allowing a missing or malformed source header
+// to disable the limit.
+func collectMatchedRules(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitConfig) ([]MatchedRule, error) {
 	var matched []MatchedRule
 
 	if cfg.GlobalThreshold != nil {
@@ -340,7 +355,14 @@ func collectMatchedRules(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCon
 	}
 
 	for _, ruleItem := range cfg.RuleItems {
-		val, hitRule, hitItem := hitRateRuleItem(ctx, ruleItem)
+		val, hitRule, hitItem, err := hitRateRuleItem(ctx, ruleItem)
+		if err != nil {
+			if cfg.OnUnresolvableIP != config.UnresolvableIPReject {
+				log.Warnf("ai-token-ratelimit: skipping rule %q (on_unresolvable_ip=skip): %v", ruleItem.Key, err)
+				continue
+			}
+			return nil, err
+		}
 		if hitRule != nil && hitItem != nil {
 			matched = append(matched, MatchedRule{
 				key:    fmt.Sprintf(AiTokenRateLimitFormat, cfg.RuleName, hitRule.LimitType, hitItem.TimeWindow, hitRule.Key, val),
@@ -350,10 +372,10 @@ func collectMatchedRules(ctx wrapper.HttpContext, cfg config.AiTokenRateLimitCon
 		}
 	}
 
-	return matched
+	return matched, nil
 }
 
-func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string, *config.LimitRuleItem, *config.LimitConfigItem) {
+func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string, *config.LimitRuleItem, *config.LimitConfigItem, error) {
 	switch rule.LimitType {
 	// 根据HTTP请求头限流
 	case config.LimitByHeaderType, config.LimitByPerHeaderType:
@@ -361,7 +383,7 @@ func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string
 		if err != nil {
 			return logDebugAndReturnEmpty("failed to get request header %s: %v", rule.Key, err)
 		}
-		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val)
+		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val), nil
 	// 根据HTTP请求参数限流
 	case config.LimitByParamType, config.LimitByPerParamType:
 		parse, err := url.Parse(ctx.Path())
@@ -376,14 +398,14 @@ func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string
 		if !ok {
 			return logDebugAndReturnEmpty("request param %s is empty", rule.Key)
 		}
-		return val[0], &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val[0])
+		return val[0], &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val[0]), nil
 	// 根据consumer限流
 	case config.LimitByConsumerType, config.LimitByPerConsumerType:
 		val, err := proxywasm.GetHttpRequestHeader(util.ConsumerHeader)
 		if err != nil {
 			return logDebugAndReturnEmpty("failed to get request header %s: %v", util.ConsumerHeader, err)
 		}
-		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val)
+		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val), nil
 	// 根据cookie中key值限流
 	case config.LimitByCookieType, config.LimitByPerCookieType:
 		cookie, err := proxywasm.GetHttpRequestHeader(CookieHeader)
@@ -394,27 +416,30 @@ func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string
 		if val == "" {
 			return logDebugAndReturnEmpty("cookie key '%s' extracted from cookie '%s' is empty.", rule.Key, cookie)
 		}
-		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val)
+		return val, &rule, findMatchingItem(rule.LimitType, rule.ConfigItems, val), nil
 	// 根据客户端IP限流
 	case config.LimitByPerIpType:
 		realIp, err := getDownStreamIp(rule)
 		if err != nil {
-			log.Warnf("failed to get down stream ip: %v", err)
-			return "", &rule, nil
+			// Unlike the branches above, this is not "the rule does not apply to
+			// this request" - it is "the rule applies and we cannot evaluate it".
+			// Return the error and let collectMatchedRules apply the configured
+			// on_unresolvable_ip policy.
+			return "", nil, nil, fmt.Errorf("cannot resolve client ip for rule %q: %w", rule.Key, err)
 		}
 		for _, item := range rule.ConfigItems {
 			if _, found, _ := item.IpNet.Get(realIp); !found {
 				continue
 			}
-			return realIp.String(), &rule, &item
+			return realIp.String(), &rule, &item, nil
 		}
 	}
-	return "", nil, nil
+	return "", nil, nil, nil
 }
 
-func logDebugAndReturnEmpty(errMsg string, args ...interface{}) (string, *config.LimitRuleItem, *config.LimitConfigItem) {
+func logDebugAndReturnEmpty(errMsg string, args ...interface{}) (string, *config.LimitRuleItem, *config.LimitConfigItem, error) {
 	log.Debugf(errMsg, args...)
-	return "", nil, nil
+	return "", nil, nil, nil
 }
 
 func findMatchingItem(limitType config.LimitRuleItemType, items []config.LimitConfigItem, key string) *config.LimitConfigItem {
@@ -469,8 +494,19 @@ func generateMetricName(route, cluster, model, consumer, metricName string) stri
 func rejected(cfg config.AiTokenRateLimitConfig, context LimitContext) {
 	headers := make(map[string][]string)
 	headers[RateLimitResetHeader] = []string{strconv.Itoa(context.reset)}
-	_ = proxywasm.SendHttpResponseWithDetail(
-		cfg.RejectedCode, "ai-token-ratelimit.rejected", util.ReconvertHeaders(headers), []byte(cfg.RejectedMsg), -1)
+	sendRejection(cfg, "ai-token-ratelimit.rejected", util.ReconvertHeaders(headers))
+}
+
+// rejectedInvalidClientIp denies a request whose per-IP rule could not resolve
+// a trustworthy client IP. It reuses the configured rejected_code and
+// rejected_msg so the caller sees the same response shape as an over-threshold
+// request; there is no reset header because no counter was consulted.
+func rejectedInvalidClientIp(cfg config.AiTokenRateLimitConfig) {
+	sendRejection(cfg, "ai-token-ratelimit.invalid-client-ip", nil)
+}
+
+func sendRejection(cfg config.AiTokenRateLimitConfig, detail string, headers [][2]string) {
+	_ = proxywasm.SendHttpResponseWithDetail(cfg.RejectedCode, detail, headers, []byte(cfg.RejectedMsg), -1)
 
 	route, _ := util.GetRouteName()
 	cluster, _ := util.GetClusterName()

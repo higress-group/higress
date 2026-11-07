@@ -34,6 +34,7 @@ description: AI Token限流插件配置参考
 | rule_name               | string | 是 | - | 限流规则名称，根据限流规则名称+限流类型+限流key名称+限流key对应的实际值来拼装redis key                      |
 | global_threshold | Object | 否，至少一项；可同时配置 | - | 对整个自定义规则组进行限流 |
 | rule_items | array of object | 否，至少一项；可同时配置 | -                | 限流规则项，最多支持 **10 条**。所有满足匹配条件的 `rule_item` 都会参与限流，规则之间是"或"关系，任一触发即拒绝；规则的执行顺序不影响最终结果。详见下方"配置说明"展开。 |
+| on_unresolvable_ip      | string | 否 | skip | `limit_by_per_ip` 无法解析客户端 IP 时的策略：`skip`（跳过该条 per-IP 规则，保持旧行为）或 `reject`（拒绝请求）。 |
 | rejected_code           | int | 否 | 429 | 请求被限流时，返回的HTTP状态码                                                         |
 | rejected_msg            | string | 否 | Too many requests | 请求被限流时，返回的响应体                                                             |
 | redis                   | object          | 是                                                           | -                | redis相关配置                                                                 |
@@ -69,6 +70,17 @@ description: AI Token限流插件配置参考
 > **注意：** 拒绝时按 `global_threshold`（如有）→ `rule_items`（数组顺序）的优先级**取最先触发的规则**报告响应头（`X-RateLimit-Reset` 等），而非"所有触发规则叠加报告"。因此，若同时配置了 `global_threshold` 和 `rule_items`，`global_threshold` 触发时总会优先报告，不会被 `rule_items` 覆盖。
 
 > `rule_items` 数组最多支持 **10 条**规则。每条 `rule_item` 会按命中的 `limit_keys` 产生独立的 Redis 计数器。
+
+#### `on_unresolvable_ip`：per-IP 来源无法解析时的策略
+
+该配置只影响 `limit_by_per_ip` 规则。典型触发场景是 `from-header-<header名>` 指定的请求头缺失、为空或值不是合法 IP/地址端口格式。
+
+| 取值 | 行为 |
+|---|---|
+| `skip`（默认） | 保留旧行为：记录 warning 并跳过当前这条 per-IP 规则；其他已命中的全局或规则项仍会继续评估。若没有其他命中规则，请求继续放行。 |
+| `reject` | 失败关闭：立即使用 `rejected_code` / `rejected_msg` 拒绝请求（默认 429 / `Too many requests`），不再进入 Redis 或上游。只要任意一条 per-IP 规则无法解析来源，整个请求都会被拒绝。 |
+
+> ⚠️ `skip` 的兼容性更好，但如果 per-IP 来源来自客户端可控请求头，缺失或畸形值会让该条限流被绕过。生产环境使用 `from-header-<header名>` 时，应确保可信代理覆盖该请求头，并按安全需要设置 `on_unresolvable_ip: reject`。
 
 `limit_keys`中每一项的配置字段说明。
 
@@ -160,6 +172,9 @@ redis:
 
 ```yaml
 rule_name: default_rule
+# 默认值即 skip，保留“无法解析 IP 时跳过该条 per-IP 规则”的旧行为。
+# 若来源头由客户端控制，建议改为 reject。
+on_unresolvable_ip: skip
 rule_items:
   - limit_by_per_ip: from-header-x-forwarded-for
     limit_keys:

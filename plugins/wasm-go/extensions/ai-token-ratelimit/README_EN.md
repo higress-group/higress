@@ -36,6 +36,7 @@ Plugin execution priority: `600`
 | rule_name                | string         | Yes      | -             | Name of the rate limiting rule. The Redis key is assembled based on the rate limiting rule name + rate limiting type + rate limiting key name + actual value corresponding to the rate limiting key. |
 | global_threshold         | Object         | No, at least one of them is required; can be configured simultaneously | - | Rate limits the entire custom rule group |
 | rule_items               | array of object| No, at least one of them is required; can be configured simultaneously | - | Rate limiting rule items. Supports up to **10** rules. All matched `rule_item`s are evaluated and combined with an OR relationship; any trigger rejects the request. The execution order of rules does not affect the final result. See the expanded `rule_items` notes below for details. |
+| on_unresolvable_ip       | string         | No       | skip          | Policy when a `limit_by_per_ip` source cannot be resolved: `skip` (drop that per-IP rule and preserve legacy behavior) or `reject` (reject the request). |
 | rejected_code            | int            | No       | 429           | HTTP status code returned when a request is rate-limited                                         |
 | rejected_msg             | string         | No       | Too many requests | Response body returned when a request is rate-limited                                            |
 | redis                    | object         | Yes      | -             | Redis-related configurations                                                                   |
@@ -74,6 +75,16 @@ Plugin execution priority: `600`
 
 > The `rule_items` array supports up to **10** rules. Each `rule_item` produces independent Redis counters for each matched `limit_keys`.
 
+#### `on_unresolvable_ip`: policy for an unresolvable per-IP source
+
+This setting only affects `limit_by_per_ip` rules. Typical triggers are a missing or empty `from-header-<header_name>` value, or a value that is not a valid IP/socket address.
+
+| Value | Behavior |
+|---|---|
+| `skip` (default) | Preserves legacy behavior: log a warning and omit only the current per-IP rule. Other matched global or rule-item limits are still evaluated. If nothing else matches, the request continues. |
+| `reject` | Fails closed: reject immediately with `rejected_code` / `rejected_msg` (defaults: 429 / `Too many requests`) without calling Redis or the upstream. If any per-IP rule cannot resolve its source, the whole request is rejected. |
+
+> ⚠️ `skip` is backward-compatible, but a missing or malformed client-controlled source header can bypass that per-IP rule. When `from-header-<header_name>` is used in production, ensure a trusted proxy overwrites the header and set `on_unresolvable_ip: reject` when fail-closed behavior is required.
 
 ### Description of Configuration Fields in `limit_keys`
 
@@ -161,6 +172,9 @@ redis:
 ### Get the peer IP using the request header x-forwarded-for for differentiated rate limiting
 ```yaml
 rule_name: default_rule
+# The default is skip, preserving the legacy behavior of dropping the per-IP rule.
+# Use reject when the source header is client-controlled and must fail closed.
+on_unresolvable_ip: skip
 rule_items:
   - limit_by_per_ip: from-header-x-forwarded-for
     limit_keys:

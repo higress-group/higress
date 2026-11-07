@@ -169,6 +169,47 @@ var ipLimitConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：客户端可控请求头作为 per-IP 来源。
+// on_unresolvable_ip 缺省为 skip，保留旧行为；reject 配置单独覆盖测试。
+func ipHeaderLimitConfigWithPolicy(policy string, withGlobal bool) json.RawMessage {
+	config := map[string]interface{}{
+		"rule_name": "ai-token-ip-header-limit",
+		"rule_items": []map[string]interface{}{
+			{
+				"limit_by_per_ip": "from-header-x-real-ip",
+				"limit_keys": []map[string]interface{}{
+					{
+						"key":              "192.168.1.0/24",
+						"token_per_minute": 300,
+					},
+				},
+			},
+		},
+		"redis": map[string]interface{}{
+			"service_name": "redis.static",
+			"service_port": 6379,
+		},
+		"rejected_code": 429,
+		"rejected_msg":  "cannot resolve client ip",
+	}
+	if policy != "" {
+		config["on_unresolvable_ip"] = policy
+	}
+	if withGlobal {
+		config["global_threshold"] = map[string]interface{}{
+			"token_per_minute": 1000,
+		}
+	}
+	data, _ := json.Marshal(config)
+	return data
+}
+
+var ipHeaderLimitConfig = ipHeaderLimitConfigWithPolicy("", false)
+var ipHeaderSkipConfig = ipHeaderLimitConfigWithPolicy("skip", false)
+var ipHeaderRejectConfig = ipHeaderLimitConfigWithPolicy("reject", false)
+var ipHeaderSkipWithGlobalConfig = ipHeaderLimitConfigWithPolicy("", true)
+var ipHeaderRejectWithGlobalConfig = ipHeaderLimitConfigWithPolicy("reject", true)
+
 // 测试配置：正则表达式限流配置
 var regexpLimitConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -700,6 +741,146 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 
 			require.Nil(t, host.GetLocalResponse())
 
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestPerIpRuleUnresolvableIPPolicy covers both supported policies for a
+// client-controlled per-IP source. The default MUST preserve the historical
+// skip behavior; reject is opt-in and fails closed before Redis or upstream.
+func TestPerIpRuleUnresolvableIPPolicy(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		unresolvable := []struct {
+			name    string
+			headers [][2]string
+		}{
+			{
+				name: "closing bracket",
+				headers: [][2]string{
+					{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+					{"x-real-ip", "]"},
+				},
+			},
+			{
+				name: "closing bracket with port",
+				headers: [][2]string{
+					{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+					{"x-real-ip", "]:8080"},
+				},
+			},
+			{
+				name: "not an address",
+				headers: [][2]string{
+					{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+					{"x-real-ip", "not-an-ip"},
+				},
+			},
+			{
+				name: "header empty",
+				headers: [][2]string{
+					{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+					{"x-real-ip", ""},
+				},
+			},
+			{
+				name: "header absent",
+				headers: [][2]string{
+					{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+				},
+			},
+		}
+
+		policies := []struct {
+			name       string
+			config     json.RawMessage
+			wantReject bool
+		}{
+			{name: "default skip", config: ipHeaderLimitConfig},
+			{name: "explicit skip", config: ipHeaderSkipConfig},
+			{name: "explicit reject", config: ipHeaderRejectConfig, wantReject: true},
+		}
+
+		for _, policy := range policies {
+			policy := policy
+			t.Run(policy.name, func(t *testing.T) {
+				for _, tt := range unresolvable {
+					tt := tt
+					t.Run(tt.name, func(t *testing.T) {
+						host, status := test.NewTestHost(policy.config)
+						defer host.Reset()
+						require.Equal(t, types.OnPluginStartStatusOK, status)
+
+						action := host.CallOnHttpRequestHeaders(tt.headers)
+
+						if policy.wantReject {
+							require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+							local := host.GetLocalResponse()
+							require.NotNil(t, local, "expected the request to be rejected locally")
+							require.Equal(t, uint32(429), local.StatusCode)
+							require.Equal(t, "cannot resolve client ip", string(local.Data))
+							host.CompleteHttp()
+							return
+						}
+
+						// skip preserves the historical behavior: the per-IP rule is
+						// omitted and, with no other matched rule, the request continues.
+						require.Equal(t, types.ActionContinue, action)
+						require.Nil(t, host.GetLocalResponse())
+					})
+				}
+
+				// A resolvable header must still reach Redis under either policy.
+				t.Run("resolvable header reaches redis", func(t *testing.T) {
+					host, status := test.NewTestHost(policy.config)
+					defer host.Reset()
+					require.Equal(t, types.OnPluginStartStatusOK, status)
+
+					action := host.CallOnHttpRequestHeaders([][2]string{
+						{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+						{"x-real-ip", "192.168.1.10"},
+					})
+					require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+					host.CallOnRedisCall(0, multiRuleResp([3]int{300, 1, 60}))
+					require.Nil(t, host.GetLocalResponse(), "a resolvable ip must not be rejected")
+					host.CompleteHttp()
+				})
+			})
+		}
+
+		// skip only omits the unresolvable per-IP rule; other matched rules are
+		// still evaluated instead of being silently bypassed with it.
+		t.Run("skip still evaluates other matched rules", func(t *testing.T) {
+			host, status := test.NewTestHost(ipHeaderSkipWithGlobalConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			host.CallOnRedisCall(0, multiRuleResp([3]int{1000, 1, 60}))
+			require.Nil(t, host.GetLocalResponse())
+			host.CompleteHttp()
+		})
+
+		// reject fails closed as soon as the per-IP source cannot be resolved,
+		// even when another rule would otherwise have matched.
+		t.Run("reject fails closed before other rules", func(t *testing.T) {
+			host, status := test.NewTestHost(ipHeaderRejectWithGlobalConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"}, {":path", "/api/test"}, {":method", "POST"},
+			})
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+			local := host.GetLocalResponse()
+			require.NotNil(t, local)
+			require.Equal(t, uint32(429), local.StatusCode)
+			require.Equal(t, "cannot resolve client ip", string(local.Data))
 			host.CompleteHttp()
 		})
 	})

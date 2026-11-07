@@ -20,6 +20,10 @@ type LimitRuleItemType string
 // LimitConfigItemType 限流配置项key类型
 type LimitConfigItemType string
 
+// UnresolvableIPPolicy controls how a per-IP rule behaves when its client IP
+// source cannot be resolved.
+type UnresolvableIPPolicy string
+
 const (
 	LimitByHeaderType      LimitRuleItemType = "limit_by_header"
 	LimitByParamType       LimitRuleItemType = "limit_by_param"
@@ -38,6 +42,11 @@ const (
 
 	RemoteAddrSourceType = "remote-addr"
 	HeaderSourceType     = "header"
+
+	UnresolvableIPSkip   UnresolvableIPPolicy = "skip"
+	UnresolvableIPReject UnresolvableIPPolicy = "reject"
+
+	DefaultUnresolvableIPPolicy = UnresolvableIPSkip
 
 	DefaultRejectedCode uint32 = 429
 	DefaultRejectedMsg  string = "Too many requests"
@@ -59,13 +68,14 @@ var timeWindows = map[string]int64{
 }
 
 type AiTokenRateLimitConfig struct {
-	RuleName        string           // 限流规则名称
-	GlobalThreshold *GlobalThreshold // 全局限流配置
-	RuleItems       []LimitRuleItem  // 限流规则项
-	RejectedCode    uint32           // 当请求超过阈值被拒绝时,返回的HTTP状态码
-	RejectedMsg     string           // 当请求超过阈值被拒绝时,返回的响应体
-	RedisClient     wrapper.RedisClient
-	CounterMetrics  map[string]proxywasm.MetricCounter // Metrics
+	RuleName         string               // 限流规则名称
+	GlobalThreshold  *GlobalThreshold     // 全局限流配置
+	RuleItems        []LimitRuleItem      // 限流规则项
+	OnUnresolvableIP UnresolvableIPPolicy // per-IP 来源无法解析时：skip（兼容旧行为）或 reject
+	RejectedCode     uint32               // 当请求超过阈值被拒绝时,返回的HTTP状态码
+	RejectedMsg      string               // 当请求超过阈值被拒绝时,返回的响应体
+	RedisClient      wrapper.RedisClient
+	CounterMetrics   map[string]proxywasm.MetricCounter // Metrics
 }
 
 type GlobalThreshold struct {
@@ -155,8 +165,14 @@ func ParseAiTokenRateLimitConfig(json gjson.Result, config *AiTokenRateLimitConf
 	}
 	config.RuleName = ruleName.String()
 
+	onUnresolvableIP, err := parseUnresolvableIPPolicy(json)
+	if err != nil {
+		return err
+	}
+	config.OnUnresolvableIP = onUnresolvableIP
+
 	// 初始化限流规则
-	err := initLimitRule(json, config)
+	err = initLimitRule(json, config)
 	if err != nil {
 		return err
 	}
@@ -174,6 +190,24 @@ func ParseAiTokenRateLimitConfig(json gjson.Result, config *AiTokenRateLimitConf
 		config.RejectedMsg = DefaultRejectedMsg
 	}
 	return nil
+}
+
+func parseUnresolvableIPPolicy(json gjson.Result) (UnresolvableIPPolicy, error) {
+	policyResult := json.Get("on_unresolvable_ip")
+	if !policyResult.Exists() {
+		return DefaultUnresolvableIPPolicy, nil
+	}
+
+	policy := UnresolvableIPPolicy(policyResult.String())
+	switch policy {
+	case UnresolvableIPSkip, UnresolvableIPReject:
+		return policy, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid 'on_unresolvable_ip' value %q: supported values are %q and %q",
+			policyResult.String(), UnresolvableIPSkip, UnresolvableIPReject,
+		)
+	}
 }
 
 func initLimitRule(json gjson.Result, config *AiTokenRateLimitConfig) error {

@@ -46,8 +46,9 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 					Count:      100,
 					TimeWindow: Second,
 				},
-				RejectedCode: DefaultRejectedCode,
-				RejectedMsg:  DefaultRejectedMsg,
+				OnUnresolvableIP: DefaultUnresolvableIPPolicy,
+				RejectedCode:     DefaultRejectedCode,
+				RejectedMsg:      DefaultRejectedMsg,
 			},
 		},
 		{
@@ -64,8 +65,9 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 					Count:      1000,
 					TimeWindow: SecondsPerMinute,
 				},
-				RejectedCode: DefaultRejectedCode,
-				RejectedMsg:  DefaultRejectedMsg,
+				OnUnresolvableIP: DefaultUnresolvableIPPolicy,
+				RejectedCode:     DefaultRejectedCode,
+				RejectedMsg:      DefaultRejectedMsg,
 			},
 		},
 		{
@@ -112,8 +114,9 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 						},
 					},
 				},
-				RejectedCode: DefaultRejectedCode,
-				RejectedMsg:  DefaultRejectedMsg,
+				OnUnresolvableIP: DefaultUnresolvableIPPolicy,
+				RejectedCode:     DefaultRejectedCode,
+				RejectedMsg:      DefaultRejectedMsg,
 			},
 		},
 		{
@@ -163,8 +166,9 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 						},
 					},
 				},
-				RejectedCode: DefaultRejectedCode,
-				RejectedMsg:  DefaultRejectedMsg,
+				OnUnresolvableIP: DefaultUnresolvableIPPolicy,
+				RejectedCode:     DefaultRejectedCode,
+				RejectedMsg:      DefaultRejectedMsg,
 			},
 		},
 		{
@@ -199,8 +203,9 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 						},
 					},
 				},
-				RejectedCode: DefaultRejectedCode,
-				RejectedMsg:  DefaultRejectedMsg,
+				OnUnresolvableIP: DefaultUnresolvableIPPolicy,
+				RejectedCode:     DefaultRejectedCode,
+				RejectedMsg:      DefaultRejectedMsg,
 			},
 		},
 		{
@@ -224,8 +229,9 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 					Count:      100,
 					TimeWindow: Second,
 				},
-				RejectedCode: 403,
-				RejectedMsg:  "Forbidden",
+				OnUnresolvableIP: DefaultUnresolvableIPPolicy,
+				RejectedCode:     403,
+				RejectedMsg:      "Forbidden",
 			},
 		},
 		{
@@ -252,6 +258,73 @@ func TestParseAiTokenRateLimitConfig(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expected, config)
 			}
+		})
+	}
+}
+
+func TestParseOnUnresolvableIPPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		want    UnresolvableIPPolicy
+		wantErr string
+	}{
+		{
+			name: "DefaultIsSkip",
+			json: `{
+				"rule_name": "policy-default",
+				"global_threshold": {"token_per_second": 1}
+			}`,
+			want: UnresolvableIPSkip,
+		},
+		{
+			name: "ExplicitSkip",
+			json: `{
+				"rule_name": "policy-skip",
+				"on_unresolvable_ip": "skip",
+				"global_threshold": {"token_per_second": 1}
+			}`,
+			want: UnresolvableIPSkip,
+		},
+		{
+			name: "ExplicitReject",
+			json: `{
+				"rule_name": "policy-reject",
+				"on_unresolvable_ip": "reject",
+				"global_threshold": {"token_per_second": 1}
+			}`,
+			want: UnresolvableIPReject,
+		},
+		{
+			name: "InvalidValue",
+			json: `{
+				"rule_name": "policy-invalid",
+				"on_unresolvable_ip": "allow",
+				"global_threshold": {"token_per_second": 1}
+			}`,
+			wantErr: `invalid 'on_unresolvable_ip' value "allow": supported values are "skip" and "reject"`,
+		},
+		{
+			name: "EmptyValue",
+			json: `{
+				"rule_name": "policy-empty",
+				"on_unresolvable_ip": "",
+				"global_threshold": {"token_per_second": 1}
+			}`,
+			wantErr: `invalid 'on_unresolvable_ip' value "": supported values are "skip" and "reject"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var config AiTokenRateLimitConfig
+			err := ParseAiTokenRateLimitConfig(gjson.Parse(tt.json), &config)
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, config.OnUnresolvableIP)
 		})
 	}
 }
