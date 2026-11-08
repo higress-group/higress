@@ -139,7 +139,7 @@ func (h *DeployHandler) checkLocalEnvironment() error {
 	}
 
 	if util.CompareVersions(pyVenv, MinPythonVersion) == -1 {
-		fmt.Printf("Current Python: %s need Python %s+", MinPythonVersion, pyVenv)
+		fmt.Printf("Current Python: %s need Python %s+", pyVenv, MinPythonVersion)
 		return fmt.Errorf("unsupport python version")
 	}
 
