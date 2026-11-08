@@ -28,14 +28,14 @@ func main() {}
 func init() {
 	wrapper.SetCtx(
 		"hello-world",
-		wrapper.ProcessRequestHeadersBy(onHttpRequestHeaders),
+		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 	)
 }
 
 type HelloWorldConfig struct {
 }
 
-func onHttpRequestHeaders(ctx wrapper.HttpContext, config HelloWorldConfig, log log.Log) types.Action {
+func onHttpRequestHeaders(ctx wrapper.HttpContext, config HelloWorldConfig) types.Action {
 	err := proxywasm.AddHttpRequestHeader("hello", "world")
 	if err != nil {
 		log.Critical("failed to set request header")
