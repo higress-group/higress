@@ -287,6 +287,11 @@ configured `rejected_code`/`rejected_msg` instead of silently skipping the rule.
 Make sure a trusted proxy in front of the gateway always populates the header
 with a single client IP; for a comma separated list only the first entry is used.
 
+The plugin accepts IPv4, IPv6 and IPv4-mapped IPv6 (for example
+`::ffff:192.0.2.1`), including values with a port or brackets. This fail-closed
+behavior is intentional: skipping an unresolvable rule would let a client
+disable the limiter by sending a crafted header.
+
 ## Diagnosing
 
 See the [Rate-limit Plugin FAQ](../../../../docs/faq/rate-limit-plugin-faq-en.md#rate-limit-not-taking-effect) for complete diagnosis recipes.

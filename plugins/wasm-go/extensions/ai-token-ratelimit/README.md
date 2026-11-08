@@ -287,6 +287,9 @@ rule_items:
 `rejected_code`/`rejected_msg` 拒绝该请求，而不是静默跳过规则。请确保网关前的可信代理始终填充该
 请求头并只放一个客户端 IP；若为逗号分隔的列表，则只取第一个。
 
+插件接受 IPv4、IPv6 以及 IPv4-mapped IPv6（例如 `::ffff:192.0.2.1`），也接受带端口或方括号的写法。
+该 fail-closed 行为是有意为之：如果改为跳过无法解析的规则，客户端只需伪造一个非法请求头就能关闭限流。
+
 ## 诊断
 
 完整排查步骤见[限流插件 FAQ](../../../../docs/faq/rate-limit-plugin-faq.md#rate-limit-not-taking-effect)。
