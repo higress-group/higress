@@ -428,7 +428,7 @@ func recursiveRefineJson(ctx wrapper.HttpContext, config PluginConfig, log log.L
 	}
 
 	// recursively refine json
-	config.serviceClient.Post(requestContext.Path, requestContext.ReqHeaders, requestContext.assembleReqBody(config),
+	if err := config.serviceClient.Post(requestContext.Path, requestContext.ReqHeaders, requestContext.assembleReqBody(config),
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			err := config.ValidateBody(responseBody)
 			if err != nil {
@@ -445,7 +445,13 @@ func recursiveRefineJson(ctx wrapper.HttpContext, config PluginConfig, log log.L
 				requestContext.SaveStrToHistMsg(log, err.Error())
 				recursiveRefineJson(ctx, config, log, retryCount, requestContext)
 			}
-		}, uint32(config.serviceTimeout))
+		}, uint32(config.serviceTimeout)); err != nil {
+		// A synchronous dispatch failure means the callback above will never
+		// run, so returning without responding would hang the request forever.
+		log.Errorf("ai-json-resp retry dispatch failed: %v", err)
+		config.rejectStruct = RejectStruct{SERVICE_UNAVAILABLE_CODE, "service unavailable: " + err.Error()}
+		sendResponse(ctx, config, log, nil)
+	}
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.Log) types.Action {
@@ -553,7 +559,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 		ReqBody:    body,
 	}
 
-	config.serviceClient.Post(requestContext.Path, requestContext.ReqHeaders, requestContext.ReqBody,
+	if err := config.serviceClient.Post(requestContext.Path, requestContext.ReqHeaders, requestContext.ReqBody,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			err := config.ValidateBody(responseBody)
 			if err != nil {
@@ -571,7 +577,14 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte
 				requestContext.SaveStrToHistMsg(log, err.Error())
 				recursiveRefineJson(ctx, config, log, retryCount, requestContext)
 			}
-		}, uint32(config.serviceTimeout))
+		}, uint32(config.serviceTimeout)); err != nil {
+		// A synchronous dispatch failure means the callback above will
+		// never run, so pausing here would hang the response forever.
+		log.Errorf("ai-json-resp service dispatch failed: %v", err)
+		config.rejectStruct = RejectStruct{SERVICE_UNAVAILABLE_CODE, "service unavailable: " + err.Error()}
+		sendResponse(ctx, config, log, nil)
+		return types.ActionContinue
+	}
 
 	return types.ActionPause
 }

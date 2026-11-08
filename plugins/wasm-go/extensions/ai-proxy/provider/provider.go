@@ -1082,7 +1082,14 @@ func doGetMappedModel(model string, modelMapping map[string]string) string {
 
 		if strings.HasPrefix(k, "~") {
 			k = strings.TrimPrefix(k, "~")
-			re := regexp.MustCompile(k)
+			re, err := regexp.Compile(k)
+			if err != nil {
+				// The mapping key comes from the plugin configuration, so an
+				// invalid regular expression would panic on every request.
+				// Skip this entry instead.
+				log.Errorf("invalid regex [%s] in model mapping: %v", k, err)
+				continue
+			}
 			if re.MatchString(model) {
 				v = re.ReplaceAllString(model, v)
 				log.Debugf("model [%s] is mapped to [%s] via regex [%s]", model, v, k)
