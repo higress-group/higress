@@ -152,7 +152,7 @@ func TestChatMessageParseContent(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "valid file part",
+			name: "file_id-only file part is preserved",
 			content: []any{
 				map[string]any{
 					"type": contentTypeFile,
@@ -167,9 +167,75 @@ func TestChatMessageParseContent(t *testing.T) {
 			},
 		},
 		{
-			name: "file part with empty object is dropped",
+			name: "file_data-only file part is preserved with filename",
+			content: []any{
+				map[string]any{
+					"type": contentTypeFile,
+					"file": map[string]any{
+						"file_data": "JVBERi0xLjQ=",
+						"filename":  "report.pdf",
+					},
+				},
+			},
+			want: []chatMessageContent{
+				{
+					Type: contentTypeFile,
+					File: &chatMessageContentFile{FileData: "JVBERi0xLjQ=", FileName: "report.pdf"},
+				},
+			},
+		},
+		{
+			name: "file_data-only file part accepts legacy file_name key",
+			content: []any{
+				map[string]any{
+					"type": contentTypeFile,
+					"file": map[string]any{
+						"file_data": "JVBERi0xLjQ=",
+						"file_name": "report.pdf",
+					},
+				},
+			},
+			want: []chatMessageContent{
+				{
+					Type: contentTypeFile,
+					File: &chatMessageContentFile{FileData: "JVBERi0xLjQ=", FileName: "report.pdf"},
+				},
+			},
+		},
+		{
+			name: "file part with both file_id and file_data keeps both",
+			content: []any{
+				map[string]any{
+					"type": contentTypeFile,
+					"file": map[string]any{
+						"file_id":   "file-123",
+						"file_data": "JVBERi0xLjQ=",
+						"filename":  "report.pdf",
+					},
+				},
+			},
+			want: []chatMessageContent{
+				{
+					Type: contentTypeFile,
+					File: &chatMessageContentFile{
+						FileData: "JVBERi0xLjQ=",
+						FileId:   "file-123",
+						FileName: "report.pdf",
+					},
+				},
+			},
+		},
+		{
+			name: "file part with neither file_id nor file_data is dropped",
 			content: []any{
 				map[string]any{"type": contentTypeFile, "file": map[string]any{}},
+			},
+			want: nil,
+		},
+		{
+			name: "file part with only filename is dropped",
+			content: []any{
+				map[string]any{"type": contentTypeFile, "file": map[string]any{"filename": "report.pdf"}},
 			},
 			want: nil,
 		},
@@ -177,6 +243,13 @@ func TestChatMessageParseContent(t *testing.T) {
 			name: "file part with numeric file_id is dropped",
 			content: []any{
 				map[string]any{"type": contentTypeFile, "file": map[string]any{"file_id": 7}},
+			},
+			want: nil,
+		},
+		{
+			name: "file part with numeric file_data and no file_id is dropped",
+			content: []any{
+				map[string]any{"type": contentTypeFile, "file": map[string]any{"file_data": 7}},
 			},
 			want: nil,
 		},

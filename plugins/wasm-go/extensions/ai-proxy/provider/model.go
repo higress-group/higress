@@ -362,7 +362,7 @@ type chatMessageContentAudio struct {
 type chatMessageContentFile struct {
 	FileData string `json:"file_data,omitempty"`
 	FileId   string `json:"file_id,omitempty"`
-	FileName string `json:"file_name,omitempty"`
+	FileName string `json:"filename,omitempty"`
 }
 
 type chatMessageContentImageUrl struct {
@@ -486,17 +486,26 @@ func (m *chatMessage) ParseContent() []chatMessageContent {
 					},
 				})
 			case contentTypeFile:
+				// A file part is usable when it carries either an uploaded
+				// file id or inline base64 data. The file name is optional
+				// and only meaningful alongside one of those fields.
 				fileId := getNestedString(contentMap, contentTypeFile, "file_id")
-				if fileId == "" {
-					log.Errorf("[ai-proxy] dropping %s content part: \"file_id\" is missing or not a non-empty string", contentTypeFile)
+				fileData := getNestedString(contentMap, contentTypeFile, "file_data")
+				if fileId == "" && fileData == "" {
+					log.Errorf("[ai-proxy] dropping %s content part: either \"file_id\" or \"file_data\" must be a non-empty string", contentTypeFile)
 					continue
+				}
+				fileName := getNestedString(contentMap, contentTypeFile, "filename")
+				if fileName == "" {
+					// Accept the legacy file_name spelling as well.
+					fileName = getNestedString(contentMap, contentTypeFile, "file_name")
 				}
 				contentList = append(contentList, chatMessageContent{
 					Type: contentTypeFile,
 					File: &chatMessageContentFile{
-						// Only file_id is carried over today; file_name/file_data
-						// are not consumed by any provider yet.
-						FileId: fileId,
+						FileData: fileData,
+						FileId:   fileId,
+						FileName: fileName,
 					},
 				})
 			}
