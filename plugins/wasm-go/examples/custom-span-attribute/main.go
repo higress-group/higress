@@ -20,9 +20,9 @@ import (
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
-	"github.com/tidwall/gjson"
-
+	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
+	"github.com/tidwall/gjson"
 )
 
 func main() {}
@@ -30,8 +30,8 @@ func main() {}
 func init() {
 	wrapper.SetCtx(
 		"custom-span-attribute",
-		wrapper.ParseConfigBy(parseConfig),
-		wrapper.ProcessRequestHeadersBy(onHttpRequestHeaders),
+		wrapper.ParseConfig(parseConfig),
+		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 	)
 }
 
@@ -39,7 +39,7 @@ type CustomSpanAttributeConfig struct {
 	HeaderKey string
 }
 
-func setSpanAttribute(key string, value interface{}, log wrapper.Log) {
+func setSpanAttribute(key string, value interface{}) {
 	if value != "" {
 		traceSpanTag := wrapper.TraceSpanTagPrefix + key
 		if e := proxywasm.SetProperty([]string{traceSpanTag}, []byte(fmt.Sprint(value))); e != nil {
@@ -57,7 +57,7 @@ Example configuration:
 headerKey: foo
 ```
 */
-func parseConfig(configJson gjson.Result, config *CustomSpanAttributeConfig, log wrapper.Log) error {
+func parseConfig(configJson gjson.Result, config *CustomSpanAttributeConfig) error {
 	config.HeaderKey = configJson.Get("headerKey").String()
 	if config.HeaderKey == "" {
 		return errors.New("no header key specified")
@@ -65,8 +65,8 @@ func parseConfig(configJson gjson.Result, config *CustomSpanAttributeConfig, log
 	return nil
 }
 
-func onHttpRequestHeaders(ctx wrapper.HttpContext, config CustomSpanAttributeConfig, log wrapper.Log) types.Action {
+func onHttpRequestHeaders(ctx wrapper.HttpContext, config CustomSpanAttributeConfig) types.Action {
 	headerValue, _ := proxywasm.GetHttpRequestHeader(config.HeaderKey)
-	setSpanAttribute(config.HeaderKey, headerValue, log)
+	setSpanAttribute(config.HeaderKey, headerValue)
 	return types.ActionContinue
 }
