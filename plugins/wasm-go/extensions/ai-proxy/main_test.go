@@ -345,6 +345,10 @@ func TestDuplicateModelMember(t *testing.T) {
 	test.RunDuplicateModelMemberTests(t)
 }
 
+func TestDuplicateStreamMember(t *testing.T) {
+	test.RunDuplicateStreamMemberTests(t)
+}
+
 func TestApiPathRegression(t *testing.T) {
 	test.RunApiPathRegressionTests(t)
 }
