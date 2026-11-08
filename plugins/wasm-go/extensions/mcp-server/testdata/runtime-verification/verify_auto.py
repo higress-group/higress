@@ -2,8 +2,11 @@
 
 import concurrent.futures
 import json
+import re
 import socket
 import time
+import os
+from collections import Counter
 
 PORT = 10009
 PROBE = "server/discover"
@@ -11,6 +14,7 @@ INIT = "initialize"
 NOTIFY = "notifications/initialized"
 CALL = "tools/call"
 LIST = "tools/list"
+BUSINESS_BASELINE = os.environ.get("RUNTIME_COMPAT_MECHANISM_BASELINE") == "1"
 
 FAILURES = {
     "401": 401, "403": 403, "429": 429, "500": 502, "302": 502,
@@ -21,6 +25,31 @@ FAILURES = {
     "init-version": 502, "notify-fail": 200, "network": 502,
     "modern-ordinary-error": 400, "trailing-json": 502, "batch": 502,
 }
+
+
+# Explicit/default profiles compare against the accepted pre-instructions proxy,
+# independently of the older binary used to prove auto was unsupported.
+EXPLICIT_CASE_NAMES = {
+    "proxy-modern-stateless-and-header-isolation", "proxy-modern-to-legacy-isolated-handshakes",
+    "proxy-default-is-legacy-for-three-versions", "proxy-legacy-to-modern-is-explicitly-unsupported",
+    "proxy-auth-errors-and-cross-origin-isolation",
+}
+
+
+def explicit_baseline_matches(candidate_cases, candidate_exchanges, baseline, baseline_log):
+    baseline_cases = baseline.get("cases", [])
+    expected_cases = Counter(EXPLICIT_CASE_NAMES)
+    request_ids = [exchange.get("accessRequestId") for exchange in baseline.get("exchanges", [])]
+    access_ids = re.findall(r"access request_id=([^ ]+)", baseline_log)
+    return (
+        Counter(case.get("case") for case in candidate_cases) == expected_cases
+        and Counter(case.get("case") for case in baseline_cases) == expected_cases
+        and all(case.get("status") == "PASS" for case in candidate_cases + baseline_cases)
+        and candidate_cases == baseline_cases
+        and candidate_exchanges == baseline.get("exchanges")
+        and bool(request_ids) and Counter(request_ids) == Counter(access_ids)
+        and len(request_ids) == len(set(request_ids))
+    )
 
 
 def wait_for(read, predicate, description, timeout=10):
@@ -195,19 +224,19 @@ def cases(v):
         evidence["continuation"] = details([PROBE, INIT, NOTIFY,])
         configure("cursor-error")
         status, _, response = rpc(LIST, key="cursor", extra_params={"cursor": "opaque-cursor"})
-        v.check(response["error"]["code"] == -32602, "cursor error was swallowed")
+        v.check(response["error"]["code"] == (-32602 if BUSINESS_BASELINE else -32603), "corresponding tools/list error mapping changed")
         evidence["cursor"] = details([PROBE, LIST])
         return evidence
 
     def no_replay():
         configure("response-loss")
         status, _, response = rpc(key="executed")
-        v.check(status == 502 and "error" in response, "lost response did not fail")
+        v.check(status == (502 if BUSINESS_BASELINE else 200) and "error" in response, "lost response did not fail")
         evidence = details([PROBE, CALL])
         v.check(evidence["backendState"]["executions"] == {"executed": 1}, "business replayed after execution")
         configure("business-version-error")
         status, _, response = rpc(key="version-error")
-        v.check(status == 400 and response["error"]["code"] == -32022, "business protocol error lost")
+        v.check(status == (400 if BUSINESS_BASELINE else 200) and response["error"]["code"] == (-32022 if BUSINESS_BASELINE else -32603), "corresponding business error mapping changed")
         evidence["businessVersionError"] = details([PROBE, CALL])
         return evidence
 

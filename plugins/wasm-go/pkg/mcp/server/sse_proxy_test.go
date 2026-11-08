@@ -137,11 +137,10 @@ func TestExtractEndpointURL(t *testing.T) {
 			wantErr:      false,
 		},
 		{
-			name:         "cross-origin full URL",
+			name:         "cross-Authority full URL",
 			endpointData: "https://other.example/messages",
 			baseURL:      "https://backend.com/mcp",
-			want:         "",
-			wantErr:      true,
+			want:         "https://other.example/messages",
 		},
 		{
 			name:         "path only",
@@ -494,7 +493,7 @@ func TestPrepareSSEUpstreamRequest_ForwardsExplicitAuthorizationOnSameOrigin(t *
 	assert.Equal(t, "Bearer forwarded", authorization)
 }
 
-func TestPrepareSSEUpstreamRequest_RejectsCrossOriginBeforeApplyingCredentials(t *testing.T) {
+func TestPrepareSSEUpstreamRequest_AppliesCredentialsToEndpointAuthority(t *testing.T) {
 	server := NewMcpProxyServer("p")
 	server.SetMcpServerURL("https://backend.example/mcp")
 	server.AddSecurityScheme(SecurityScheme{
@@ -504,8 +503,7 @@ func TestPrepareSSEUpstreamRequest_RejectsCrossOriginBeforeApplyingCredentials(t
 	authInfo := &ProxyAuthInfo{SecuritySchemeID: "K", Server: server}
 
 	got, err := prepareSSEUpstreamRequest(server, authInfo, &headers, "https://other.example/messages")
-	require.Error(t, err)
-	assert.Empty(t, got)
-	_, exists := findHeader(headers, "X-Api-Key")
-	assert.False(t, exists)
+	require.NoError(t, err)
+	assert.Equal(t, "https://other.example/messages", got)
+	assert.Equal(t, "configured", mustHeaderValue(t, headers, "X-Api-Key"))
 }

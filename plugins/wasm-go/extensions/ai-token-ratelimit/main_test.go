@@ -169,6 +169,56 @@ var ipLimitConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：limit_by_per_ip 从请求头读取 IPv4 客户端 IP
+var ipHeaderLimitConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"rule_name": "ai-token-ip-header-limit",
+		"rule_items": []map[string]interface{}{
+			{
+				"limit_by_per_ip": "from-header-x-real-ip",
+				"limit_keys": []map[string]interface{}{
+					{
+						"key":              "192.0.2.0/24",
+						"token_per_minute": 300,
+					},
+				},
+			},
+		},
+		"redis": map[string]interface{}{
+			"service_name": "redis.static",
+			"service_port": 6379,
+		},
+		"rejected_code": 429,
+		"rejected_msg":  "IP rate limit exceeded",
+	})
+	return data
+}()
+
+// 测试配置：limit_by_per_ip 从请求头读取 IPv6 客户端 IP
+var ipv6HeaderLimitConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"rule_name": "ai-token-ipv6-header-limit",
+		"rule_items": []map[string]interface{}{
+			{
+				"limit_by_per_ip": "from-header-x-real-ip",
+				"limit_keys": []map[string]interface{}{
+					{
+						"key":              "2001:db8::/32",
+						"token_per_minute": 300,
+					},
+				},
+			},
+		},
+		"redis": map[string]interface{}{
+			"service_name": "redis.static",
+			"service_port": 6379,
+		},
+		"rejected_code": 429,
+		"rejected_msg":  "IP rate limit exceeded",
+	})
+	return data
+}()
+
 // 测试配置：正则表达式限流配置
 var regexpLimitConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -841,6 +891,105 @@ func TestOnHttpStreamingBody(t *testing.T) {
 				"missing token context should skip response-phase INCRBY")
 
 			host.CompleteHttp()
+		})
+	})
+}
+
+func TestPerIPHeaderRequestBehavior(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		requestHeaders := func(realIP string) [][2]string {
+			return [][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/test"},
+				{":method", "POST"},
+				{"x-real-ip", realIP},
+			}
+		}
+		headersWithoutRealIP := [][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/test"},
+			{":method", "POST"},
+		}
+
+		assertRejected := func(t *testing.T, configJSON json.RawMessage, headers [][2]string) {
+			t.Helper()
+			host, status := test.NewTestHost(configJSON)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders(headers)
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+			require.Empty(t, host.GetRedisCalloutAttributes(),
+				"an unresolvable client IP must be rejected before Redis")
+
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.Equal(t, uint32(429), localResponse.StatusCode)
+			require.Contains(t, string(localResponse.Data), "IP rate limit exceeded")
+		}
+
+		assertAllowedWithRedisKey := func(t *testing.T, configJSON json.RawMessage, headers [][2]string, wantKeySuffix string) {
+			t.Helper()
+			host, status := test.NewTestHost(configJSON)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders(headers)
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			callouts := host.GetRedisCalloutAttributes()
+			require.Len(t, callouts, 1)
+			require.Contains(t, string(callouts[0].Query), "from-header-x-real-ip:"+wantKeySuffix,
+				"the resolved client IP must be used in the Redis key")
+
+			host.CallOnRedisCall(0, multiRuleResp([3]int{300, 1, 60}))
+			require.Nil(t, host.GetLocalResponse())
+			host.CompleteHttp()
+		}
+
+		malformed := []struct {
+			name  string
+			value string
+		}{
+			{name: "closing bracket only", value: "]"},
+			{name: "closing bracket with port", value: "]:80"},
+			{name: "closing bracket with trailing text", value: "]abc"},
+			{name: "not an ip", value: "not-an-ip"},
+			{name: "out of range ipv4", value: "999.999.999.999"},
+			{name: "too many port separators", value: "192.0.2.1:80:90"},
+		}
+		for _, tc := range malformed {
+			t.Run("malformed real-ip header: "+tc.name, func(t *testing.T) {
+				assertRejected(t, ipHeaderLimitConfig, requestHeaders(tc.value))
+			})
+		}
+
+		t.Run("missing real-ip header is rejected", func(t *testing.T) {
+			assertRejected(t, ipHeaderLimitConfig, headersWithoutRealIP)
+		})
+
+		t.Run("valid ipv4 is allowed and reaches redis", func(t *testing.T) {
+			assertAllowedWithRedisKey(t, ipHeaderLimitConfig, requestHeaders("192.0.2.1"), "192.0.2.1")
+		})
+
+		t.Run("valid ipv4 with port is allowed", func(t *testing.T) {
+			assertAllowedWithRedisKey(t, ipHeaderLimitConfig, requestHeaders("192.0.2.1:8080"), "192.0.2.1")
+		})
+
+		t.Run("valid ipv6 is allowed and reaches redis", func(t *testing.T) {
+			assertAllowedWithRedisKey(t, ipv6HeaderLimitConfig, requestHeaders("2001:db8::1"), "2001:db8::1")
+		})
+
+		t.Run("valid bracketed ipv6 with port is allowed", func(t *testing.T) {
+			assertAllowedWithRedisKey(t, ipv6HeaderLimitConfig, requestHeaders("[2001:db8::1]:443"), "2001:db8::1")
+		})
+
+		t.Run("valid ipv4-mapped ipv6 is allowed", func(t *testing.T) {
+			assertAllowedWithRedisKey(t, ipHeaderLimitConfig, requestHeaders("::ffff:192.0.2.1"), "192.0.2.1")
+		})
+
+		t.Run("valid bracketed ipv4-mapped ipv6 with port is allowed", func(t *testing.T) {
+			assertAllowedWithRedisKey(t, ipHeaderLimitConfig, requestHeaders("[::ffff:192.0.2.1]:443"), "192.0.2.1")
 		})
 	})
 }

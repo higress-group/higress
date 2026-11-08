@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/config"
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/vector"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -22,6 +23,7 @@ const (
 	TOOL_CALLS_CONTEXT_KEY      = "toolCalls"
 	STREAM_CONTEXT_KEY          = "stream"
 	SKIP_CACHE_HEADER           = "x-higress-skip-ai-cache"
+	CONSUMER_HEADER             = "x-mse-consumer"
 	ERROR_PARTIAL_MESSAGE_KEY   = "errorPartialMessage"
 
 	DEFAULT_MAX_BODY_BYTES uint32 = 100 * 1024 * 1024
@@ -65,6 +67,16 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, c config.PluginConfig, log lo
 		ctx.DontReadRequestBody()
 		return types.ActionContinue
 	}
+	// Consumer authentication must run before ai-cache so this header contains
+	// the authenticated identity, with any client-supplied value removed or replaced.
+	consumer, _ := proxywasm.GetHttpRequestHeader(CONSUMER_HEADER)
+	if consumer == "" {
+		log.Debug("no authenticated consumer; skip all cache processing")
+		ctx.SetContext(SKIP_CACHE_HEADER, struct{}{})
+		ctx.DontReadRequestBody()
+		return types.ActionContinue
+	}
+	ctx.SetContext(vector.ConsumerContextKey, consumer)
 	contentType, _ := proxywasm.GetHttpRequestHeader("content-type")
 	// The request does not have a body.
 	if contentType == "" {
@@ -119,6 +131,11 @@ func onHttpRequestBody(ctx wrapper.HttpContext, c config.PluginConfig, body []by
 	log.Debugf("[onHttpRequestBody] key: %s", key)
 	if key == "" {
 		log.Debug("[onHttpRequestBody] parse key from request body failed")
+		ctx.DontReadResponseBody()
+		return types.ActionContinue
+	}
+	if c.GetCacheProvider() == nil && !c.EnableSemanticCache {
+		ctx.SetContext(CACHE_KEY_CONTEXT_KEY, nil)
 		ctx.DontReadResponseBody()
 		return types.ActionContinue
 	}

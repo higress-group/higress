@@ -125,6 +125,9 @@ func NewClusterEndpointLoadBalancer(json gjson.Result) (ClusterEndpointLoadBalan
 	lb.ServiceAdaptiveMetrics = make(map[string]*AdaptiveMetrics)
 
 	lb.Mode = json.Get("mode").String()
+	if !isValidMode(lb.Mode) {
+		return lb, fmt.Errorf("mode must be one of [LeastBusy, LeastFirstTokenLatency, LeastTotalLatency, AdaptiveScore], got %q", lb.Mode)
+	}
 	lb.ClusterHeader = json.Get("cluster_header").String()
 	if lb.ClusterHeader == "" {
 		lb.ClusterHeader = DefaultClusterHeader
@@ -240,6 +243,15 @@ func getFloatConfig(json gjson.Result, path string, defaultValue float64) float6
 
 func isValidMetricsMissingPolicy(policy string) bool {
 	return policy == MetricsMissingPolicyLeast
+}
+
+func isValidMode(mode string) bool {
+	switch mode {
+	case "LeastBusy", "LeastFirstTokenLatency", "LeastTotalLatency", ModeAdaptiveScore:
+		return true
+	default:
+		return false
+	}
 }
 
 func (lb ClusterEndpointLoadBalancer) getRequestRate(serviceName string) float64 {
@@ -510,7 +522,7 @@ func (lb ClusterEndpointLoadBalancer) selectGlobalAdaptiveScore(ctx wrapper.Http
 		log.Debugf("adaptive score fallback selected service: %s", candidate)
 		return types.ActionContinue
 	}
-	return types.ActionPause
+	return types.HeaderStopAllIterationAndWatermark
 }
 
 // Callbacks which are called in request path

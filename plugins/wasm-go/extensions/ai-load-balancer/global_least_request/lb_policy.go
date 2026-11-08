@@ -216,9 +216,15 @@ func (lb GlobalLeastRequestLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpC
 			proxywasm.ResumeHttpRequest()
 			return
 		}
+		hsetKey := fmt.Sprintf(RedisKeyFormat, routeName, clusterName)
 		valArray := response.Array()
 		if len(valArray) < 2 {
 			log.Errorf("redis eval lua result format error, expect at least [host, count], got: %+v", valArray)
+			// The script has already incremented the host it returns as the first
+			// element, and the request is abandoned here, so put that increment back.
+			if compErr := utils.CompensateCounter(lb.redisClient, hsetKey, compensationHostFromReply(valArray)); compErr != nil {
+				log.Errorf("cannot compensate the request counter after a malformed eval reply: %v", compErr)
+			}
 			ctx.SetContext("error", true)
 			proxywasm.ResumeHttpRequest()
 			return
@@ -249,6 +255,11 @@ func (lb GlobalLeastRequestLoadBalancer) HandleHttpRequestBody(ctx wrapper.HttpC
 		}
 
 		if err := proxywasm.SetUpstreamOverrideHost([]byte(hostSelected)); err != nil {
+			// The increment is already in Redis and the request will not reach the
+			// host; HandleHttpStreamDone skips its decrement once error is set.
+			if compErr := utils.CompensateCounter(lb.redisClient, hsetKey, hostSelected); compErr != nil {
+				log.Errorf("cannot compensate the request counter after a failed override: %v", compErr)
+			}
 			ctx.SetContext("error", true)
 			log.Errorf("override upstream host failed, fallback to default lb policy, error informations: %+v", err)
 			proxywasm.ResumeHttpRequest()
@@ -296,4 +307,15 @@ func (lb GlobalLeastRequestLoadBalancer) HandleHttpStreamDone(ctx wrapper.HttpCo
 			}
 		}
 	}
+}
+
+// compensationHostFromReply returns the host that the Lua script incremented
+// when it returned a reply too short to use. The script returns the selected
+// target as the first element, so a truncated reply still names the host whose
+// counter was incremented; an empty reply names nothing and yields "".
+func compensationHostFromReply(reply []resp.Value) string {
+	if len(reply) == 0 {
+		return ""
+	}
+	return reply[0].String()
 }

@@ -62,10 +62,6 @@ The command removes all the Kubernetes components associated with the chart and 
 | controller.ports[1].port | int | `8889` |  |
 | controller.ports[1].protocol | string | `"TCP"` |  |
 | controller.ports[1].targetPort | int | `8889` |  |
-| controller.ports[2].name | string | `"grpc"` |  |
-| controller.ports[2].port | int | `15051` |  |
-| controller.ports[2].protocol | string | `"TCP"` |  |
-| controller.ports[2].targetPort | int | `15051` |  |
 | controller.probe.httpGet.path | string | `"/ready"` |  |
 | controller.probe.httpGet.port | int | `8888` |  |
 | controller.probe.initialDelaySeconds | int | `1` |  |

@@ -1,6 +1,6 @@
 # E2BDev MCP Server
 
-基于E2B Code Interpreter API 的MCP服务器实现，提供沙盒环境管理功能，沙盒环境中可执行Python代码。
+基于 E2B API 的 MCP 服务器实现，提供沙盒生命周期管理功能。本服务器仅提供 `create_sandbox` 和 `kill_sandbox` 两个工具，不支持代码执行。
 
 ## 使用教程
 
@@ -22,16 +22,12 @@
 
 ### 工具使用
 
+本服务器仅提供以下沙盒生命周期工具：
+
 - **create_sandbox**: 创建E2B沙盒环境
   - 参数:
     - timeout: 沙盒超时时间（秒），超时后沙盒将被终止
   - 返回: 沙盒ID
-
-- **execute_code_sandbox**: 在沙盒中执行代码
-  - 参数:
-    - sandbox_id: 沙盒ID，从create_sandbox获取
-    - code: 要执行的Python代码
-  - 返回: 执行结果
 
 - **kill_sandbox**: 终止沙盒环境
   - 参数:

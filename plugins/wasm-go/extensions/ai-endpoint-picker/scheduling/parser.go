@@ -86,9 +86,9 @@ func ParseCompactVLLMMetrics(relevant []byte) (VLLMMetrics, error) {
 	if value, ok := latestFiniteValue(families[queueMetric]); ok && value >= 0 {
 		result.BaseSignals[SignalQueue] = available(value, queueMetric)
 	}
-	if value, ok := latestFiniteValue(families[currentKVMetric]); ok {
+	if value, ok := latestFiniteValue(families[currentKVMetric]); ok && value >= 0 {
 		result.BaseSignals[SignalKVCache] = available(value, currentKVMetric)
-	} else if value, ok := latestFiniteValue(families[legacyKVMetric]); ok {
+	} else if value, ok := latestFiniteValue(families[legacyKVMetric]); ok && value >= 0 {
 		result.BaseSignals[SignalKVCache] = available(value, legacyKVMetric)
 	}
 	if family := families[loraMetric]; family != nil {

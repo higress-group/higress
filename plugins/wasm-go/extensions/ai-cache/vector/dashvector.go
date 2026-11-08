@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -76,6 +77,7 @@ type queryRequest struct {
 	Vector        []float64 `json:"vector"`
 	TopK          int       `json:"topk"`
 	IncludeVector bool      `json:"include_vector"`
+	Filter        string    `json:"filter"`
 }
 
 // result 定义查询结果的结构
@@ -86,13 +88,14 @@ type result struct {
 	Score  float64                `json:"score"`
 }
 
-func (d *DvProvider) constructEmbeddingQueryParameters(vector []float64) (string, []byte, [][2]string, error) {
+func (d *DvProvider) constructEmbeddingQueryParameters(vector []float64, consumer string) (string, []byte, [][2]string, error) {
 	url := fmt.Sprintf("/v1/collections/%s/query", d.config.collectionID)
 
 	requestData := queryRequest{
 		Vector:        vector,
 		TopK:          d.config.topK,
 		IncludeVector: false,
+		Filter:        fmt.Sprintf("consumer = '%s'", strings.ReplaceAll(consumer, "'", "\\'")),
 	}
 
 	requestBody, err := json.Marshal(requestData)
@@ -122,7 +125,11 @@ func (d *DvProvider) QueryEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(results []QueryResult, ctx wrapper.HttpContext, log log.Log, err error)) error {
-	url, body, headers, err := d.constructEmbeddingQueryParameters(emb)
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
+	url, body, headers, err := d.constructEmbeddingQueryParameters(emb, consumer)
 	log.Debugf("url:%s, body:%s, headers:%v", url, string(body), headers)
 	if err != nil {
 		err = fmt.Errorf("failed to construct embedding query parameters: %v", err)
@@ -152,10 +159,8 @@ func (d *DvProvider) QueryEmbedding(
 }
 
 func getStringValue(fields map[string]interface{}, key string) string {
-	if val, ok := fields[key]; ok {
-		return val.(string)
-	}
-	return ""
+	value, _ := fields[key].(string)
+	return value
 }
 
 func (d *DvProvider) ParseQueryResponse(responseBody []byte, ctx wrapper.HttpContext, log log.Log) ([]QueryResult, error) {
@@ -176,6 +181,7 @@ func (d *DvProvider) ParseQueryResponse(responseBody []byte, ctx wrapper.HttpCon
 			Embedding: output.Vector,
 			Score:     output.Score,
 			Answer:    getStringValue(output.Fields, "answer"),
+			Consumer:  getStringValue(output.Fields, TenantField),
 		}
 		results = append(results, result)
 	}
@@ -192,14 +198,15 @@ type insertRequest struct {
 	Docs []document `json:"docs"`
 }
 
-func (d *DvProvider) constructUploadParameters(emb []float64, queryString string, answer string) (string, []byte, [][2]string, error) {
+func (d *DvProvider) constructUploadParameters(emb []float64, queryString string, answer string, consumer string) (string, []byte, [][2]string, error) {
 	url := "/v1/collections/" + d.config.collectionID + "/docs"
 
 	doc := document{
 		Vector: emb,
 		Fields: map[string]string{
-			"query":  queryString,
-			"answer": answer,
+			"query":     queryString,
+			"answer":    answer,
+			TenantField: consumer,
 		},
 	}
 
@@ -217,7 +224,11 @@ func (d *DvProvider) constructUploadParameters(emb []float64, queryString string
 }
 
 func (d *DvProvider) UploadEmbedding(queryString string, queryEmb []float64, ctx wrapper.HttpContext, log log.Log, callback func(ctx wrapper.HttpContext, log log.Log, err error)) error {
-	url, body, headers, err := d.constructUploadParameters(queryEmb, queryString, "")
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
+	url, body, headers, err := d.constructUploadParameters(queryEmb, queryString, "", consumer)
 	if err != nil {
 		return err
 	}
@@ -237,7 +248,11 @@ func (d *DvProvider) UploadEmbedding(queryString string, queryEmb []float64, ctx
 }
 
 func (d *DvProvider) UploadAnswerAndEmbedding(queryString string, queryEmb []float64, queryAnswer string, ctx wrapper.HttpContext, log log.Log, callback func(ctx wrapper.HttpContext, log log.Log, err error)) error {
-	url, body, headers, err := d.constructUploadParameters(queryEmb, queryString, queryAnswer)
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
+	url, body, headers, err := d.constructUploadParameters(queryEmb, queryString, queryAnswer, consumer)
 	if err != nil {
 		return err
 	}
