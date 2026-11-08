@@ -64,7 +64,12 @@ func (c WasmPluginClient) List(ctx context.Context) (*unstructured.UnstructuredL
 }
 
 func (c WasmPluginClient) Create(ctx context.Context, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	return c.dyn.Create(ctx, WasmPluginGVR, HigressNamespace, obj)
+	return c.CreateInNamespace(ctx, HigressNamespace, obj)
+}
+
+// CreateInNamespace creates a plugin in the namespace selected by the caller.
+func (c WasmPluginClient) CreateInNamespace(ctx context.Context, namespace string, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	return c.dyn.Create(ctx, WasmPluginGVR, namespace, obj)
 }
 
 func (c WasmPluginClient) Delete(ctx context.Context, name string) (*unstructured.Unstructured, error) {
