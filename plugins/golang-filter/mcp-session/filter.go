@@ -82,7 +82,11 @@ func (f *filter) processMcpRequestHeadersForRestUpstream(header api.RequestHeade
 		f.proxyURL = requestUrl
 		if method == http.MethodPost && f.config.sessionRegistry != nil {
 			if sessionID := requestUrl.Query().Get("sessionId"); sessionID != "" {
-				valid, err := f.config.sessionRegistry.ValidateSession(f.matchedRule.SessionServerName(), sessionID)
+				sessionRegistry := f.config.sessionRegistry
+				if pinnedClient := common.GlobalSessionRegistry.PublisherForSession(sessionID, nil); pinnedClient != nil {
+					sessionRegistry = common.NewRedisSessionRegistry(pinnedClient)
+				}
+				valid, err := sessionRegistry.ValidateSession(f.matchedRule.SessionServerName(), sessionID)
 				if err != nil {
 					api.LogErrorf("Failed to validate MCP session: %v", err)
 					f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusServiceUnavailable, "", nil, 0, "")

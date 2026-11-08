@@ -749,6 +749,7 @@ type redisCapture struct {
 	listener net.Listener
 	mu       sync.Mutex
 	received string
+	getValue string
 }
 
 func newRedisCapture(t *testing.T) *redisCapture {
@@ -771,6 +772,12 @@ func (c *redisCapture) Received() string {
 	return c.received
 }
 
+func (c *redisCapture) setGetValue(value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.getValue = value
+}
+
 func (c *redisCapture) serve() {
 	for {
 		conn, err := c.listener.Accept()
@@ -787,10 +794,26 @@ func (c *redisCapture) handle(conn net.Conn) {
 	for {
 		n, err := conn.Read(buffer)
 		if n > 0 {
+			request := string(buffer[:n])
 			c.mu.Lock()
-			c.received += string(buffer[:n])
+			c.received += request
+			getValue := c.getValue
 			c.mu.Unlock()
-			if _, writeErr := conn.Write([]byte(":0\r\n")); writeErr != nil {
+			response := ":0\r\n"
+			upperRequest := strings.ToUpper(request)
+			switch {
+			case strings.Contains(upperRequest, "\r\nPING\r\n"):
+				response = "+PONG\r\n"
+			case strings.Contains(upperRequest, "\r\nGET\r\n"):
+				if getValue == "" {
+					response = "$-1\r\n"
+				} else {
+					response = fmt.Sprintf("$%d\r\n%s\r\n", len(getValue), getValue)
+				}
+			case strings.Contains(upperRequest, "\r\nSET\r\n"):
+				response = "+OK\r\n"
+			}
+			if _, writeErr := conn.Write([]byte(response)); writeErr != nil {
 				return
 			}
 		}
@@ -834,31 +857,41 @@ func TestResolveSessionRedisClientKeepsLiveSessionOnItsOwnBackend(t *testing.T) 
 	require.Nil(t, f.resolveSessionRedisClient(""))
 }
 
-// TestEncodeDataFromRestUpstreamPublishesOnThePinnedBackend reproduces the
-// reported scenario end to end: the session is established against backend A,
-// the configuration is then switched to backend B, and the response of a POST
-// carrying the same sessionId must still be published on backend A.
-func TestEncodeDataFromRestUpstreamPublishesOnThePinnedBackend(t *testing.T) {
+func TestLiveSessionPostAcrossRedisHotUpdate(t *testing.T) {
 	api.SetCommonCAPI(&mockCommonCAPI{})
 
 	backendA := newRedisCapture(t)
 	backendB := newRedisCapture(t)
 	sessionClient := newTestSessionRedisClient(t, backendA.Addr())
 	configuredClient := newTestSessionRedisClient(t, backendB.Addr())
+	matchedRule := common.MatchRule{
+		ServerName:      "server-a",
+		MatchRuleDomain: "*",
+		HostMatcher:     common.ParseHostPattern("*"),
+		MatchRuleType:   common.PrefixMatch,
+		MatchRulePath:   "/mcp",
+		UpstreamType:    common.RestUpstream,
+	}
+	backendA.setGetValue(matchedRule.SessionServerName())
 
 	const sessionID = "session-after-hot-update"
 	common.GlobalSessionRegistry.Register(sessionID, sessionClient)
 	t.Cleanup(func() { common.GlobalSessionRegistry.Unregister(sessionID) })
 
-	proxyURL, err := url.Parse("https://example.com/mcp?sessionId=" + sessionID)
-	require.NoError(t, err)
-
+	decoder := &registryDecoderCallbacks{}
 	f := &filter{
-		needProcess: true,
-		matchedRule: common.MatchRule{UpstreamType: common.RestUpstream},
-		config:      &config{redisClient: configuredClient},
-		proxyURL:    proxyURL,
+		callbacks: &registryFilterCallbacks{decoder: decoder},
+		config: &config{
+			matchList:       []common.MatchRule{matchedRule},
+			redisClient:     configuredClient,
+			sessionRegistry: common.NewRedisSessionRegistry(configuredClient),
+		},
 	}
+
+	header := newTestRequestHeaders("/mcp?sessionId=" + sessionID)
+	status := f.DecodeHeaders(header, true)
+	require.Zero(t, decoder.statusCode)
+	require.Equal(t, api.Continue, status)
 
 	buffer := &testBuffer{data: []byte(`{"jsonrpc":"2.0","id":1,"result":"ok"}`)}
 	require.Equal(t, api.Continue, f.EncodeData(buffer, true))
@@ -867,7 +900,12 @@ func TestEncodeDataFromRestUpstreamPublishesOnThePinnedBackend(t *testing.T) {
 	// depending on the casing the client happens to use, and check the session
 	// channel separately.
 	receivedA := backendA.Received()
-	require.Contains(t, strings.ToUpper(receivedA), "PUBLISH")
+	upperReceivedA := strings.ToUpper(receivedA)
+	require.Contains(t, upperReceivedA, "\r\nGET\r\n")
+	require.Contains(t, upperReceivedA, "\r\nSET\r\n")
+	require.Contains(t, upperReceivedA, "PUBLISH")
 	require.Contains(t, receivedA, "mcp-server-sse:"+sessionID)
-	require.NotContains(t, strings.ToUpper(backendB.Received()), "PUBLISH")
+	upperReceivedB := strings.ToUpper(backendB.Received())
+	require.NotContains(t, upperReceivedB, "\r\nGET\r\n")
+	require.NotContains(t, upperReceivedB, "PUBLISH")
 }
