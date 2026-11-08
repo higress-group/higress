@@ -884,3 +884,33 @@ func TestOnHttpStreamResponseBody(t *testing.T) {
 		})
 	})
 }
+
+func TestGetIntQueryParameterRejectsNegative(t *testing.T) {
+	// ?cnt=-1 used to produce a negative count and panic on
+	// chat[len(chat)-cnt:] in the query path.
+	require.Equal(t, 10, getIntQueryParameter("cnt", "/ai-history/query?cnt=-1", 10))
+	require.Equal(t, 10, getIntQueryParameter("fill_history_cnt", "/ai-history/fill?fill_history_cnt=-8", 10))
+}
+
+func TestGetIntQueryParameterValidAndInvalid(t *testing.T) {
+	require.Equal(t, 3, getIntQueryParameter("cnt", "/ai-history/query?cnt=3", 10))
+	require.Equal(t, 10, getIntQueryParameter("cnt", "/ai-history/query", 10))
+	require.Equal(t, 10, getIntQueryParameter("cnt", "/ai-history/query?cnt=abc", 10))
+	require.Equal(t, 0, getIntQueryParameter("cnt", "/ai-history/query?cnt=0", 10))
+}
+
+func TestFillHistoryNegativeCountDoesNotPanic(t *testing.T) {
+	chat := []ChatHistory{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+	}
+	curr := []ChatHistory{{Role: "user", Content: "q2"}}
+	// A negative configured count used to panic with slice bounds out of range.
+	require.NotPanics(t, func() {
+		final := fillHistory(chat, curr, -4)
+		require.Equal(t, curr, final)
+	})
+	require.Equal(t, append([]ChatHistory{{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"}}, curr...), fillHistory(chat, curr, 100))
+	require.Equal(t, curr, fillHistory(chat, curr, 0))
+}

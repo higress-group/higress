@@ -292,6 +292,10 @@ func fillHistory(chat []ChatHistory, currMessage []ChatHistory, fillHistoryCnt i
 	if fillHistoryCnt > len(chat) {
 		fillHistoryCnt = len(chat)
 	}
+	// A misconfigured (or negative) count must not panic the request.
+	if fillHistoryCnt < 0 {
+		fillHistoryCnt = 0
+	}
 	finalChat := append(chat[len(chat)-fillHistoryCnt:], currMessage...)
 	return finalChat
 }
@@ -318,6 +322,11 @@ func getIntQueryParameter(name string, path string, defaultValue int) int {
 	}
 	num, err := strconv.Atoi(queryStr)
 	if err != nil {
+		return defaultValue
+	}
+	// Both callers slice chat[len(chat)-cnt:]; a negative count panics with
+	// slice bounds out of range, so treat it like any other invalid input.
+	if num < 0 {
 		return defaultValue
 	}
 	return num
