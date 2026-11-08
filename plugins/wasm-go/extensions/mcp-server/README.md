@@ -4,6 +4,8 @@
 
 仍在运行旧版本插件的部署会继续读取 `x-higress-mcpserver-config` 请求头。在控制器生成的路由上，网关的路由级请求头移除规则会在请求到达插件前删除该请求头，因此这些部署仍受保护。对于直接应用的原生 Istio VirtualService，路由级移除不生效，旧版插件在部署升级前仍会采用客户端提供的值。迁移时请升级插件 OCI 版本（或添加路由/请求头操作规则）；升级插件后将完全移除该行为。
 
+REST-to-MCP 路径参数安全升级：`position: path` 的参数现在只会在 URL 路径部分按单个路径段转义，并在百分号解码后拒绝包含 `.` 或 `..` 段的值（包括 `%2e%2e`、`.%2e`、`..%2f`、`%252e%252e` 等变体）。调用方必须传入原始值，不能传入 `%20` 等预编码值；预编码值会按原始字面量处理，其中的 `%` 会被转义为 `%25`。查询参数行为不变。依赖旧版原样拼接行为的工具可临时设置 `requestTemplate.allowUnsafePathArgs: true`，该选项不安全，仅用于迁移。
+
 [English](./README_EN.md)
 
 ## 功能说明
@@ -197,6 +199,7 @@ proxywasm.AddHttpRequestHeader("x-envoy-allow-mcp-tools", "tool1,tool2,tool3")
 | `tools[].requestTemplate.argsToJsonBody` | boolean | 选填 | false | 将未指定 `position` 的参数作为 JSON 请求体。三个 `argsTo*` 开关最多启用一个；使用 `body` 时无需启用此项。 |
 | `tools[].requestTemplate.argsToUrlParam` | boolean | 选填 | false | 将未指定 `position` 的参数添加到 URL 查询参数。三个 `argsTo*` 开关最多启用一个；可与 `body` 模板配合使用。 |
 | `tools[].requestTemplate.argsToFormBody` | boolean | 选填 | false | 将未指定 `position` 的参数编码为表单请求体。三个 `argsTo*` 开关最多启用一个；使用 `body` 时无需启用此项。 |
+| `tools[].requestTemplate.allowUnsafePathArgs` | boolean | 选填 | false | 恢复旧版路径参数原样拼接行为（不转义、不校验）。不安全，仅用于临时兼容迁移。 |
 | `tools[].responseTemplate` | object | 选填 | - | 响应转换模板。不配置时使用后端原始响应；直接响应模式必须配置 `body`。 |
 | `tools[].responseTemplate.body` | string | 直接响应模式必填，其他场景选填 | - | 响应体模板，不能与 `prependBody`、`appendBody` 同时使用。 |
 | `tools[].responseTemplate.prependBody` | string | 选填     | -      | 在响应体前插入的文本（与body互斥） |
@@ -587,6 +590,36 @@ args:
 - `limit` 将作为查询参数添加到 URL 中
 - `tags` 将添加到请求体中
 
+### 路径参数转义与安全
+
+`position: path` 的参数只会在解析后的 URL 路径组件中按单个路径段处理：
+
+- `{petId}` 和 `{{.args.petId}}` 两种写法都会被自动转义；`/`、`?`、`#`、空格、中文等字符会分别编码为 `%2F`、`%3F`、`%23`、`%20` 和 UTF-8 百分号编码。
+- URL 模板的 scheme、host、port、userinfo 和 opaque 必须是静态值：这些组件中出现任何 `{...}` 或 `{{...}}` 占位符/模板动作时，配置加载会直接失败。每次渲染完成后还会再次解析最终 URL，并要求这些组件与模板静态值一致（host 不区分大小写，默认端口等效），否则在调用后端前拒绝请求。路径参数和显式转义函数都无法改变 authority。
+- 参数值会先按原始值处理，再进行有界的百分号解码校验；解码后出现 `.` 或 `..` 路径段时，工具调用会失败，不会向后端发起请求。达到解码上限后仍能继续解码的值也会被拒绝。覆盖 `..`、`../..`、`x/../../internal`、`%2e%2e`、`%2E%2E`、`.%2e`、`..%2f`、`%252e%252e` 等变体。
+- 路径参数必须传原始值，不能传 `%20` 等预编码值。预编码值会按原始字面量处理，例如 `alice%20smith` 编码后为 `alice%2520smith`；包含编码后点段的预编码值会被拒绝。
+- 查询参数（`position: query`、`argsToUrlParam` 以及 URL 模板查询部分中的参数）保持原有行为，不会做路径转义。高德地理编码等使用查询参数的配置不受影响。
+
+OpenAPI 转换工具（openapi-to-mcpserver）位于独立仓库，本仓库不包含其生成器实现。生成的工具配置应继续使用 `position: path` 传递原始值，路径转义由本插件在运行时完成。
+
+在模板中也可以显式使用转义函数：
+
+```yaml
+requestTemplate:
+  url: "https://api.example.com/pets/{{pathescape .args.petId}}?q={{queryescape .args.q}}"
+```
+
+`pathescape` 对单个路径段执行转义并拒绝点段；`queryescape` 对查询参数值执行转义。显式函数的输出不会被自动路径参数替换覆盖。对于 `position: path` 的参数，自动转义已经生效，通常不需要再显式调用 `pathescape`。
+
+如确有旧配置依赖原样拼接路径参数，可临时启用兼容开关：
+
+```yaml
+requestTemplate:
+  allowUnsafePathArgs: true
+```
+
+该开关默认关闭，会恢复旧版的不转义、不校验行为，可能允许工具调用方访问同后端上的其他路径并携带工具配置的认证信息。它不会放宽 scheme/host/port/userinfo/opaque 必须静态的约束。只应在迁移期间使用，并尽快移除。
+
 ### 与批量参数处理选项的关系
 
 当使用 `position` 指定参数位置时，这些参数将按照指定的位置处理，而不会受到批量参数处理选项（`argsToJsonBody`、`argsToUrlParam`、`argsToFormBody`）的影响。只有未指定 `position` 的参数才会受到这些批量选项的影响。
@@ -656,6 +689,8 @@ REST-to-MCP 功能使用 [GJSON Template](https://github.com/higress-group/gjson
 | --- | --- |
 | `getSocketIP` | 获取当前连接的对端 IP。 |
 | `getRealIP` | 获取 `X-Forwarded-For` 中的第一个 IP；请求中没有该头时，使用连接对端 IP。 |
+| `pathescape` | 将值转义为单个 URL 路径段；拒绝解码后包含 `.` 或 `..` 段的值。 |
+| `queryescape` | 将值转义为 URL 查询参数值。 |
 
 ```yaml
 requestTemplate:

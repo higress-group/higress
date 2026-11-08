@@ -10,6 +10,8 @@ Per-user MCP server configuration and per-user rate limiting are removed. When R
 
 Session validity slides with activity: every successful validation refreshes the session TTL, so active SSE connections keep working while idle sessions expire after the TTL.
 
+REST-to-MCP path argument security update: arguments with `position: path` are now escaped as a single path segment only when they land in the URL path portion, and values whose percent-decoded form contains a `.` or `..` segment are rejected (including `%2e%2e`, `.%2e`, `..%2f`, `%252e%252e`, mixed-case and double-encoded variants). Callers must provide raw values, not pre-encoded values such as `%20`; pre-encoded input is treated as a raw literal and its `%` characters are escaped to `%25`. Query argument behavior is unchanged. Tools that depend on the legacy raw substitution can temporarily set `requestTemplate.allowUnsafePathArgs: true`; this option is unsafe and intended only for migration.
+
 [中文](./README.md)
 
 ## Feature Description
@@ -205,6 +207,7 @@ Using `ReplaceHttpRequestHeader` ensures:
 | `tools[].requestTemplate.argsToJsonBody` | boolean | No | false | Places arguments without `position` in a JSON request body. Enable at most one of the three `argsTo*` switches; this option is unnecessary when using `body`. |
 | `tools[].requestTemplate.argsToUrlParam` | boolean | No | false | Adds arguments without `position` to the URL query. Enable at most one of the three `argsTo*` switches; this option can be combined with a `body` template. |
 | `tools[].requestTemplate.argsToFormBody` | boolean | No | false | Encodes arguments without `position` as a form request body. Enable at most one of the three `argsTo*` switches; this option is unnecessary when using `body`. |
+| `tools[].requestTemplate.allowUnsafePathArgs` | boolean | No | false | Restores the legacy raw path argument substitution (no escaping or validation). Unsafe; use only as a temporary compatibility escape hatch. |
 | `tools[].responseTemplate` | object | No | - | Response transformation template. If omitted, uses the raw backend response. Direct response mode requires `body`. |
 | `tools[].responseTemplate.body` | string | Required in direct response mode; otherwise optional | - | Response body template. Cannot be combined with `prependBody` or `appendBody`. |
 | `tools[].responseTemplate.prependBody` | string | No      | -      | Text to insert before the response body (mutually exclusive with body) |
@@ -594,6 +597,36 @@ In the example above:
 - `limit` will be added as a query parameter to the URL
 - `tags` will be added to the request body
 
+### Path Argument Escaping and Security
+
+Arguments with `position: path` are only processed as individual segments in the parsed URL path component:
+
+- Both `{petId}` and `{{.args.petId}}` are escaped automatically. `/`, `?`, `#`, spaces and non-ASCII characters become `%2F`, `%3F`, `%23`, `%20` and UTF-8 percent-encoding respectively.
+- The URL template's scheme, host, port, userinfo and opaque components must be static. Any `{...}` or `{{...}}` placeholder/template action in those components makes configuration loading fail. After every render the final URL is parsed again and those components must still match the template values (host comparison is case-insensitive and default ports are equivalent); otherwise the request is rejected before the backend is called. Neither path arguments nor explicit escape functions can change the authority.
+- Values are treated as raw input and then validated with bounded percent-decoding. If the decoded form contains a `.` or `..` path segment, the tool call fails before any backend request is sent. A value that can still be decoded after the decode limit is also rejected. This covers variants such as `..`, `../..`, `x/../../internal`, `%2e%2e`, `%2E%2E`, `.%2e`, `..%2f` and `%252e%252e`.
+- Path arguments must be raw values, not pre-encoded values such as `%20`. Pre-encoded input is treated as a raw literal; for example, `alice%20smith` becomes `alice%2520smith`, and pre-encoded dot segments are rejected.
+- Query arguments (`position: query`, `argsToUrlParam`, and arguments in the URL template query portion) keep their existing behavior and are not path-escaped. Configurations such as the AMap geocoding example are unaffected.
+
+The OpenAPI-to-MCP generator (openapi-to-mcpserver) lives in a separate repository; this repository does not contain its implementation. Generated tool configurations should continue to pass raw values with `position: path`; this plugin performs path escaping at runtime.
+
+Template functions are also available for explicit escaping:
+
+```yaml
+requestTemplate:
+  url: "https://api.example.com/pets/{{pathescape .args.petId}}?q={{queryescape .args.q}}"
+```
+
+`pathescape` escapes a single path segment and rejects dot segments; `queryescape` escapes a query value. Automatic path argument substitution never overwrites explicit function output. Automatic escaping already applies to `position: path` arguments, so explicit `pathescape` is usually unnecessary.
+
+If a legacy configuration genuinely depends on raw substitution, the temporary compatibility switch can be enabled:
+
+```yaml
+requestTemplate:
+  allowUnsafePathArgs: true
+```
+
+The switch is disabled by default and restores the old unescaped, unvalidated behavior. It can allow a tool caller to reach other paths on the same backend while carrying the tool's configured credentials. It does not relax the requirement that scheme, host, port, userinfo and opaque stay static. Use it only during migration and remove it as soon as possible.
+
 ### Relationship with Bulk Parameter Processing Options
 
 When using `position` to specify parameter locations, these parameters will be processed according to their specified positions and will not be affected by bulk parameter processing options (`argsToJsonBody`, `argsToUrlParam`, `argsToFormBody`). Only parameters without a specified `position` will be affected by these bulk options.
@@ -663,6 +696,8 @@ Templates also provide the following IP address functions:
 | --- | --- |
 | `getSocketIP` | Returns the peer IP address of the current connection. |
 | `getRealIP` | Returns the first IP in `X-Forwarded-For`, or the connection peer IP if the header is absent. |
+| `pathescape` | Escapes a value as a single URL path segment and rejects decoded `.` or `..` segments. |
+| `queryescape` | Escapes a value for use in a URL query component. |
 
 ```yaml
 requestTemplate:
