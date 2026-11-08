@@ -135,9 +135,12 @@ func parseGlobalConfig(json gjson.Result, global *BasicAuthConfig, log log.Log) 
 		if _, ok := global.credential2Name[credential.String()]; ok {
 			return errors.Errorf("duplicate consumer credential: %s", credential.String())
 		}
-		userAndPasswd := strings.Split(credential.String(), ":")
+		userAndPasswd := strings.SplitN(credential.String(), ":", 2)
 		if len(userAndPasswd) != 2 {
 			return errors.Errorf("invalid credential format: %s", credential.String())
+		}
+		if _, ok := global.username2Passwd[userAndPasswd[0]]; ok {
+			return errors.Errorf("duplicate consumer username: %s", userAndPasswd[0])
 		}
 
 		consumer := Consumer{
@@ -235,7 +238,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config BasicAuthConfig, log l
 	}
 
 	credential := string(credentialByte)
-	userAndPasswd := strings.Split(credential, ":")
+	userAndPasswd := strings.SplitN(credential, ":", 2)
 	if len(userAndPasswd) != 2 {
 		log.Warnf("invalid credential format: %s", credential)
 		return deniedInvalidCredentials()
