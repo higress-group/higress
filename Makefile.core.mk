@@ -39,6 +39,14 @@ GATEWAY_API_GATEWAY_SERVICE_TYPE ?= ClusterIP
 GATEWAY_API_KIND_NODE_TAG ?= v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
 HIGRESS_CONFORMANCE_VERSION ?= $(shell git rev-parse HEAD)
 
+# Scale regression test settings. These are passed through to the scale test
+# and can be overridden from the environment or the make command line.
+E2E_SCALE_NAMESPACE ?= scale-test
+E2E_SCALE_INGRESS_CLASS ?= higress
+E2E_SCALE_BASE ?= 200
+E2E_SCALE_RATIO_MAX ?= 3.0
+E2E_SCALE_EVENT_MAX_SECONDS ?= 60
+
 INFERENCE_EXTENSION_VERSION ?= v1.4.0
 INFERENCE_EXTENSION_GATEWAY_API_VERSION ?= v1.5.0
 INFERENCE_EXTENSION_SOURCE_DIR ?= $(abspath out/gateway-api-inference-extension-source/$(INFERENCE_EXTENSION_VERSION))
@@ -505,6 +513,47 @@ higress-conformance-test: $(tools/kind) delete-cluster create-cluster docker-bui
 # higress-conformance-test-clean cleans the environment for higress conformance tests.
 .PHONY: higress-conformance-test-clean
 higress-conformance-test-clean: $(tools/kind) delete-cluster
+
+# higress-scale-test runs the ingress scale regression guard on a fresh kind cluster.
+.PHONY: higress-scale-test
+higress-scale-test: TEST_ISTIO_IMAGE_TAG=$(TAG)
+higress-scale-test: $(tools/kind) delete-cluster create-cluster docker-build build-test-pilot kube-load-image install-dev run-higress-scale-test delete-cluster
+
+# run-higress-scale-test runs the scale regression guard against the current cluster.
+.PHONY: run-higress-scale-test
+run-higress-scale-test:
+	@echo -e "\n\033[36mRunning Higress ingress scale regression test...\033[0m"
+	@echo -e "\n\033[36mWaiting for higress-controller to be ready...\033[0m"
+	kubectl wait --timeout=10m -n higress-system deployment/higress-controller --for=condition=Available
+	@echo -e "\n\033[36mWaiting for higress-gateway to be ready...\033[0m"
+	kubectl wait --timeout=10m -n higress-system deployment/higress-gateway --for=condition=Available
+	@address="$${E2E_SCALE_ADDRESS:-}"; \
+	if [ -z "$${address}" ]; then \
+		for attempt in $$(seq 1 30); do \
+			address="$$(kubectl -n higress-system get service higress-gateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"; \
+			if [ -z "$${address}" ]; then \
+				address="$$(kubectl -n higress-system get service higress-gateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"; \
+			fi; \
+			if [ -n "$${address}" ]; then break; fi; \
+			sleep 1; \
+		done; \
+	fi; \
+	if [ -z "$${address}" ]; then \
+		address="$$(kubectl get nodes -o jsonpath='{range .items[0].status.addresses[?(@.type=="InternalIP")]}{.address}{"\n"}{end}' 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$$' | head -n 1 || true)"; \
+		if [ -z "$${address}" ]; then \
+			address="$$(kubectl get nodes -o jsonpath='{range .items[0].status.addresses[?(@.type=="InternalIP")]}{.address}{"\n"}{end}' 2>/dev/null | head -n 1 || true)"; \
+		fi; \
+		echo "LoadBalancer address is pending; using kind node address $${address} (gateway hostPort)"; \
+	fi; \
+	if [ -z "$${address}" ]; then echo "Unable to resolve the Higress gateway address" >&2; exit 1; fi; \
+	echo "Higress gateway address: $${address}"; \
+	E2E_SCALE_ADDRESS="$${address}" \
+	E2E_SCALE_INGRESS_CLASS="$(E2E_SCALE_INGRESS_CLASS)" \
+	E2E_SCALE_BASE="$(E2E_SCALE_BASE)" \
+	E2E_SCALE_RATIO_MAX="$(E2E_SCALE_RATIO_MAX)" \
+	E2E_SCALE_EVENT_MAX_SECONDS="$(E2E_SCALE_EVENT_MAX_SECONDS)" \
+	E2E_SCALE_NAMESPACE="$(E2E_SCALE_NAMESPACE)" \
+	go test -v -tags scale ./test/e2e/scale -timeout 45m
 
 # higress-wasmplugin-test-prepare prepares the environment for higress wasmplugin tests.
 .PHONY: higress-wasmplugin-test-prepare
