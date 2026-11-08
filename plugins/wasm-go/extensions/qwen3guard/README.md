@@ -159,6 +159,19 @@ curl -i '<YOUR_GATEWAY_URL>/v1/chat/completions' \
 
 实际响应还会包含动态 `id`、`created`、`usage` 和 `logprobs` 字段。
 
+请求携带 `"stream": true` 时，插件会返回同一 `denyMessage` 的 OpenAI-compatible 流式拒答，而不是上面的非流式 JSON；此时响应头 `content-type` 为 `text/event-stream`：
+
+```text
+data: {"id":"chatcmpl-qwen3guard-...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"QWEN3GUARD_BLOCKED","role":"assistant"}}]}
+
+data: {"id":"chatcmpl-qwen3guard-...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+```
+
+拒答的形态由请求体里的 `stream` 字段决定，与命中请求检测还是响应检测无关：非流式响应被拦截时同样按该字段选择 JSON 或 SSE。Dify、LangChain、OpenAI SDK 这类按 SSE 解析的客户端只有拿到 `data:` 帧才能读到 `denyMessage`，否则会把非流式 JSON 当作空回复。
+
 ## 检测模式
 
 ### 仅检测请求
@@ -245,6 +258,7 @@ PLUGIN_NAME=qwen3guard make local-build
 | 插件日志显示外呼超时或返回 `503` | 目标服务不可用、白名单或出口网络未打通 | 在 Envoy 所在网络直接请求 Qwen3Guard，并确认服务状态和实际出口 IP |
 | Qwen3Guard 返回 `401` | `apiKey` 缺失、无效或错误包含了 `Bearer ` 前缀 | 只配置原始 API Key，插件会自动添加前缀 |
 | 危险内容未拦截 | 安全服务调用失败后 fail-open，或阈值未命中 | 检查 Qwen3Guard HTTP 状态、Safety 标签和 `riskLevelBar` |
+| 网关日志显示已返回拒答，但 Dify 等工作流平台里内容为空值 | 请求带 `stream: true`，客户端按 SSE 解析，而拒答被返回成了非流式 JSON | 升级到按请求 `stream` 字段返回对应形态的版本；用 `curl -N` 确认响应头是 `text/event-stream` 且正文包含 `data:` 帧 |
 
 ## 安全说明
 
