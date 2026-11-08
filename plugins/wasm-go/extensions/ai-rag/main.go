@@ -198,7 +198,20 @@ func parseEmbeddingVector(statusCode int, responseBody []byte) ([]float32, error
 	if len(responseEmbedding.Output.Embeddings) == 0 {
 		return nil, errors.New("no embedding found in response")
 	}
-	return responseEmbedding.Output.Embeddings[0].Embedding, nil
+	embeddings := responseEmbedding.Output.Embeddings
+	dimension := len(embeddings[0].Embedding)
+	if dimension == 0 {
+		return nil, errors.New("embedding at index 0 is empty")
+	}
+	for i, embedding := range embeddings[1:] {
+		if len(embedding.Embedding) == 0 {
+			return nil, fmt.Errorf("embedding at index %d is empty", i+1)
+		}
+		if len(embedding.Embedding) != dimension {
+			return nil, fmt.Errorf("embedding at index %d has dimension %d, want %d", i+1, len(embedding.Embedding), dimension)
+		}
+	}
+	return embeddings[0].Embedding, nil
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config AIRagConfig, log log.Log) types.Action {

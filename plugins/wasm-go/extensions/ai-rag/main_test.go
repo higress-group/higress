@@ -441,6 +441,9 @@ func TestParseEmbeddingVector(t *testing.T) {
 			{"quota exceeded", 429, `{"code":"Throttling","message":"Requests rate limit exceeded."}`},
 			{"server error", 500, `{"code":"InternalError","message":"internal error"}`},
 			{"empty embeddings", 200, `{"output":{"embeddings":[]},"request_id":"req-empty"}`},
+			{"empty embedding vector", 200, `{"output":{"embeddings":[{"embedding":[],"text_index":0}]},"request_id":"req-empty-vector"}`},
+			{"empty first vector in a list", 200, `{"output":{"embeddings":[{"embedding":[],"text_index":0},{"embedding":[0.1],"text_index":1}]}}`},
+			{"empty later vector in a list", 200, `{"output":{"embeddings":[{"embedding":[0.1],"text_index":0},{"embedding":[],"text_index":1}]}}`},
 			{"missing output", 200, `{"request_id":"req-no-output"}`},
 			{"malformed json", 200, `{"output":`},
 			{"empty body", 200, ``},
@@ -451,6 +454,47 @@ func TestParseEmbeddingVector(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				vec, err := parseEmbeddingVector(tc.status, []byte(tc.body))
 				require.Error(t, err)
+				require.Nil(t, vec)
+			})
+		}
+	})
+
+	// An embedding response can contain several vectors (for example when the
+	// batch input has more than one text). Every vector must be non-empty and
+	// share the first vector's dimension; otherwise the recall would forward an
+	// unusable vector to DashVector and later indexing math could misbehave.
+	t.Run("empty and inconsistent vectors are rejected with a clear error", func(t *testing.T) {
+		cases := []struct {
+			name    string
+			body    string
+			wantErr string
+		}{
+			{
+				name:    "empty vector",
+				body:    `{"output":{"embeddings":[{"embedding":[],"text_index":0}]}}`,
+				wantErr: "embedding at index 0 is empty",
+			},
+			{
+				name:    "partially empty list with empty first vector",
+				body:    `{"output":{"embeddings":[{"embedding":[],"text_index":0},{"embedding":[0.1],"text_index":1}]}}`,
+				wantErr: "embedding at index 0 is empty",
+			},
+			{
+				name:    "partially empty list with empty later vector",
+				body:    `{"output":{"embeddings":[{"embedding":[0.1],"text_index":0},{"embedding":[],"text_index":1}]}}`,
+				wantErr: "embedding at index 1 is empty",
+			},
+			{
+				name:    "inconsistent dimensions",
+				body:    `{"output":{"embeddings":[{"embedding":[0.1,0.2],"text_index":0},{"embedding":[0.3,0.4,0.5],"text_index":1}]}}`,
+				wantErr: "embedding at index 1 has dimension 3, want 2",
+			},
+		}
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				vec, err := parseEmbeddingVector(200, []byte(tc.body))
+				require.ErrorContains(t, err, tc.wantErr)
 				require.Nil(t, vec)
 			})
 		}
@@ -478,6 +522,8 @@ func TestOnHttpRequestBodyEmbeddingFailure(t *testing.T) {
 			{"quota exceeded error document", "429", `{"code":"Throttling","message":"Requests rate limit exceeded."}`},
 			{"server error document", "500", `{"code":"InternalError","message":"internal error"}`},
 			{"http 200 without embeddings", "200", `{"output":{"embeddings":[]},"request_id":"req-empty"}`},
+			{"http 200 with an empty vector", "200", `{"output":{"embeddings":[{"embedding":[],"text_index":0}]},"request_id":"req-empty-vector"}`},
+			{"http 200 with a partially empty vector list", "200", `{"output":{"embeddings":[{"embedding":[0.1,0.2,0.3],"text_index":0},{"embedding":[],"text_index":1}]},"request_id":"req-empty-vector"}`},
 			{"malformed json body", "200", `{"output":`},
 		}
 		for _, tc := range cases {
