@@ -99,10 +99,10 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 }
 
 func executeReadImage(imageUrls []string, config Config, query string, queryIndex int, body []byte) types.Action {
-	var imageContents []string
+	imageContents := make([]string, len(imageUrls))
 	var totalImages int
 	var finished int
-	for _, imageUrl := range imageUrls {
+	for i, imageUrl := range imageUrls {
 		err := config.ocrProvider.DoOCR(imageUrl, func(imageContent string, err error) {
 			defer func() {
 				finished++
@@ -128,7 +128,7 @@ func executeReadImage(imageUrls []string, config Config, query string, queryInde
 				log.Errorf("do ocr failed, err:%v", err)
 				return
 			}
-			imageContents = append(imageContents, imageContent)
+			imageContents[i] = imageContent
 		})
 		if err != nil {
 			log.Errorf("ocr call failed, err:%v", err)
