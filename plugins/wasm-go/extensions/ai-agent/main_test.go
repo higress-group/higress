@@ -1098,6 +1098,53 @@ paths:
 			require.Equal(t, types.ActionContinue, action)
 		})
 
+		t.Run("LLM response with empty choices", func(t *testing.T) {
+			host, status := test.NewTestHost(httpTestConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 设置请求头
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+			})
+
+			// 先调用请求体处理来初始化上下文
+			requestBody := `{
+				"model": "qwen-turbo",
+				"messages": [
+					{
+						"role": "user",
+						"content": "今天天气怎么样？"
+					}
+				],
+				"stream": false
+			}`
+			host.CallOnHttpRequestBody([]byte(requestBody))
+
+			// 构造一个可解析但 choices 为空的响应体（如上游错误/空响应）
+			responseBody := `{
+				"id": "chatcmpl-123",
+				"choices": [],
+				"created": 1677652288,
+				"model": "qwen-turbo",
+				"object": "chat.completion",
+				"usage": {
+					"prompt_tokens": 10,
+					"completion_tokens": 0,
+					"total_tokens": 10
+				}
+			}`
+
+			// 调用响应体处理，空 choices 不应导致 panic，应安全放行
+			action := host.CallOnHttpResponseBody([]byte(responseBody))
+
+			// 应该返回ActionContinue，避免索引越界 panic
+			require.Equal(t, types.ActionContinue, action)
+		})
+
 		t.Run("complete ReAct loop flow", func(t *testing.T) {
 			host, status := test.NewTestHost(httpTestConfig)
 			defer host.Reset()
