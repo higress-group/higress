@@ -2,9 +2,11 @@
 """Deterministic observable REST and MCP backend for Envoy runtime verification."""
 
 import auto_backend
+import compat_backend
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -43,6 +45,7 @@ def safe_event(handler, body):
         "authorizationMatchesExplicitPolicy": headers.get("Authorization") == EXPECTED_AUTH,
         "cookiePresent": truthy_header(headers, "Cookie"),
         "sessionPresent": truthy_header(headers, "Mcp-Session-Id"),
+        "fixtureSessionPresent": headers.get("Mcp-Session-Id") == "fixture-upstream-session",
         "lastEventIDPresent": truthy_header(headers, "Last-Event-ID"),
         "internalRoutePresent": truthy_header(headers, "x-envoy-allow-mcp-tools"),
         "unrelatedCredentialPresent": truthy_header(headers, "x-unrelated-credential"),
@@ -56,6 +59,16 @@ def safe_event(handler, body):
             "flag": headers.get("X-Compat-Flag") or headers.get("X-Corpus-Flag"),
             "jsonBody": parsed if isinstance(parsed, dict) else {},
         }
+    if parsed_url.path == "/instructions":
+        event["instructionsRequest"] = {
+            "mode": headers.get("X-Instructions-Mode", "normal"),
+            "requestId": headers.get("X-Request-ID"),
+            "queryCredentialMatches": parse_qs(parsed_url.query).get("api_key") == ["runtime-key"],
+            "passthroughMatches": headers.get("Authorization") == "Bearer instructions-client",
+            "tenant": headers.get("X-Tenant"),
+            "meta": (parsed.get("params") or {}).get("_meta"),
+            "body": parsed,
+        }
     with LOCK:
         SEQ += 1
         event["seq"] = SEQ
@@ -63,10 +76,10 @@ def safe_event(handler, body):
     return parsed
 
 
-def read_request_body(handler):
+def read_request_body(handler, errors="replace"):
     length = int(handler.headers.get("Content-Length", "0"))
     if length:
-        return handler.rfile.read(length).decode("utf-8", "replace")
+        return handler.rfile.read(length).decode("utf-8", errors)
     if handler.headers.get("Transfer-Encoding", "").lower() != "chunked":
         return ""
     chunks = []
@@ -79,7 +92,7 @@ def read_request_body(handler):
             break
         chunks.append(handler.rfile.read(size))
         handler.rfile.read(2)
-    return b"".join(chunks).decode("utf-8", "replace")
+    return b"".join(chunks).decode("utf-8", errors)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -98,8 +111,66 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def instructions(self, request):
+        mode = self.headers.get("X-Instructions-Mode", "normal")
+        rpc_id = request.get("id")
+        if mode.startswith("http"):
+            status = int(mode[4:])
+            return self.send_json(status, {"error": "fixture failure", "result": {"instructions": "must not extract"}},
+                                  {"WWW-Authenticate": 'Bearer realm="instructions"'})
+        if mode == "retry":
+            request_id = self.headers.get("X-Request-ID")
+            with LOCK:
+                attempts = sum(e.get("instructionsRequest", {}).get("requestId") == request_id for e in EVENTS)
+            if attempts == 1:
+                return self.send_json(503, {"error": "retry fixture"})
+        if mode == "slow":
+            time.sleep(1)
+        if mode == "invalid":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "1")
+            self.end_headers()
+            self.wfile.write(b"{")
+            return
+        result = {"resultType": "complete", "instructions": "Use the weather tool. 天气", "ttlMs": 0.5,
+                  "supportedVersions": ["upstream-only"], "capabilities": {"resources": {}},
+                  "serverInfo": {"name": "upstream-only", "version": "99"}, "cacheScope": "public",
+                  "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "upstream-only", "version": "99"}}}
+        if mode == "missing":
+            result.pop("instructions")
+        elif mode in ("empty", "number", "object", "null", "limit", "oversize", "whitespace"):
+            result["instructions"] = {"empty": "", "number": 7, "object": {}, "null": None,
+                                      "limit": "界" * 10922 + "ab", "oversize": "界" * 10923,
+                                      "whitespace": " \n\t "}[mode]
+        elif mode == "fresh":
+            with LOCK:
+                result["instructions"] = f"fresh-{SEQ}"
+        elif mode == "identity":
+            result["instructions"] = "tenant:" + self.headers.get("X-Tenant", "anonymous")
+        elif mode == "incomplete":
+            result.update({"resultType": "input_required", "inputRequests": [], "instructions": "upstream incomplete"})
+        response = {"jsonrpc": "2.0", "id": rpc_id, "result": result}
+        if mode == "rpc-error":
+            response["error"] = {"code": -32603, "message": "fixture error"}
+        if mode == "sse":
+            data = ("data: " + json.dumps(response, separators=(",", ":")) + "\n\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        try:
+            return self.send_json(200, response, {"Mcp-Session-Id": "upstream-private-session"})
+        except BrokenPipeError:
+            # Expected when the existing route timeout cancels the slow fixture.
+            return
+
     def do_GET(self):
         global SEQ
+        if compat_backend.get(self):
+            return
         parsed_url = urlparse(self.path)
         if parsed_url.path == "/__state":
             with LOCK:
@@ -120,8 +191,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         global EVENTS, SEQ
         parsed_url = urlparse(self.path)
-        body = read_request_body(self)
+        try:
+            body = read_request_body(self, errors="strict" if parsed_url.path.startswith("/unified/") else "replace")
+        except UnicodeDecodeError:
+            compat_backend.record(self, b"", rejection="invalid UTF-8")
+            return compat_backend.raw_response(self, 400)
         if parsed_url.path == "/__reset":
+            compat_backend.reset()
             with LOCK:
                 EVENTS = []
                 SEQ = 0
@@ -129,7 +205,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if auto_backend.control(self, parsed_url.path, body):
             return
+        if compat_backend.post(self, body):
+            return
         request = safe_event(self, body)
+        if parsed_url.path == "/instructions":
+            return self.instructions(request)
         if parsed_url.path.startswith("/auto"):
             return auto_backend.handle(self, request)
         if parsed_url.path.startswith("/compat/"):

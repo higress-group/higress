@@ -19,11 +19,14 @@ import (
 	quark "quark-search/tools"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
+	sdklog "github.com/higress-group/wasm-go/pkg/log"
 )
 
 func main() {}
 
 func init() {
+	// Keep payload logs at DEBUG for the entire VM, including async responses.
+	sdklog.SetSafeLogEnabled(true)
 	mcp.LoadMCPServer(mcp.AddMCPServer("quark-search",
 		quark.LoadTools(mcp.NewMCPServer())))
 	mcp.LoadMCPServer(mcp.AddMCPServer("amap-tools",

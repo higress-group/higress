@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/cache"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/config"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/vector"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -16,13 +17,17 @@ import (
 
 // CheckCacheForKey checks if the key is in the cache, or triggers similarity search if not found.
 func CheckCacheForKey(key string, ctx wrapper.HttpContext, c config.PluginConfig, log logs.Log, stream bool, useSimilaritySearch bool) error {
+	consumer := vector.ConsumerFromContext(ctx)
+	if consumer == "" {
+		return logAndReturnError(log, "[CheckCacheForKey] authenticated consumer is required")
+	}
 	activeCacheProvider := c.GetCacheProvider()
 	if activeCacheProvider == nil {
 		log.Debugf("[%s] [CheckCacheForKey] no cache provider configured, performing similarity search", PLUGIN_NAME)
 		return performSimilaritySearch(key, ctx, c, log, key, stream)
 	}
 
-	queryKey := activeCacheProvider.GetCacheKeyPrefix() + key
+	queryKey := cache.BuildCacheKey(activeCacheProvider.GetCacheKeyPrefix(), consumer, key)
 	log.Debugf("[%s] [CheckCacheForKey] querying cache with key: %s", PLUGIN_NAME, queryKey)
 
 	err := activeCacheProvider.Get(queryKey, func(response resp.Value) {
@@ -86,6 +91,9 @@ func processCacheHit(key string, response string, stream bool, ctx wrapper.HttpC
 
 // performSimilaritySearch determines the appropriate similarity search method to use.
 func performSimilaritySearch(key string, ctx wrapper.HttpContext, c config.PluginConfig, log logs.Log, queryString string, stream bool) error {
+	if vector.ConsumerFromContext(ctx) == "" {
+		return logAndReturnError(log, "[performSimilaritySearch] authenticated consumer is required")
+	}
 	activeVectorProvider := c.GetVectorProvider()
 	if activeVectorProvider == nil {
 		return logAndReturnError(log, "[performSimilaritySearch] no vector provider configured for similarity search")
@@ -147,6 +155,18 @@ func performEmbeddingQuery(key string, ctx wrapper.HttpContext, c config.PluginC
 	})
 }
 
+func firstResultForConsumer(results []vector.QueryResult, consumer string) (vector.QueryResult, bool) {
+	if consumer == "" {
+		return vector.QueryResult{}, false
+	}
+	for _, result := range results {
+		if result.Consumer == consumer {
+			return result, true
+		}
+	}
+	return vector.QueryResult{}, false
+}
+
 // handleQueryResults processes the results of similarity search and determines next actions.
 func handleQueryResults(key string, results []vector.QueryResult, ctx wrapper.HttpContext, log logs.Log, stream bool, c config.PluginConfig, err error) {
 	if err != nil {
@@ -160,7 +180,14 @@ func handleQueryResults(key string, results []vector.QueryResult, ctx wrapper.Ht
 		return
 	}
 
-	mostSimilarData := results[0]
+	consumer := vector.ConsumerFromContext(ctx)
+	mostSimilarData, ok := firstResultForConsumer(results, consumer)
+	if !ok {
+		log.Infof("[%s] [handleQueryResults] no result has matching consumer metadata", PLUGIN_NAME)
+		proxywasm.ResumeHttpRequest()
+		return
+	}
+
 	log.Debugf("[%s] [handleQueryResults] for key: %s, the most similar key found: %s with score: %f", PLUGIN_NAME, key, mostSimilarData.Text, mostSimilarData.Score)
 	simThreshold := c.GetVectorProviderConfig().Threshold
 	simThresholdRelation := c.GetVectorProviderConfig().ThresholdRelation
@@ -205,6 +232,10 @@ func handleInternalError(err error, message string, log logs.Log) {
 
 // Caches the response value
 func cacheResponse(ctx wrapper.HttpContext, c config.PluginConfig, key string, value string, log logs.Log) {
+	consumer := vector.ConsumerFromContext(ctx)
+	if consumer == "" {
+		return
+	}
 	if strings.TrimSpace(value) == "" {
 		log.Warnf("[%s] [cacheResponse] cached value for key %s is empty", PLUGIN_NAME, key)
 		return
@@ -212,7 +243,7 @@ func cacheResponse(ctx wrapper.HttpContext, c config.PluginConfig, key string, v
 
 	activeCacheProvider := c.GetCacheProvider()
 	if activeCacheProvider != nil {
-		queryKey := activeCacheProvider.GetCacheKeyPrefix() + key
+		queryKey := cache.BuildCacheKey(activeCacheProvider.GetCacheKeyPrefix(), consumer, key)
 		_ = activeCacheProvider.Set(queryKey, value, nil)
 		log.Debugf("[%s] [cacheResponse] cache set success, key: %s, length of value: %d", PLUGIN_NAME, queryKey, len(value))
 	}
@@ -220,6 +251,9 @@ func cacheResponse(ctx wrapper.HttpContext, c config.PluginConfig, key string, v
 
 // Handles embedding upload if available
 func uploadEmbeddingAndAnswer(ctx wrapper.HttpContext, c config.PluginConfig, key string, value string, log logs.Log) {
+	if vector.ConsumerFromContext(ctx) == "" {
+		return
+	}
 	embedding := ctx.GetContext(CACHE_KEY_EMBEDDING_KEY)
 	if embedding == nil {
 		return

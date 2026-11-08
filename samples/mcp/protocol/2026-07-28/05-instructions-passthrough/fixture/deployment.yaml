@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: instructions-mcp
+  namespace: mcp-demo
+  labels:
+    mcp.higress.io/demo: instructions
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: instructions-mcp
+  template:
+    metadata:
+      labels:
+        app: instructions-mcp
+        mcp.higress.io/demo: instructions
+    spec:
+      containers:
+        - name: upstream
+          image: localhost/mcp-demo/instructions-sdk:1.0.0
+          imagePullPolicy: IfNotPresent
+          args: ["-instructions-file", "/config/instructions.txt"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 1
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: instructions
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: instructions
+          configMap:
+            name: mcp-instructions-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: instructions-mcp
+  namespace: mcp-demo
+  labels:
+    mcp.higress.io/demo: instructions
+spec:
+  selector:
+    app: instructions-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

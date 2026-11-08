@@ -1,7 +1,7 @@
 FROM docker.io/library/golang:1.24.4-alpine AS builder
 
 ARG HIGRESS_REPOSITORY=https://github.com/higress-group/higress.git
-ARG HIGRESS_REF=14c36d9bd70b3dc38237cda6175b3f9dede0dccd
+ARG HIGRESS_REF=1268f41d5de0ab07ecd9759c8217b7815dfc655e
 
 RUN apk add --no-cache git ca-certificates
 RUN git init /src \

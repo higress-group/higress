@@ -19,6 +19,11 @@ type DBConfig struct {
 	dbType      string
 	dsn         string
 	description string
+	// username/password are the HTTP Basic credentials a caller must present to
+	// reach this server. They are kept out of the ParseConfig debug log so the
+	// credential is never written to the gateway log.
+	username string
+	password string
 }
 
 func (c *DBConfig) Clone() common.Server {
@@ -26,7 +31,31 @@ func (c *DBConfig) Clone() common.Server {
 	return &cloned
 }
 
+// GetBasicAuthCredentials implements common.BasicAuthProvider. The database
+// server exposes query and execute tools against a live database, so callers
+// must always present HTTP Basic credentials. ParseConfig rejects a config that
+// leaves them empty, which is what keeps this gate from being silently disabled.
+func (c *DBConfig) GetBasicAuthCredentials() (string, string) {
+	return c.username, c.password
+}
+
 func (c *DBConfig) ParseConfig(config map[string]any) error {
+	// Basic auth credentials are mandatory and validated first: the database
+	// server runs SQL against a live database, so it must never load
+	// unauthenticated.
+	username, _ := config["username"].(string)
+	if username == "" {
+		api.LogErrorf("database server rejected config: missing username. The database MCP server exposes query and execute tools against a live database and requires basic auth credentials (username and password).")
+		return errors.New("missing username: database requires basic auth credentials (username and password)")
+	}
+	password, _ := config["password"].(string)
+	if password == "" {
+		api.LogErrorf("database server rejected config: missing password. The database MCP server exposes query and execute tools against a live database and requires basic auth credentials (username and password).")
+		return errors.New("missing password: database requires basic auth credentials (username and password)")
+	}
+	c.username = username
+	c.password = password
+
 	dsn, ok := config["dsn"].(string)
 	if !ok {
 		return errors.New("missing dsn")
@@ -38,7 +67,7 @@ func (c *DBConfig) ParseConfig(config map[string]any) error {
 		return errors.New("missing database type")
 	}
 	c.dbType = dbType
-	api.LogDebugf("DBConfig ParseConfig: %+v", config)
+	api.LogDebugf("DBConfig ParseConfig: dbType %s", c.dbType)
 	c.description, ok = config["description"].(string)
 	if !ok {
 		c.description = ""

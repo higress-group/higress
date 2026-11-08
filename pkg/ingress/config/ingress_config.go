@@ -323,6 +323,9 @@ func (m *IngressConfig) List(typ config.GroupVersionKind, namespace string) []co
 		configs = append(configs, configsFromGateway...)
 	}
 
+	if typ == gvk.VirtualService {
+		stripMcpServerConfigHeaderFromConfigs(configs)
+	}
 	return configs
 }
 
@@ -552,6 +555,52 @@ func (m *IngressConfig) convertGateways(configs []common.WrapperConfig) []config
 	return out
 }
 
+const mcpServerConfigHeader = "x-higress-mcpserver-config"
+
+func stripMcpServerConfigHeader(route *networking.HTTPRoute) {
+	if route == nil {
+		return
+	}
+	if route.Headers == nil {
+		route.Headers = &networking.Headers{}
+	}
+	if route.Headers.Request == nil {
+		route.Headers.Request = &networking.Headers_HeaderOperations{}
+	}
+	requestHeaders := route.Headers.Request
+	remove := make([]string, 0, len(requestHeaders.Remove)+1)
+	for _, name := range requestHeaders.Remove {
+		if !strings.EqualFold(name, mcpServerConfigHeader) {
+			remove = append(remove, name)
+		}
+	}
+	requestHeaders.Remove = append(remove, mcpServerConfigHeader)
+
+	for name := range requestHeaders.Add {
+		if strings.EqualFold(name, mcpServerConfigHeader) {
+			delete(requestHeaders.Add, name)
+		}
+	}
+
+	for name := range requestHeaders.Set {
+		if strings.EqualFold(name, mcpServerConfigHeader) {
+			delete(requestHeaders.Set, name)
+		}
+	}
+}
+
+func stripMcpServerConfigHeaderFromConfigs(configs []config.Config) {
+	for i := range configs {
+		virtualService, ok := configs[i].Spec.(*networking.VirtualService)
+		if !ok {
+			continue
+		}
+		for _, route := range virtualService.Http {
+			stripMcpServerConfigHeader(route)
+		}
+	}
+}
+
 func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []config.Config {
 	convertOptions := common.ConvertOptions{
 		IngressRouteCache: common.NewIngressRouteCache(),
@@ -662,6 +711,7 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 		common.SortHTTPRoutes(routes)
 
 		for _, route := range routes {
+			stripMcpServerConfigHeader(route.HTTPRoute)
 			vs.Http = append(vs.Http, route.HTTPRoute)
 		}
 
@@ -686,6 +736,11 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 	if m.RegistryReconciler != nil {
 		allConfigsFromMcp := m.RegistryReconciler.GetAllConfigs(gvk.VirtualService)
 		for _, cfg := range allConfigsFromMcp {
+			if virtualService, ok := cfg.Spec.(*networking.VirtualService); ok {
+				for _, route := range virtualService.Http {
+					stripMcpServerConfigHeader(route)
+				}
+			}
 			out = append(out, *cfg)
 		}
 	}
@@ -890,10 +945,12 @@ func (m *IngressConfig) convertEnvoyFilter(convertOptions *common.ConvertOptions
 		}
 	}
 
-	if proxyEnvoyFilters := constructProxyEnvoyFilters(convertOptions.ProxyWrappers, convertOptions.ServiceWrappers, m.namespace); len(proxyEnvoyFilters) != 0 {
-		for _, ef := range proxyEnvoyFilters {
-			envoyFilters = append(envoyFilters, *ef)
-		}
+	proxyEnvoyFilters, err := constructProxyEnvoyFilters(convertOptions.ProxyWrappers, convertOptions.ServiceWrappers, m.namespace)
+	if err != nil {
+		IngressLog.Errorf("Failed to construct proxy envoy filters, skipping them: %v", err)
+	}
+	for _, ef := range proxyEnvoyFilters {
+		envoyFilters = append(envoyFilters, *ef)
 	}
 
 	// TODO Support other envoy filters
@@ -1936,7 +1993,7 @@ func constructBasicAuthEnvoyFilter(rules *common.BasicAuthRules, namespace strin
 	}, nil
 }
 
-func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, serviceWrappers map[string]*common.ServiceWrapper, namespace string) []*config.Config {
+func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, serviceWrappers map[string]*common.ServiceWrapper, namespace string) ([]*config.Config, error) {
 	var envoyFilters []*config.Config
 	for _, proxyWrapper := range proxyWrappers {
 		envoyFilters = append(envoyFilters, &config.Config{
@@ -2039,6 +2096,10 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 					}
 				}
 				patchJson, _ := json.Marshal(patchObj)
+				patchValue, err := util.BuildPatchStruct(string(patchJson))
+				if err != nil {
+					return nil, err
+				}
 				serviceProxyPatches = append(serviceProxyPatches, &networking.EnvoyFilter_EnvoyConfigObjectPatch{
 					ApplyTo: networking.EnvoyFilter_CLUSTER,
 					Match: &networking.EnvoyFilter_EnvoyConfigObjectMatch{
@@ -2046,7 +2107,7 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 					},
 					Patch: &networking.EnvoyFilter_Patch{
 						Operation: networking.EnvoyFilter_Patch_ADD,
-						Value:     util.BuildPatchStruct(string(patchJson)),
+						Value:     patchValue,
 					},
 				})
 			}
@@ -2065,7 +2126,7 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 		})
 	}
 
-	return envoyFilters
+	return envoyFilters, nil
 }
 
 func validateServiceWrapperForProxy(serviceWrapper *common.ServiceWrapper) error {

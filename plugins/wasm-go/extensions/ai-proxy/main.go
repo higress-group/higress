@@ -14,6 +14,7 @@ import (
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/config"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/provider"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -367,6 +368,28 @@ func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig
 		return types.ActionContinue
 	}
 	log.Debugf("[onHttpRequestBody] provider=%s", activeProvider.GetProviderType())
+
+	// Reject a body declaring "model" more than once before any provider logic
+	// runs. gjson reads the first occurrence while the sjson rewrite below and
+	// upstream parsers settle on the last one, so model mapping, routing and
+	// credential selection would otherwise act on a different model than the
+	// upstream does. Once this passes, first and last occurrence are the same
+	// member, which makes the sjson rewrite in defaultTransformRequestBody
+	// unambiguous.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "model"); err != nil {
+		log.Debugf("[onHttpRequestBody] skip duplicate model member check: %v", err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage("model")
+		log.Warnf("[onHttpRequestBody] %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(
+			http.StatusBadRequest,
+			"duplicate_model_member",
+			util.CreateHeaders(util.HeaderContentType, util.MimeTypeTextPlain),
+			[]byte(message),
+			-1,
+		)
+		return types.ActionPause
+	}
 
 	defer func() {
 		saveContextsToHeaders(ctx)

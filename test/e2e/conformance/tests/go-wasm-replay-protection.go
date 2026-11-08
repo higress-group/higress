@@ -17,9 +17,11 @@ package tests
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"net/url"
 	"testing"
 
 	"github.com/alibaba/higress/v2/test/e2e/conformance/utils/http"
+	"github.com/alibaba/higress/v2/test/e2e/conformance/utils/roundtripper"
 	"github.com/alibaba/higress/v2/test/e2e/conformance/utils/suite"
 )
 
@@ -131,7 +133,21 @@ var WasmPluginsReplayProtection = suite.ConformanceTest{
 		}
 
 		t.Run("WasmPlugins replay-protection", func(t *testing.T) {
-			for _, testcase := range testcases {
+			for i, testcase := range testcases {
+				if i == 2 {
+					// A nonce returns 200 only on its first request; later retries are duplicates.
+					request := roundtripper.Request{
+						Method:   "GET",
+						Host:     "foo.com",
+						URL:      url.URL{Scheme: "http", Host: suite.GatewayAddress, Path: "/"},
+						Protocol: "HTTP/1.1",
+						Headers: map[string][]string{
+							"X-Higress-Nonce": {replayNonce},
+						},
+					}
+					http.WaitForConsistentResponse(t, suite.RoundTripper, request, testcase, 1, suite.TimeoutConfig.MaxTimeToConsistency)
+					continue
+				}
 				http.MakeRequestAndExpectEventuallyConsistentResponse(t, suite.RoundTripper, suite.TimeoutConfig, suite.GatewayAddress, testcase)
 			}
 		})

@@ -247,6 +247,7 @@ jobs:
       working-directory: plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification
       run: |
         python3 auto_self_test.py
+        python3 routing_self_test.py
         python3 orchestration_self_test.py
         bash lifecycle_self_test.sh
 

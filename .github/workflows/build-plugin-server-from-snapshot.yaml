@@ -153,6 +153,28 @@ jobs:
           image="$REGISTRY/higress/plugin-server:$GATEWAY_VERSION"
           candidate="$REGISTRY/candidates/plugin-server:${GATEWAY_VERSION}-${SNAPSHOT_SHA256}"
           echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+          # Existing WasmPlugin CRs may still point at the legacy plugin-server
+          # paths mcp-server/1.0.0 and mcp-server/2.0.0. Seed those paths with
+          # the exact snapshot-managed bytes before the build. The plugin-server
+          # Dockerfile's local stage copies this tree, then pull_plugins.py
+          # materializes the snapshot-managed entries on top of it.
+          managed=$(jq -c '.plugins[] | select(.consumers.pluginServer.inventoryKey == "mcp-server")' "$SNAPSHOT_PATH")
+          managed_path=$(jq -r '.consumers.pluginServer.httpPath' <<<"$managed")
+          managed_version=$(jq -r .version <<<"$managed")
+          test "$managed_path" = "mcp-server"
+          managed_ref=$(jq -r '.ociRef | sub(":[^/:]+$"; "")' <<<"$managed")
+          managed_digest=$(jq -r .digest <<<"$managed")
+          managed_layer=$(oras manifest fetch "$managed_ref@$managed_digest" | jq -r '.layers[] | select(.mediaType == "application/vnd.module.wasm.content.layer.v1+wasm").digest')
+          [[ "$managed_layer" =~ ^sha256:[0-9a-f]{64}$ ]]
+          oras blob fetch "$managed_ref@$managed_layer" -o /tmp/managed-oci.wasm
+          head -c 4 /tmp/managed-oci.wasm | grep -qx $'\x00asm'
+          compatibility_versions="1.0.0 2.0.0"
+          rm -rf plugin-server/plugins/mcp-server
+          for version in $compatibility_versions; do
+            if [ "$version" = "$managed_version" ]; then continue; fi
+            mkdir -p "plugin-server/plugins/$managed_path/$version"
+            cp /tmp/managed-oci.wasm "plugin-server/plugins/$managed_path/$version/plugin.wasm"
+          done
           lookup_error=/tmp/public-tag-lookup.err
           if existing_json=$(oras manifest fetch "$image" --descriptor 2>"$lookup_error"); then
             existing=$(jq -er .digest <<<"$existing_json")
@@ -180,7 +202,8 @@ jobs:
                { grep -Fq 'Error response from registry:' "$candidate_lookup_error" && grep -Fq "$candidate: not found" "$candidate_lookup_error"; }; then
             docker buildx build --platform linux/amd64,linux/arm64 --push -t "$candidate" \
               --build-arg SNAPSHOT_SHA256="$SNAPSHOT_SHA256" --build-arg HIGRESS_SOURCE_COMMIT="$HIGRESS_COMMIT" \
-              --build-arg PLUGIN_SERVER_SOURCE_COMMIT="$PLUGIN_SERVER_COMMIT" --build-arg GATEWAY_VERSION="$GATEWAY_VERSION" plugin-server
+              --build-arg PLUGIN_SERVER_SOURCE_COMMIT="$PLUGIN_SERVER_COMMIT" --build-arg GATEWAY_VERSION="$GATEWAY_VERSION" \
+              --build-arg USE_LOCAL_PLUGINS=true plugin-server
             candidate_digest=$(docker buildx imagetools inspect "$candidate" --format '{{json .Manifest.Digest}}' | tr -d '"')
           else
             cat "$candidate_lookup_error" >&2
@@ -206,13 +229,13 @@ jobs:
           for retry in $(seq 1 20); do curl --fail --silent --show-error http://127.0.0.1:18080/plugins/snapshot-inventory.json >/tmp/snapshot-inventory.json && break; sleep 1; done
           jq -e 'type == "object" and has("mcp-server") and has("json-converter") and has("jsonrpc-converter")' /tmp/snapshot-inventory.json >/dev/null
           fetch_wasm() { curl --fail --silent --show-error "http://127.0.0.1:18080/plugins/$1/$2/plugin.wasm" > "$3"; head -c 4 "$3" | grep -qx $'\x00asm'; }
-          managed=$(jq -c '.plugins[] | select(.consumers.pluginServer.inventoryKey == "mcp-server")' "$SNAPSHOT_PATH")
-          managed_path=$(jq -r '.consumers.pluginServer.httpPath' <<<"$managed"); managed_version=$(jq -r .version <<<"$managed")
           fetch_wasm "$managed_path" "$managed_version" /tmp/managed.wasm
-          managed_ref=$(jq -r '.ociRef | sub(":[^/:]+$"; "")' <<<"$managed"); managed_digest=$(jq -r .digest <<<"$managed")
-          managed_layer=$(oras manifest fetch "$managed_ref@$managed_digest" | jq -r '.layers[] | select(.mediaType == "application/vnd.module.wasm.content.layer.v1+wasm").digest')
-          oras blob fetch "$managed_ref@$managed_layer" -o /tmp/managed-oci.wasm
           cmp /tmp/managed.wasm /tmp/managed-oci.wasm
+          for version in $compatibility_versions; do
+            if [ "$version" = "$managed_version" ]; then continue; fi
+            fetch_wasm "$managed_path" "$version" "/tmp/managed-$version.wasm"
+            cmp "/tmp/managed-$version.wasm" /tmp/managed-oci.wasm
+          done
           json_version=$(jq -r '.plugins[] | select(.consumers.pluginServer.inventoryKey == "json-converter") | .version' "$SNAPSHOT_PATH")
           fetch_wasm jsonrpc-converter "$json_version" /tmp/jsonrpc.wasm
           lock=plugin-server/unmanaged-plugins.lock.json

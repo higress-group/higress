@@ -249,6 +249,11 @@ func (g *GzipController) ConstructEnvoyFilters() ([]*config.Config, error) {
 		return configs, nil
 	}
 
+	gzipPatchValue, err := util.BuildPatchStruct(gzipStruct)
+	if err != nil {
+		return nil, err
+	}
+
 	config := &config.Config{
 		Meta: config.Meta{
 			GroupVersionKind: gvk.EnvoyFilter,
@@ -276,7 +281,7 @@ func (g *GzipController) ConstructEnvoyFilters() ([]*config.Config, error) {
 					},
 					Patch: &networking.EnvoyFilter_Patch{
 						Operation: networking.EnvoyFilter_Patch_INSERT_BEFORE,
-						Value:     util.BuildPatchStruct(gzipStruct),
+						Value:     gzipPatchValue,
 					},
 				},
 			},

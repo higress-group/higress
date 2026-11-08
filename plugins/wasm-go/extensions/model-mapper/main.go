@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 )
 
 const (
@@ -167,6 +170,28 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 	if !json.Valid(body) {
 		log.Error("invalid json body")
 		return types.ActionContinue
+	}
+
+	// Runs before the model is read for mapping and before the sjson rewrite
+	// below: gjson keeps the first occurrence of a duplicated member while sjson
+	// and the upstream parser keep the last, so the mapping would otherwise be
+	// resolved for one model and rewritten onto another. Once this passes, the
+	// member is unique and the rewrite is unambiguous. A modelKey holding a
+	// nested gjson path is never a top-level member name, so the count - which
+	// is scoped to the top level - reports nothing for it.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, config.modelKey); err != nil {
+		log.Debugf("skip duplicate %s member check: %v", config.modelKey, err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage(config.modelKey)
+		log.Warnf("rejecting request: %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(
+			http.StatusBadRequest,
+			"duplicate_model_member",
+			[][2]string{{"content-type", "text/plain"}},
+			[]byte(message),
+			-1,
+		)
+		return types.ActionPause
 	}
 
 	oldModel := gjson.GetBytes(body, config.modelKey).String()

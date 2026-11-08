@@ -95,7 +95,7 @@ const (
 )
 
 var (
-	configPatchesBuilders = map[common.ProxyType]func(*apiv1.ProxyConfig) []*v1alpha3.EnvoyFilter_EnvoyConfigObjectPatch{
+	configPatchesBuilders = map[common.ProxyType]func(*apiv1.ProxyConfig) ([]*v1alpha3.EnvoyFilter_EnvoyConfigObjectPatch, error){
 		common.ProxyType_HTTP: buildConfigPatchesForHttpProxy,
 	}
 
@@ -141,43 +141,49 @@ func FillProxyListenerPorts(proxies []*apiv1.ProxyConfig) bool {
 	return filled
 }
 
-func BuildProxyWrapper(config *apiv1.ProxyConfig) *ingress.ProxyWrapper {
+func BuildProxyWrapper(config *apiv1.ProxyConfig) (*ingress.ProxyWrapper, error) {
 	if config == nil {
-		return nil
+		return nil, nil
 	}
 	if len(config.ServerAddress) == 0 || config.ServerPort <= 0 || config.ServerPort > 65535 || config.ListenerPort <= 0 || config.ListenerPort > 65535 {
-		return nil
+		return nil, nil
 	}
 
-	envoyFilter := buildEnvoyFilter(config)
+	envoyFilter, err := buildEnvoyFilter(config)
+	if err != nil {
+		return nil, err
+	}
 	if envoyFilter == nil {
-		return nil
+		return nil, nil
 	}
 
 	return &ingress.ProxyWrapper{
 		ProxyName:    config.Name,
 		ListenerPort: config.ListenerPort,
 		EnvoyFilter:  envoyFilter,
-	}
+	}, nil
 }
 
-func buildEnvoyFilter(config *apiv1.ProxyConfig) *v1alpha3.EnvoyFilter {
+func buildEnvoyFilter(config *apiv1.ProxyConfig) (*v1alpha3.EnvoyFilter, error) {
 	if config == nil {
-		return nil
+		return nil, nil
 	}
 
 	configPatchesBuilder := configPatchesBuilders[common.ParseProxyType(config.Type)]
 	if configPatchesBuilder == nil {
-		return nil
+		return nil, nil
 	}
 
-	configPatches := configPatchesBuilder(config)
-	return &v1alpha3.EnvoyFilter{ConfigPatches: configPatches}
+	configPatches, err := configPatchesBuilder(config)
+	if err != nil {
+		return nil, err
+	}
+	return &v1alpha3.EnvoyFilter{ConfigPatches: configPatches}, nil
 }
 
-func buildConfigPatchesForHttpProxy(config *apiv1.ProxyConfig) []*v1alpha3.EnvoyFilter_EnvoyConfigObjectPatch {
+func buildConfigPatchesForHttpProxy(config *apiv1.ProxyConfig) ([]*v1alpha3.EnvoyFilter_EnvoyConfigObjectPatch, error) {
 	if common.ParseProxyType(config.Type) != common.ProxyType_HTTP {
-		return nil
+		return nil, nil
 	}
 
 	clusterName := buildClusterName(config)
@@ -203,6 +209,10 @@ func buildConfigPatchesForHttpProxy(config *apiv1.ProxyConfig) []*v1alpha3.Envoy
 		proxyClusterPatchJson = strings.ReplaceAll(proxyClusterPatchJson, "{{address}}", config.ServerAddress)
 		proxyClusterPatchJson = strings.ReplaceAll(proxyClusterPatchJson, "{{port}}", fmt.Sprintf("%d", config.ServerPort))
 	}
+	proxyClusterPatchValue, err := util.BuildPatchStruct(proxyClusterPatchJson)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build cluster patch for proxy %s: %v", config.Name, err)
+	}
 	proxyClusterPatch := &v1alpha3.EnvoyFilter_EnvoyConfigObjectPatch{
 		ApplyTo: v1alpha3.EnvoyFilter_CLUSTER,
 		Match: &v1alpha3.EnvoyFilter_EnvoyConfigObjectMatch{
@@ -210,7 +220,7 @@ func buildConfigPatchesForHttpProxy(config *apiv1.ProxyConfig) []*v1alpha3.Envoy
 		},
 		Patch: &v1alpha3.EnvoyFilter_Patch{
 			Operation: v1alpha3.EnvoyFilter_Patch_ADD,
-			Value:     util.BuildPatchStruct(proxyClusterPatchJson),
+			Value:     proxyClusterPatchValue,
 		},
 	}
 	patches = append(patches, proxyClusterPatch)
@@ -220,6 +230,10 @@ func buildConfigPatchesForHttpProxy(config *apiv1.ProxyConfig) []*v1alpha3.Envoy
 	proxyListenerPatchJson = strings.ReplaceAll(proxyListenerPatchJson, "{{proxy_name}}", config.Name)
 	proxyListenerPatchJson = strings.ReplaceAll(proxyListenerPatchJson, "{{port}}", fmt.Sprintf("%d", config.ListenerPort))
 	proxyListenerPatchJson = strings.ReplaceAll(proxyListenerPatchJson, "{{cluster_name}}", clusterName)
+	proxyListenerPatchValue, err := util.BuildPatchStruct(proxyListenerPatchJson)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build listener patch for proxy %s: %v", config.Name, err)
+	}
 	proxyListenerPatch := &v1alpha3.EnvoyFilter_EnvoyConfigObjectPatch{
 		ApplyTo: v1alpha3.EnvoyFilter_LISTENER,
 		Match: &v1alpha3.EnvoyFilter_EnvoyConfigObjectMatch{
@@ -227,12 +241,12 @@ func buildConfigPatchesForHttpProxy(config *apiv1.ProxyConfig) []*v1alpha3.Envoy
 		},
 		Patch: &v1alpha3.EnvoyFilter_Patch{
 			Operation: v1alpha3.EnvoyFilter_Patch_ADD,
-			Value:     util.BuildPatchStruct(proxyListenerPatchJson),
+			Value:     proxyListenerPatchValue,
 		},
 	}
 	patches = append(patches, proxyListenerPatch)
 
-	return patches
+	return patches, nil
 }
 
 func buildClusterName(config *apiv1.ProxyConfig) string {

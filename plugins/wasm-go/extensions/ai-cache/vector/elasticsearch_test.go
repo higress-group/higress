@@ -9,9 +9,9 @@ import (
 func TestESParseQueryResponseValidatesSourceFields(t *testing.T) {
 	provider := &ESProvider{}
 
-	results, err := provider.parseQueryResponse([]byte(`{"hits":{"total":{"value":1},"hits":[{"_id":"ok","_score":0.9,"_source":{"question":"q","answer":"a"}}]}}`), nil)
+	results, err := provider.parseQueryResponse([]byte(`{"hits":{"total":{"value":1},"hits":[{"_id":"ok","_score":0.9,"_source":{"question":"q","answer":"a","consumer":"consumer-a"}}]}}`), nil)
 	require.NoError(t, err)
-	require.Equal(t, []QueryResult{{Text: "q", Score: 0.9, Answer: "a"}}, results)
+	require.Equal(t, []QueryResult{{Text: "q", Score: 0.9, Answer: "a", Consumer: "consumer-a"}}, results)
 
 	for _, tc := range []struct {
 		name string

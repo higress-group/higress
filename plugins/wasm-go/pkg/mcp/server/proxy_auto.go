@@ -21,6 +21,8 @@ import (
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
+const CtxMcpAutoExchange = "mcp_auto_exchange"
+
 const (
 	autoPrepared     = "prepared"
 	autoProbing      = "probing"
@@ -41,6 +43,8 @@ type AutoExchange struct {
 	mu                 sync.Mutex
 	phase              string
 	terminal           bool
+	closed             bool
+	cancelReplied      bool
 	businessDispatched bool
 	profile            ProtocolStrategy
 	version            protocol.Version
@@ -131,12 +135,16 @@ func (h *McpProtocolHandler) eligibleAuto(ctx wrapper.HttpContext) bool {
 }
 
 func (h *McpProtocolHandler) startAuto(ctx wrapper.HttpContext, auth *ProxyAuthInfo) error {
-	prepared, err := h.prepareAutoRequest(ctx, auth)
+	prepared, err := h.prepareProxyRequest(ctx, auth)
 	if err != nil {
 		return err
 	}
 	e := &AutoExchange{phase: autoPrepared, prepared: prepared, ctx: ctx}
+	// Cancellation can win before the first callout, leaving no callback to
+	// terminate a live paused request. This invocation still owns its response.
+	defer e.replyCancelled(ctx)
 	h.auto = e
+	ctx.SetContext(CtxMcpAutoExchange, e)
 	request, _ := ModernRequestContext(ctx)
 	e.register(request)
 	// Only the exchange now owns the credential/header snapshots. Cancellation
@@ -168,6 +176,7 @@ func (e *AutoExchange) probe(h *McpProtocolHandler) {
 	}}})
 	op := OutboundOperation{method: "server/discover", version: protocol.Version20260728}
 	err := dispatchPreparedMCP(step.prepared.target, step.prepared.probeTimeout, step.prepared.headers(op), body, autoProbeBodyLimit, func(r autoHTTPResponse) {
+		defer e.replyCancelled(step.ctx)
 		if _, ok := e.take(autoProbing, autoProbed); !ok {
 			return
 		}
@@ -202,6 +211,7 @@ func (e *AutoExchange) initialize(h *McpProtocolHandler) {
 	}})
 	op := OutboundOperation{method: "initialize", version: step.version}
 	err := dispatchPreparedMCP(step.prepared.target, step.prepared.timeout, step.prepared.headers(op), body, 0, func(r autoHTTPResponse) {
+		defer e.replyCancelled(step.ctx)
 		current, ok := e.take(autoInitializing, autoInitialized)
 		if !ok {
 			return
@@ -253,6 +263,7 @@ func (e *AutoExchange) notify(h *McpProtocolHandler) {
 	body := []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
 	op := OutboundOperation{method: "notifications/initialized", version: step.version, session: step.session}
 	err := dispatchPreparedMCP(step.prepared.target, step.prepared.timeout, step.prepared.headers(op), body, 0, func(r autoHTTPResponse) {
+		defer e.replyCancelled(step.ctx)
 		if _, ok := e.take(autoNotifying, autoNotified); !ok {
 			return
 		}
@@ -280,8 +291,7 @@ func (e *AutoExchange) ready(h *McpProtocolHandler, phase string) {
 			}
 		}
 	}
-	// Retain the original business execution entry points and the same final
-	// DispatchHttpCall boundary; auto does not fix or change #4597 routing.
+	// The final RPC uses the same main-request route as explicit strategies.
 	if step.prepared.method == string(OpToolsList) {
 		h.executeToolsList(step.ctx)
 	} else {
@@ -294,61 +304,30 @@ func (e *AutoExchange) dispatchBusiness(h *McpProtocolHandler) error {
 	if !ok {
 		return nil
 	}
-	body := step.prepared.raw
-	if step.profile == ProtocolStrategyLegacy {
-		params := map[string]json.RawMessage{}
-		keys := []string{"cursor"}
-		if step.prepared.method == string(OpToolsCall) {
-			keys = []string{"name", "arguments"}
-		}
-		for _, key := range keys {
-			if value, exists := step.prepared.params[key]; exists {
-				params[key] = value
-			}
-		}
-		body, _ = json.Marshal(map[string]any{"jsonrpc": "2.0", "id": step.prepared.id, "method": step.prepared.method, "params": params})
-	}
 	op := OutboundOperation{method: step.prepared.method, version: step.version, session: step.session}
-	err := dispatchPreparedMCP(step.prepared.target, step.prepared.timeout, step.prepared.headers(op), body, 0, func(r autoHTTPResponse) {
-		current, ok := e.take(autoDispatching, autoResponding)
-		if !ok {
+	body, err := step.prepared.body(op)
+	if err != nil {
+		e.fail(autoDispatching, gatewayAutoFailure("invalid_business_request"))
+		return nil
+	}
+	err = routeProxyBusiness(step.ctx, step.prepared.url, step.prepared.headers(op), body, func(status int, headers [][2]string, body []byte) {
+		if _, ok := e.take(autoDispatching, autoResponding); !ok {
+			sendProxyCancelled(step.ctx)
 			return
 		}
-		envelope, err := decodeAutoResponse(r, current.prepared.id)
-		if err != nil || r.status < 200 || (r.status >= 300 && r.status < 400) {
-			failure := operationalAutoFailure(r)
-			if failure == nil {
-				failure = gatewayAutoFailure("invalid_business_response")
-			}
-			e.fail(autoResponding, failure)
-			return
-		}
-		if envelope.result != nil && r.status != http.StatusOK {
-			e.fail(autoResponding, gatewayAutoFailure("invalid_business_status"))
-			return
-		}
-		// Only the winner of completion may access context, emit a response or
-		// clean it. Cancellation callbacks do none of these operations.
+		// Arbitration remains exchange-scoped, while business responses use
+		// the historical codec/status policy independently of strict controls.
 		completed, ok := e.terminate(autoResponding, "completed")
 		if !ok {
+			sendProxyCancelled(step.ctx)
 			return
 		}
-		if envelope.result != nil {
-			result, _ := decodeBackendJSONObject(envelope.members["result"])
-			if completed.prepared.method == string(OpToolsList) {
-				result = h.applyAllowToolsFilter(completed.ctx, result)
-			}
-			result = adaptProxyResult(completed.ctx, completed.profile == ProtocolStrategyModern, result)
-			envelope.members["result"], _ = json.Marshal(result)
-		}
-		// Rebind even a permitted no-ID HTTP error to the original business ID.
-		envelope.members["id"] = completed.prepared.id
-		responseBody, _ := json.Marshal(envelope.members)
-		proxywasm.SendHttpResponseWithDetail(uint32(r.status), "mcp-proxy:auto:business", safeAutoResponseHeaders(r.headers), responseBody, -1)
-		finishProxyRequest(completed.ctx)
+		h.handleBusinessResponse(completed.ctx, completed.prepared.method, completed.profile == ProtocolStrategyModern, status, headers, body)
 	})
 	if err != nil {
 		e.fail(autoDispatching, gatewayAutoFailure("dispatch_failed"))
+	} else {
+		proxywasm.ResumeHttpRequest()
 	}
 	return nil
 }
@@ -387,4 +366,27 @@ func postPreparedMCP(target proxyTarget, timeout uint32, headers [][2]string, bo
 		callback(response)
 	})
 	return err
+}
+
+// Control callbacks retain the context only for this host invocation. A live
+// cancelled request needs an explicit terminal response; a closed stream must
+// never receive another hostcall.
+func (e *AutoExchange) replyCancelled(ctx wrapper.HttpContext) {
+	e.mu.Lock()
+	reply := e.terminal && e.phase == "cancelled" && !e.closed && !e.cancelReplied
+	if reply {
+		e.cancelReplied = true
+	}
+	e.mu.Unlock()
+	if reply {
+		sendProxyCancelled(ctx)
+		finishProxyRequest(ctx)
+	}
+}
+
+func (e *AutoExchange) closeStream() {
+	e.mu.Lock()
+	e.closed = true
+	e.mu.Unlock()
+	e.terminate("", "stream_closed")
 }

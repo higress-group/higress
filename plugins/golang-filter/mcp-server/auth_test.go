@@ -282,3 +282,211 @@ func TestRAGServerClonePreservesCredentials(t *testing.T) {
 	require.Equal(t, "admin", username)
 	require.Equal(t, "s3cret", password)
 }
+
+// databaseServerConfig builds a database (gorm) server config. The dbType is
+// deliberately outside the supported set so NewDBClient logs the failed
+// connection and returns without dialing any driver, keeping the test hermetic.
+func databaseServerConfig(username, password string) map[string]any {
+	cfg := map[string]any{
+		"dsn":    "test-dsn",
+		"dbType": "test-db",
+	}
+	if username != "" {
+		cfg["username"] = username
+	}
+	if password != "" {
+		cfg["password"] = password
+	}
+	return cfg
+}
+
+// TestDatabaseServerFailsClosedWithoutCredentials asserts the database-specific
+// half of the gate: the registered database server must opt into
+// BasicAuthProvider and must refuse a config with no credentials, so it is never
+// loaded serving its query and execute tools unauthenticated.
+func TestDatabaseServerFailsClosedWithoutCredentials(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	tests := []struct {
+		name string
+		cfg  map[string]any
+	}{
+		{"no config", nil},
+		{"empty config", map[string]any{}},
+		{"missing username", databaseServerConfig("", "")},
+		{"missing password", databaseServerConfig("admin", "")},
+		{"empty username", func() map[string]any {
+			cfg := databaseServerConfig("", "s3cret")
+			cfg["username"] = ""
+			return cfg
+		}()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := common.GlobalRegistry.NewServerConfig("database")
+			require.NotNil(t, server, "database server should be registered")
+
+			provider, ok := server.(common.BasicAuthProvider)
+			require.True(t, ok, "database must implement common.BasicAuthProvider to be gated by the filter")
+
+			err := server.ParseConfig(tt.cfg)
+			require.Error(t, err, "database must fail closed without basic auth credentials")
+
+			username, password := provider.GetBasicAuthCredentials()
+			require.Empty(t, username, "a rejected database config must not publish a username")
+			require.Empty(t, password, "a rejected database config must not publish a password")
+		})
+	}
+}
+
+// TestDatabaseServerPublishesCredentialsForAuthGate asserts that a fully
+// configured database server hands its credentials to the filter gate.
+func TestDatabaseServerPublishesCredentialsForAuthGate(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	server := common.GlobalRegistry.NewServerConfig("database")
+	require.NotNil(t, server)
+
+	require.NoError(t, server.ParseConfig(databaseServerConfig("admin", "s3cret")))
+
+	provider, ok := server.(common.BasicAuthProvider)
+	require.True(t, ok)
+
+	username, password := provider.GetBasicAuthCredentials()
+	require.Equal(t, "admin", username)
+	require.Equal(t, "s3cret", password)
+
+	require.True(t, common.CheckBasicAuth(basicAuthHeader("admin", "s3cret"), username, password))
+	require.False(t, common.CheckBasicAuth(basicAuthHeader("admin", "nope"), username, password))
+}
+
+// TestDatabaseServerClonePreservesCredentials guards the cloned config, which is
+// what the parser wires into the wrapper: a clone reporting an empty username
+// would make the filter treat auth as disabled.
+func TestDatabaseServerClonePreservesCredentials(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	server := common.GlobalRegistry.NewServerConfig("database")
+	require.NotNil(t, server)
+	require.NoError(t, server.ParseConfig(databaseServerConfig("admin", "s3cret")))
+
+	cloner, ok := server.(common.ServerCloner)
+	require.True(t, ok, "database should implement common.ServerCloner")
+
+	provider, ok := cloner.Clone().(common.BasicAuthProvider)
+	require.True(t, ok, "cloned database config must still implement common.BasicAuthProvider")
+
+	username, password := provider.GetBasicAuthCredentials()
+	require.Equal(t, "admin", username)
+	require.Equal(t, "s3cret", password)
+}
+
+// TestParserSkipsDatabaseServerWithoutCredentials covers the load path: a
+// database entry with no credentials must be rejected at parse time, leaving the
+// config with no server to route to.
+func TestParserSkipsDatabaseServerWithoutCredentials(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	parsed, err := (&Parser{}).Parse(typedStructAny(t, map[string]any{
+		"servers": []any{
+			map[string]any{
+				"name":   "database-server",
+				"type":   "database",
+				"path":   "/mcp-servers/database",
+				"config": databaseServerConfig("", ""),
+			},
+		},
+	}), nil)
+	require.NoError(t, err)
+
+	conf := parsed.(*config)
+	t.Cleanup(conf.Destroy)
+	require.Empty(t, conf.servers, "a credential-less database server must not load")
+}
+
+// TestDatabaseServerEnforcesBasicAuth covers the loaded half: with credentials
+// the database server loads, the filter refuses unauthenticated callers with a
+// 401, and an authenticated caller is let through to the MCP dispatch.
+func TestDatabaseServerEnforcesBasicAuth(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	parsed, err := (&Parser{}).Parse(typedStructAny(t, map[string]any{
+		"servers": []any{
+			map[string]any{
+				"name":   "database-server",
+				"type":   "database",
+				"path":   "/mcp-servers/database",
+				"config": databaseServerConfig("admin", "s3cret"),
+			},
+		},
+	}), nil)
+	require.NoError(t, err)
+
+	conf := parsed.(*config)
+	t.Cleanup(conf.Destroy)
+	require.Len(t, conf.servers, 1, "a database server with credentials should load")
+	require.Equal(t, "admin", conf.servers[0].AuthUsername)
+	require.Equal(t, "s3cret", conf.servers[0].AuthPassword)
+
+	rejected := []struct {
+		name          string
+		authorization string
+	}{
+		{"missing header", ""},
+		{"wrong password", basicAuthHeader("admin", "nope")},
+		{"wrong username", basicAuthHeader("root", "s3cret")},
+		{"bearer token is not accepted", "Bearer s3cret"},
+	}
+	for _, tt := range rejected {
+		t.Run(tt.name, func(t *testing.T) {
+			f, decoder := newTestFilter(conf)
+
+			status := f.DecodeHeaders(postMessageHeaders("/mcp-servers/database", tt.authorization), false)
+
+			require.Equal(t, api.LocalReply, status, "request must be stopped at the filter")
+			require.Equal(t, http.StatusUnauthorized, decoder.statusCode)
+			require.Equal(t, "Unauthorized", decoder.body)
+			require.Contains(t, decoder.headers, "WWW-Authenticate")
+		})
+	}
+
+	t.Run("valid credentials", func(t *testing.T) {
+		f, decoder := newTestFilter(conf)
+
+		status := f.DecodeHeaders(
+			postMessageHeaders("/mcp-servers/database", basicAuthHeader("admin", "s3cret")),
+			false,
+		)
+
+		require.Equal(t, api.StopAndBuffer, status, "authenticated request should be buffered, not refused")
+		require.Zero(t, decoder.statusCode, "no local reply should have been sent")
+	})
+}
+
+// TestParserStillLoadsServersWithOtherAuthModels pins the scope of the gate:
+// higress-api authenticates by forwarding the caller's Authorization header to
+// the Higress Console API, so it must keep loading without basic auth
+// credentials of its own.
+func TestParserStillLoadsServersWithOtherAuthModels(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	parsed, err := (&Parser{}).Parse(typedStructAny(t, map[string]any{
+		"servers": []any{
+			map[string]any{
+				"name": "higress-api-server",
+				"type": "higress-api",
+				"path": "/mcp-servers/higress-api",
+				"config": map[string]any{
+					"higressURL": "http://higress-console.higress-system:8080",
+				},
+			},
+		},
+	}), nil)
+	require.NoError(t, err)
+
+	conf := parsed.(*config)
+	t.Cleanup(conf.Destroy)
+	require.Len(t, conf.servers, 1, "higress-api should still load without basic auth credentials")
+	require.Empty(t, conf.servers[0].AuthUsername)
+}

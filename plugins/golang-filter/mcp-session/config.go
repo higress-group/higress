@@ -9,25 +9,22 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-session/common"
-	"github.com/alibaba/higress/plugins/golang-filter/mcp-session/handler"
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
 )
 
 const (
 	Name              = "mcp-session"
 	Version           = "1.0.0"
-	ConfigPathSuffix  = "/config"
 	DefaultServerName = "higress-mcp-server"
 )
 
 var GlobalSSEPathSuffix = "/sse"
 
 type config struct {
-	matchList             []common.MatchRule
-	enableUserLevelServer bool
-	rateLimitConfig       *handler.MCPRatelimitConfig
-	redisClient           *common.RedisClient
-	sharedMCPServer       *common.MCPServer // Created once, thread-safe with sync.RWMutex
+	matchList       []common.MatchRule
+	redisClient     *common.RedisClient
+	sessionRegistry common.SessionRegistry
+	sharedMCPServer *common.MCPServer // Created once, thread-safe with sync.RWMutex
 }
 
 func (c *config) Destroy() {
@@ -74,44 +71,19 @@ func (p *Parser) Parse(any *anypb.Any, callbacks api.ConfigCallbackHandler) (int
 		api.LogDebug("Redis configuration not provided, running without Redis")
 	}
 
-	enableUserLevelServer, ok := v.AsMap()["enable_user_level_server"].(bool)
-	if !ok {
-		enableUserLevelServer = false
-	}
-	conf.enableUserLevelServer = enableUserLevelServer
-	if enableUserLevelServer && conf.redisClient == nil {
-		return nil, fmt.Errorf("redis configuration is required when enable_user_level_server is true")
-	}
-
-	if rateLimit, ok := v.AsMap()["rate_limit"].(map[string]interface{}); ok {
-		rateLimitConfig := &handler.MCPRatelimitConfig{}
-		if limit, ok := rateLimit["limit"].(float64); ok {
-			rateLimitConfig.Limit = int(limit)
-		}
-		if window, ok := rateLimit["window"].(float64); ok {
-			rateLimitConfig.Window = int(window)
-		}
-		if whiteList, ok := rateLimit["white_list"].([]interface{}); ok {
-			for _, item := range whiteList {
-				if uid, ok := item.(string); ok {
-					rateLimitConfig.Whitelist = append(rateLimitConfig.Whitelist, uid)
-				}
-			}
-		}
-		if errorText, ok := rateLimit["error_text"].(string); ok {
-			rateLimitConfig.ErrorText = errorText
-		}
-		conf.rateLimitConfig = rateLimitConfig
-	}
-
 	ssePathSuffix, ok := v.AsMap()["sse_path_suffix"].(string)
 	if !ok || ssePathSuffix == "" {
 		return nil, fmt.Errorf("sse path suffix is not set or empty")
 	}
 	GlobalSSEPathSuffix = ssePathSuffix
 
-	// Create shared MCPServer once during config parsing (thread-safe with sync.RWMutex)
+	// Create shared MCPServer once during config parsing (thread-safe with sync.RWMutex).
+	// Its name is protocol metadata only: sessions are bound to the per-rule
+	// identity carried by the matched match_list entry.
 	conf.sharedMCPServer = common.NewMCPServer(DefaultServerName, Version)
+	if conf.redisClient != nil {
+		conf.sessionRegistry = common.NewRedisSessionRegistry(conf.redisClient)
+	}
 
 	return conf, nil
 }
@@ -130,10 +102,6 @@ func (p *Parser) Merge(parent interface{}, child interface{}) interface{} {
 	if childConfig.matchList != nil {
 		newConfig.matchList = childConfig.matchList
 	}
-	newConfig.enableUserLevelServer = childConfig.enableUserLevelServer
-	if childConfig.rateLimitConfig != nil {
-		newConfig.rateLimitConfig = childConfig.rateLimitConfig
-	}
 	return &newConfig
 }
 
@@ -143,10 +111,8 @@ func FilterFactory(c interface{}, callbacks api.FilterCallbackHandler) api.Strea
 		panic("unexpected config type")
 	}
 	return &filter{
-		callbacks:           callbacks,
-		config:              conf,
-		stopChan:            make(chan struct{}),
-		mcpConfigHandler:    handler.NewMCPConfigHandler(conf.redisClient, callbacks),
-		mcpRatelimitHandler: handler.NewMCPRatelimitHandler(conf.redisClient, callbacks, conf.rateLimitConfig),
+		callbacks: callbacks,
+		config:    conf,
+		stopChan:  make(chan struct{}),
 	}
 }
