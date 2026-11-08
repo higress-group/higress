@@ -1,0 +1,71 @@
+# Copyright (c) 2026 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-nginx-rewrite-compatible
+  namespace: higress-conformance-infra
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "rewrite.example.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: infra-backend-v1
+                port:
+                  number: 8080
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: nginx-rewrite-compatible
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  matchRules:
+    - config:
+        rules:
+          # case 1: plain capture-group path rewrite.
+          - regex: ^/old/(.*)$
+            replacement: /new/$1
+          # case 3: keep the incoming query string and append one fragment.
+          - regex: ^/api/(.*)$
+            replacement: /internal
+            query_append: migrated=true
+          # case 4: replace the query string entirely, driven by capture groups.
+          - regex: ^/x/(.*)/(.*)$
+            replacement: /y
+            query_template: a=$1&b=$2
+          # case 5: expose a captured group to the upstream as a request header.
+          - regex: ^/tag/(.*)$
+            replacement: /tagged/$1
+            set_vars:
+              - name: origin
+                capture_group: 1
+            pass_to_upstream: true
+          # case 6: same variable, but not propagated upstream.
+          - regex: ^/private/(.*)$
+            replacement: /hidden/$1
+            set_vars:
+              - name: internal
+                capture_group: 1
+      configDisable: false
+      ingress:
+        - higress-conformance-infra/wasmplugin-nginx-rewrite-compatible
+  url: file:///opt/plugins/wasm-go/extensions/nginx-rewrite-compatible/plugin.wasm
