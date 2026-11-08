@@ -20,9 +20,11 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -97,6 +99,20 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg Config) types.Action {
 func onHttpRequestBody(ctx wrapper.HttpContext, cfg Config, body []byte) types.Action {
 	if !cfg.IsEnabled() {
 		return types.ActionContinue
+	}
+	// The token estimate below is derived from the first occurrence of "messages"
+	// (gjson), while the upstream parser keeps the last one: a body that declares
+	// the member twice would therefore be limited against a different conversation
+	// than the one the model receives, and a small first value could carry an
+	// oversized last one past the limit.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "messages"); err != nil {
+		log.Debugf("[aicl] skip duplicate messages member check: %v", err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage("messages")
+		log.Warnf("[aicl] rejecting request: %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "duplicate_messages_member",
+			[][2]string{{"content-type", "text/plain"}}, []byte(message), -1)
+		return types.ActionPause
 	}
 	bodyBytes := len(body)
 	log.Infof("[aicl] body_received bytes=%d", bodyBytes)

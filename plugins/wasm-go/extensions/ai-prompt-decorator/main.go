@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -149,6 +151,20 @@ func applyReplaceRulesToMessage(rawMessage string, rules []ReplaceRule) string {
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config AIPromptDecoratorConfig, body []byte) types.Action {
+	// The rewrite below edits the first occurrence of "messages" (gjson reads and
+	// sjson writes that one), while the upstream parser keeps the last one: a body
+	// that declares the member twice would carry the caller's original messages
+	// past the decorator, so reject it instead of reporting a rewrite that never
+	// reaches the model.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "messages"); err != nil {
+		log.Debugf("skip duplicate messages member check: %v", err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage("messages")
+		log.Warnf("rejecting request: %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "duplicate_messages_member",
+			[][2]string{{"content-type", "text/plain"}}, []byte(message), -1)
+		return types.ActionPause
+	}
 	messageJson := `{"messages":[]}`
 
 	for _, entry := range config.Prepend {
