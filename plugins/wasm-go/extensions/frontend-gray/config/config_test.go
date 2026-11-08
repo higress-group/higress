@@ -52,6 +52,26 @@ func TestJsonToGrayConfigRuleValidation(t *testing.T) {
 		assert.Equal(t, 80, grayConfig.GrayWeight)
 	})
 
+	t.Run("weighted-only deployment without rules is accepted", func(t *testing.T) {
+		json := `{"grayKey":"userid","baseDeployment":{"version":"base"},"grayDeployments":[{"name":"weighted","version":"gray","enabled":true,"weight":80}]}`
+		grayConfig := &GrayConfig{}
+		err := JsonToGrayConfig(gjson.Parse(json), grayConfig)
+		assert.NoError(t, err)
+		assert.Equal(t, 80, grayConfig.GrayWeight)
+		assert.Len(t, grayConfig.GrayDeployments, 1)
+	})
+
+	t.Run("mixed order without rules is accepted", func(t *testing.T) {
+		json := `{"grayKey":"userid","baseDeployment":{"version":"base"},"grayDeployments":[{"name":"legacy","version":"gray","enabled":true},{"name":"weighted","version":"gray","enabled":true,"weight":80}]}`
+		grayConfig := &GrayConfig{}
+		err := JsonToGrayConfig(gjson.Parse(json), grayConfig)
+		assert.NoError(t, err)
+		assert.Equal(t, 80, grayConfig.GrayWeight)
+		assert.Len(t, grayConfig.GrayDeployments, 2)
+		assert.Equal(t, "legacy", grayConfig.GrayDeployments[0].Name)
+		assert.Equal(t, "weighted", grayConfig.GrayDeployments[1].Name)
+	})
+
 	t.Run("enabled deployment with matching rule passes validation", func(t *testing.T) {
 		json := `{"grayKey":"userid","rules":[{"name":"inner-user","grayKeyValue":["00000001"]}],"baseDeployment":{"version":"base"},"grayDeployments":[{"name":"inner-user","version":"gray","enabled":true}]}`
 		grayConfig := &GrayConfig{}

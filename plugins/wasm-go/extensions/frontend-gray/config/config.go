@@ -203,17 +203,18 @@ func JsonToGrayConfig(json gjson.Result, grayConfig *GrayConfig) error {
 	// nil 并被直接解引用，导致每个 HTML 请求都 panic，panic 被 wasm 框架 recover
 	// 后请求静默回退到基线版本，灰度和注入都不会生效，排查成本很高。
 	// 因此在配置解析阶段直接返回错误，让错误配置在插件启动时暴露出来。
-	// 注意：配置了 weight 的部署走比例灰度分支，不依赖规则，无需校验。
-	ruleNames := make(map[string]struct{}, len(grayConfig.Rules))
-	for _, rule := range grayConfig.Rules {
-		ruleNames[rule.Name] = struct{}{}
-	}
-	for _, deployment := range grayConfig.GrayDeployments {
-		if deployment.Weight > 0 {
-			continue
+	// 注意：只有比例灰度未生效（GrayWeight == 0）时才会按规则匹配，此时每个
+	// 启用的部署都必须有同名规则；GrayWeight > 0 时 FilterGrayRule 走比例分支，
+	// rules 不参与匹配，混合配置中的无 weight 部署可以没有同名规则。
+	if grayConfig.GrayWeight == 0 {
+		ruleNames := make(map[string]struct{}, len(grayConfig.Rules))
+		for _, rule := range grayConfig.Rules {
+			ruleNames[rule.Name] = struct{}{}
 		}
-		if _, ok := ruleNames[deployment.Name]; !ok {
-			return fmt.Errorf("grayDeployments entry %q is enabled but has no matching rule in rules, add a rule named %q or set a positive weight for this deployment", deployment.Name, deployment.Name)
+		for _, deployment := range grayConfig.GrayDeployments {
+			if _, ok := ruleNames[deployment.Name]; !ok {
+				return fmt.Errorf("grayDeployments entry %q is enabled but has no matching rule in rules, add a rule named %q or set a positive weight for this deployment", deployment.Name, deployment.Name)
+			}
 		}
 	}
 
