@@ -63,14 +63,18 @@ type RestToolHeader struct {
 
 // RestToolRequestTemplate defines how to construct the HTTP request
 type RestToolRequestTemplate struct {
-	URL            string              `json:"url"`
-	Method         string              `json:"method"`
-	Headers        []RestToolHeader    `json:"headers"`
-	Body           string              `json:"body"`
-	ArgsToJsonBody bool                `json:"argsToJsonBody,omitempty"` // Use args as JSON body
-	ArgsToUrlParam bool                `json:"argsToUrlParam,omitempty"` // Add args to URL parameters
-	ArgsToFormBody bool                `json:"argsToFormBody,omitempty"` // Use args as form-urlencoded body
-	Security       SecurityRequirement `json:"security,omitempty"`
+	URL            string           `json:"url"`
+	Method         string           `json:"method"`
+	Headers        []RestToolHeader `json:"headers"`
+	Body           string           `json:"body"`
+	ArgsToJsonBody bool             `json:"argsToJsonBody,omitempty"` // Use args as JSON body
+	ArgsToUrlParam bool             `json:"argsToUrlParam,omitempty"` // Add args to URL parameters
+	ArgsToFormBody bool             `json:"argsToFormBody,omitempty"` // Use args as form-urlencoded body
+	// AllowUnsafePathArgs restores the legacy behavior of substituting path
+	// arguments into the URL template without escaping or validation. It is
+	// unsafe and intended only as a temporary compatibility escape hatch.
+	AllowUnsafePathArgs bool                `json:"allowUnsafePathArgs,omitempty"`
+	Security            SecurityRequirement `json:"security,omitempty"`
 }
 
 // RestToolResponseTemplate defines how to transform the HTTP response
@@ -78,6 +82,17 @@ type RestToolResponseTemplate struct {
 	Body        string `json:"body"`
 	PrependBody string `json:"prependBody,omitempty"` // Text to insert before the response body
 	AppendBody  string `json:"appendBody,omitempty"`  // Text to insert after the response body
+}
+
+// urlAuthority captures the URL components that must stay static. Arguments
+// are only allowed to affect the path, query, and fragment, so these values
+// are recorded from the template and compared with the final rendered URL.
+type urlAuthority struct {
+	scheme   string
+	hostname string
+	port     string
+	userinfo *url.Userinfo
+	opaque   string
 }
 
 // RestTool represents a REST API that can be called as an MCP tool
@@ -98,6 +113,7 @@ type RestTool struct {
 	parsedBodyTemplate          *template.Template
 	parsedResponseTemplate      *template.Template
 	parsedErrorResponseTemplate *template.Template
+	urlAuthority                *urlAuthority
 
 	// Map of argument names to their positions
 	argPositions map[string]string
@@ -123,9 +139,33 @@ func parseIP(source string, fromHeader bool) string {
 	return source
 }
 
-// templateFuncs returns the template functions map
 func templateFuncs() template.FuncMap {
+	return templateFuncsWithPathArgTokens(nil)
+}
+
+func templateFuncsWithPathArgTokens(pathArgsByToken map[string]interface{}) template.FuncMap {
+	resolvePathArgToken := func(value interface{}) interface{} {
+		if raw, ok := pathArgsByToken[convertArgToString(value)]; ok {
+			return raw
+		}
+		return value
+	}
 	return template.FuncMap{
+		// Escape a value as a single URL path segment. Dot segments are
+		// rejected so that the escaped value cannot traverse the backend path.
+		"pathescape": func(value interface{}) (string, error) {
+			value = resolvePathArgToken(value)
+			raw := convertArgToString(value)
+			if err := validatePathArgValue(raw); err != nil {
+				return "", err
+			}
+			return url.PathEscape(raw), nil
+		},
+		// Escape a value for use in a URL query component.
+		"queryescape": func(value interface{}) string {
+			value = resolvePathArgToken(value)
+			return url.QueryEscape(convertArgToString(value))
+		},
 		// Get IP from socket
 		"getSocketIP": func() string {
 			bs, _ := proxywasm.GetProperty([]string{"source", "address"})
@@ -148,6 +188,100 @@ func templateFuncs() template.FuncMap {
 			return ""
 		},
 	}
+}
+
+func containsTemplatePlaceholder(value string) bool {
+	return strings.ContainsAny(value, "{}")
+}
+
+func newURLAuthority(templateURL string) (*urlAuthority, error) {
+	parsed, err := url.Parse(templateURL)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing URL template (scheme, host, port, userinfo, and opaque must be static): %v", err)
+	}
+
+	userinfo := ""
+	if parsed.User != nil {
+		userinfo = parsed.User.String()
+	}
+	if containsTemplatePlaceholder(parsed.Scheme) ||
+		containsTemplatePlaceholder(parsed.Host) ||
+		containsTemplatePlaceholder(parsed.Port()) ||
+		containsTemplatePlaceholder(userinfo) ||
+		containsTemplatePlaceholder(parsed.Opaque) {
+		return nil, errors.New("URL template scheme, host, port, userinfo, and opaque components must be static")
+	}
+
+	return &urlAuthority{
+		scheme:   strings.ToLower(parsed.Scheme),
+		hostname: strings.ToLower(parsed.Hostname()),
+		port:     parsed.Port(),
+		userinfo: parsed.User,
+		opaque:   parsed.Opaque,
+	}, nil
+}
+
+func defaultPortForScheme(scheme string) string {
+	switch strings.ToLower(scheme) {
+	case "http", "ws":
+		return "80"
+	case "https", "wss":
+		return "443"
+	default:
+		return ""
+	}
+}
+
+func effectiveURLPort(scheme, port string) string {
+	if port != "" {
+		return port
+	}
+	return defaultPortForScheme(scheme)
+}
+
+func userinfoEqual(left, right *url.Userinfo) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	if left.Username() != right.Username() {
+		return false
+	}
+	leftPassword, leftHasPassword := left.Password()
+	rightPassword, rightHasPassword := right.Password()
+	return leftHasPassword == rightHasPassword && leftPassword == rightPassword
+}
+
+func (expected *urlAuthority) validate(actual *url.URL) error {
+	if !strings.EqualFold(actual.Scheme, expected.scheme) {
+		return fmt.Errorf("scheme changed from %q to %q", expected.scheme, actual.Scheme)
+	}
+	if !strings.EqualFold(actual.Hostname(), expected.hostname) {
+		return fmt.Errorf("host changed from %q to %q", expected.hostname, actual.Hostname())
+	}
+	if effectiveURLPort(actual.Scheme, actual.Port()) != effectiveURLPort(expected.scheme, expected.port) {
+		return fmt.Errorf("port changed from %q to %q", expected.port, actual.Port())
+	}
+	if !userinfoEqual(actual.User, expected.userinfo) {
+		return errors.New("userinfo changed")
+	}
+	if actual.Opaque != expected.opaque {
+		return fmt.Errorf("opaque component changed from %q to %q", expected.opaque, actual.Opaque)
+	}
+	return nil
+}
+
+func (t *RestTool) verifyRenderedURLAuthority(renderedURL string) error {
+	if t.urlAuthority == nil {
+		return errors.New("URL template authority has not been validated")
+	}
+	parsed, err := url.Parse(renderedURL)
+	if err != nil {
+		return fmt.Errorf("error parsing rendered URL: %v", err)
+	}
+	if err := t.urlAuthority.validate(parsed); err != nil {
+		return fmt.Errorf("rendered URL authority does not match URL template: %v", err)
+	}
+	return nil
 }
 
 // parseTemplates parses all templates in the tool configuration
@@ -177,6 +311,10 @@ func (t *RestTool) parseTemplates() error {
 		t.parsedURLTemplate, err = template.New("url").Funcs(templateFuncs()).Parse(t.RequestTemplate.URL)
 		if err != nil {
 			return fmt.Errorf("error parsing URL template: %v", err)
+		}
+		t.urlAuthority, err = newURLAuthority(t.RequestTemplate.URL)
+		if err != nil {
+			return err
 		}
 
 		// Parse header templates
@@ -249,6 +387,247 @@ func executeTemplate(tmpl *template.Template, data []byte) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+const maxPathArgDecodeDepth = 4
+
+// hasDotPathSegment reports whether value contains a "." or ".." segment.
+// Backslashes are treated as separators as well so that Windows-style paths
+// cannot bypass the check.
+func hasDotPathSegment(value string) bool {
+	normalized := strings.ReplaceAll(value, "\\", "/")
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func hexValue(c byte) (byte, bool) {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0', true
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10, true
+	case 'A' <= c && c <= 'F':
+		return c - 'A' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+// decodePercentOnce decodes valid percent escapes and leaves invalid escape
+// sequences untouched. It reports whether at least one escape was decoded.
+func decodePercentOnce(value string) (string, bool) {
+	if !strings.Contains(value, "%") {
+		return value, false
+	}
+	var decoded strings.Builder
+	decoded.Grow(len(value))
+	changed := false
+	for i := 0; i < len(value); i++ {
+		if value[i] == '%' && i+2 < len(value) {
+			high, highOK := hexValue(value[i+1])
+			low, lowOK := hexValue(value[i+2])
+			if highOK && lowOK {
+				decoded.WriteByte(high<<4 | low)
+				i += 2
+				changed = true
+				continue
+			}
+		}
+		decoded.WriteByte(value[i])
+	}
+	return decoded.String(), changed
+}
+
+// validatePathArgValue rejects raw path argument values whose percent-decoded
+// form contains a dot segment. Arguments are expected to be raw values, so
+// pre-encoded input is validated as if it were raw rather than decoded and
+// reused; decoding is bounded and only used for validation.
+func validatePathArgValue(value string) error {
+	current := value
+	for depth := 0; ; depth++ {
+		if hasDotPathSegment(current) {
+			return errors.New("path argument must not contain '.' or '..' segments")
+		}
+		decoded, changed := decodePercentOnce(current)
+		if !changed {
+			return nil
+		}
+		if depth == maxPathArgDecodeDepth {
+			return errors.New("path argument exceeds the percent-decoding limit")
+		}
+		current = decoded
+	}
+}
+
+func escapePathArgSegment(value string) (string, error) {
+	if err := validatePathArgValue(value); err != nil {
+		return "", err
+	}
+	return url.PathEscape(value), nil
+}
+
+func buildPathArgToken(templateText string, args map[string]interface{}, index int) string {
+	token := fmt.Sprintf("__HIGRESS_REST_PATH_ARG_%d__", index)
+	for {
+		collision := strings.Contains(templateText, token)
+		if !collision {
+			for _, value := range args {
+				if strings.Contains(convertArgToString(value), token) {
+					collision = true
+					break
+				}
+			}
+		}
+		if !collision {
+			return token
+		}
+		token += "_"
+	}
+}
+
+func parseTokenizedURL(renderedURL string, tokens map[string]string) (*url.URL, error) {
+	for name, token := range tokens {
+		renderedURL = strings.ReplaceAll(renderedURL, "{"+name+"}", token)
+	}
+	parsedURL, err := url.Parse(renderedURL)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing tokenized URL template: %v", err)
+	}
+	for name, token := range tokens {
+		if strings.Contains(parsedURL.Scheme, token) ||
+			strings.Contains(parsedURL.Opaque, token) ||
+			strings.Contains(parsedURL.Host, token) ||
+			(parsedURL.User != nil && strings.Contains(parsedURL.User.String(), token)) {
+			return nil, fmt.Errorf("path argument %q must not be used in the URL scheme, authority, userinfo, opaque, or host", name)
+		}
+	}
+	return parsedURL, nil
+}
+
+// substitutePathArgs substitutes automatic path tokens into EscapedPath and
+// RawQuery without overwriting output from explicit template escape functions.
+// In unsafe mode it preserves the legacy raw substitution.
+func substitutePathArgs(renderedURL string, pathArgs map[string]interface{}, tokens map[string]string, allowUnsafe bool) (string, error) {
+	if allowUnsafe {
+		for name, value := range pathArgs {
+			renderedURL = strings.ReplaceAll(renderedURL, "{"+name+"}", convertArgToString(value))
+		}
+		return renderedURL, nil
+	}
+	if len(tokens) == 0 {
+		return renderedURL, nil
+	}
+
+	parsedURL, err := parseTokenizedURL(renderedURL, tokens)
+	if err != nil {
+		return "", err
+	}
+	escapedValues := make(map[string]string, len(pathArgs))
+	escapedPath := parsedURL.EscapedPath()
+	for name, value := range pathArgs {
+		token, ok := tokens[name]
+		if !ok {
+			return "", fmt.Errorf("missing path argument token for %q", name)
+		}
+		raw := convertArgToString(value)
+		if strings.Contains(escapedPath, token) {
+			escaped, err := escapePathArgSegment(raw)
+			if err != nil {
+				return "", fmt.Errorf("invalid value for path argument %q: %w", name, err)
+			}
+			escapedValues[name] = escaped
+		}
+		parsedURL.RawQuery = strings.ReplaceAll(parsedURL.RawQuery, token, raw)
+		parsedURL.Fragment = strings.ReplaceAll(parsedURL.Fragment, token, raw)
+		parsedURL.RawFragment = ""
+	}
+
+	pathSegments := strings.Split(escapedPath, "/")
+	for index, segment := range pathSegments {
+		for name, token := range tokens {
+			if escaped, ok := escapedValues[name]; ok {
+				segment = strings.ReplaceAll(segment, token, escaped)
+			}
+		}
+		pathSegments[index] = segment
+	}
+	escapedPath = strings.Join(pathSegments, "/")
+	decodedPath, err := url.PathUnescape(escapedPath)
+	if err != nil {
+		return "", fmt.Errorf("error decoding substituted URL path: %v", err)
+	}
+	parsedURL.Path = decodedPath
+	parsedURL.RawPath = escapedPath
+	return parsedURL.String(), nil
+}
+
+// renderURL renders the URL template with path-position arguments tokenized so
+// that their values can be escaped exactly when they land in the path portion.
+func (t *RestTool) renderURL(serverConfig map[string]interface{}, args map[string]interface{}, pathArgs map[string]interface{}) (string, error) {
+	urlArgs := make(map[string]interface{}, len(args))
+	for name, value := range args {
+		urlArgs[name] = value
+	}
+
+	var tokens map[string]string
+	if !t.RequestTemplate.AllowUnsafePathArgs {
+		tokens = make(map[string]string, len(pathArgs))
+		index := 0
+		for name := range pathArgs {
+			token := buildPathArgToken(t.RequestTemplate.URL, args, index)
+			tokens[name] = token
+			urlArgs[name] = token
+			index++
+		}
+	}
+
+	var templateData []byte
+	templateData, _ = sjson.SetBytes(templateData, "config", serverConfig)
+	templateData, _ = sjson.SetBytes(templateData, "args", urlArgs)
+
+	renderedURL, err := executeTemplate(t.parsedURLTemplate, templateData)
+	if err != nil {
+		return "", fmt.Errorf("error executing URL template: %v", err)
+	}
+	if t.RequestTemplate.AllowUnsafePathArgs || len(tokens) == 0 {
+		renderedURL, err = substitutePathArgs(renderedURL, pathArgs, tokens, t.RequestTemplate.AllowUnsafePathArgs)
+		if err != nil {
+			return "", err
+		}
+		if err := t.verifyRenderedURLAuthority(renderedURL); err != nil {
+			return "", err
+		}
+		return renderedURL, nil
+	}
+	if _, err := parseTokenizedURL(renderedURL, tokens); err != nil {
+		return "", err
+	}
+
+	pathArgsByToken := make(map[string]interface{}, len(tokens))
+	for name, token := range tokens {
+		pathArgsByToken[token] = pathArgs[name]
+	}
+	resolvedTemplate, err := t.parsedURLTemplate.Clone()
+	if err != nil {
+		return "", fmt.Errorf("error cloning URL template: %v", err)
+	}
+	resolvedTemplate.Funcs(templateFuncsWithPathArgTokens(pathArgsByToken))
+	renderedURL, err = executeTemplate(resolvedTemplate, templateData)
+	if err != nil {
+		return "", fmt.Errorf("error executing URL template: %v", err)
+	}
+	renderedURL, err = substitutePathArgs(renderedURL, pathArgs, tokens, t.RequestTemplate.AllowUnsafePathArgs)
+	if err != nil {
+		return "", err
+	}
+	if err := t.verifyRenderedURLAuthority(renderedURL); err != nil {
+		return "", err
+	}
+	return renderedURL, nil
 }
 
 // RestMCPServer implements Server interface for REST-to-MCP conversion
@@ -605,12 +984,6 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 	}
 
 	// Regular REST tool with HTTP request
-	// Execute URL template
-	urlStr, err := executeTemplate(t.toolConfig.parsedURLTemplate, templateDataBytes)
-	if err != nil {
-		return fmt.Errorf("error executing URL template: %v", err)
-	}
-
 	// Execute header templates from tool config
 	headers := make([][2]string, 0, len(t.toolConfig.RequestTemplate.Headers))
 	for i, header := range t.toolConfig.RequestTemplate.Headers {
@@ -675,11 +1048,12 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 		}
 	}
 
-	// Process path parameters
-	for name, value := range pathArgs {
-		placeholder := fmt.Sprintf("{%s}", name)
-		// Path parameters are substituted directly into urlStr
-		urlStr = strings.Replace(urlStr, placeholder, convertArgToString(value), -1)
+	// Render the URL template with path arguments tokenized, then escape the
+	// tokens that land in the path portion. Query placeholders keep their
+	// existing raw behavior.
+	urlStr, err := t.toolConfig.renderURL(serverConfig, t.arguments, pathArgs)
+	if err != nil {
+		return err
 	}
 
 	// After path parameters are substituted, parse urlStr to create/update parsedURL.

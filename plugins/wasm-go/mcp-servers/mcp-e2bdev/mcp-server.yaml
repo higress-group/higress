@@ -31,46 +31,6 @@ tools:
             "sandboxID": "{{.sandboxID}}-{{.clientID}}"
           }
   
-  - name: execute_code_sandbox
-    description: Execute code in e2b sandbox
-    args:
-    - name: sandbox_id
-      description: "create sandbox id, get from create_sandbox"
-      type: string
-      required: true
-      position: path
-    - name: code
-      description: "python code to execute"
-      type: string
-      required: true
-      position: body
-    requestTemplate:
-      url: "https://49999-{{.args.sandbox_id}}.e2b.dev/execute"
-      method: POST
-      argsToJsonBody: true
-      headers:
-        - key: Content-Type
-          value: "application/json"
-        - key: Authorization
-          value: "Bearer {{.config.apiKey}}"
-    responseTemplate:
-      prependBody: |+
-            # API Response Information
-            Below is the response from an API call. To help you understand the data, I've provided:
-
-            1. A detailed description of all fields in the response structure
-            2. The complete API response
-
-            ## Response Structure
-
-            > Content-Type: application/json
-            result.type is valid only when in ["stdout", "stdout", "result", "error"]
-            - **result: **:  (Type: object)
-              - **result.type**:  (Type: string)
-              - **result.text**:  (Type: string)
-
-            ## Original Response
-  
   - name: kill_sandbox
     description: Kill e2b sandbox
     args:

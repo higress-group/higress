@@ -3300,9 +3300,9 @@ func TestRestMCPServer_CallBranches(t *testing.T) {
 		})
 
 		// -------------------------------------------------------------------
-		// path arg with reserved chars → substituted into URL template
+		// path arg with reserved chars → escaped into URL template
 		// -------------------------------------------------------------------
-		t.Run("path arg substitutes into URL placeholder", func(t *testing.T) {
+		t.Run("path arg is escaped into URL placeholder", func(t *testing.T) {
 			cfg, _ := json.Marshal(map[string]interface{}{
 				"server": map[string]interface{}{"name": "rest-path", "type": "rest"},
 				"tools": []map[string]interface{}{{
@@ -3323,13 +3323,88 @@ func TestRestMCPServer_CallBranches(t *testing.T) {
 
 			host.InitHttp()
 			host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
-			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_user","arguments":{"id":"alice%20smith"}}}`))
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_user","arguments":{"id":"alice smith"}}}`))
 
 			upstreamHeaders := host.GetRequestHeaders()
 			pathVal, has := test.GetHeaderValue(upstreamHeaders, ":path")
 			require.True(t, has)
-			// Path arg is substituted as-is into the URL template before being parsed.
-			require.Contains(t, pathVal, "/users/alice")
+			// Raw path values are escaped as a single segment.
+			require.Equal(t, "/users/alice%20smith", pathVal)
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// path traversal arg → rejected before the backend is called
+		// -------------------------------------------------------------------
+		t.Run("path traversal arg is rejected before routing", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-path-unsafe", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":        "get_user",
+					"description": "by id",
+					"args": []map[string]interface{}{
+						{"name": "id", "description": "uid", "type": "string", "required": true, "position": "path"},
+					},
+					"requestTemplate": map[string]interface{}{
+						"url":    "http://backend.example/users/{id}",
+						"method": "GET",
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_user","arguments":{"id":"../../admin"}}}`))
+
+			localResp := host.GetLocalResponse()
+			require.NotNil(t, localResp)
+			require.Contains(t, string(localResp.Data), `"isError":true`)
+			require.Contains(t, string(localResp.Data), "path argument")
+			require.Empty(t, host.GetHttpCalloutAttributes())
+			upstreamHeaders := host.GetRequestHeaders()
+			require.True(t, test.HasHeaderWithValue(upstreamHeaders, ":authority", "x"))
+			require.True(t, test.HasHeaderWithValue(upstreamHeaders, ":path", "/mcp"))
+			host.CompleteHttp()
+		})
+
+		// -------------------------------------------------------------------
+		// explicit pathescape output cannot rewrite the URL authority
+		// -------------------------------------------------------------------
+		t.Run("explicit pathescape cannot rewrite authority", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{
+				"server": map[string]interface{}{"name": "rest-path-authority", "type": "rest"},
+				"tools": []map[string]interface{}{{
+					"name":        "get_user",
+					"description": "by scheme and host",
+					"args": []map[string]interface{}{
+						{"name": "scheme", "description": "scheme", "type": "string", "required": true, "position": "path"},
+						{"name": "host", "description": "host", "type": "string", "required": true, "position": "path"},
+					},
+					"requestTemplate": map[string]interface{}{
+						"url":    "{{pathescape .args.scheme}}//{{pathescape .args.host}}/users",
+						"method": "GET",
+					},
+				}},
+			})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.InitHttp()
+			host.CallOnHttpRequestHeaders([][2]string{{":authority", "x"}, {":method", "POST"}, {":path", "/mcp"}, {"content-type", "application/json"}})
+			host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_user","arguments":{"scheme":"http:","host":"127.0.0.1:8080"}}}`))
+
+			localResp := host.GetLocalResponse()
+			require.NotNil(t, localResp)
+			require.Contains(t, string(localResp.Data), `"isError":true`)
+			require.Contains(t, string(localResp.Data), "authority")
+			require.Empty(t, host.GetHttpCalloutAttributes())
+			upstreamHeaders := host.GetRequestHeaders()
+			require.True(t, test.HasHeaderWithValue(upstreamHeaders, ":authority", "x"))
+			require.True(t, test.HasHeaderWithValue(upstreamHeaders, ":path", "/mcp"))
 			host.CompleteHttp()
 		})
 
