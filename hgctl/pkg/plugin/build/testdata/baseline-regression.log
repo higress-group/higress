@@ -1,0 +1,6 @@
+--- FAIL: TestCleanupForErrorPreservesOutput (0.00s)
+    --- FAIL: TestCleanupForErrorPreservesOutput/files (0.00s)
+        build_test.go:54: caller file changed: content="" error=open /var/folders/sv/cn8h71pj0vd8750qqdkn2kmm0000gn/T/TestCleanupForErrorPreservesOutputfiles1578720546/001/output/nested/user-file: no such file or directory
+FAIL
+FAIL	github.com/alibaba/higress/hgctl/pkg/plugin/build	0.027s
+FAIL

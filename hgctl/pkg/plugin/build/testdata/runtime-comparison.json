@@ -1,0 +1,18 @@
+[
+  {
+    "variant": "baseline",
+    "exit_code": 1,
+    "sentinel_preserved": false,
+    "stdout": "",
+    "stderr": "error: failed to generate wasm plugin metadata files: stat /var/folders/sv/cn8h71pj0vd8750qqdkn2kmm0000gn/T/hgctl-cleanup-s2p9mznq/missing-model: no such file or directory\n",
+    "binary_sha256": "6b0ccc5c2525ea03a8c55b51cda0c98939f99e25096fc47ea7dce37ef876c648"
+  },
+  {
+    "variant": "fixed",
+    "exit_code": 1,
+    "sentinel_preserved": true,
+    "stdout": "",
+    "stderr": "error: failed to generate wasm plugin metadata files: stat /var/folders/sv/cn8h71pj0vd8750qqdkn2kmm0000gn/T/hgctl-cleanup-nhqtfzjf/missing-model: no such file or directory\n",
+    "binary_sha256": "ee4acb0cff8a62007d6cb5aa265386ca5d0f66872c5ae006df14a781f8d330c8"
+  }
+]
