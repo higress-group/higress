@@ -119,20 +119,28 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIRagConfig, body []byte,
 	}
 	headers := [][2]string{{"Content-Type", "application/json"}, {"Authorization", "Bearer " + config.DashScopeAPIKey}}
 	reqEmbeddingSerialized, _ := json.Marshal(requestEmbedding)
-	config.DashScopeClient.Post(
+	if err := config.DashScopeClient.Post(
 		"/api/v1/services/embeddings/text-embedding/text-embedding",
 		headers,
 		reqEmbeddingSerialized,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			var responseEmbedding dashscope.Response
-			_ = json.Unmarshal(responseBody, &responseEmbedding)
+			// A DashScope failure (invalid key, quota, ...) returns an
+			// error payload with no embeddings; index Embeddings[0] then
+			// panicked and aborted the request.
+			if err := json.Unmarshal(responseBody, &responseEmbedding); err != nil ||
+				len(responseEmbedding.Output.Embeddings) == 0 {
+				log.Errorf("ai-rag: embedding request failed or returned no embeddings, passing the request through")
+				proxywasm.ResumeHttpRequest()
+				return
+			}
 			requestQuery := dashvector.Request{
 				TopK:         config.DashVectorTopK,
 				OutputFileds: []string{config.DashVectorField},
 				Vector:       responseEmbedding.Output.Embeddings[0].Embedding,
 			}
 			requestQuerySerialized, _ := json.Marshal(requestQuery)
-			config.DashVectorClient.Post(
+			if err := config.DashVectorClient.Post(
 				fmt.Sprintf("/v1/collections/%s/query", config.DashVectorCollection),
 				[][2]string{{"Content-Type", "application/json"}, {"dashvector-auth-token", config.DashVectorAPIKey}},
 				requestQuerySerialized,
@@ -162,10 +170,20 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config AIRagConfig, body []byte,
 					}
 					proxywasm.ResumeHttpRequest()
 				},
-			)
+			); err != nil {
+				// A synchronous dispatch failure means the callback above
+				// will never run, so the request would hang forever.
+				log.Errorf("ai-rag: dashvector dispatch failed: %v", err)
+				proxywasm.ResumeHttpRequest()
+			}
 		},
 		50000,
-	)
+	); err != nil {
+		// A synchronous dispatch failure means the callback above will
+		// never run, so pausing here would hang the request forever.
+		log.Errorf("ai-rag: dashscope dispatch failed: %v", err)
+		return types.ActionContinue
+	}
 	return types.ActionPause
 }
 

@@ -391,3 +391,44 @@ func TestDashVectorTypes(t *testing.T) {
 		require.Equal(t, float32(0.75), response.Output[0].Score)
 	})
 }
+
+// DashScope failure payloads (invalid key, quota, ...) carry no
+// embeddings; the old code unmarshalled with the error ignored and
+// indexed Output.Embeddings[0] unconditionally, panicking and aborting
+// the request. It must instead pass the original request through.
+func TestEmbeddingErrorResponsePassesThrough(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(basicConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/v1/chat/completions"},
+			{":method", "POST"},
+		})
+
+		originalBody := `{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "What is AI?"}]}`
+		action := host.CallOnHttpRequestBody([]byte(originalBody))
+		require.Equal(t, types.ActionPause, action)
+
+		// DashScope error response: no output.embeddings at all.
+		errorResponse := `{"code": "InvalidApiKey", "message": "Invalid API-key provided.", "request_id": "req-err"}`
+		require.NotPanics(t, func() {
+			host.CallOnHttpCall([][2]string{
+				{":status", "401"},
+				{"content-type", "application/json"},
+			}, []byte(errorResponse))
+		})
+
+		// The original request body must pass through unmodified.
+		requestBody := host.GetRequestBody()
+		var passthrough Request
+		err := json.Unmarshal(requestBody, &passthrough)
+		require.NoError(t, err)
+		require.Len(t, passthrough.Messages, 1)
+		require.Equal(t, "What is AI?", passthrough.Messages[0].Content)
+
+		host.CompleteHttp()
+	})
+}
