@@ -33,7 +33,8 @@ func StripPrefix(path, prefix string) string {
 }
 
 func SplitSetFlag(flag string) (string, string) {
-	items := strings.Split(flag, "=")
+	// Split after the first '=' only, so a value that contains '=' is kept.
+	items := strings.SplitN(flag, "=", 2)
 	if len(items) != 2 {
 		return flag, ""
 	}
