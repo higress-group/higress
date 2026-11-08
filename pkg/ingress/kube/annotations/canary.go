@@ -84,7 +84,9 @@ func (c canary) Parse(annotations Annotations, config *Ingress, _ *GlobalContext
 		return nil
 	}
 
-	canaryConfig.Weight, _ = annotations.ParseIntASAP(canaryWeight)
+	if weight, err := annotations.ParseIntASAP(canaryWeight); err == nil && weight >= 0 {
+		canaryConfig.Weight = weight
+	}
 	if weightTotal, err := annotations.ParseIntASAP(canaryWeightTotal); err == nil && weightTotal > 0 {
 		canaryConfig.WeightTotal = weightTotal
 	}

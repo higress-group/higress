@@ -265,3 +265,20 @@ func TestLoadBalanceApplyTrafficPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadBalanceParseNegativeCookieAge(t *testing.T) {
+	config := &Ingress{}
+	annotations := Annotations{
+		buildNginxAnnotationKey(affinity):            "cookie",
+		buildNginxAnnotationKey(sessionCookieMaxAge): "-100",
+	}
+	if err := (loadBalance{}).Parse(annotations, config, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if config.LoadBalance == nil || config.LoadBalance.cookie == nil {
+		t.Fatal("expected cookie affinity config")
+	}
+	if got := config.LoadBalance.cookie.age.GetSeconds(); got != 0 {
+		t.Fatalf("a negative cookie age must be ignored, got %d", got)
+	}
+}

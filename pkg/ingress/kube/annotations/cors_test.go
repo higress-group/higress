@@ -280,3 +280,20 @@ func TestCorsApplyRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestCorsParseNegativeMaxAge(t *testing.T) {
+	config := &Ingress{}
+	annotations := Annotations{
+		buildNginxAnnotationKey(enableCors): "true",
+		buildNginxAnnotationKey(maxAge):     "-100",
+	}
+	if err := (cors{}).Parse(annotations, config, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if config.Cors == nil {
+		t.Fatal("expected cors config")
+	}
+	if config.Cors.MaxAge != defaultMaxAge {
+		t.Fatalf("a negative max age must be ignored, got %d", config.Cors.MaxAge)
+	}
+}
