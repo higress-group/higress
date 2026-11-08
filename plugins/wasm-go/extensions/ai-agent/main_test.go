@@ -2026,5 +2026,75 @@ paths:
 			// 应该返回ActionContinue，因为Action Input JSON无效
 			require.Equal(t, types.ActionContinue, action)
 		})
+
+		t.Run("llm_call_returns_error_status_no_panic", func(t *testing.T) {
+			host, status := test.NewTestHost(httpTestConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+			})
+			userRequestBody := `{"model":"qwen-turbo","messages":[{"role":"user","content":"今天天气怎么样？"}],"stream":false}`
+			host.CallOnHttpRequestBody([]byte(userRequestBody))
+
+			llmResponse1 := `{
+				"id": "chatcmpl-123",
+				"choices": [{"message": {"role": "assistant", "content": "{\"action\": \"getWeather\", \"action_input\": \"{\\\"city\\\": \\\"北京\\\"}\"}"}}]
+			}`
+			action := host.CallOnHttpResponseBody([]byte(llmResponse1))
+			require.Equal(t, types.ActionPause, action)
+
+			apiResponse1 := `{"temperature": 25, "condition": "晴朗"}`
+			host.CallOnHttpCall([][2]string{
+				{"Content-Type", "application/json"},
+				{":status", "200"},
+			}, []byte(apiResponse1))
+
+			require.NotPanics(t, func() {
+				host.CallOnHttpCall([][2]string{
+					{"Content-Type", "application/json"},
+					{":status", "429"},
+				}, []byte(`{"error":{"message":"Rate limit reached"}}`))
+			})
+		})
+
+		t.Run("llm_call_returns_empty_choices_no_panic", func(t *testing.T) {
+			host, status := test.NewTestHost(httpTestConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/chat"},
+				{":method", "POST"},
+				{"content-type", "application/json"},
+			})
+			userRequestBody := `{"model":"qwen-turbo","messages":[{"role":"user","content":"今天天气怎么样？"}],"stream":false}`
+			host.CallOnHttpRequestBody([]byte(userRequestBody))
+
+			llmResponse1 := `{
+				"id": "chatcmpl-123",
+				"choices": [{"message": {"role": "assistant", "content": "{\"action\": \"getWeather\", \"action_input\": \"{\\\"city\\\": \\\"北京\\\"}\"}"}}]
+			}`
+			action := host.CallOnHttpResponseBody([]byte(llmResponse1))
+			require.Equal(t, types.ActionPause, action)
+
+			apiResponse1 := `{"temperature": 25, "condition": "晴朗"}`
+			host.CallOnHttpCall([][2]string{
+				{"Content-Type", "application/json"},
+				{":status", "200"},
+			}, []byte(apiResponse1))
+
+			require.NotPanics(t, func() {
+				host.CallOnHttpCall([][2]string{
+					{"Content-Type", "application/json"},
+					{":status", "200"},
+				}, []byte(`{"id":"chatcmpl-124","choices":[]}`))
+			})
+		})
 	})
 }
