@@ -10,7 +10,7 @@ require (
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.1.13
 	github.com/alibabacloud-go/tea v1.3.13
 	github.com/alibabacloud-go/tea-utils/v2 v2.0.7
-	github.com/envoyproxy/envoy v1.36.10
+	github.com/envoyproxy/envoy v1.36.12
 	github.com/mark3labs/mcp-go v0.12.0
 )
 
