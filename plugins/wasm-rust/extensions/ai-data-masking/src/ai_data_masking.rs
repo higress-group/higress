@@ -190,25 +190,19 @@ struct ToolRestore {
     has_entries: bool,
 }
 
-fn tool_response_format(bytes: &[u8], end: bool) -> Option<bool> {
-    let bytes = if bytes.starts_with(b"\xef\xbb\xbf") {
-        &bytes[3..]
-    } else if b"\xef\xbb\xbf".starts_with(bytes) && !end {
+fn tool_response_format(mut bytes: impl Iterator<Item = u8> + Clone, end: bool) -> Option<bool> {
+    let prefix: Vec<_> = bytes.clone().take(3).collect();
+    if prefix == b"\xef\xbb\xbf" {
+        let _ = bytes.nth(2);
+    } else if b"\xef\xbb\xbf".starts_with(&prefix) && !end {
         return None;
-    } else {
-        bytes
-    };
-    let bytes = bytes
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
-        .map_or(&[][..], |at| &bytes[at..]);
-    match bytes.first() {
+    }
+    let mut bytes = bytes.skip_while(u8::is_ascii_whitespace);
+    match bytes.next() {
         Some(b'{' | b'[') => Some(false),
         Some(b':') => Some(true),
         None => end.then_some(true),
-        _ if bytes.contains(&b':') || bytes.contains(&b'\n') || bytes.contains(&b'\r') || end => {
-            Some(true)
-        }
+        _ if bytes.any(|byte| matches!(byte, b':' | b'\n' | b'\r')) || end => Some(true),
         _ => None,
     }
 }
@@ -1936,6 +1930,7 @@ impl AiDataMasking {
     }
     fn fail_tool_stream(&mut self, mut tools: ToolState, reason: &'static str) -> DataAction {
         tools.failed = true;
+        tools.probe = Vec::new();
         tools.stream = tool_stream::ToolStream::default();
         tools.raw_restore = tool_raw::RawRestoreWindow::default();
         tools.raw_deny = tool_raw::RawDenyWindow::default();
@@ -1954,54 +1949,66 @@ impl AiDataMasking {
             return DataAction::Continue;
         }
         tools.body_started = true;
-        let mut buffered = None;
-        if tools.response_stream != Some(true) {
-            tools.probe.extend_from_slice(body);
-            if tools.response_stream.is_none() {
-                tools.response_stream = tool_response_format(&tools.probe, end);
-            }
-            match tools.response_stream {
-                Some(false) if end => {
-                    let bytes = std::mem::take(&mut tools.probe);
-                    self.tools = Some(tools);
-                    self.replace_http_response_body(&bytes);
-                    return self.on_http_response_complete_body(&bytes);
-                }
-                Some(true) => buffered = Some(std::mem::take(&mut tools.probe)),
-                _ => {
-                    self.tools = Some(tools);
-                    self.replace_http_response_body(&[]);
-                    return DataAction::Continue;
-                }
-            }
-        }
-        let body = buffered.as_deref().unwrap_or(body);
         let config = self
             .config
             .as_ref()
             .expect("configured tool stream")
             .clone();
-        let legacy_text = config.deny_openai && self.is_openai;
-        let raw_mode = !legacy_text && config.deny_raw;
-        if raw_mode {
-            if let Err(reason) = tools.raw_deny.push(body, end, &config, &self.log) {
-                return self.fail_tool_stream(tools, reason);
+        let mut buffered = None;
+        if tools.response_stream != Some(true) {
+            if tools.response_stream.is_none() {
+                tools.response_stream =
+                    tool_response_format(tools.probe.iter().chain(body.iter()).copied(), end);
+            }
+            if tools.response_stream == Some(true) {
+                if !tools.probe.is_empty() {
+                    buffered = Some(std::mem::take(&mut tools.probe));
+                }
+            } else {
+                if tools
+                    .probe
+                    .len()
+                    .checked_add(body.len())
+                    .is_none_or(|size| size > config.tool_arguments.limits.max_unparsed_bytes)
+                {
+                    return self.fail_tool_stream(tools, "unparsed response buffer limit exceeded");
+                }
+                tools.probe.extend_from_slice(body);
+                if tools.response_stream == Some(false) && end {
+                    let bytes = std::mem::take(&mut tools.probe);
+                    self.tools = Some(tools);
+                    self.replace_http_response_body(&bytes);
+                    return self.on_http_response_complete_body(&bytes);
+                }
+                self.tools = Some(tools);
+                self.replace_http_response_body(&[]);
+                return DataAction::Continue;
             }
         }
-        let actions = match tools
-            .stream
-            .push(body, end, &config, &tools.restore, &self.log)
+        let legacy_text = config.deny_openai && self.is_openai;
+        let raw_mode = !legacy_text && config.deny_raw;
+        let mut actions = Vec::new();
+        for (part, part_end) in buffered
+            .iter()
+            .map(|bytes| (bytes.as_slice(), false))
+            .chain(std::iter::once((body, end)))
         {
-            Ok(actions) => actions,
-            Err(reason) => {
-                tools.failed = true;
-                tools.stream = tool_stream::ToolStream::default();
-                self.msg_window = MsgWindow::default();
-                self.tools = Some(tools);
-                self.log.warn(reason);
-                return self.deny(true);
+            if raw_mode {
+                if let Err(reason) = tools.raw_deny.push(part, part_end, &config, &self.log) {
+                    return self.fail_tool_stream(tools, reason);
+                }
             }
-        };
+            match tools
+                .stream
+                .push(part, part_end, &config, &tools.restore, &self.log)
+            {
+                Ok(output) => actions.extend(output),
+                Err(reason) => return self.fail_tool_stream(tools, reason),
+            }
+        }
+        if tools.stream.errored() {
+            actions.retain(|action| !matches!(action, StreamAction::Arguments(_)));
+        }
         if raw_mode {
             let result = (|| -> Result<Vec<u8>, &'static str> {
                 if tools.stream.errored() {
@@ -2607,7 +2614,7 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
         let config = self.config.as_ref().unwrap().clone();
         if let Some(tools) = &mut self.tools {
             if !tools.body_started && tools.response_stream.is_none() {
-                tools.response_stream = tool_response_format(res_body, true);
+                tools.response_stream = tool_response_format(res_body.iter().copied(), true);
                 if tools.response_stream == Some(true) {
                     return self.process_tool_stream(res_body, true);
                 }
@@ -4183,6 +4190,65 @@ mod tests {
                 assert_eq!(crate::test_host::last_rejection().unwrap().0, 200);
                 assert!(crate::test_host::take_request_body().is_none());
             }
+        }
+    }
+    #[test]
+    fn undecided_response_prefix_is_bounded_and_failure_stays_closed() {
+        crate::test_host::reset();
+        let config = serde_json::from_value(json!({"deny_openai":false,"deny_words":["BLOCKED"],
+            "tool_arguments":{"check":true,"limits":{"max_unparsed_bytes":16}}}))
+        .unwrap();
+        let mut plugin = AiDataMasking::new();
+        plugin.on_config(Rc::new(config));
+        plugin.on_http_request_complete_body(
+            &json!({"stream":true,"messages":[]})
+                .to_string()
+                .into_bytes(),
+        );
+        let input = vec![b' '; 1030];
+        crate::test_host::response_input(&input);
+        plugin.on_http_response_body(input.len(), false);
+        assert!(
+            plugin.tools.as_ref().unwrap().failed,
+            "undecided prefix exceeded its limit"
+        );
+        assert!(plugin.tools.as_ref().unwrap().probe.is_empty());
+        for tail in [
+            b"data: {\"choices\":[]}\n\n".as_slice(),
+            b"data: [DONE]\n\n",
+        ] {
+            crate::test_host::reset();
+            crate::test_host::response_input(tail);
+            plugin.on_http_response_body(tail.len(), true);
+            assert_eq!(crate::test_host::take_response_body().unwrap(), b"");
+        }
+    }
+    #[test]
+    fn response_sniffing_preserves_batched_frames_after_a_split_prefix() {
+        let config = Rc::new(
+            serde_json::from_value(json!({"deny_openai":false,"deny_words":["BLOCKED"],
+            "tool_arguments":{"check":true,"limits":{"max_unparsed_bytes":64}}}))
+            .unwrap(),
+        );
+        let frame = b"data: {\"choices\":[]}\n\n";
+        let wire = frame.repeat(100);
+        for prefix_len in [0, 1, 3] {
+            crate::test_host::reset();
+            let mut plugin = AiDataMasking::new();
+            plugin.on_config(Rc::clone(&config));
+            plugin.on_http_request_complete_body(
+                &json!({"stream":true,"messages":[]})
+                    .to_string()
+                    .into_bytes(),
+            );
+            let mut output = Vec::new();
+            for part in [&wire[..prefix_len], &wire[prefix_len..]] {
+                crate::test_host::response_input(part);
+                plugin.on_http_response_body(part.len(), false);
+                output.extend(crate::test_host::take_response_body().unwrap());
+            }
+            assert!(!plugin.tools.as_ref().unwrap().failed);
+            assert_eq!(output, wire);
         }
     }
 }

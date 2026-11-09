@@ -62,7 +62,10 @@ description: AI 数据脱敏插件配置参考
 | `tool_definitions.check` | bool | false | 检查请求中的 tools/functions 定义，命中即拒绝，不做新增替换 |
 | `tool_arguments.limits.max_call_bytes` | 正整数 | 1048576 | 单 call 的输入和改写结果上限，按解开外层转义后的 UTF-8 字节计 |
 | `tool_arguments.limits.max_buffer_bytes` | 正整数 | 4194304 | 每个响应保留的参数总量，含原文、改写结果、排队参数及 name/id |
+| `tool_arguments.limits.max_unparsed_bytes` | 正整数 | 沿用 `max_buffer_bytes` | 单个原始 SSE 帧及响应格式识别缓存的硬上限，按网络字节计 |
 | `tool_arguments.limits.max_calls` | 正整数 | 128 | 每个响应登记过的需处理 call 数，结束后仍计数 |
+
+未解析缓存单独按 `max_unparsed_bytes` 限制，包含协议字段和外层 JSON 转义。可以单独调高它，同时保留较小的参数预算；未配置时沿用 `max_buffer_bytes`。帧边界之前先检查空间，再追加数据；一次回调中的多帧逐帧处理。超限后丢弃待发参数并保持拒绝状态。只开启定义检查不启用这项响应限制。
 
 以上三项数值是当前开发分支的候选值，需完成容量验证后才能确定发布默认值。总量预算不等于网关 RSS 上限；解析树、协议编码、旧文字窗口和其他 HTTP 缓冲另有开销。请求历史只检查单 call 上限，不套用响应总量和 call 数上限。关闭新功能时，这些上限不影响旧路径。
 

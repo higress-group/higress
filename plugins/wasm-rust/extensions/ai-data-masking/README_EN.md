@@ -57,7 +57,10 @@ Plugin Execution Priority: `991`
 | `tool_definitions.check` | bool | false | Deny matching tools/functions definitions; no new definition masking |
 | `tool_arguments.limits.max_call_bytes` | positive integer | 1048576 | Per-call input and rewritten arguments, in UTF-8 bytes after outer JSON decoding |
 | `tool_arguments.limits.max_buffer_bytes` | positive integer | 4194304 | Retained response parameters: input, rewritten/queued arguments, name and id |
+| `tool_arguments.limits.max_unparsed_bytes` | positive integer | Inherits `max_buffer_bytes` | Hard byte ceiling for one wire SSE frame and buffered response-format detection |
 | `tool_arguments.limits.max_calls` | positive integer | 128 | Registered calls requiring processing, including completed calls |
+
+`max_unparsed_bytes` counts wire bytes, including protocol fields and outer JSON escaping. Set it separately when framing requires more room than the parameter budget. If omitted, it inherits `max_buffer_bytes`. Space is checked before appending bytes, and batched events are processed one at a time. Exceeding this ceiling discards queued arguments and keeps the response rejected. Definition-only checks do not enable this response limit.
 
 These values are development candidates pending capacity verification before release. The buffer budget is not an RSS cap: parsing trees, protocol encoding, legacy text windows, and HTTP buffering have additional costs. Request history uses only the per-call limit, not response byte/count quotas. Disabled features do not impose these limits on legacy traffic.
 

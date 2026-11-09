@@ -10,43 +10,58 @@ struct SseDecoder {
     line_start: usize,
 }
 impl SseDecoder {
-    fn push(&mut self, data: &[u8], end: bool) -> Vec<Vec<u8>> {
-        self.pending.extend_from_slice(data);
-        let mut events = Vec::new();
-        let mut consumed = 0;
-        while self.scan < self.pending.len() {
-            let position = self.scan;
-            let byte = self.pending[position];
-            if byte != b'\r' && byte != b'\n' {
-                self.scan += 1;
-                continue;
+    fn next_event(
+        &mut self,
+        input: &mut &[u8],
+        end: bool,
+        limit: usize,
+    ) -> Result<Option<Vec<u8>>, &'static str> {
+        loop {
+            while self.scan < self.pending.len() {
+                let position = self.scan;
+                let byte = self.pending[position];
+                if byte != b'\r' && byte != b'\n' {
+                    self.scan += 1;
+                    continue;
+                }
+                if byte == b'\r'
+                    && position + 1 == self.pending.len()
+                    && !(end && input.is_empty())
+                    && input.first().map_or(true, |next| *next == b'\n')
+                {
+                    break;
+                }
+                let length = if byte == b'\r' && self.pending.get(position + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+                self.scan += length;
+                if position == self.line_start {
+                    let rest = self.pending.split_off(self.scan);
+                    let event = std::mem::replace(&mut self.pending, rest);
+                    self.scan = 0;
+                    self.line_start = 0;
+                    return Ok(Some(event));
+                }
+                self.line_start = self.scan;
             }
-            if byte == b'\r' && position + 1 == self.pending.len() && !end {
-                break;
+            if input.is_empty() {
+                if end && !self.pending.is_empty() {
+                    self.scan = 0;
+                    self.line_start = 0;
+                    return Ok(Some(std::mem::take(&mut self.pending)));
+                }
+                return Ok(None);
             }
-            let length = if byte == b'\r' && self.pending.get(position + 1) == Some(&b'\n') {
-                2
-            } else {
-                1
-            };
-            self.scan += length;
-            if position == self.line_start {
-                events.push(self.pending[consumed..self.scan].to_vec());
-                consumed = self.scan;
+            let available = limit.saturating_sub(self.pending.len());
+            if available == 0 {
+                return Err("unparsed SSE buffer limit exceeded");
             }
-            self.line_start = self.scan;
+            let count = input.len().min(available);
+            self.pending.extend_from_slice(&input[..count]);
+            *input = &input[count..];
         }
-        if consumed != 0 {
-            self.pending.drain(..consumed);
-            self.scan -= consumed;
-            self.line_start -= consumed;
-        }
-        if end && !self.pending.is_empty() {
-            events.push(std::mem::take(&mut self.pending));
-            self.scan = 0;
-            self.line_start = 0;
-        }
-        events
     }
 }
 
@@ -446,7 +461,12 @@ impl ToolStream {
         log: &Log,
     ) -> Result<Vec<StreamAction>, &'static str> {
         let mut actions = Vec::new();
-        for mut raw in self.parser.push(data, end) {
+        let mut input = data;
+        while let Some(mut raw) = self.parser.next_event(
+            &mut input,
+            end,
+            config.tool_arguments.limits.max_unparsed_bytes,
+        )? {
             // A flushed HTTP tail must end before any buffered args we append.
             ensure_event_boundary(&mut raw);
             let data = payload(&raw);
@@ -692,10 +712,15 @@ mod tests {
             let mut parser = SseDecoder::default();
             let mut events = Vec::new();
             for chunk in input.chunks(size) {
-                events.extend(parser.push(chunk, false));
+                let mut input = chunk;
+                while let Some(event) = parser.next_event(&mut input, false, 4096).unwrap() {
+                    events.push(event);
+                }
             }
             assert_eq!(events.len(), 1, "size {size}");
-            events.extend(parser.push(&[], true));
+            while let Some(event) = parser.next_event(&mut &[][..], true, 4096).unwrap() {
+                events.push(event);
+            }
             assert_eq!(events.len(), 2);
             assert_eq!(events.concat(), input);
         }
@@ -942,5 +967,84 @@ mod tests {
         assert!(actions.iter().any(|action| matches!(action,StreamAction::Event{raw,..} if String::from_utf8_lossy(raw).contains("upstream failed"))));
         assert_eq!(stream.retained, 0);
         assert!(!stream.done);
+    }
+    #[test]
+    fn unclosed_sse_frames_obey_the_unparsed_buffer_limit() {
+        let config: AiDataMaskingConfig = serde_json::from_value(json!({
+            "deny_openai":false,"deny_words":["BLOCKED"],
+            "tool_arguments":{"check":true,"limits":{
+                "max_call_bytes":16,"max_buffer_bytes":64,"max_unparsed_bytes":16
+            }}
+        }))
+        .unwrap();
+        let input = [b"data:".as_slice(), &[b'x'; 1025]].concat();
+        assert_eq!(input.len(), 1030);
+        for size in [1, 17, input.len()] {
+            let mut stream = ToolStream::default();
+            let mut rejected = false;
+            for part in input.chunks(size) {
+                if stream
+                    .push(
+                        part,
+                        false,
+                        &config,
+                        &ToolRestore::default(),
+                        &Log::new("test".into()),
+                    )
+                    .is_err()
+                {
+                    rejected = true;
+                    break;
+                }
+            }
+            assert!(rejected, "unclosed SSE accepted with chunk size {size}");
+        }
+    }
+    #[test]
+    fn frame_limits_count_wire_bytes_and_reset_between_events() {
+        for ending in ["\n\n", "\r\r", "\r\n\r\n"] {
+            let frame = format!("data: {{\"choices\":[]}}{ending}").into_bytes();
+            let all = frame.repeat(100);
+            for limit in [frame.len() - 1, frame.len(), frame.len() + 1] {
+                for size in [1, 19, all.len()] {
+                    let mut parser = SseDecoder::default();
+                    let mut events = Vec::new();
+                    let mut rejected = false;
+                    for part in all.chunks(size) {
+                        let mut input = part;
+                        loop {
+                            match parser.next_event(&mut input, false, limit) {
+                                Ok(Some(event)) => events.push(event),
+                                Ok(None) => break,
+                                Err(_) => {
+                                    rejected = true;
+                                    break;
+                                }
+                            }
+                        }
+                        assert!(parser.pending.len() <= limit);
+                        if rejected {
+                            break;
+                        }
+                    }
+                    if !rejected {
+                        while let Some(event) =
+                            parser.next_event(&mut &[][..], true, limit).unwrap()
+                        {
+                            events.push(event);
+                        }
+                    }
+                    assert_eq!(
+                        rejected,
+                        limit < frame.len(),
+                        "ending {ending:?}, size {size}, limit {limit}"
+                    );
+                    if !rejected {
+                        assert_eq!(events.len(), 100);
+                        assert_eq!(events.concat(), all);
+                    }
+                }
+            }
+        }
     }
 }

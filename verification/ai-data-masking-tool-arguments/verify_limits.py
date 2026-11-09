@@ -31,6 +31,7 @@ def argument_of_size(size, key='x', value='x'):
 
 def config(limits, restore=False):
     value = deepcopy(BASE_CONFIG)
+    limits = {'max_unparsed_bytes': 65536, **limits}
     value['tool_arguments'] = {'check': not restore, 'restore': restore, 'limits': limits}
     if restore:
         value['tool_arguments']['restore_allowlist'] = [{'tool': 'lookup', 'paths': ['/email']}]

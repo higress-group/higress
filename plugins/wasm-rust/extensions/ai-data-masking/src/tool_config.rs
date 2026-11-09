@@ -29,6 +29,7 @@ pub(crate) struct ToolArgumentsConfig {
 pub(crate) struct ToolLimits {
     pub(crate) max_call_bytes: usize,
     pub(crate) max_buffer_bytes: usize,
+    pub(crate) max_unparsed_bytes: usize,
     pub(crate) max_calls: usize,
 }
 
@@ -37,6 +38,7 @@ impl Default for ToolLimits {
         Self {
             max_call_bytes: 1_048_576,
             max_buffer_bytes: 4_194_304,
+            max_unparsed_bytes: 4_194_304,
             max_calls: 128,
         }
     }
@@ -59,9 +61,11 @@ impl<'de> Deserialize<'de> for ToolLimits {
                     D::Error::custom("tool limit must be a positive representable integer")
                 }),
         };
+        let max_buffer_bytes = read("max_buffer_bytes", default.max_buffer_bytes)?;
         Ok(Self {
             max_call_bytes: read("max_call_bytes", default.max_call_bytes)?,
-            max_buffer_bytes: read("max_buffer_bytes", default.max_buffer_bytes)?,
+            max_buffer_bytes,
+            max_unparsed_bytes: read("max_unparsed_bytes", max_buffer_bytes)?,
             max_calls: read("max_calls", default.max_calls)?,
         })
     }
@@ -191,5 +195,31 @@ impl<'de> Deserialize<'de> for ToolArgumentsConfig {
             restore_allowlist,
             limits,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unparsed_limit_inherits_response_budget_and_accepts_an_explicit_override() {
+        let inherited: ToolLimits = serde_json::from_value(json!({"max_buffer_bytes":16})).unwrap();
+        assert_eq!(inherited.max_unparsed_bytes, 16);
+        let separate: ToolLimits =
+            serde_json::from_value(json!({"max_buffer_bytes":16,"max_unparsed_bytes":256}))
+                .unwrap();
+        assert_eq!(separate.max_buffer_bytes, 16);
+        assert_eq!(separate.max_unparsed_bytes, 256);
+        for value in [json!(0), json!(-1), json!(1.5), json!("16"), Value::Null] {
+            assert!(
+                serde_json::from_value::<ToolLimits>(json!({"max_unparsed_bytes":value})).is_err()
+            );
+            assert!(serde_json::from_value::<ToolArgumentsConfig>(
+                json!({"limits":{"max_unparsed_bytes":value}})
+            )
+            .is_ok());
+        }
     }
 }
