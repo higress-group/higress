@@ -58,7 +58,13 @@ impl SseDecoder {
             if available == 0 {
                 return Err("unparsed SSE buffer limit exceeded");
             }
-            let count = input.len().min(available);
+            // Stop at the next line ending so extracting an event never copies
+            // a tail containing the remaining events from a large host callback.
+            let piece = &input[..input.len().min(available)];
+            let count = piece
+                .iter()
+                .position(|byte| matches!(byte, b'\r' | b'\n'))
+                .map_or(piece.len(), |position| position + 1);
             self.pending.extend_from_slice(&input[..count]);
             *input = &input[count..];
         }
