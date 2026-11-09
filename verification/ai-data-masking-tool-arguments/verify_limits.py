@@ -106,6 +106,8 @@ def main():
                                         assert actual['finish'] == original['finish'] and actual['done'] == original['done']
                                         assert actual['text'] == {('0', 'content'): case_data.get('expected_text', 'checking DEMO_SECRET')}, 'content scope changed'
                                         upstream = json.loads((lab.cases / (case + '.upstream-request')).read_bytes())
+                                        if case_data.get('legacy_content_masked'):
+                                            assert upstream['messages'][0]['content'] == 'MASKED_TOKEN', 'legacy text was not masked'
                                         if 'request_argument' in case_data:
                                             value = upstream['messages'][1]['tool_calls'][0]['function']['arguments']
                                             assert value == case_data['request_argument'], 'request argument result differs'
@@ -139,7 +141,7 @@ def main():
             for size in (boundary - 1, boundary, boundary + 1):
                 request = request_for('request-arguments', True)
                 request['messages'][1]['tool_calls'][0]['function']['arguments'] = argument_of_size(size)
-                cases.append({'request': request, 'spec': {'calls': []}, 'expected': 'pass' if size <= boundary else 'request-denied', 'expected_text': 'checking MASKED_TOKEN'})
+                cases.append({'request': request, 'spec': {'calls': []}, 'expected': 'pass' if size <= boundary else 'request-denied', 'expected_text': 'checking DEMO_SECRET', 'legacy_content_masked': True})
             group(f'request-input-{boundary}', config(limits), cases)
         # Exactly 64 argument bytes + lookup(6) + call-0(6).
         for buffer in (75, 76, 77):
@@ -183,7 +185,7 @@ def main():
             request = request_for('normal', True)
             request['messages'].append({'role': 'assistant', 'content': None, 'tool_calls': [{'id': f'history-{index}', 'type': 'function', 'function': {'name': 'lookup', 'arguments': history_argument}} for index in range(129)]})
             group('request-long-history', config({'max_call_bytes': 100000, 'max_buffer_bytes': 1, 'max_calls': 1}),
-                [{'request': request, 'spec': {'calls': []}, 'streams': (True,), 'history': True, 'expected_text': 'checking MASKED_TOKEN'}])
+                [{'request': request, 'spec': {'calls': []}, 'streams': (True,), 'history': True, 'expected_text': 'checking DEMO_SECRET', 'legacy_content_masked': True}])
         lab.save('summary.json', {'passed': len(records), 'failed': 0, 'full_t5_complete': False, 'models': 0})
 
 
