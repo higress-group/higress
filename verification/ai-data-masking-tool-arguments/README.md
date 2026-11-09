@@ -70,3 +70,5 @@ python3 verification/ai-data-masking-tool-arguments/check_results.py /absolute/p
 ```
 
 离线脚本核对文件完整性、正文 hash、记录结果和清理证明；不会运行网关，也不会把未完成的验证变成通过。失败尝试可用 `--allow-recorded-failure` 检查完整性。证据在审查脱敏后放独立分支，不能混入修复提交。
+
+与上游正文解析修复合并后，可直接运行 `verify_content_merge.py`，参数与其他固定上游脚本相同。它以当次上游构建为基线，核对多模态文字、图片和未知字段、null 历史、同值文字与工具参数、非法 content 及拒绝行为，再对照三个关闭配置和开启配置。
