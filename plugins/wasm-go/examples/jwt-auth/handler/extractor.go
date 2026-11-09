@@ -144,7 +144,8 @@ func deleteCookie(cookie string, key string) string {
 
 	for _, pair := range pairs {
 		pair = strings.TrimSpace(pair)
-		if !strings.HasPrefix(pair, key) {
+		k, _, ok := strings.Cut(pair, "=")
+		if !ok || k != key {
 			result += pair + ";"
 		}
 	}
