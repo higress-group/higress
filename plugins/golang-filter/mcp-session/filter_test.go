@@ -2,12 +2,16 @@ package mcp_session
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-session/common"
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
+	"github.com/stretchr/testify/require"
 )
 
 // Mock implementation of CommonCAPI for testing
@@ -736,4 +740,172 @@ func TestEncodeDataFromSSEUpstream_FragmentedNonEndpointEvent(t *testing.T) {
 	if got != want {
 		t.Errorf("expected client to receive the complete message %q, got %q", want, got)
 	}
+}
+
+// redisCapture is a tiny RESP server that records the raw bytes of every
+// command it receives and answers with ":0". It lets a test observe which Redis
+// backend a publication was sent to without running a real Redis server.
+type redisCapture struct {
+	listener net.Listener
+	mu       sync.Mutex
+	received string
+	getValue string
+}
+
+func newRedisCapture(t *testing.T) *redisCapture {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	capture := &redisCapture{listener: listener}
+	go capture.serve()
+	t.Cleanup(func() { _ = listener.Close() })
+	return capture
+}
+
+func (c *redisCapture) Addr() string {
+	return c.listener.Addr().String()
+}
+
+func (c *redisCapture) Received() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.received
+}
+
+func (c *redisCapture) setGetValue(value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.getValue = value
+}
+
+func (c *redisCapture) serve() {
+	for {
+		conn, err := c.listener.Accept()
+		if err != nil {
+			return
+		}
+		go c.handle(conn)
+	}
+}
+
+func (c *redisCapture) handle(conn net.Conn) {
+	defer conn.Close()
+	buffer := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buffer)
+		if n > 0 {
+			request := string(buffer[:n])
+			c.mu.Lock()
+			c.received += request
+			getValue := c.getValue
+			c.mu.Unlock()
+			response := ":0\r\n"
+			upperRequest := strings.ToUpper(request)
+			switch {
+			case strings.Contains(upperRequest, "\r\nPING\r\n"):
+				response = "+PONG\r\n"
+			case strings.Contains(upperRequest, "\r\nGET\r\n"):
+				if getValue == "" {
+					response = "$-1\r\n"
+				} else {
+					response = fmt.Sprintf("$%d\r\n%s\r\n", len(getValue), getValue)
+				}
+			case strings.Contains(upperRequest, "\r\nSET\r\n"):
+				response = "+OK\r\n"
+			}
+			if _, writeErr := conn.Write([]byte(response)); writeErr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// newTestSessionRedisClient builds a RedisClient for the mcp-session filter
+// pointing at the given address. The address does not have to be a real Redis
+// server; these tests only care about which backend a publication is routed to.
+func newTestSessionRedisClient(t *testing.T, addr string) *common.RedisClient {
+	t.Helper()
+	redisConfig, err := common.ParseRedisConfig(map[string]interface{}{"address": addr})
+	require.NoError(t, err)
+	client, err := common.NewRedisClient(redisConfig)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+// TestResolveSessionRedisClientKeepsLiveSessionOnItsOwnBackend covers the
+// selection rule: a session with a live SSE subscription keeps using the client
+// that opened the subscription even after mcpServer.redis was hot-updated,
+// while sessions without a subscription use the configured client.
+func TestResolveSessionRedisClientKeepsLiveSessionOnItsOwnBackend(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	configuredClient := newTestSessionRedisClient(t, "127.0.0.1:6390")
+	sessionClient := newTestSessionRedisClient(t, "127.0.0.1:6391")
+
+	f := &filter{config: &config{redisClient: configuredClient}}
+
+	const sessionID = "live-session"
+	common.GlobalSessionRegistry.Register(sessionID, sessionClient)
+	t.Cleanup(func() { common.GlobalSessionRegistry.Unregister(sessionID) })
+
+	require.Same(t, sessionClient, f.resolveSessionRedisClient(sessionID))
+	require.Same(t, configuredClient, f.resolveSessionRedisClient("unknown-session"))
+	require.Nil(t, f.resolveSessionRedisClient(""))
+}
+
+func TestLiveSessionPostAcrossRedisHotUpdate(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	backendA := newRedisCapture(t)
+	backendB := newRedisCapture(t)
+	sessionClient := newTestSessionRedisClient(t, backendA.Addr())
+	configuredClient := newTestSessionRedisClient(t, backendB.Addr())
+	matchedRule := common.MatchRule{
+		ServerName:      "server-a",
+		MatchRuleDomain: "*",
+		HostMatcher:     common.ParseHostPattern("*"),
+		MatchRuleType:   common.PrefixMatch,
+		MatchRulePath:   "/mcp",
+		UpstreamType:    common.RestUpstream,
+	}
+	backendA.setGetValue(matchedRule.SessionServerName())
+
+	const sessionID = "session-after-hot-update"
+	common.GlobalSessionRegistry.Register(sessionID, sessionClient)
+	t.Cleanup(func() { common.GlobalSessionRegistry.Unregister(sessionID) })
+
+	decoder := &registryDecoderCallbacks{}
+	f := &filter{
+		callbacks: &registryFilterCallbacks{decoder: decoder},
+		config: &config{
+			matchList:       []common.MatchRule{matchedRule},
+			redisClient:     configuredClient,
+			sessionRegistry: common.NewRedisSessionRegistry(configuredClient),
+		},
+	}
+
+	header := newTestRequestHeaders("/mcp?sessionId=" + sessionID)
+	status := f.DecodeHeaders(header, true)
+	require.Zero(t, decoder.statusCode)
+	require.Equal(t, api.Continue, status)
+
+	buffer := &testBuffer{data: []byte(`{"jsonrpc":"2.0","id":1,"result":"ok"}`)}
+	require.Equal(t, api.Continue, f.EncodeData(buffer, true))
+
+	// Redis command names are case insensitive, so compare the command without
+	// depending on the casing the client happens to use, and check the session
+	// channel separately.
+	receivedA := backendA.Received()
+	upperReceivedA := strings.ToUpper(receivedA)
+	require.Contains(t, upperReceivedA, "\r\nGET\r\n")
+	require.Contains(t, upperReceivedA, "\r\nSET\r\n")
+	require.Contains(t, upperReceivedA, "PUBLISH")
+	require.Contains(t, receivedA, "mcp-server-sse:"+sessionID)
+	upperReceivedB := strings.ToUpper(backendB.Received())
+	require.NotContains(t, upperReceivedB, "\r\nGET\r\n")
+	require.NotContains(t, upperReceivedB, "PUBLISH")
 }

@@ -82,7 +82,11 @@ func (f *filter) processMcpRequestHeadersForRestUpstream(header api.RequestHeade
 		f.proxyURL = requestUrl
 		if method == http.MethodPost && f.config.sessionRegistry != nil {
 			if sessionID := requestUrl.Query().Get("sessionId"); sessionID != "" {
-				valid, err := f.config.sessionRegistry.ValidateSession(f.matchedRule.SessionServerName(), sessionID)
+				sessionRegistry := f.config.sessionRegistry
+				if pinnedClient := common.GlobalSessionRegistry.PublisherForSession(sessionID, nil); pinnedClient != nil {
+					sessionRegistry = common.NewRedisSessionRegistry(pinnedClient)
+				}
+				valid, err := sessionRegistry.ValidateSession(f.matchedRule.SessionServerName(), sessionID)
 				if err != nil {
 					api.LogErrorf("Failed to validate MCP session: %v", err)
 					f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusServiceUnavailable, "", nil, 0, "")
@@ -202,6 +206,18 @@ func (f *filter) EncodeData(buffer api.BufferInstance, endStream bool) api.Statu
 	return ret
 }
 
+// resolveSessionRedisClient returns the Redis client whose backend must receive
+// the response for the message endpoint request of the given session.
+//
+// A live SSE session is pinned to the client that opened its subscription (see
+// common.SessionRegistry), so a hot update of mcpServer.redis cannot move the
+// publication to a different backend while the subscription keeps listening on
+// the original one. Requests without a live session fall back to the currently
+// configured client.
+func (f *filter) resolveSessionRedisClient(sessionID string) *common.RedisClient {
+	return common.GlobalSessionRegistry.PublisherForSession(sessionID, f.config.redisClient)
+}
+
 func (f *filter) encodeDataFromRestUpstream(buffer api.BufferInstance, endStream bool) api.StatusType {
 	if !f.needProcess {
 		return api.Continue
@@ -212,11 +228,19 @@ func (f *filter) encodeDataFromRestUpstream(buffer api.BufferInstance, endStream
 	if f.proxyURL != nil && f.config.redisClient != nil {
 		sessionID := f.proxyURL.Query().Get("sessionId")
 		if sessionID != "" {
-			channel := common.GetSSEChannelName(sessionID)
-			eventData := fmt.Sprintf("event: message\ndata: %s\n\n", buffer.String())
-			publishErr := f.config.redisClient.Publish(channel, eventData)
-			if publishErr != nil {
-				api.LogErrorf("Failed to publish wasm mcp server message to Redis: %v", publishErr)
+			// Publish on the backend that owns the live SSE session instead of the
+			// currently configured one: mcpServer.redis can be hot-updated while
+			// the SSE connection stays open, and its subscription keeps reading
+			// from the client that created it. Publishing through the configured
+			// client would write to a different backend and the SSE client would
+			// never see the response.
+			publisher := f.resolveSessionRedisClient(sessionID)
+			if publisher != nil {
+				channel := common.GetSSEChannelName(sessionID)
+				eventData := fmt.Sprintf("event: message\ndata: %s\n\n", buffer.String())
+				if publishErr := publisher.Publish(channel, eventData); publishErr != nil {
+					api.LogErrorf("Failed to publish wasm mcp server message to Redis: %v", publishErr)
+				}
 			}
 		}
 	}
