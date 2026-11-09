@@ -28,6 +28,7 @@ def cases():
     for limit in (16, 1029, 1030, 1031):
         yield 'unterminated-' + str(limit), frame, limit, limit >= 1030
     yield 'closed-over-limit', frame + '\n\n', 1030, False
+    yield 'oversized-then-done', frame + '\n\ndata: [DONE]\n\n', 64, False
     small = 'data: {"choices":[]}\n\n'
     yield 'batched', small * 100, len(small.encode()), True
     yield 'undecided-prefix', ' ' * 1030, 16, False
@@ -49,7 +50,9 @@ def main():
                     for delivery in ('single', 'events', 'fragment17', 'prefix1'):
                         case = variant + '-' + label + '-' + delivery
                         lab.save('cases/' + case + '.fixture.json', {'raw': wire})
-                        row, body = lab.request(gateway, case, request_for('normal', True), delivery=delivery)
+                        row, body = lab.request(gateway, case, request_for('normal', True),
+                                                scenario='missing-content-type' if label == 'undecided-prefix' else 'normal',
+                                                delivery=delivery)
                         try:
                             assert row['curl_exit'] == 0 and row['status'] == '200' and row['upstream_received'], row
                             original = (lab.cases / (case + '.upstream-response')).read_bytes()
