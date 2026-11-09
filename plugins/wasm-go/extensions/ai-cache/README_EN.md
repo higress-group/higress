@@ -17,6 +17,15 @@ When carrying the request header `x-higress-skip-ai-cache: on`, the current requ
 Plugin Execution Phase: `Authentication Phase`
 Plugin Execution Priority: `10`
 
+## Consumer Identity and Upgrade Migration
+
+- Run consumer authentication before ai-cache. The authentication plugin must remove or replace any client-supplied `x-mse-consumer`; ai-cache uses only the resulting authenticated consumer name. It does not derive a cache identity from an API key and does not add a tenant header. Requests without an authenticated consumer skip all cache processing: no exact read or write, no embedding request, no vector query or upload, and no Redis lookup after a semantic hit. Normal upstream processing continues.
+- Exact lookups, writes, and Redis lookups after semantic hits use one key format: `configured prefix + "v2:" + lowercase hex SHA256(consumer + NUL + raw question key)`. The prefix is applied exactly once. Old unversioned keys are never read.
+- All seven vector providers (dashvector, chroma, elasticsearch, weaviate, pinecone, qdrant, and milvus) upload `consumer` metadata and filter queries by the same value. Both direct `Answer` returns and `Text`-to-Redis lookups require matching consumer metadata. Ensure the existing collection or index schema permits this string field and supports filtering.
+- The key-format change orphans every old Redis entry and causes a cold start. Previous cross-consumer hits disappear and overall hit rates change. Old vector records without matching consumer metadata are also unusable. Clean old data offline in batches only; the request path never deletes it.
+- During a rolling upgrade, old nodes can still read old data. Drain old nodes and clean the old namespace before cutover, or take the old version offline before completing the transition.
+- `enableSemanticCache` always defaults to `false`, even when a vector provider is configured. Existing semantic-cache users must explicitly set `enableSemanticCache: true`, `vector.threshold`, and `vector.thresholdRelation`. Threshold has no numeric default, and an explicit `0` remains `0`. Providers expose incompatible distance or similarity scales and directions, so the relation must also be chosen explicitly.
+
 ## Configuration Description
 
 The configuration is divided into 3 parts: Vector Database (vector), Text Embedding Service (embedding), and Cache Service (cache). It also provides fine-grained LLM request/response extraction parameter configurations.
@@ -31,12 +40,12 @@ This plugin supports both vector database-based semantic caching and string matc
 | embedding | object | optional | - | Text embedding service configuration, see Text Embedding Service section below |
 | cache | object | optional | - | Cache service configuration, see Cache Service section below |
 | cacheKeyStrategy | string | optional | "lastQuestion" | Strategy for generating cache key from historical questions. Options: "lastQuestion" (use last question), "allQuestions" (concatenate all questions), or "disabled" (disable caching) |
-| enableSemanticCache | bool | optional | false | Whether to enable semantic caching. If disabled, string matching is used to find cache, requiring cache service configuration. Automatically enabled when a vector provider is configured |
+| enableSemanticCache | bool | optional | false | Whether to enable semantic caching. A vector provider does not enable it automatically; threshold and thresholdRelation are required when enabled |
 
 Depending on whether semantic caching is needed, you can configure component combinations as follows:
 1. `cache`: Enable string matching cache only
-2. `vector (+ embedding)`: Enable semantic caching. If `vector` does not provide string representation service, you need to configure `embedding` service separately
-3. `vector (+ embedding) + cache`: Enable semantic caching and use cache service to store LLM responses for acceleration
+2. `vector (+ embedding)`: Used after explicitly enabling semantic caching. If `vector` does not provide string representation service, configure `embedding` separately
+3. `vector (+ embedding) + cache`: Used after explicitly enabling semantic caching, with the cache service storing LLM responses for acceleration
 
 If you do not configure a related component, you can ignore the `required` fields of that component.
 
@@ -52,8 +61,8 @@ If you do not configure a related component, you can ignore the `required` field
 | vector.topK | int | optional | 1 | Return TopK results |
 | vector.timeout | uint32 | optional | 10000 | Timeout for requesting vector storage service, in milliseconds. Default is 10000 (10 seconds) |
 | vector.collectionID | string | optional | - | Vector storage service Collection ID |
-| vector.threshold | float64 | optional | 1000 | Vector similarity measurement threshold |
-| vector.thresholdRelation | string | optional | "lt" | Similarity measurement comparison method. Similarity measurement methods include `Cosine`, `DotProduct`, `Euclidean`, etc. The first two have higher similarity with larger values, while the latter has higher similarity with smaller values. Use `gt` for `Cosine` and `DotProduct`, and `lt` for `Euclidean`. All options include `lt` (less than), `lte` (less than or equal to), `gt` (greater than), `gte` (greater than or equal to) |
+| vector.threshold | float64 | required when semantic caching is enabled | - | Vector similarity or distance threshold. No numeric default; an explicit 0 remains 0 |
+| vector.thresholdRelation | string | required when semantic caching is enabled | - | Similarity or distance comparison direction, with no default. Similarity measurement methods include `Cosine`, `DotProduct`, `Euclidean`, etc. The first two have higher similarity with larger values, while the latter has higher similarity with smaller values. Use `gt` for `Cosine` and `DotProduct`, and `lt` for `Euclidean`. Options are `lt`, `lte`, `gt`, and `gte` |
 | vector.esUsername | string | optional | - | ElasticSearch username, only for elasticsearch type |
 | vector.esPassword | string | optional | - | ElasticSearch password, only for elasticsearch type |
 

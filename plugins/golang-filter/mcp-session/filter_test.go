@@ -2,12 +2,16 @@ package mcp_session
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-session/common"
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
+	"github.com/stretchr/testify/require"
 )
 
 // Mock implementation of CommonCAPI for testing
@@ -479,10 +483,54 @@ func (h testHeaderMap) Get(key string) (string, bool) {
 func (h testHeaderMap) Set(key, value string) { h.values[key] = value }
 func (h testHeaderMap) Del(key string)        { delete(h.values, key) }
 
-// TestRestUpstreamSkipsBodyBufferingWithoutRateLimit verifies that plain
-// REST/streamable MCP proxying does not buffer the request body, so that large
-// requests are not rejected with a 413. See #3238.
-func TestRestUpstreamSkipsBodyBufferingWithoutRateLimit(t *testing.T) {
+func newTestRequestHeaders(path string) testHeaderMap {
+	return testHeaderMap{values: map[string]string{
+		":method":    http.MethodPost,
+		":scheme":    "http",
+		":authority": "example.com",
+		":path":      path,
+	}}
+}
+
+func TestDecodeHeadersRemovesClientConfigOnEveryPath(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+	matchList := []common.MatchRule{{
+		MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"),
+		MatchRuleType: common.PrefixMatch,
+		MatchRulePath: "/mcp",
+		UpstreamType:  common.RestUpstream,
+	}}
+	tests := []struct {
+		name   string
+		path   string
+		config *config
+		status api.StatusType
+	}{
+		{name: "malformed URL", path: "/%", status: api.Continue},
+		{name: "unmatched path", path: "/other", config: &config{matchList: matchList}, status: api.Continue},
+		{name: "static REST", path: "/mcp", config: &config{matchList: matchList}, status: api.Continue},
+		{name: "static streamable", path: "/mcp", config: &config{matchList: []common.MatchRule{{MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"), MatchRuleType: common.PrefixMatch, MatchRulePath: "/mcp", UpstreamType: common.StreamableUpstream}}}, status: api.Continue},
+		{name: "static SSE", path: "/mcp", config: &config{matchList: []common.MatchRule{{MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"), MatchRuleType: common.PrefixMatch, MatchRulePath: "/mcp", UpstreamType: common.SSEUpstream}}}, status: api.Continue},
+		{name: "unknown upstream", path: "/mcp", config: &config{matchList: []common.MatchRule{{MatchRuleDomain: "*", HostMatcher: common.ParseHostPattern("*"), MatchRuleType: common.PrefixMatch, MatchRulePath: "/mcp"}}}, status: api.Continue},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			header := newTestRequestHeaders(tt.path)
+			header.Set(mcpServerConfigHeader, "client-value")
+			f := &filter{config: tt.config}
+			if status := f.DecodeHeaders(header, true); status != tt.status {
+				t.Fatalf("expected status %v, got %v", tt.status, status)
+			}
+			if value, ok := header.Get(mcpServerConfigHeader); ok {
+				t.Fatalf("expected client config header to be removed, got %q", value)
+			}
+		})
+	}
+}
+
+// TestRestUpstreamSkipsBodyBuffering verifies that plain REST/streamable MCP
+// proxying does not buffer the request body. See #3238.
+func TestRestUpstreamSkipsBodyBuffering(t *testing.T) {
 	mockAPI := &mockCommonCAPI{}
 	api.SetCommonCAPI(mockAPI)
 
@@ -490,15 +538,14 @@ func TestRestUpstreamSkipsBodyBufferingWithoutRateLimit(t *testing.T) {
 		t.Run(string(upstreamType), func(t *testing.T) {
 			parsedURL, _ := url.Parse("http://example.com/mcp/api")
 			f := &filter{
-				config:      &config{enableUserLevelServer: false},
+				config:      &config{},
 				matchedRule: common.MatchRule{UpstreamType: upstreamType},
 				needProcess: true,
 				req:         &http.Request{Method: http.MethodPost, URL: parsedURL},
 			}
 			header := testHeaderMap{values: map[string]string{}}
 
-			// endStream=false would previously return StopAndBuffer and buffer
-			// the whole body. Without rate limiting we should stream instead.
+			// endStream=false must still stream rather than buffer the full body.
 			status := f.processMcpRequestHeadersForRestUpstream(header, false)
 			if status != api.Continue {
 				t.Errorf("expected api.Continue, got %v", status)
@@ -512,34 +559,6 @@ func TestRestUpstreamSkipsBodyBufferingWithoutRateLimit(t *testing.T) {
 				t.Errorf("expected DecodeData to Continue when body is skipped, got %v", got)
 			}
 		})
-	}
-}
-
-// TestRestUpstreamBuffersBodyWhenRateLimitEnabled verifies that the body is
-// still buffered when user-level rate limiting is enabled, since that path
-// needs to inspect the JSON-RPC method in the body.
-func TestRestUpstreamBuffersBodyWhenRateLimitEnabled(t *testing.T) {
-	mockAPI := &mockCommonCAPI{}
-	api.SetCommonCAPI(mockAPI)
-
-	// Use a path with fewer than 3 segments so the config handler (which is
-	// nil in this test) is never queried; f.ratelimit is still set to true
-	// because enableUserLevelServer is enabled.
-	parsedURL, _ := url.Parse("http://example.com/mcp")
-	f := &filter{
-		config:      &config{enableUserLevelServer: true},
-		matchedRule: common.MatchRule{UpstreamType: common.RestUpstream},
-		needProcess: true,
-		req:         &http.Request{Method: http.MethodPost, URL: parsedURL},
-	}
-
-	header := testHeaderMap{values: map[string]string{}}
-	status := f.processMcpRequestHeadersForRestUpstream(header, false)
-	if status != api.StopAndBuffer {
-		t.Errorf("expected api.StopAndBuffer when rate limiting is enabled, got %v", status)
-	}
-	if f.skipRequestBody {
-		t.Errorf("expected skipRequestBody to be false when buffering is required")
 	}
 }
 
@@ -721,4 +740,172 @@ func TestEncodeDataFromSSEUpstream_FragmentedNonEndpointEvent(t *testing.T) {
 	if got != want {
 		t.Errorf("expected client to receive the complete message %q, got %q", want, got)
 	}
+}
+
+// redisCapture is a tiny RESP server that records the raw bytes of every
+// command it receives and answers with ":0". It lets a test observe which Redis
+// backend a publication was sent to without running a real Redis server.
+type redisCapture struct {
+	listener net.Listener
+	mu       sync.Mutex
+	received string
+	getValue string
+}
+
+func newRedisCapture(t *testing.T) *redisCapture {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	capture := &redisCapture{listener: listener}
+	go capture.serve()
+	t.Cleanup(func() { _ = listener.Close() })
+	return capture
+}
+
+func (c *redisCapture) Addr() string {
+	return c.listener.Addr().String()
+}
+
+func (c *redisCapture) Received() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.received
+}
+
+func (c *redisCapture) setGetValue(value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.getValue = value
+}
+
+func (c *redisCapture) serve() {
+	for {
+		conn, err := c.listener.Accept()
+		if err != nil {
+			return
+		}
+		go c.handle(conn)
+	}
+}
+
+func (c *redisCapture) handle(conn net.Conn) {
+	defer conn.Close()
+	buffer := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buffer)
+		if n > 0 {
+			request := string(buffer[:n])
+			c.mu.Lock()
+			c.received += request
+			getValue := c.getValue
+			c.mu.Unlock()
+			response := ":0\r\n"
+			upperRequest := strings.ToUpper(request)
+			switch {
+			case strings.Contains(upperRequest, "\r\nPING\r\n"):
+				response = "+PONG\r\n"
+			case strings.Contains(upperRequest, "\r\nGET\r\n"):
+				if getValue == "" {
+					response = "$-1\r\n"
+				} else {
+					response = fmt.Sprintf("$%d\r\n%s\r\n", len(getValue), getValue)
+				}
+			case strings.Contains(upperRequest, "\r\nSET\r\n"):
+				response = "+OK\r\n"
+			}
+			if _, writeErr := conn.Write([]byte(response)); writeErr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// newTestSessionRedisClient builds a RedisClient for the mcp-session filter
+// pointing at the given address. The address does not have to be a real Redis
+// server; these tests only care about which backend a publication is routed to.
+func newTestSessionRedisClient(t *testing.T, addr string) *common.RedisClient {
+	t.Helper()
+	redisConfig, err := common.ParseRedisConfig(map[string]interface{}{"address": addr})
+	require.NoError(t, err)
+	client, err := common.NewRedisClient(redisConfig)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+// TestResolveSessionRedisClientKeepsLiveSessionOnItsOwnBackend covers the
+// selection rule: a session with a live SSE subscription keeps using the client
+// that opened the subscription even after mcpServer.redis was hot-updated,
+// while sessions without a subscription use the configured client.
+func TestResolveSessionRedisClientKeepsLiveSessionOnItsOwnBackend(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	configuredClient := newTestSessionRedisClient(t, "127.0.0.1:6390")
+	sessionClient := newTestSessionRedisClient(t, "127.0.0.1:6391")
+
+	f := &filter{config: &config{redisClient: configuredClient}}
+
+	const sessionID = "live-session"
+	common.GlobalSessionRegistry.Register(sessionID, sessionClient)
+	t.Cleanup(func() { common.GlobalSessionRegistry.Unregister(sessionID) })
+
+	require.Same(t, sessionClient, f.resolveSessionRedisClient(sessionID))
+	require.Same(t, configuredClient, f.resolveSessionRedisClient("unknown-session"))
+	require.Nil(t, f.resolveSessionRedisClient(""))
+}
+
+func TestLiveSessionPostAcrossRedisHotUpdate(t *testing.T) {
+	api.SetCommonCAPI(&mockCommonCAPI{})
+
+	backendA := newRedisCapture(t)
+	backendB := newRedisCapture(t)
+	sessionClient := newTestSessionRedisClient(t, backendA.Addr())
+	configuredClient := newTestSessionRedisClient(t, backendB.Addr())
+	matchedRule := common.MatchRule{
+		ServerName:      "server-a",
+		MatchRuleDomain: "*",
+		HostMatcher:     common.ParseHostPattern("*"),
+		MatchRuleType:   common.PrefixMatch,
+		MatchRulePath:   "/mcp",
+		UpstreamType:    common.RestUpstream,
+	}
+	backendA.setGetValue(matchedRule.SessionServerName())
+
+	const sessionID = "session-after-hot-update"
+	common.GlobalSessionRegistry.Register(sessionID, sessionClient)
+	t.Cleanup(func() { common.GlobalSessionRegistry.Unregister(sessionID) })
+
+	decoder := &registryDecoderCallbacks{}
+	f := &filter{
+		callbacks: &registryFilterCallbacks{decoder: decoder},
+		config: &config{
+			matchList:       []common.MatchRule{matchedRule},
+			redisClient:     configuredClient,
+			sessionRegistry: common.NewRedisSessionRegistry(configuredClient),
+		},
+	}
+
+	header := newTestRequestHeaders("/mcp?sessionId=" + sessionID)
+	status := f.DecodeHeaders(header, true)
+	require.Zero(t, decoder.statusCode)
+	require.Equal(t, api.Continue, status)
+
+	buffer := &testBuffer{data: []byte(`{"jsonrpc":"2.0","id":1,"result":"ok"}`)}
+	require.Equal(t, api.Continue, f.EncodeData(buffer, true))
+
+	// Redis command names are case insensitive, so compare the command without
+	// depending on the casing the client happens to use, and check the session
+	// channel separately.
+	receivedA := backendA.Received()
+	upperReceivedA := strings.ToUpper(receivedA)
+	require.Contains(t, upperReceivedA, "\r\nGET\r\n")
+	require.Contains(t, upperReceivedA, "\r\nSET\r\n")
+	require.Contains(t, upperReceivedA, "PUBLISH")
+	require.Contains(t, receivedA, "mcp-server-sse:"+sessionID)
+	upperReceivedB := strings.ToUpper(backendB.Received())
+	require.NotContains(t, upperReceivedB, "\r\nGET\r\n")
+	require.NotContains(t, upperReceivedB, "PUBLISH")
 }

@@ -38,6 +38,9 @@ impl MessageWindow {
                 .to_vec();
             ret.as_bytes().to_vec()
         } else {
+            if self.message.len() <= byte_window_size {
+                return Vec::new();
+            }
             let ret = self.message[..self.message.len() - byte_window_size].to_vec();
             self.message = self.message[self.message.len() - byte_window_size..].to_vec();
             ret
@@ -62,5 +65,25 @@ mod tests {
         msg_window.update(b"hello world");
         assert_eq!(msg_window.pop(5, 5), b"worldhello ");
         assert_eq!(msg_window.finish(), b"world");
+    }
+
+    #[test]
+    fn test_pop_non_utf8_shorter_than_byte_window() {
+        // A body that is not valid UTF-8 and shorter than the byte window
+        // must not panic on the underflowing slice index.
+        let mut msg_window = super::MessageWindow::default();
+        msg_window.update(&[0xff, 0xfe, 0xfd, 0xfc]);
+        assert_eq!(msg_window.pop(2, 8), Vec::<u8>::new());
+        assert_eq!(msg_window.finish(), vec![0xff, 0xfe, 0xfd, 0xfc]);
+    }
+
+    #[test]
+    fn test_pop_non_utf8_longer_than_byte_window() {
+        // A non-UTF-8 body longer than the byte window pops the excess
+        // bytes and keeps exactly byte_window_size bytes.
+        let mut msg_window = super::MessageWindow::default();
+        msg_window.update(&[0xffu8; 10]);
+        assert_eq!(msg_window.pop(2, 4), vec![0xffu8; 6]);
+        assert_eq!(msg_window.finish(), vec![0xffu8; 4]);
     }
 }

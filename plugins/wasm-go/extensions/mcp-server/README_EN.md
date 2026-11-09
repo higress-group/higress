@@ -1,5 +1,17 @@
 # mcp-server
 
+## Upgrade note
+
+In the upcoming plugin version, request-header MCP server configuration injection is fully removed: no header name, documented or undocumented, is honored. Configure MCP servers exclusively through stored configuration in the console or McpServer resources.
+
+Deployments that still run older plugin versions continue to honor the `x-higress-mcpserver-config` header. On controller-generated routes, the gateway's route-level header strips remove it before it reaches the plugin, so those deployments remain protected. On directly applied native Istio VirtualServices, the route-level strip does not apply, so a client-supplied value is still honored by the old plugin until the deployment upgrades. Upgrade the plugin OCI version (or add a route/header-manipulation rule) as part of the migration; upgrading the plugin fully removes this behavior.
+
+Per-user MCP server configuration and per-user rate limiting are removed. When Redis is configured, MCP sessions are registry-validated: unknown session IDs and session IDs replayed against a different server are rejected. Without Redis, session IDs remain generated but unvalidated; this is a documented limitation for standalone deployments.
+
+Session validity slides with activity: every successful validation refreshes the session TTL, so active SSE connections keep working while idle sessions expire after the TTL.
+
+REST-to-MCP path argument security update: arguments with `position: path` are now escaped as a single path segment only when they land in the URL path portion, and values whose percent-decoded form contains a `.` or `..` segment are rejected (including `%2e%2e`, `.%2e`, `..%2f`, `%252e%252e`, mixed-case and double-encoded variants). Callers must provide raw values, not pre-encoded values such as `%20`; pre-encoded input is treated as a raw literal and its `%` characters are escaped to `%25`. Query argument behavior is unchanged. Tools that depend on the legacy raw substitution can temporarily set `requestTemplate.allowUnsafePathArgs: true`; this option is unsafe and intended only for migration.
+
 [中文](./README.md)
 
 ## Feature Description
@@ -42,6 +54,7 @@ Plugin execution priority: `30`
 | `server.defaultUpstreamSecurity` | object | No | - | Default backend authentication configuration, overridden by tool-level `requestTemplate.security`. `id` references a security scheme. REST-to-MCP also supports `credential` overrides; for MCP proxy, configure fixed credentials with the scheme's `defaultCredential`. |
 | `server.version` | string | No | `1.0.0` | Server version reported in legacy MCP initialization responses. Does not select the MCP protocol version. |
 | `server.protocolStrategy` | string | No | `legacy` | Backend protocol strategy: `legacy`, `modern`, or `auto`. For `mcp-proxy` only; see Protocol Support and Backend Connections. |
+| `server.passthroughInstructions` | boolean | No | false | May be enabled only for one explicit `mcp-proxy` with `transport: http` and `protocolStrategy: modern`. Extracts instructions from a successful upstream discover result; see below. |
 | `server.autoDetection.probeTimeoutMs` | integer | No | `1000` | Backend protocol detection timeout, in milliseconds. Must be a positive integer. Used only with `protocolStrategy: auto` and `transport: http`; the effective detection timeout does not exceed `server.timeout`. |
 
 ### Tool Set Configuration
@@ -194,6 +207,7 @@ Using `ReplaceHttpRequestHeader` ensures:
 | `tools[].requestTemplate.argsToJsonBody` | boolean | No | false | Places arguments without `position` in a JSON request body. Enable at most one of the three `argsTo*` switches; this option is unnecessary when using `body`. |
 | `tools[].requestTemplate.argsToUrlParam` | boolean | No | false | Adds arguments without `position` to the URL query. Enable at most one of the three `argsTo*` switches; this option can be combined with a `body` template. |
 | `tools[].requestTemplate.argsToFormBody` | boolean | No | false | Encodes arguments without `position` as a form request body. Enable at most one of the three `argsTo*` switches; this option is unnecessary when using `body`. |
+| `tools[].requestTemplate.allowUnsafePathArgs` | boolean | No | false | Restores the legacy raw path argument substitution (no escaping or validation). Unsafe; use only as a temporary compatibility escape hatch. |
 | `tools[].responseTemplate` | object | No | - | Response transformation template. If omitted, uses the raw backend response. Direct response mode requires `body`. |
 | `tools[].responseTemplate.body` | string | Required in direct response mode; otherwise optional | - | Response body template. Cannot be combined with `prependBody` or `appendBody`. |
 | `tools[].responseTemplate.prependBody` | string | No      | -      | Text to insert before the response body (mutually exclusive with body) |
@@ -205,8 +219,8 @@ Using `ReplaceHttpRequestHeader` ensures:
 | `tools[].requestTemplate.security.id` | string  | Required when `tools[].requestTemplate.security` is configured | - | References a security scheme ID defined in `server.securitySchemes`. |
 | `tools[].requestTemplate.security.credential` | string | No | - | Backend credential for REST-to-MCP, overriding the referenced scheme's `defaultCredential`. A successfully extracted, non-empty passthrough credential takes precedence when passthrough is enabled. |
 | `tools[].errorResponseTemplate` | string | No | - | Error response template used when the HTTP response status is greater than or equal to 300, or less than 200. |
-| `tools[].legacyOnly` | boolean | No | `false` | Restricts the tool to legacy MCP clients. When `true`, the tool is neither listed nor callable through MCP `2026-07-28`. |
-| `tools[].outputSchema` | object | No | - | JSON Schema for structured tool output. Currently returned in legacy tool lists, but not MCP `2026-07-28` tool lists. The plugin does not validate output against this schema. |
+| `tools[].legacyOnly` | boolean | No | `false` | Deprecated. Omitted, `false`, and `true` remain parse-compatible but no longer affect visibility or calls. |
+| `tools[].outputSchema` | object | No | - | JSON Schema for structured tool output, returned for every supported protocol version. The plugin does not validate output against this schema. |
 
 ### Direct Responses
 
@@ -233,11 +247,17 @@ tools:
 
 When `outputSchema` is configured and the backend response is valid JSON, the plugin also returns the raw backend JSON as `structuredContent`. Text produced by `responseTemplate` does not replace this structured content. In direct response mode, structured content comes from the valid JSON rendered by the template instead.
 
-MCP `2026-07-28` validates input arguments before calling a tool. If the tool's parameter definition cannot be used for validation, the tool may still appear in the list, but calls will be rejected. Set `legacyOnly: true` for tools that temporarily need to remain available only to legacy clients.
+All supported profiles use the historical tool lookup, authentication, `allowTools`, Create/Call, and REST conversion paths. The gateway no longer compiles or validates input schemas or applies private schema resource gates. Normally JSON-serializable descriptors, including `outputSchema`, remain publishable; tools retain their own business input constraints.
+
+Tools previously marked `legacyOnly: true` now become visible and callable to Modern clients, subject to authentication and `allowTools`. Review existing tool authorization during migration; the flag is no longer needed to bypass schema validation. The built-in `mcp-e2bdev` and `mcp-firecrawl` configurations have removed this flag.
+
+Legacy and Modern share a **100 MiB** limit for the complete UTF-8 JSON-RPC body, including its envelope and `_meta`. Ordinary media headers, non-identity metadata, duplicate keys, depth, and value counts follow historical business behavior. The Modern-only 1 MiB arguments, 64-level, 65536-value, and name budgets are removed. Valid single-object messages, protocol identity conflicts, and strict probe/handshake checks remain. Proxies normalize the selected upstream request and preserve client ID tokens and exact JSON numbers; direct Create inputs and tool-owned REST conversions keep their existing contracts.
 
 ## Protocol Support and Backend Connections
 
-The plugin supports tool services using MCP `2024-11-05`, `2025-03-26`, `2025-06-18`, and `2026-07-28`.
+The plugin supports tool services using MCP `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, and `2026-07-28`.
+
+`2025-11-25` support covers the existing `initialize` → `notifications/initialized` → `tools/list` / `tools/call` workflow, negotiating the same version when requested. An unknown initialize-body version without a version header still falls back to `2025-06-18`; unknown version headers remain rejected. This compatibility addition does not expand Tasks, Sampling, URL Elicitation, OAuth or transport capabilities, or change backend version selection.
 
 Built-in tools and REST-to-MCP do not require a backend MCP protocol strategy. When proxying an existing MCP server, configure `transport` and `protocolStrategy` according to the backend's capabilities.
 
@@ -286,6 +306,16 @@ Keep the following in mind:
 - Detection requests use the configured backend credentials. The backend must allow those credentials to access its discovery interface. Backend instances behind the same route should have consistent protocol capabilities.
 - `transport: sse` enables access to legacy SSE backends; it does not provide a general real-time subscription or push service to clients.
 Upstream pool instances must have consistent protocol capabilities because probe and business calls may reach different instances. HTTP JSON/SSE is parsed after the complete business response, without live progress or subscriptions. The 1 MiB probe guard prevents copying oversized bodies into Wasm; it does not bound all Envoy receive buffers or Tool results. Cancellation prevents later phases but cannot retract submitted tool effects. A cancelled live response is explicitly terminated; callbacks after stream closure do not access the stream.
+
+
+
+### Upstream instructions
+
+By default, `server/discover` returns the existing local gateway result without an upstream request. Set `server.passthroughInstructions: true` on the modern HTTP proxy configuration above to retrieve upstream usage instructions. Enabling it with `auto`, `legacy`, SSE, REST or `toolSet` is a configuration error; non-boolean values are also rejected.
+
+Each enabled modern `server/discover` uses the existing main request route, timeout, retry and server-level authentication rules, preserving the original request ID and `_meta`. Extraction is attempted only for HTTP 200 responses with an object result and no JSON-RPC error. Explicit non-`complete` results retain the existing proxy result path; upstream failures retain the existing error path rather than becoming a successful local discover response.
+
+Only a non-empty string of at most 32768 decoded UTF-8 bytes is merged, preserving whitespace. A missing, empty, wrongly typed or oversized field is omitted without affecting other local fields. The gateway still owns `supportedVersions`, `capabilities`, `serverInfo`, `resultType`, `ttlMs` and `cacheScope`. Instructions are not cached. Without server-level credentials and with `passthroughAuthHeader` disabled, discover remains anonymous. With `passthroughAuthHeader: true`, the existing rules still forward the client `Authorization` header; discovery does not inspect or borrow tool-level credentials. This option retains the existing SDK logging, read/write and `original-*` context visibility boundaries. Upstream instructions are untrusted text: do not execute their directives or use them to authorize tools. `allowTools` may hide tools mentioned in that guidance.
 
 
 ## Authentication and Security
@@ -567,6 +597,36 @@ In the example above:
 - `limit` will be added as a query parameter to the URL
 - `tags` will be added to the request body
 
+### Path Argument Escaping and Security
+
+Arguments with `position: path` are only processed as individual segments in the parsed URL path component:
+
+- Both `{petId}` and `{{.args.petId}}` are escaped automatically. `/`, `?`, `#`, spaces and non-ASCII characters become `%2F`, `%3F`, `%23`, `%20` and UTF-8 percent-encoding respectively.
+- The URL template's scheme, host, port, userinfo and opaque components must be static. Any `{...}` or `{{...}}` placeholder/template action in those components makes configuration loading fail. After every render the final URL is parsed again and those components must still match the template values (host comparison is case-insensitive and default ports are equivalent); otherwise the request is rejected before the backend is called. Neither path arguments nor explicit escape functions can change the authority.
+- Values are treated as raw input and then validated with bounded percent-decoding. If the decoded form contains a `.` or `..` path segment, the tool call fails before any backend request is sent. A value that can still be decoded after the decode limit is also rejected. This covers variants such as `..`, `../..`, `x/../../internal`, `%2e%2e`, `%2E%2E`, `.%2e`, `..%2f` and `%252e%252e`.
+- Path arguments must be raw values, not pre-encoded values such as `%20`. Pre-encoded input is treated as a raw literal; for example, `alice%20smith` becomes `alice%2520smith`, and pre-encoded dot segments are rejected.
+- Query arguments (`position: query`, `argsToUrlParam`, and arguments in the URL template query portion) keep their existing behavior and are not path-escaped. Configurations such as the AMap geocoding example are unaffected.
+
+The OpenAPI-to-MCP generator (openapi-to-mcpserver) lives in a separate repository; this repository does not contain its implementation. Generated tool configurations should continue to pass raw values with `position: path`; this plugin performs path escaping at runtime.
+
+Template functions are also available for explicit escaping:
+
+```yaml
+requestTemplate:
+  url: "https://api.example.com/pets/{{pathescape .args.petId}}?q={{queryescape .args.q}}"
+```
+
+`pathescape` escapes a single path segment and rejects dot segments; `queryescape` escapes a query value. Automatic path argument substitution never overwrites explicit function output. Automatic escaping already applies to `position: path` arguments, so explicit `pathescape` is usually unnecessary.
+
+If a legacy configuration genuinely depends on raw substitution, the temporary compatibility switch can be enabled:
+
+```yaml
+requestTemplate:
+  allowUnsafePathArgs: true
+```
+
+The switch is disabled by default and restores the old unescaped, unvalidated behavior. It can allow a tool caller to reach other paths on the same backend while carrying the tool's configured credentials. It does not relax the requirement that scheme, host, port, userinfo and opaque stay static. Use it only during migration and remove it as soon as possible.
+
 ### Relationship with Bulk Parameter Processing Options
 
 When using `position` to specify parameter locations, these parameters will be processed according to their specified positions and will not be affected by bulk parameter processing options (`argsToJsonBody`, `argsToUrlParam`, `argsToFormBody`). Only parameters without a specified `position` will be affected by these bulk options.
@@ -636,6 +696,8 @@ Templates also provide the following IP address functions:
 | --- | --- |
 | `getSocketIP` | Returns the peer IP address of the current connection. |
 | `getRealIP` | Returns the first IP in `X-Forwarded-For`, or the connection peer IP if the header is absent. |
+| `pathescape` | Escapes a value as a single URL path segment and rejects decoded `.` or `..` segments. |
+| `queryescape` | Escapes a value for use in a URL query component. |
 
 ```yaml
 requestTemplate:
@@ -753,6 +815,14 @@ allowTools:
 Fetching the tool list uses the default backend key; calling `get-secure-product` uses the product tool key. `allowTools` restricts access to that tool. Replace the key placeholders with actual credentials.
 
 In proxy mode, `tools` provides per-tool configuration, not an allowlist. Use `allowTools` to restrict tool access.
+
+### Origin and SSE Endpoint Trust
+
+The plugin restores historical Origin acceptance: absent, cross-origin, different-port, and `null` Origin values enter normal processing. It no longer provides the DNS rebinding protection supplied by the former same-origin rejection. Deployers must assess and enforce suitable protection at trusted network or gateway entry boundaries. CORS and authentication are not equivalent replacements; review this tradeoff during upgrades.
+
+Legacy SSE keeps its main-request GET and existing route. The plugin trusts endpoints returned by the configured upstream and applies historical relative/absolute URL rules to later control/business POST path, query, and HTTP Authority. A complete endpoint can select another Authority. Existing static or forwarded Authorization and header/query apiKey credentials may reach that Authority under the existing removal and override rules. Removed client credentials stay removed; authentication failures still stop subsequent requests.
+
+Actual sends retain the original route cluster; endpoint domains do not trigger a new DNS connection or switch clusters. A fixed cluster does not fix the HTTP virtual host or every TLS identity: TLS follows existing cluster/route configuration and call behavior. Trust the configured MCP upstream and its endpoints, and assess reachable virtual hosts and credential recipients within that cluster. Path configurations retain historical empty-Authority/`unknownhost` failures; the plugin does not infer Authority from cluster names or promise every path combination works.
 
 ### MCP Proxy Server Example: Using SSE
 

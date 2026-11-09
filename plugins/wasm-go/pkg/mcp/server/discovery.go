@@ -22,6 +22,7 @@ var discoverySupportedVersions = [...]protocol.Version{
 	protocol.Version20241105,
 	protocol.Version20250326,
 	protocol.Version20250618,
+	protocol.Version20251125,
 	protocol.Version20260728,
 }
 

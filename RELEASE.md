@@ -115,6 +115,37 @@ notes refer to the intended version. Installation and representative gateway
 traffic are smoke-tested with the published artifacts before the release is
 announced as ready.
 
+### Go toolchain pin and embedded-version evidence
+
+Release workflows pin the `actions/setup-go` toolchain to `1.26.10` in
+[`.github/workflows/build-image-and-push.yaml`](.github/workflows/build-image-and-push.yaml)
+and
+[`.github/workflows/release-hgctl.yaml`](.github/workflows/release-hgctl.yaml).
+This drives the controller image and `hgctl` builds. The pin is explicit rather
+than `go-version-file` because module `go` directives describe the language
+baseline and are not the release toolchain authority.
+
+Record the embedded toolchain from the produced artifacts before publishing:
+
+```bash
+# Controller image (docker/Dockerfile.higress installs /usr/local/bin/higress)
+docker create --name higress-go-evidence <controller-image>
+docker cp higress-go-evidence:/usr/local/bin/higress ./higress
+docker rm higress-go-evidence
+go version -m ./higress | grep -F 'go1.26.10'
+
+# hgctl linux archive produced by release-hgctl.yaml
+tar -xzf hgctl_<version>_linux_amd64.tar.gz
+go version -m ./out/linux_amd64/hgctl | grep -F 'go1.26.10'
+```
+
+`go version -m` reports the toolchain recorded in the Go build info; the
+command must match before the artifact is published. The pilot and gateway Go
+components are compiled inside the external `higress/build-tools` images
+referenced by `tools/hack/build-istio-image.sh`; capture their build info from
+those images separately, because their Go toolchain is not selected by the
+workflow `setup-go` steps.
+
 Release announcements link the GitHub release and call out breaking changes,
 deprecations, migrations, known issues, and security impact. Confirmed security
 issues are disclosed through a GitHub Security Advisory and CVE when

@@ -15,6 +15,8 @@ description: AI 数据脱敏插件配置参考
   - jsonpath：只处理指定字段
   - raw：整个请求/返回body
 
+开启 `deny_openai` 后，带有顶层 `messages` 字段的 JSON 请求体会被识别为 OpenAI 对话请求；此类请求若 message 或 content 结构不合法，会被直接拒绝，不会回退到 jsonpath 或 raw 扫描。不带顶层 `messages` 字段的请求继续沿用原有 jsonpath/raw 处理逻辑。
+
 ### 敏感词拦截
   - 处理数据范围中出现敏感词直接拦截，返回预设错误信息
   - 支持系统内置敏感词库和自定义敏感词

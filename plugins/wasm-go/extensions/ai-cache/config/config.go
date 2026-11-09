@@ -88,19 +88,23 @@ func (c *PluginConfig) FromJson(json gjson.Result, log log.Log) {
 		c.ResponseTemplate = `{"id":"from-cache","choices":[{"index":0,"message":{"role":"assistant","content":"%s"},"finish_reason":"stop"}],"model":"from-cache","object":"chat.completion","usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`
 	}
 
-	if json.Get("enableSemanticCache").Exists() {
-		c.EnableSemanticCache = json.Get("enableSemanticCache").Bool()
-	} else if c.GetVectorProvider() == nil {
-		c.EnableSemanticCache = false // set value to false when no vector provider
-	} else {
-		c.EnableSemanticCache = true // set default value to true
-	}
+	// Semantic caching is always opt-in, including when a vector provider is configured.
+	c.EnableSemanticCache = json.Get("enableSemanticCache").Bool()
 
 	// compatible with legacy config
 	convertLegacyMapFields(c, json, log)
 }
 
 func (c *PluginConfig) Validate() error {
+	if c.EnableSemanticCache {
+		if !c.vectorProviderConfig.HasThreshold() {
+			return fmt.Errorf("vector.threshold is required when enableSemanticCache is true")
+		}
+		if !c.vectorProviderConfig.HasThresholdRelation() {
+			return fmt.Errorf("vector.thresholdRelation is required when enableSemanticCache is true")
+		}
+	}
+
 	// if cache provider is configured, validate it
 	if c.cacheProviderConfig.GetProviderType() != "" {
 		if err := c.cacheProviderConfig.Validate(); err != nil {

@@ -22,11 +22,17 @@ func GetSSEChannelName(sessionID string) string {
 // It provides real-time communication capabilities over HTTP using the SSE protocol.
 type SSEServer struct {
 	server          *MCPServer
+	serverName      string
 	baseURL         string
 	messageEndpoint string
 	sseEndpoint     string
 	sessions        sync.Map
 	redisClient     *RedisClient // Redis client for pub/sub
+	sessionRegistry SessionRegistry
+	// backendRegistry pins live sessions to the Redis client that created their
+	// subscription. It is usually left nil and then resolves to
+	// GlobalSessionRegistry; tests inject an isolated instance instead.
+	backendRegistry *SessionBackendRegistry
 }
 
 func (s *SSEServer) GetMessageEndpoint() string {
@@ -38,7 +44,48 @@ func (s *SSEServer) GetSSEEndpoint() string {
 }
 
 func (s *SSEServer) GetServerName() string {
-	return s.server.name
+	return s.serverName
+}
+
+// sessionBackendRegistry returns the registry that pins live sessions, falling
+// back to the process wide one.
+func (s *SSEServer) sessionBackendRegistry() *SessionBackendRegistry {
+	if s.backendRegistry != nil {
+		return s.backendRegistry
+	}
+	return GlobalSessionRegistry
+}
+
+// registerSessionForRedisBackend pins sessionID to the Redis client that backs
+// this SSE connection and releases the pin once the connection is torn down.
+//
+// The SSE connection is the only subscriber on the session channel, so pinning
+// it here is what keeps a POST carrying the same sessionId on the same backend
+// after mcpServer.redis has been hot-updated: without the pin the POST would
+// publish through the newly configured client while this subscription keeps
+// reading from the client created at connection time, and the response would be
+// lost. The pin is dropped when stopChan is closed by filter.OnDestroy; a nil
+// stopChan means the caller never tears the connection down, in which case the
+// pin stays for the lifetime of the process.
+func (s *SSEServer) registerSessionForRedisBackend(sessionID string, stopChan chan struct{}) {
+	if s.redisClient == nil {
+		return
+	}
+
+	s.sessionBackendRegistry().Register(sessionID, s.redisClient)
+	if stopChan == nil {
+		return
+	}
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				api.LogErrorf("Failed to release redis session pin: %v", r)
+			}
+		}()
+		<-stopChan
+		s.sessionBackendRegistry().Unregister(sessionID)
+	}()
 }
 
 // Option defines a function type for configuring SSEServer
@@ -65,9 +112,40 @@ func WithSSEEndpoint(endpoint string) Option {
 	}
 }
 
+// WithServerName overrides the identity used to bind sessions to a server.
+// The filter sets this per request from the matched MCP server rule so that a
+// session issued for one route cannot be replayed on another.
+func WithServerName(serverName string) Option {
+	return func(s *SSEServer) {
+		s.serverName = serverName
+	}
+}
+
 func WithRedisClient(redisClient *RedisClient) Option {
 	return func(s *SSEServer) {
 		s.redisClient = redisClient
+	}
+}
+
+// WithSessionRegistry configures the registry used for MCP sessions.
+//
+// A SessionRegistry supplies session binding and validation; a
+// *SessionBackendRegistry pins live sessions to their Redis backend. Production
+// code relies on GlobalSessionRegistry for pinning; tests use the option to run
+// against an isolated registry.
+func WithSessionRegistry(registry interface{}) Option {
+	return func(s *SSEServer) {
+		switch r := registry.(type) {
+		case SessionRegistry:
+			s.sessionRegistry = r
+		case *SessionBackendRegistry:
+			s.backendRegistry = r
+		case nil:
+			s.sessionRegistry = nil
+			s.backendRegistry = nil
+		default:
+			api.LogErrorf("Unsupported session registry type %T", registry)
+		}
 	}
 }
 
@@ -75,6 +153,7 @@ func WithRedisClient(redisClient *RedisClient) Option {
 func NewSSEServer(server *MCPServer, opts ...Option) *SSEServer {
 	s := &SSEServer{
 		server:          server,
+		serverName:      server.name,
 		sseEndpoint:     "/sse",
 		messageEndpoint: "/message",
 	}
@@ -86,13 +165,32 @@ func NewSSEServer(server *MCPServer, opts ...Option) *SSEServer {
 	return s
 }
 
+// registerSession binds a generated session to this server's identity.
+func (s *SSEServer) registerSession(sessionID string) error {
+	if s.sessionRegistry == nil {
+		return nil
+	}
+	return s.sessionRegistry.RegisterSession(s.serverName, sessionID)
+}
+
 // handleSSE handles incoming SSE connection requests.
 // It sets up appropriate headers and creates a new session for the client.
 func (s *SSEServer) HandleSSE(cb api.FilterCallbackHandler, stopChan chan struct{}) {
 	sessionID := uuid.New().String()
 
+	if err := s.registerSession(sessionID); err != nil {
+		api.LogErrorf("Failed to register MCP session: %v", err)
+		cb.EncoderFilterCallbacks().SendLocalReply(http.StatusServiceUnavailable, "", nil, 0, "")
+		return
+	}
+
 	s.sessions.Store(sessionID, true)
 	defer s.sessions.Delete(sessionID)
+
+	// Bind the session to the Redis backend that is being subscribed below, so
+	// later POSTs for the same session keep publishing on the same backend even
+	// if mcpServer.redis is hot-updated while the connection is live.
+	s.registerSessionForRedisBackend(sessionID, stopChan)
 
 	channel := GetSSEChannelName(sessionID)
 	u, err := url.Parse(s.baseURL + s.messageEndpoint)
@@ -218,13 +316,6 @@ func (s *SSEServer) HandleMessage(w http.ResponseWriter, r *http.Request, body j
 	if istiodToken := r.Header.Get("X-Istiod-Token"); istiodToken != "" {
 		ctx = WithIstiodToken(ctx, istiodToken)
 	}
-
-	//TODO： check session id
-	// _, ok := s.sessions.Load(sessionID)
-	// if !ok {
-	// 	s.writeJSONRPCError(w, nil, mcp.INVALID_PARAMS, "Invalid session ID")
-	// 	return
-	// }
 
 	// Process message through MCPServer
 	response := s.server.HandleMessage(ctx, body)

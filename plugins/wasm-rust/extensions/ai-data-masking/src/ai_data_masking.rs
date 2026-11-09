@@ -365,7 +365,7 @@ fn prepare_tool_request(
         }
     }
     let owned: HashSet<usize> = arguments.iter().map(|argument| argument.address).collect();
-    let legacy = LegacyRequestPlan::from_config(config, &value, &normalized, &owned);
+    let legacy = LegacyRequestPlan::from_config(config, &value, &document, &owned)?;
     for text in legacy.checked_strings(&normalized) {
         if config.check_message(text, log) {
             return Err("legacy request deny matched");
@@ -404,6 +404,20 @@ fn prepare_tool_request(
     scoped.protected.sort_by_key(|span| span.start);
     let mut legacy_mask = RequestMasks::default();
     match &legacy {
+        LegacyRequestPlan::OpenAi { values, .. } => {
+            let mut edits = Vec::new();
+            for (text, span) in values {
+                let masked = legacy_mask.plain(config, text)?;
+                if masked != *text {
+                    edits.push((
+                        span.clone(),
+                        serde_json::to_string(&masked).map_err(|_| "content encoding failed")?,
+                    ));
+                }
+            }
+            edits.sort_by_key(|(span, _)| span.start);
+            scoped.apply_edits(edits)?;
+        }
         LegacyRequestPlan::Strings { values, .. } => {
             for (text, managed) in values {
                 if *managed {
@@ -576,7 +590,13 @@ fn prepare_tool_response(
                     .choices
                     .into_iter()
                     .filter_map(|choice| choice.message)
-                    .flat_map(|message| [message.content, message.reasoning_content])
+                    .flat_map(|message| {
+                        message
+                            .text_segments()
+                            .into_iter()
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
                     .collect::<Vec<_>>()
             })
     } else {
@@ -864,10 +884,12 @@ fn deny_definition(
 }
 
 enum LegacyRequestPlan {
+    OpenAi {
+        values: Vec<(String, Range<usize>)>,
+        stream: bool,
+    },
     Strings {
         values: Vec<(String, bool)>,
-        openai: bool,
-        stream: bool,
     },
     Raw,
     None,
@@ -877,22 +899,48 @@ impl LegacyRequestPlan {
     fn from_config(
         config: &AiDataMaskingConfig,
         value: &Value,
-        normalized: &str,
+        document: &JsonStrings,
         owned: &HashSet<usize>,
-    ) -> Self {
+    ) -> Result<Self, &'static str> {
         if config.deny_openai {
-            if let Ok(request) = serde_json::from_str::<Req>(normalized) {
-                return Self::Strings {
-                    values: request
-                        .messages
-                        .into_iter()
-                        .flat_map(|message| {
-                            [(message.content, false), (message.reasoning_content, false)]
-                        })
-                        .collect(),
-                    openai: true,
-                    stream: request.stream,
+            if let Some(request) =
+                parse_openai_request(value).map_err(|_| "invalid OpenAI request body")?
+            {
+                let mut values = Vec::new();
+                let mut add = |text: &str, path: Vec<String>| -> Result<(), &'static str> {
+                    let span = document
+                        .string_span(&path)?
+                        .ok_or("missing OpenAI content location")?;
+                    values.push((text.to_string(), span));
+                    Ok(())
                 };
+                for (index, message) in request.messages.iter().enumerate() {
+                    let base = vec!["messages".to_string(), index.to_string()];
+                    if let Some(text) = &message.reasoning_content {
+                        let mut path = base.clone();
+                        path.push("reasoning_content".to_string());
+                        add(text, path)?;
+                    }
+                    let mut path = base;
+                    path.push("content".to_string());
+                    match &message.content {
+                        Some(MessageContent::Text(text)) => add(text, path)?,
+                        Some(MessageContent::Parts(parts)) => {
+                            for (part_index, part) in parts.iter().enumerate() {
+                                if let Some(text) = part.scan_text() {
+                                    let mut text_path = path.clone();
+                                    text_path.extend([part_index.to_string(), "text".to_string()]);
+                                    add(text, text_path)?;
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                return Ok(Self::OpenAi {
+                    values,
+                    stream: request.stream,
+                });
             }
         }
         if !config.deny_jsonpath.is_empty() {
@@ -909,21 +957,18 @@ impl LegacyRequestPlan {
                     }
                 }
             }
-            return Self::Strings {
-                values,
-                openai: false,
-                stream: false,
-            };
+            return Ok(Self::Strings { values });
         }
         if config.deny_raw {
-            Self::Raw
+            Ok(Self::Raw)
         } else {
-            Self::None
+            Ok(Self::None)
         }
     }
 
     fn checked_strings<'a>(&'a self, normalized: &'a str) -> Vec<&'a str> {
         match self {
+            Self::OpenAi { values, .. } => values.iter().map(|(value, _)| value.as_str()).collect(),
             Self::Strings { values, .. } => {
                 values.iter().map(|(value, _)| value.as_str()).collect()
             }
@@ -933,12 +978,12 @@ impl LegacyRequestPlan {
     }
 
     fn always_forwards(&self) -> bool {
-        matches!(self, Self::Strings { .. })
+        matches!(self, Self::OpenAi { .. } | Self::Strings { .. })
     }
 
     fn openai_state(&self) -> (bool, bool) {
         match self {
-            Self::Strings { openai, stream, .. } => (*openai, *stream),
+            Self::OpenAi { stream, .. } => (true, *stream),
             _ => (false, false),
         }
     }
@@ -1600,18 +1645,127 @@ fn install_tool_configuration(
     *matcher = candidate;
     Ok(())
 }
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ContentPart {
+    kind: String,
+    text: Option<String>,
+    raw: serde_json::Map<String, Value>,
+}
+
+fn is_textual_content_part_kind(kind: &str) -> bool {
+    matches!(kind, "text" | "input_text")
+}
+
+impl<'de> Deserialize<'de> for ContentPart {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let Value::Object(mut object) = Value::deserialize(deserializer)? else {
+            return Err(D::Error::custom("content part must be an object"));
+        };
+        let kind = object
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| D::Error::custom("content part must have a string type"))?
+            .to_string();
+        let textual = is_textual_content_part_kind(&kind);
+        let text = if textual {
+            match object.get("text") {
+                Some(Value::String(text)) => Some(text.clone()),
+                _ => {
+                    return Err(D::Error::custom(
+                        "textual content part must have a string text",
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+        object.remove("type");
+        if textual {
+            object.remove("text");
+        }
+        Ok(Self {
+            kind,
+            text,
+            raw: object,
+        })
+    }
+}
+
+impl ContentPart {
+    fn is_textual(&self) -> bool {
+        is_textual_content_part_kind(&self.kind)
+    }
+
+    fn scan_text(&self) -> Option<&str> {
+        if self.is_textual() {
+            self.text.as_deref()
+        } else {
+            None
+        }
+    }
+
+    fn with_text(&self, text: String) -> Value {
+        debug_assert!(self.is_textual());
+        let mut part = self.raw.clone();
+        part.insert("type".to_string(), Value::String(self.kind.clone()));
+        part.insert("text".to_string(), Value::String(text));
+        Value::Object(part)
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct Message {
     #[serde(default)]
-    content: String,
+    content: Option<MessageContent>,
     #[serde(default)]
-    reasoning_content: String,
+    reasoning_content: Option<String>,
+}
+
+impl Message {
+    fn text_segments(&self) -> Vec<&str> {
+        let mut segments = Vec::new();
+        if let Some(reasoning_content) = &self.reasoning_content {
+            segments.push(reasoning_content.as_str());
+        }
+        if let Some(content) = &self.content {
+            match content {
+                MessageContent::Text(text) => segments.push(text.as_str()),
+                MessageContent::Parts(parts) => {
+                    segments.extend(parts.iter().filter_map(ContentPart::scan_text));
+                }
+            }
+        }
+        segments
+    }
 }
 #[derive(Debug, Deserialize, Clone)]
 struct Req {
     #[serde(default)]
     stream: bool,
     messages: Vec<Message>,
+}
+
+fn is_openai_candidate(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| object.contains_key("messages"))
+}
+
+fn parse_openai_request(value: &Value) -> Result<Option<Req>, serde_json::Error> {
+    if !is_openai_candidate(value) {
+        return Ok(None);
+    }
+    Req::deserialize(value).map(Some)
 }
 
 #[derive(Default, Debug, Deserialize)]
@@ -2072,6 +2226,11 @@ impl AiDataMasking {
             .error(&format!("request masking regex failed: {}", error));
         self.deny(false)
     }
+    fn deny_request_parse_error(&mut self, error: impl std::fmt::Display) -> DataAction {
+        self.log()
+            .error(&format!("invalid OpenAI request body: {}", error));
+        self.deny(false)
+    }
 }
 
 impl Context for AiDataMasking {}
@@ -2296,9 +2455,10 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
                 }
             }
         }
-        let mut req_body = match serde_json::from_slice::<Value>(req_body) {
-            Ok(r) => r.to_string(),
-            Err(_) => {
+        let mut parsed_body = serde_json::from_slice::<Value>(req_body).ok();
+        let mut req_body = match &parsed_body {
+            Some(value) => value.to_string(),
+            None => {
                 if let Ok(r) = String::from_utf8(req_body.clone()) {
                     r
                 } else {
@@ -2307,38 +2467,95 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
             }
         };
         if config.deny_openai {
-            if let Ok(req) = serde_json::from_str::<Req>(req_body.as_str()) {
-                self.is_openai = true;
-                self.stream = req.stream;
-                for msg in req.messages {
-                    if self.check_message(&msg.content)
-                        || self.check_message(&msg.reasoning_content)
-                    {
-                        return self.deny(false);
-                    }
-                    let new_content = match self.replace_request_msg(&msg.content) {
-                        Ok(content) => content,
-                        Err(error) => return self.deny_request_masking_error(&error),
-                    };
-                    let new_reasoning_content =
-                        match self.replace_request_msg(&msg.reasoning_content) {
-                            Ok(content) => content,
-                            Err(error) => return self.deny_request_masking_error(&error),
+            if let Some(value) = parsed_body.as_mut() {
+                match parse_openai_request(value) {
+                    Ok(Some(req)) => {
+                        self.is_openai = true;
+                        self.stream = req.stream;
+                        let mut changed = false;
+                        let Some(messages_value) =
+                            value.get_mut("messages").and_then(Value::as_array_mut)
+                        else {
+                            return self.deny_request_parse_error("messages must be an array");
                         };
-                    if new_content != msg.content {
-                        req_body = req_body.replace(
-                            &Value::String(msg.content).to_string(),
-                            &Value::String(new_content).to_string(),
-                        );
+                        for (message_index, message) in req.messages.iter().enumerate() {
+                            let Some(message_value) = messages_value.get_mut(message_index) else {
+                                return self.deny_request_parse_error("messages must be an array");
+                            };
+                            if let Some(reasoning_content) = &message.reasoning_content {
+                                if self.check_message(reasoning_content) {
+                                    return self.deny(false);
+                                }
+                                let new_reasoning_content = match self
+                                    .replace_request_msg(reasoning_content)
+                                {
+                                    Ok(content) => content,
+                                    Err(error) => return self.deny_request_masking_error(&error),
+                                };
+                                if new_reasoning_content != *reasoning_content {
+                                    message_value["reasoning_content"] =
+                                        Value::String(new_reasoning_content);
+                                    changed = true;
+                                }
+                            }
+                            match &message.content {
+                                None => {}
+                                Some(MessageContent::Text(content)) => {
+                                    if self.check_message(content) {
+                                        return self.deny(false);
+                                    }
+                                    let new_content = match self.replace_request_msg(content) {
+                                        Ok(content) => content,
+                                        Err(error) => {
+                                            return self.deny_request_masking_error(&error)
+                                        }
+                                    };
+                                    if new_content != *content {
+                                        message_value["content"] = Value::String(new_content);
+                                        changed = true;
+                                    }
+                                }
+                                Some(MessageContent::Parts(parts)) => {
+                                    let Some(parts_value) = message_value
+                                        .get_mut("content")
+                                        .and_then(Value::as_array_mut)
+                                    else {
+                                        return self
+                                            .deny_request_parse_error("content must be an array");
+                                    };
+                                    for (part_index, part) in parts.iter().enumerate() {
+                                        let Some(text) = part.scan_text() else {
+                                            continue;
+                                        };
+                                        if self.check_message(text) {
+                                            return self.deny(false);
+                                        }
+                                        let new_text = match self.replace_request_msg(text) {
+                                            Ok(text) => text,
+                                            Err(error) => {
+                                                return self.deny_request_masking_error(&error)
+                                            }
+                                        };
+                                        if new_text != text {
+                                            if let Some(part_value) =
+                                                parts_value.get_mut(part_index)
+                                            {
+                                                *part_value = part.with_text(new_text);
+                                                changed = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if changed {
+                            req_body = value.to_string();
+                        }
+                        return self.forward_request_body(&req_body);
                     }
-                    if new_reasoning_content != msg.reasoning_content {
-                        req_body = req_body.replace(
-                            &Value::String(msg.reasoning_content).to_string(),
-                            &Value::String(new_reasoning_content).to_string(),
-                        );
-                    }
+                    Ok(None) => {}
+                    Err(error) => return self.deny_request_parse_error(&error),
                 }
-                return self.forward_request_body(&req_body);
             }
         }
         if !config.deny_jsonpath.is_empty() {
@@ -2435,29 +2652,22 @@ impl HttpContextWrapper<AiDataMaskingConfig> for AiDataMasking {
             if let Ok(res) = serde_json::from_str::<Res>(res_body.as_str()) {
                 for msg in res.choices {
                     if let Some(message) = msg.message {
-                        if self.check_message(&message.content)
-                            || self.check_message(&message.reasoning_content)
-                        {
+                        let texts = message.text_segments();
+                        if texts.iter().any(|text| self.check_message(text)) {
                             return self.deny(true);
                         }
 
                         let Some(mask_restore) = &self.mask_restore else {
                             continue;
                         };
-                        let new_content = mask_restore.restore(&message.content);
-                        let new_reasoning_content =
-                            mask_restore.restore(&message.reasoning_content);
-                        if new_content != message.content {
-                            res_body = res_body.replace(
-                                &Value::String(message.content).to_string(),
-                                &Value::String(new_content).to_string(),
-                            );
-                        }
-                        if new_reasoning_content != message.reasoning_content {
-                            res_body = res_body.replace(
-                                &Value::String(message.reasoning_content).to_string(),
-                                &Value::String(new_reasoning_content).to_string(),
-                            );
+                        for text in texts {
+                            let new_text = mask_restore.restore(text);
+                            if new_text != text {
+                                res_body = res_body.replace(
+                                    &Value::String(text.to_string()).to_string(),
+                                    &Value::String(new_text).to_string(),
+                                );
+                            }
                         }
                     }
                 }
@@ -3585,5 +3795,394 @@ mod tests {
             .collect();
         assert_eq!(arguments, vec!["{\"email\":\"SECRET\"}"]);
         assert!(!body.contains("[DONE]"));
+    }
+    fn parse_req(body: &str) -> Result<Option<Req>, serde_json::Error> {
+        let value: Value = serde_json::from_str(body).unwrap();
+        parse_openai_request(&value)
+    }
+
+    fn req_text_segments(req: &Req) -> Vec<String> {
+        req.messages
+            .iter()
+            .flat_map(|message| {
+                message
+                    .text_segments()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn parses_supported_openai_content_shapes() {
+        let cases = [
+            (
+                "string content",
+                r#"{"messages":[{"role":"user","content":"hello"}]}"#,
+                vec!["hello"],
+            ),
+            (
+                "null content",
+                r#"{"messages":[{"role":"assistant","content":null}]}"#,
+                vec![],
+            ),
+            (
+                "missing content",
+                r#"{"messages":[{"role":"assistant","tool_calls":[]}]}"#,
+                vec![],
+            ),
+            (
+                "empty content parts",
+                r#"{"messages":[{"role":"user","content":[]}]}"#,
+                vec![],
+            ),
+            (
+                "content parts",
+                r#"{"messages":[{"role":"user","content":[{"type":"text","text":"first"},{"type":"text","text":"second"},{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}"#,
+                vec!["first", "second"],
+            ),
+            (
+                "image-only content parts",
+                r#"{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}"#,
+                vec![],
+            ),
+            (
+                "input_text content part",
+                r#"{"messages":[{"role":"user","content":[{"type":"input_text","text":"third"}]}]}"#,
+                vec!["third"],
+            ),
+            (
+                "image_url part with extra text",
+                r#"{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"},"text":"fourth"}]}]}"#,
+                vec![],
+            ),
+            (
+                "unknown part kind with text",
+                r#"{"messages":[{"role":"user","content":[{"type":"custom_part","text":"fifth"}]}]}"#,
+                vec![],
+            ),
+            ("empty messages", r#"{"messages":[]}"#, vec![]),
+        ];
+
+        for (name, body, expected) in cases {
+            let req = parse_req(body)
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+                .unwrap_or_else(|| panic!("{name}: expected an OpenAI candidate"));
+            assert_eq!(req_text_segments(&req), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_openai_content_shapes() {
+        let cases = [
+            ("number content", r#"{"messages":[{"content":42}]}"#),
+            ("float content", r#"{"messages":[{"content":1.5}]}"#),
+            ("boolean content", r#"{"messages":[{"content":true}]}"#),
+            (
+                "object content",
+                r#"{"messages":[{"content":{"text":"hello"}}]}"#,
+            ),
+            (
+                "string array content",
+                r#"{"messages":[{"content":["hello","world"]}]}"#,
+            ),
+            (
+                "part missing type",
+                r#"{"messages":[{"content":[{"text":"hello"}]}]}"#,
+            ),
+            (
+                "text part missing text",
+                r#"{"messages":[{"content":[{"type":"text"}]}]}"#,
+            ),
+            (
+                "text part null text",
+                r#"{"messages":[{"content":[{"type":"text","text":null}]}]}"#,
+            ),
+            (
+                "text part numeric text",
+                r#"{"messages":[{"content":[{"type":"text","text":42}]}]}"#,
+            ),
+            (
+                "input_text part missing text",
+                r#"{"messages":[{"content":[{"type":"input_text"}]}]}"#,
+            ),
+            (
+                "input_text part null text",
+                r#"{"messages":[{"content":[{"type":"input_text","text":null}]}]}"#,
+            ),
+            (
+                "input_text part numeric text",
+                r#"{"messages":[{"content":[{"type":"input_text","text":42}]}]}"#,
+            ),
+            (
+                "part is not an object",
+                r#"{"messages":[{"content":["hello"]}]}"#,
+            ),
+            ("messages object", r#"{"messages":{}}"#),
+            ("messages null", r#"{"messages":null}"#),
+            ("messages string", r#"{"messages":"hello"}"#),
+            ("message null", r#"{"messages":[null]}"#),
+            ("message string", r#"{"messages":["hello"]}"#),
+            ("stream wrong type", r#"{"stream":"yes","messages":[]}"#),
+            (
+                "reasoning array",
+                r#"{"messages":[{"content":"hello","reasoning_content":[]}]}"#,
+            ),
+            (
+                "reasoning object",
+                r#"{"messages":[{"content":"hello","reasoning_content":{}}]}"#,
+            ),
+            (
+                "reasoning number",
+                r#"{"messages":[{"content":"hello","reasoning_content":1}]}"#,
+            ),
+        ];
+
+        for (name, body) in cases {
+            let value: Value = serde_json::from_str(body).unwrap();
+            assert!(
+                parse_openai_request(&value).is_err(),
+                "{name} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn non_openai_json_requests_remain_non_candidates() {
+        let cases = [
+            r#"{"foo":"bar"}"#,
+            r#"{"messages_count":1}"#,
+            r#"{"data":{"messages":[]}}"#,
+            r#"[{"messages":[]}]"#,
+            r#""messages""#,
+            r#"null"#,
+        ];
+
+        for body in cases {
+            let value: Value = serde_json::from_str(body).unwrap();
+            assert!(
+                parse_openai_request(&value).unwrap().is_none(),
+                "{body} should keep using the raw/JSONPath path"
+            );
+        }
+    }
+
+    #[test]
+    fn null_message_does_not_hide_other_message_text() {
+        let req = parse_req(
+            r#"{"messages":[{"role":"user","content":"secret"},{"role":"assistant","content":null,"tool_calls":[]}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(req.messages.len(), 2);
+        assert_eq!(
+            req.messages[0].content,
+            Some(MessageContent::Text("secret".to_string()))
+        );
+        assert!(req.messages[1].content.is_none());
+        assert_eq!(req_text_segments(&req), vec!["secret"]);
+    }
+
+    #[test]
+    fn parses_reasoning_content_compatibly() {
+        let with_reasoning =
+            parse_req(r#"{"messages":[{"content":"hello","reasoning_content":"thinking"}]}"#)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            req_text_segments(&with_reasoning),
+            vec!["thinking", "hello"]
+        );
+
+        for body in [
+            r#"{"messages":[{"content":"hello","reasoning_content":null}]}"#,
+            r#"{"messages":[{"content":"hello"}]}"#,
+        ] {
+            let req = parse_req(body).unwrap().unwrap();
+            assert_eq!(req_text_segments(&req), vec!["hello"]);
+        }
+    }
+
+    #[test]
+    fn ignores_unknown_fields_and_parses_stream() {
+        let req = parse_req(
+            r#"{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hello","name":"test"}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(req.stream);
+        assert_eq!(req_text_segments(&req), vec!["hello"]);
+    }
+
+    #[test]
+    fn content_parts_preserve_unknown_fields_when_text_is_replaced() {
+        let req = parse_req(
+            r#"{"messages":[{"content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}},{"type":"image_url","image_url":{"url":"https://example.com/a.png"},"detail":"high"}]}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let Some(MessageContent::Parts(parts)) = &req.messages[0].content else {
+            panic!("expected content parts");
+        };
+
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].raw["cache_control"]["type"], "ephemeral");
+        assert!(!parts[0].raw.contains_key("type"));
+        assert!(!parts[0].raw.contains_key("text"));
+        assert_eq!(
+            parts[1].raw["image_url"]["url"],
+            "https://example.com/a.png"
+        );
+        assert_eq!(parts[1].raw["detail"], "high");
+
+        let replaced = parts[0].with_text("masked".to_string());
+        assert_eq!(replaced["type"], "text");
+        assert_eq!(replaced["text"], "masked");
+        assert_eq!(replaced["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn non_textual_parts_preserve_text_fields_and_are_not_scanned() {
+        let req = parse_req(
+            r#"{"messages":[{"content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"},"text":"keep image text"},{"type":"custom_part","text":"keep unknown text"}]}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let Some(MessageContent::Parts(parts)) = &req.messages[0].content else {
+            panic!("expected content parts");
+        };
+
+        assert_eq!(req_text_segments(&req), Vec::<String>::new());
+        assert!(parts.iter().all(|part| !part.is_textual()));
+        assert!(parts.iter().all(|part| part.scan_text().is_none()));
+        assert_eq!(parts[0].raw["text"], "keep image text");
+        assert_eq!(
+            parts[0].raw["image_url"]["url"],
+            "https://example.com/a.png"
+        );
+        assert_eq!(parts[1].raw["text"], "keep unknown text");
+    }
+
+    #[test]
+    fn parses_nullable_response_content() {
+        let res: Res = serde_json::from_str(
+            r#"{"choices":[{"message":{"role":"assistant","content":null}},{"message":{"role":"assistant","content":"hello"}},{"message":{"role":"assistant","content":[{"type":"text","text":"world"}]}}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(res.choices.len(), 3);
+        assert!(res.choices[0].message.as_ref().unwrap().content.is_none());
+        assert_eq!(
+            res.choices[1].message.as_ref().unwrap().text_segments(),
+            vec!["hello"]
+        );
+        assert_eq!(
+            res.choices[2].message.as_ref().unwrap().text_segments(),
+            vec!["world"]
+        );
+    }
+    #[test]
+    fn merged_openai_content_scopes_keep_tool_fields_independent() {
+        let arguments = r#"{"email":"SECRET"}"#;
+        let request = json!({"messages": [
+            {"content": [
+                {"type":"text","text":"SECRET","cache_control":{"type":"ephemeral"}},
+                {"type":"input_text","text":"SECRET"},
+                {"type":"image_url","image_url":{"url":"https://example.com/SECRET"},"text":"SECRET"},
+                {"type":"custom_part","text":"SECRET"}
+            ], "reasoning_content":"SECRET"},
+            {"content":null,"tool_calls":[{"function":{"name":"lookup","arguments":arguments}}]},
+            {"content":arguments}
+        ], "tools":[{"function":{"name":"lookup","description":"SECRET"}}]}).to_string().into_bytes();
+        for flags in 0..8 {
+            crate::test_host::reset();
+            let config = serde_json::from_value(json!({
+                "deny_words":["BLOCKED"],
+                "tool_arguments":{"check":flags & 1 != 0,"restore":flags & 2 != 0,
+                    "restore_allowlist":[{"tool":"lookup","paths":["/email"]}]},
+                "tool_definitions":{"check":flags & 4 != 0},
+                "replace_roles":[{"regex":"SECRET","type":"replace","value":"MASKED_TOKEN","restore":true}]
+            })).unwrap();
+            let mut plugin = AiDataMasking::new();
+            plugin.on_config(Rc::new(config));
+            assert_eq!(
+                plugin.on_http_request_complete_body(&request),
+                DataAction::Continue
+            );
+            assert!(
+                crate::test_host::last_rejection().is_none(),
+                "flags {flags}"
+            );
+            let written = crate::test_host::take_request_body().unwrap();
+            let value: Value = serde_json::from_slice(&written).unwrap();
+            assert_eq!(value["messages"][0]["reasoning_content"], "MASKED_TOKEN");
+            assert_eq!(value["messages"][0]["content"][0]["text"], "MASKED_TOKEN");
+            assert_eq!(
+                value["messages"][0]["content"][0]["cache_control"]["type"],
+                "ephemeral"
+            );
+            assert_eq!(value["messages"][0]["content"][1]["text"], "MASKED_TOKEN");
+            assert_eq!(value["messages"][0]["content"][2]["text"], "SECRET");
+            assert_eq!(
+                value["messages"][0]["content"][2]["image_url"]["url"],
+                "https://example.com/SECRET"
+            );
+            assert_eq!(value["messages"][0]["content"][3]["text"], "SECRET");
+            assert!(value["messages"][1]["content"].is_null());
+            assert_eq!(
+                value["messages"][2]["content"],
+                arguments.replace("SECRET", "MASKED_TOKEN")
+            );
+            assert_eq!(value["tools"][0]["function"]["description"], "SECRET");
+            assert_eq!(
+                value["messages"][1]["tool_calls"][0]["function"]["arguments"],
+                if flags & 1 != 0 {
+                    arguments.replace("SECRET", "MASKED_TOKEN")
+                } else {
+                    arguments.to_string()
+                }
+            );
+            assert!(plugin.is_openai, "flags {flags}");
+        }
+    }
+
+    #[test]
+    fn merged_openai_parse_errors_are_rejected_with_every_tool_scope() {
+        let contents = [
+            json!(42),
+            json!(true),
+            json!({"text":"SECRET"}),
+            json!(["SECRET"]),
+            json!([{"type":"text","text":null}]),
+        ];
+        for flags in 0..8 {
+            let config = Rc::new(
+                serde_json::from_value(json!({
+                    "deny_words":["BLOCKED"],
+                    "tool_arguments":{"check":flags & 1 != 0,"restore":flags & 2 != 0,
+                        "restore_allowlist":[{"tool":"lookup","paths":["/email"]}]},
+                    "tool_definitions":{"check":flags & 4 != 0}
+                }))
+                .unwrap(),
+            );
+            for content in &contents {
+                crate::test_host::reset();
+                let request = json!({"messages":[{"content":content}]})
+                    .to_string()
+                    .into_bytes();
+                let mut plugin = AiDataMasking::new();
+                plugin.on_config(Rc::clone(&config));
+                assert_eq!(
+                    plugin.on_http_request_complete_body(&request),
+                    DataAction::StopIterationAndBuffer,
+                    "flags {flags}"
+                );
+                assert_eq!(crate::test_host::last_rejection().unwrap().0, 200);
+                assert!(crate::test_host::take_request_body().is_none());
+            }
+        }
     }
 }

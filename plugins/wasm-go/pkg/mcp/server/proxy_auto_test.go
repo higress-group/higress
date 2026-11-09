@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	wasmtest "github.com/higress-group/wasm-go/pkg/test"
@@ -69,7 +70,8 @@ func TestAutoModernFreshProbeAndOpaqueBusiness(t *testing.T) {
 		assert.False(t, param)
 		completeAutoResult(host, probe, validAutoDiscoverResult)
 		business := routedRequest(t, host)
-		assert.Equal(t, string(modernProxyListBody(id)), string(business.Body))
+		assert.Equal(t, fmt.Sprint(id), gjson.GetBytes(business.Body, "id").Raw)
+		assert.Equal(t, "Higress-mcp-proxy", gjson.GetBytes(business.Body, `params._meta.io\.modelcontextprotocol/clientInfo.name`).String())
 		assert.Equal(t, "tools/list", gjson.GetBytes(business.Body, "method").String())
 		assert.Equal(t, "/a%2Fb?tenant=one", mustHeaderValue(t, business.Headers, ":path"))
 		completeAutoResult(host, business, `{"resultType":"complete","tools":[],"opaque":900719925474099312345}`)
@@ -199,13 +201,15 @@ func TestAutoCallWithoutListKeepsIdentityAndRejectsLegacyContinuation(t *testing
 			}
 			completeAutoResult(host, probe, validAutoDiscoverResult)
 			business := routedRequest(t, host)
-			assert.Equal(t, string(body), string(business.Body))
+			assert.Equal(t, "900719925474099312345", gjson.GetBytes(business.Body, "params.arguments.value").Raw)
+			assert.Equal(t, "1", gjson.GetBytes(business.Body, "params.requestState.opaque").Raw)
 			assert.Equal(t, "value", mustHeaderValue(t, business.Headers, "Mcp-Param-Future"))
 			completeCallout(host, business, "400", [][2]string{{"Content-Type", "application/json"}}, autoError(`"business"`, -32020, `{"opaque":900719925474099312345}`))
 			response := proxyTestResponse(host)
 			require.NotNil(t, response)
-			assert.Equal(t, uint32(400), response.StatusCode)
-			assert.Equal(t, int64(-32020), gjson.GetBytes(response.Data, "error.code").Int())
+			assert.Equal(t, uint32(200), response.StatusCode)
+			assert.Equal(t, int64(utils.ErrInternalError), gjson.GetBytes(response.Data, "error.code").Int())
+			assert.False(t, gjson.GetBytes(response.Data, "error.data").Exists())
 			assert.Empty(t, host.GetHttpCalloutAttributes())
 		})
 	}
@@ -248,7 +252,7 @@ func TestAutoAuthenticationSnapshotAndTarget(t *testing.T) {
 
 func TestAutoTerminalArbitrationAndDuplicateCallbacks(t *testing.T) {
 	t.Run("cancel before dispatch", func(t *testing.T) {
-		e := &AutoExchange{phase: autoReady, prepared: &PreparedProxyRequest{raw: []byte("secret")}}
+		e := &AutoExchange{phase: autoReady, prepared: &PreparedProxyRequest{params: map[string]json.RawMessage{"opaque": json.RawMessage(`"private"`)}}}
 		e.cancel()
 		_, ok := e.take(autoReady, autoDispatching)
 		assert.False(t, ok)
@@ -405,7 +409,7 @@ func TestAutoCancellationRegistrationRace(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		request, protocolErr := protocol.PrepareRequest(protocol.NewTransport("POST", "mcp.example.com", modernProxyListHeaders()), modernProxyListBody(1), func(string) bool { return true })
 		require.Nil(t, protocolErr)
-		e := &AutoExchange{phase: autoPrepared, prepared: &PreparedProxyRequest{raw: []byte("private")}}
+		e := &AutoExchange{phase: autoPrepared, prepared: &PreparedProxyRequest{params: map[string]json.RawMessage{"opaque": json.RawMessage(`"private"`)}}}
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() { defer wg.Done(); e.register(request) }()

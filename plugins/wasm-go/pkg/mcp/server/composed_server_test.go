@@ -114,7 +114,7 @@ func TestComposedMCPServer_GetMCPTools_AggregatesWithPrefix(t *testing.T) {
 	assert.Nil(t, dt2.OutputSchema())
 }
 
-func TestComposedMCPServer_GetMCPTools_PreservesLegacyOnlyCompatibility(t *testing.T) {
+func TestComposedMCPServer_GetMCPTools_IgnoresDeprecatedLegacyOnly(t *testing.T) {
 	r := &GlobalToolRegistry{}
 	r.Initialize()
 	r.RegisterTool("rest", "legacy", &RestMCPTool{
@@ -137,10 +137,10 @@ func TestComposedMCPServer_GetMCPTools_PreservesLegacyOnlyCompatibility(t *testi
 
 	tool, ok := cs.GetMCPTools()["rest___legacy"].(*DescriptiveTool)
 	require.True(t, ok)
-	assert.True(t, tool.legacyOnlyInputSchema())
+	assert.Contains(t, tool.InputSchema()["properties"], "value")
 	created, ok := tool.Create(nil).(*DescriptiveTool)
 	require.True(t, ok)
-	assert.True(t, created.legacyOnlyInputSchema(), "Create must retain compatibility metadata")
+	assert.Equal(t, tool.InputSchema(), created.InputSchema())
 }
 
 func TestComposedMCPServer_GetMCPTools_MissingToolIsSkipped(t *testing.T) {
@@ -245,7 +245,6 @@ func TestDescriptiveTool_Create_ReturnsNewInstanceWithSameFields(t *testing.T) {
 		description:  "d",
 		inputSchema:  map[string]any{"k": "v"},
 		outputSchema: map[string]any{"o": "w"},
-		legacyOnly:   true,
 	}
 	created := dt.Create([]byte(`{"ignored":true}`))
 	require.NotNil(t, created)
@@ -255,7 +254,6 @@ func TestDescriptiveTool_Create_ReturnsNewInstanceWithSameFields(t *testing.T) {
 	assert.Equal(t, dt.Description(), cdt.Description())
 	assert.Equal(t, dt.InputSchema(), cdt.InputSchema())
 	assert.Equal(t, dt.OutputSchema(), cdt.OutputSchema())
-	assert.True(t, cdt.legacyOnlyInputSchema())
 }
 
 func TestDescriptiveTool_Call_ReturnsError(t *testing.T) {

@@ -387,7 +387,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			// 测试任意请求体
-			anyBody := `{"invalid": "data"}`
+			anyBody := `not a json {{{`
 			action = host.CallOnHttpRequestBody([]byte(anyBody))
 
 			require.Equal(t, types.ActionContinue, action)

@@ -258,7 +258,7 @@ rules:
 baseDeployment:
   version: base
 grayDeployments:
-  - name: beta-user
+  - name: inner-user
     version: gray
     enabled: true
 injection:
