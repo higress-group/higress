@@ -1,0 +1,54 @@
+name: Recover hgctl macOS AMD64 Asset
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version used in the asset name (for example v2.2.6)"
+        required: true
+        type: string
+      release_tag:
+        description: "Existing release tag to receive the asset (for example v2.2.6)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  recover-hgctl-macos-amd64:
+    runs-on: macos-15-intel
+    env:
+      VERSION: ${{ inputs.version }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Validate inputs and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null
+
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.version }}
+
+      - uses: actions/setup-go@v5
+        with:
+          # Release toolchain pin; intentionally independent of module go directives.
+          go-version: '1.26.10'
+
+      - name: Build and package hgctl darwin/amd64
+        run: |
+          set -euo pipefail
+          GOPROXY="https://proxy.golang.org,direct" make build-hgctl-macos-amd64
+          tar -zcvf "hgctl_${VERSION}_darwin_amd64.tar.gz" out/darwin_amd64/
+
+      - name: Upload asset to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "${RELEASE_TAG}" "hgctl_${VERSION}_darwin_amd64.tar.gz" --repo "${GITHUB_REPOSITORY}"
