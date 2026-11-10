@@ -1965,12 +1965,11 @@ impl AiDataMasking {
                     buffered = Some(std::mem::take(&mut tools.probe));
                 }
             } else {
-                if tools
-                    .probe
-                    .len()
-                    .checked_add(body.len())
-                    .is_none_or(|size| size > config.tool_arguments.limits.max_unparsed_bytes)
-                {
+                let exceeds_unparsed_limit = match tools.probe.len().checked_add(body.len()) {
+                    Some(size) => size > config.tool_arguments.limits.max_unparsed_bytes,
+                    None => true,
+                };
+                if exceeds_unparsed_limit {
                     return self.fail_tool_stream(tools, "unparsed response buffer limit exceeded");
                 }
                 tools.probe.extend_from_slice(body);
