@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -170,6 +171,16 @@ func TestFrameSSEEvents(t *testing.T) {
 	})
 }
 
+// The converted chat completion chunks stamp `created` from the wall clock.
+// Two renders of the same stream can therefore straddle a second boundary,
+// which made the byte-for-byte comparison below flaky. Compare everything
+// except that timestamp; usage and framing assertions stay exact.
+var claudeChunkCreated = regexp.MustCompile(`"created":\d+`)
+
+func normalizeClaudeChunkTimes(s string) string {
+	return claudeChunkCreated.ReplaceAllString(s, `"created":0`)
+}
+
 func TestFrameSSEEventsClaudeUsageSurvivesSplitMessageStart(t *testing.T) {
 	// End-to-end at the provider level: message_start split across callbacks
 	// must still land its input_tokens in the final usage chunk.
@@ -201,7 +212,7 @@ func TestFrameSSEEventsClaudeUsageSurvivesSplitMessageStart(t *testing.T) {
 
 	for i := 1; i < len(intact); i++ {
 		got := render(t, intact[:i], intact[i:])
-		require.Equal(t, baseline, got, "split at offset %d", i)
+		require.Equal(t, normalizeClaudeChunkTimes(baseline), normalizeClaudeChunkTimes(got), "split at offset %d", i)
 	}
 }
 
