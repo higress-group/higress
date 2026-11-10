@@ -117,7 +117,10 @@ jobs:
           echo "Read-only ORAS preflight classified $attempted deterministic public references: $present present, $absent explicitly absent, $authenticated_capture require authenticated capture; deferred alpha plugins were skipped." >> "$GITHUB_STEP_SUMMARY"
   prepare:
     needs: preflight
-    runs-on: ubuntu-latest
+    # Keep the release candidate build/test environment pinned: ubuntu-latest
+    # moved to Ubuntu 26 (GCC 15), where the bundled oniguruma C sources in
+    # ai-data-masking's onig_sys dependency fail to compile.
+    runs-on: ubuntu-22.04
     # No environment gate: candidate builds publish only into the
     # content-addressed candidates/ namespace, which nothing public resolves.
     # The human gate for a release is the preparation PR review plus the

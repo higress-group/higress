@@ -20,6 +20,7 @@ const (
 	claudeDefaultVersion          = "2023-06-01"
 	claudeDefaultMaxTokens        = 4096
 	claudeMinThinkingBudgetTokens = 1024
+	ctxKeyClaudeStreamState       = "claudeStreamState"
 
 	// Claude Code mode constants
 	claudeCodeUserAgent    = "claude-cli/2.1.2 (external, cli)"
@@ -325,10 +326,21 @@ func (c *claudeProviderInitializer) CreateProvider(config ProviderConfig) (Provi
 type claudeProvider struct {
 	config       ProviderConfig
 	contextCache *contextCache
+}
 
+type claudeStreamState struct {
 	messageId   string
 	usage       usage
 	serviceTier string
+}
+
+func getClaudeStreamState(ctx wrapper.HttpContext) *claudeStreamState {
+	state, _ := ctx.GetContext(ctxKeyClaudeStreamState).(*claudeStreamState)
+	if state == nil {
+		state = &claudeStreamState{}
+		ctx.SetContext(ctxKeyClaudeStreamState, state)
+	}
+	return state
 }
 
 func (c *claudeProvider) GetProviderType() string {
@@ -857,15 +869,17 @@ func stopReasonClaude2OpenAI(reason *string) string {
 }
 
 func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, origResponse *claudeTextGenStreamResponse) *chatCompletionResponse {
+	state := getClaudeStreamState(ctx)
 	switch origResponse.Type {
 	case "message_start":
+		*state = claudeStreamState{}
 		if origResponse.Message != nil {
-			c.messageId = origResponse.Message.Id
-			c.usage = usage{
+			state.messageId = origResponse.Message.Id
+			state.usage = usage{
 				PromptTokens:     origResponse.Message.Usage.InputTokens,
 				CompletionTokens: origResponse.Message.Usage.OutputTokens,
 			}
-			c.serviceTier = origResponse.Message.Usage.ServiceTier
+			state.serviceTier = origResponse.Message.Usage.ServiceTier
 		}
 		var index int
 		if origResponse.Index != nil {
@@ -978,8 +992,8 @@ func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, or
 
 	case "message_delta":
 		if origResponse.Usage != nil {
-			c.usage.CompletionTokens += origResponse.Usage.OutputTokens
-			c.usage.TotalTokens = c.usage.PromptTokens + c.usage.CompletionTokens
+			state.usage.CompletionTokens += origResponse.Usage.OutputTokens
+			state.usage.TotalTokens = state.usage.PromptTokens + state.usage.CompletionTokens
 		}
 
 		var index int
@@ -994,16 +1008,16 @@ func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, or
 		return c.createChatCompletionResponse(ctx, origResponse, choice)
 	case "message_stop":
 		return &chatCompletionResponse{
-			Id:          c.messageId,
+			Id:          state.messageId,
 			Created:     time.Now().UnixMilli() / 1000,
 			Model:       ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
 			Object:      objectChatCompletionChunk,
 			Choices:     []chatCompletionChoice{},
-			ServiceTier: c.serviceTier,
+			ServiceTier: state.serviceTier,
 			Usage: &usage{
-				PromptTokens:     c.usage.PromptTokens,
-				CompletionTokens: c.usage.CompletionTokens,
-				TotalTokens:      c.usage.TotalTokens,
+				PromptTokens:     state.usage.PromptTokens,
+				CompletionTokens: state.usage.CompletionTokens,
+				TotalTokens:      state.usage.TotalTokens,
 			},
 		}
 	case "content_block_stop":
@@ -1032,13 +1046,14 @@ func (c *claudeProvider) streamResponseClaude2OpenAI(ctx wrapper.HttpContext, or
 }
 
 func (c *claudeProvider) createChatCompletionResponse(ctx wrapper.HttpContext, response *claudeTextGenStreamResponse, choice chatCompletionChoice) *chatCompletionResponse {
+	state := getClaudeStreamState(ctx)
 	return &chatCompletionResponse{
-		Id:          c.messageId,
+		Id:          state.messageId,
 		Created:     time.Now().UnixMilli() / 1000,
 		Model:       ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
 		Object:      objectChatCompletionChunk,
 		Choices:     []chatCompletionChoice{choice},
-		ServiceTier: c.serviceTier,
+		ServiceTier: state.serviceTier,
 	}
 }
 

@@ -200,7 +200,7 @@ docker-buildx-push: clean-env docker.higress-buildx
 export PARENT_GIT_TAG:=$(shell cat VERSION)
 export PARENT_GIT_REVISION:=$(TAG)
 
-export ENVOY_PACKAGE_URL_PATTERN?=https://github.com/higress-group/proxy/releases/download/v2.2.5/envoy-symbol-ARCH.tar.gz
+export ENVOY_PACKAGE_URL_PATTERN?=https://github.com/higress-group/proxy/releases/download/v2.2.6/envoy-symbol-ARCH.tar.gz
 
 build-envoy: prebuild
 	./tools/hack/build-envoy.sh
@@ -258,7 +258,7 @@ install: pre-install
 	helm install higress helm/higress -n higress-system --create-namespace --set 'global.local=true'
 
 HIGRESS_LATEST_IMAGE_TAG ?= latest
-ENVOY_LATEST_IMAGE_TAG ?= 49b0ec03e77386b875fc6772ec4e79b088e4a634
+ENVOY_LATEST_IMAGE_TAG ?= 1cf20e40264ffc6b10919f0005edc135af1683c4
 ISTIO_LATEST_IMAGE_TAG ?= 3498bc95bdea417fe0ce3f3017b0015cda907908
 TEST_ISTIO_IMAGE_TAG ?= $(ISTIO_LATEST_IMAGE_TAG)
 
