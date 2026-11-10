@@ -40,7 +40,7 @@ func (c *PluginConfig) FromJson(json gjson.Result) {
 		responseCode, err := strconv.Atoi(v.String())
 		if err != nil || responseCode < 100 || responseCode > 999 {
 			log.Errorf("Skip invalid response_code value: %s", v.String())
-			return
+			continue
 		}
 		c.CacheResponseCode = append(c.CacheResponseCode, int32(responseCode))
 	}
