@@ -9,7 +9,7 @@ replace github.com/alibaba/higress/plugins/wasm-go/pkg/pathutil => ../../pkg/pat
 require (
 	github.com/alibaba/higress/plugins/wasm-go/pkg/pathutil v0.0.0
 	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20251103120604-77e9cce339d2
-	github.com/higress-group/wasm-go v1.2.0
+	github.com/higress-group/wasm-go v1.2.1-0.20261111151630-647ef409a302
 	github.com/stretchr/testify v1.9.0
 	github.com/tidwall/gjson v1.18.0
 )
