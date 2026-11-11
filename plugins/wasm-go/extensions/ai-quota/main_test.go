@@ -124,8 +124,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			// 由于需要调用Redis检查配额，应该返回HeaderStopAllIterationAndWatermark
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
-			// 模拟Redis调用响应（有足够配额）
-			resp := test.CreateRedisResp(1000)
+			// 模拟Redis调用响应（有足够配额）- Lua Eval 返回数组 {cVal}
+			resp := test.CreateRedisRespArray([]interface{}{1000})
 			host.CallOnRedisCall(0, resp)
 			action = host.GetHttpStreamAction()
 			require.Equal(t, types.ActionContinue, action)
@@ -150,8 +150,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			// legacy 路径同样 HeaderStopAllIterationAndWatermark
 			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
-			// 模拟 Redis 返回 0，触发 response.Integer() <= 0 拒绝分支
-			resp := test.CreateRedisResp(0)
+			// 模拟 Redis 返回数组 {0}，触发 <= 0 拒绝分支
+			resp := test.CreateRedisRespArray([]interface{}{0})
 			host.CallOnRedisCall(0, resp)
 
 			response := host.GetLocalResponse()
@@ -185,7 +185,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 
 			response := host.GetLocalResponse()
 			require.Equal(t, uint32(http.StatusOK), response.StatusCode)
-			require.Equal(t, "{\"consumer\":\"consumer1\",\"quota\":500}", string(response.Data))
+			// json.Marshal(map) 按 key 字典序输出：consumer < limited < quota
+			require.Equal(t, "{\"consumer\":\"consumer1\",\"limited\":true,\"quota\":500}", string(response.Data))
 			host.CompleteHttp()
 		})
 
@@ -425,10 +426,14 @@ func TestGetOperationMode(t *testing.T) {
 
 // 验证两个 Lua 脚本常量存在且内容非空（编译期通过即可，运行时验证在后续 Task 中做）
 func TestLuaScripts_Defined(t *testing.T) {
-	require.NotEmpty(t, RequestPhaseQuotaReadScript)
-	require.NotEmpty(t, ResponsePhaseQuotaDecrbyScript)
-	require.Contains(t, RequestPhaseQuotaReadScript, "GET")
-	require.Contains(t, ResponsePhaseQuotaDecrbyScript, "DECRBY")
+	require.NotEmpty(t, ConsumerQuotaReadScript)
+	require.NotEmpty(t, ConsumerQuotaDecrbyScript)
+	require.NotEmpty(t, GroupConsumerQuotaReadScript)
+	require.NotEmpty(t, GroupConsumerQuotaDecrbyScript)
+	require.Contains(t, ConsumerQuotaReadScript, "GET")
+	require.Contains(t, ConsumerQuotaDecrbyScript, "EXISTS")
+	require.Contains(t, GroupConsumerQuotaReadScript, "GET")
+	require.Contains(t, GroupConsumerQuotaDecrbyScript, "EXISTS")
 }
 
 // chat completion 模式 + group 非空 + 两池都 > 0 → ActionContinue
@@ -510,7 +515,7 @@ func TestOnHttpRequestHeaders_WithGroup_ConsumerExhausted(t *testing.T) {
 	})
 }
 
-// group 非空 + 两池都 ≤ 0 → 拒绝（ai-quota.noquota: group and consumer quota exhausted）
+// group 非空 + 两池都 ≤ 0 → 拒绝（ai-quota.noquota: group quota exhausted，按顺序先检查 group）
 func TestOnHttpRequestHeaders_WithGroup_BothExhausted(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
@@ -532,21 +537,20 @@ func TestOnHttpRequestHeaders_WithGroup_BothExhausted(t *testing.T) {
 		require.NotNil(t, resp)
 		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
 		require.Contains(t, string(resp.Data), "ai-quota.noquota")
-		require.Contains(t, string(resp.Data), "group and consumer quota exhausted")
+		require.Contains(t, string(resp.Data), "group quota exhausted")
 		host.CompleteHttp()
 	})
 }
 
-// Phase 1 legacy Get 路径下 Redis 返回 nil（key 不存在）→ 403 ai-quota.noquota
-// 锁定 main.go:235-237 的 IsNull() 分支，与 Integer() <= 0 分支独立。
-// 业务语义：从未 refresh 过该 consumer 配额 → 视为无配额拒绝。
-func TestOnHttpRequestHeaders_LegacyPhase1_NullKey_Denied(t *testing.T) {
+// Phase 1 单池路径下 Redis 返回 nil（key 不存在）→ 不限额，ActionContinue
+// 业务语义：默认不限额，只有通过 admin API 设置了配额才启用检查。
+func TestOnHttpRequestHeaders_LegacyPhase1_NullKey_Unlimited(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		// 不带 x-mse-consumer-group → legacy 单池路径
+		// 不带 x-mse-consumer-group → 单池路径
 		action := host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "example.com"},
 			{":path", "/v1/chat/completions"},
@@ -555,14 +559,12 @@ func TestOnHttpRequestHeaders_LegacyPhase1_NullKey_Denied(t *testing.T) {
 		})
 		require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
-		// RESP nil reply：模拟 key 不存在
-		host.CallOnRedisCall(0, test.CreateRedisRespNull())
+		// RESP array with nil：模拟 key 不存在（不限额）
+		// 单池 Lua 返回 {cVal}，cVal=nil 表示 key 不存在
+		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{nil}))
 
-		resp := host.GetLocalResponse()
-		require.NotNil(t, resp)
-		require.Equal(t, uint32(http.StatusForbidden), resp.StatusCode)
-		require.Contains(t, string(resp.Data), "ai-quota.noquota")
-		require.Contains(t, string(resp.Data), "consumer quota exhausted")
+		action = host.GetHttpStreamAction()
+		require.Equal(t, types.ActionContinue, action)
 		host.CompleteHttp()
 	})
 }
@@ -645,16 +647,15 @@ func TestOnHttpStreamingResponseBody_WithGroup_DecrbyBothPools(t *testing.T) {
 	})
 }
 
-// Sister 测试：Phase 2 legacy 路径（group == ""，无 x-mse-consumer-group header）→ 单 DecrBy。
-// 与 WithGroup 版对照：若有人把 Lua 路径误换成 legacy 路径，WithGroup 测试的数组响应会让
-// legacy DecrBy（只接受 integer reply）解析行为差异可见，反之亦然。
-func TestOnHttpStreamingResponseBody_LegacyDecrby_SinglePool(t *testing.T) {
+// Sister 测试：Phase 2 单池路径（group == ""）→ Lua Eval 单池 DECRBY。
+// 与 WithGroup 版对照：单池 Lua Eval 返回数组 {nc}，双池返回 {gVal, cVal}。
+func TestOnHttpStreamingResponseBody_SinglePoolDecrby(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(basicConfig)
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		// 不带 x-mse-consumer-group → legacy 路径
+		// 不带 x-mse-consumer-group → 单池路径
 		host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "example.com"},
 			{":path", "/v1/chat/completions"},
@@ -662,8 +663,8 @@ func TestOnHttpStreamingResponseBody_LegacyDecrby_SinglePool(t *testing.T) {
 			{"x-mse-consumer", "alice"},
 		})
 
-		// Phase 1 legacy Get 返回 integer reply
-		host.CallOnRedisCall(0, test.CreateRedisResp(1000))
+		// Phase 1 单池 Lua Eval 返回数组 {cVal}
+		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{1000}))
 
 		data := []byte(`{"choices": [{"delta": {"content": "Hello"}}], "usage": {"prompt_tokens": 15, "completion_tokens": 15, "total_tokens": 30}}`)
 		result := host.CallOnHttpStreamingResponseBody(data, false)
@@ -672,8 +673,8 @@ func TestOnHttpStreamingResponseBody_LegacyDecrby_SinglePool(t *testing.T) {
 		result = host.CallOnHttpStreamingResponseBody(data, true)
 		require.Equal(t, types.ActionContinue, result)
 
-		// Phase 2 legacy DecrBy 响应：单 integer（扣减后剩余），回调为 nil
-		host.CallOnRedisCall(0, test.CreateRedisResp(970))
+		// Phase 2 单池 Lua DECRBY 响应：数组 {nc}，回调为 nil
+		host.CallOnRedisCall(0, test.CreateRedisRespArray([]interface{}{970}))
 
 		// post-state 断言：data 透传
 		require.Equal(t, data, host.GetResponseBody())
@@ -755,7 +756,7 @@ func TestAdminQuery_Group(t *testing.T) {
 
 		response := host.GetLocalResponse()
 		require.Equal(t, uint32(http.StatusOK), response.StatusCode)
-		require.JSONEq(t, `{"group":"team-a","quota":2000}`, string(response.Data))
+		require.JSONEq(t, `{"group":"team-a","quota":2000,"limited":true}`, string(response.Data))
 		host.CompleteHttp()
 	})
 }
@@ -780,7 +781,7 @@ func TestAdminQuery_Consumer(t *testing.T) {
 
 		response := host.GetLocalResponse()
 		require.Equal(t, uint32(http.StatusOK), response.StatusCode)
-		require.JSONEq(t, `{"consumer":"consumer1","quota":500}`, string(response.Data))
+		require.JSONEq(t, `{"consumer":"consumer1","quota":500,"limited":true}`, string(response.Data))
 		// 防御性：响应里不出现 name 字段（spec §5.4.2 决策 —— 不创造 targetName 统一抽象）
 		require.NotContains(t, string(response.Data), `"name"`)
 		host.CompleteHttp()
