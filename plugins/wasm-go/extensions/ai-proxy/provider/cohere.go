@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
-	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 const (
@@ -119,6 +119,9 @@ func (m *cohereProvider) TransformRequestBody(ctx wrapper.HttpContext, apiName A
 func (m *cohereProvider) GetApiName(path string) ApiName {
 	if strings.Contains(path, cohereChatCompletionPath) {
 		return ApiNameChatCompletion
+	}
+	if strings.Contains(path, cohereRerankPath) {
+		return ApiNameCohereV1Rerank
 	}
 	return ""
 }
