@@ -746,6 +746,9 @@ def supplements(variant, out):
 
 
 if __name__ == "__main__":
+    if "--legacy-response-ack" in sys.argv:
+        from legacy_response_ack import Fixture
+        raise SystemExit(Fixture(os.environ["COMPAT_VARIANT"], os.environ.get("RUNTIME_EVIDENCE", "/evidence")).run())
     variant = os.environ["COMPAT_VARIANT"]
     out = os.environ.get("RUNTIME_EVIDENCE", "/evidence")
     if "--sse-no-space" in sys.argv:

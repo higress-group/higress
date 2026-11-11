@@ -685,8 +685,111 @@ def sse_no_space_focused_checks():
             require(recorded["cleanupComplete"] == (cleanup_status == 0), "cleanup failure hidden")
             require(any(command[:3] == ["podman", "network", "ls"] for command in commands) and any(command[:3] == ["podman", "volume", "ls"] for command in commands), "cleanup inventories missing")
 
+def legacy_response_ack_checks():
+    """Offline synthetic evidence; actual acceptance still requires native SSE."""
+    import legacy_response_ack as ack
+    import run_compat
+    import contextlib
+    import unittest.mock as mock
+
+    def snapshot(role):
+        endpoint = "/mcp/legacy?sessionId=synthetic-" + role
+        value = {"variant": role, "expectedCases": ack.cases(), "cases": [], "exchanges": [], "frames": [],
+                 "bindings": {"endpoint": endpoint, "sessionId": "synthetic-" + role, "pings": []},
+                 "startupError": None, "readerClosed": True,
+                 "backend": {"events": [{"case": name, "method": "GET", "path": "/unified/rest/legacy-ack", "accepted": True} for name in ("C2/call", "C5/call")]}}
+        def frame(event, raw):
+            value["frames"].append({"event": event, "data": ack.raw_record(raw), "wire": ack.raw_record(b"event: " + event.encode() + b"\ndata: " + raw + b"\n\n")})
+        frame("endpoint", endpoint.encode())
+        for case in ack.cases():
+            red = role == "affected" and case["target"]
+            value["cases"].append({"id": case["id"], "status": "FAIL" if red else "PASS", "validRedReproduction": red})
+            for repetition in range(2 if case["id"] == "A3/native-heartbeats" else 1):
+                port = ack.SESSION if case["id"].startswith(("C2/", "A3/")) else ack.DIRECT
+                raw = ack.dump({"synthetic": case["id"]})
+                if case["id"].startswith("A3/"):
+                    ping_id = role + "-synthetic-ping-" + str(repetition)
+                    value["bindings"]["pings"].append({"id": ping_id, "frame": len(value["frames"]), "replySequence": len(value["exchanges"]) + 1})
+                    frame("message", ack.dump({"jsonrpc": "2.0", "id": ping_id, "method": "ping"}))
+                    raw = ack.dump({"jsonrpc": "2.0", "id": ping_id, "result": {}})
+                status = 400 if red or case["id"].startswith(("C3/", "C4/")) else 202 if case["target"] or case["id"] == "C2/initialized" else 200
+                body = ack.dump({"jsonrpc": "2.0", "id": "synthetic", "error": {"code": -32600}}) if status == 400 else b"" if status == 202 else ack.dump({"jsonrpc": "2.0", "id": "synthetic", "result": {}})
+                value["exchanges"].append({"case": case["id"], "accessRequestId": "request-" + str(len(value["exchanges"])), "port": port,
+                                           "path": endpoint if port == ack.SESSION else "/mcp", "headers": [["Host", "gateway"]],
+                                           "request": ack.raw_record(raw), "status": status, "response": ack.raw_record(body)})
+                if port == ack.SESSION and body: frame("message", body)
+        value["counts"] = ack.observed_counts(value)
+        return value
+
+    before, after = snapshot("affected"), snapshot("candidate")
+    require(not ack.observation_errors(before) and not ack.observation_errors(after), "synthetic focused observations rejected")
+    require(ack.normalized(before) == ack.normalized(after) and ack.normalized_frames(before) == ack.normalized_frames(after), "bound-only native normalization differs")
+    mutations = [
+        lambda value: value.update(startupError="native ABI unavailable"),
+        lambda value: value["cases"].pop(),
+        lambda value: value["cases"].append(copy.deepcopy(value["cases"][0])),
+        lambda value: value["bindings"]["pings"][0].update(id="tampered"),
+        lambda value: value["bindings"].update(sessionId="tampered"),
+        lambda value: value["exchanges"][2].update(request=ack.raw_record(b'{"jsonrpc":"2.0","id":"tampered","result":{}}')),
+        lambda value: value["frames"].append(copy.deepcopy(value["frames"][-1])),
+        lambda value: value["backend"]["events"].append(copy.deepcopy(value["backend"]["events"][0])),
+        lambda value: value.update(readerClosed=False),
+        lambda value: value["cases"][0].update(validRedReproduction=False),
+        lambda value: value["exchanges"][0].update(status=503),
+    ]
+    for mutate in mutations:
+        value = copy.deepcopy(before); mutate(value)
+        require(ack.observation_errors(value), "focused corruption accepted")
+    value = copy.deepcopy(after)
+    value["exchanges"][0]["request"] = ack.raw_record(b'{"different":"ordinary-user-value"}')
+    require(ack.normalized(value) != ack.normalized(after), "arbitrary value normalized away")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary); ack.config(root)
+        config = (root / "envoy.yaml").read_text()
+        require(config.count("plugin_name: mcp-session") == 1 and config.index("envoy.filters.http.golang") < config.rindex("envoy.filters.http.wasm"), "native filter missing/wrong order")
+        require('match_rule_domain: gateway' in config and 'redis:6379' in config and '/unified/rest/legacy-ack' in config and config.count('/runtime/plugin.wasm') == 2, "focused fixture binding changed")
+        (root / "harness").mkdir(); (root / "harness" / "frozen").write_text("synthetic")
+        inputs = {"mode": "legacy-response-ack", "responseBaseline": ack.AFFECTED, "candidate": "a" * 40,
+                  "tokenOverridesUnset": True, "sourceStillClean": True, "cleanupComplete": True,
+                  "cleanup": {"containers": [], "networks": [], "volumes": [], "publishedPorts": [], "readerProcesses": []},
+                  "verifierExits": {"affected": 1, "candidate": 0}, "versions": {}, "configs": {}, "loaded": {},
+                  "native": {"path": ack.NATIVE_PATH, "sha256": "b" * 64},
+                  "images": {"synthetic/" + name + "@sha256:" + "c" * 64: {} for name in ("gateway", "backend", "redis")},
+                  "imageRoles": {name: "synthetic/" + name + "@sha256:" + "c" * 64 for name in ("gateway", "backend", "redis")},
+                  "harness": {"frozen": ack.sha(root / "harness" / "frozen")}}
+        for role, observed in (("affected", before), ("candidate", after)):
+            (root / ("legacy-response-" + role + ".json")).write_text(json.dumps(observed))
+            (root / ("plain-" + role + ".wasm")).write_bytes(b"synthetic-" + role.encode())
+            (root / ("envoy-" + role + ".yaml")).write_text(config)
+            (root / ("gateway-" + role + ".log")).write_text("".join("access request_id=" + identity + " listener=synthetic\n" for identity in [row["accessRequestId"] for row in observed["exchanges"]] + ["legacy-ack-sse"]))
+            digest = ack.sha(root / ("plain-" + role + ".wasm"))
+            inputs["versions"][role] = {"source": ack.AFFECTED if role == "affected" else inputs["candidate"], "go": "synthetic-go", "moduleFiles": {}, "wasm": {"plain": digest}}
+            inputs["configs"][role] = ack.sha(root / ("envoy-" + role + ".yaml"))
+            inputs["loaded"][role] = {"wasm": digest, "native": inputs["native"]["sha256"]}
+        require(not ack.final_errors(root, inputs), "valid focused synthetic manifest rejected")
+        for mutate in (
+            lambda value: value.update(responseBaseline="wrong"),
+            lambda value: value["versions"]["affected"].update(source="wrong"),
+            lambda value: value["imageRoles"].update(redis=value["imageRoles"]["gateway"]),
+            lambda value: value["loaded"]["candidate"].update(native="d" * 64),
+            lambda value: value["verifierExits"].update(affected=0),
+            lambda value: value.update(cleanupComplete=False),
+            lambda value: value["cleanup"]["networks"].append("run-owned-leftover"),
+            lambda value: value.update(error="startup failure"),
+        ):
+            changed = copy.deepcopy(inputs); mutate(changed)
+            require(ack.final_errors(root, changed), "focused input corruption accepted")
+    for extra in (["--legacy-response-ack"], ["--response-baseline", ack.AFFECTED], ["--legacy-response-ack", "--response-baseline", ack.AFFECTED, "--redis-image", "synthetic", "--sse-no-space"]):
+        with mock.patch("sys.argv", ["run_compat.py", "--output", "/synthetic", *extra]), contextlib.redirect_stderr(io.StringIO()):
+            try: run_compat.main()
+            except SystemExit as error: require(error.code == 2, "wrong mode rejection")
+            else: raise AssertionError("incomplete/mixed focused mode accepted")
+    with mock.patch("sys.argv", ["run_compat.py", "--output", "/synthetic", "--legacy-response-ack", "--response-baseline", ack.AFFECTED, "--redis-image", "synthetic"]), mock.patch.object(ack, "run", return_value=73) as runner:
+        require(run_compat.main() == 73 and runner.call_count == 1, "focused mode did not delegate exactly once")
+
+
 def main():
-    sse_no_space_focused_checks(); strict_peer_checks(); concurrent_control_checks(); nov25_focused_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
+    legacy_response_ack_checks(); sse_no_space_focused_checks(); strict_peer_checks(); concurrent_control_checks(); nov25_focused_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()
     print("unified compatibility fixture/oracle self-tests passed")
 
 

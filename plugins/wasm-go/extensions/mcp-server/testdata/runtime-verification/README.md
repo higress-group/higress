@@ -339,3 +339,72 @@ assertion fault injection, source/config/request equivalence and failed cleanup.
 They run alongside all retained normal-mode fixture assertions. These injected
 self-tests establish harness behavior; real Wasm evidence requires the command
 above.
+
+## Focused Legacy response acknowledgements (#5336)
+
+This opt-in mode uses the real native `mcp-session` filter, isolated Redis and
+plain production Wasm. Ordinary modes, historical pins and `compose.yaml` are
+unchanged. Run only after committing a clean candidate, with an empty external
+evidence directory and all three images available locally:
+
+```sh
+env -u GH_TOKEN -u GITHUB_TOKEN PYTHONDONTWRITEBYTECODE=1 \
+  /opt/homebrew/bin/python3.12 \
+  plugins/wasm-go/extensions/mcp-server/testdata/runtime-verification/run_compat.py \
+  --legacy-response-ack \
+  --response-baseline d388d06a92dd125bbe99330888690fd6deeb352f \
+  --candidate HEAD \
+  --gateway-image higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway@sha256:2b00548e16aafc5ee51314a0de8c4df4369877b1d0f9eaec13becc3675dd04b7 \
+  --backend-image docker.io/library/python@sha256:34d4d54d6f68a1980ad02433a5078d998ab394d55c97d953efa50b442135baf2 \
+  --redis-image docker.io/library/redis@sha256:52d1ea8a654b10f06af3ecda4e9dbcd035c7868b5c49ee7975de917f81de13db \
+  --output "$SSE_EVIDENCE/runtime"
+```
+
+Run this command from the repository root; define `SSE_EVIDENCE` as an external
+run-owned directory. The mode cannot mix with `--sse-no-space`, `--skip-routing`
+or alternate ordinary oracle/control pins. It freezes the actual image
+RepoDigests, measures `/var/lib/istio/envoy/golang-filter.so`, then checks its
+hash and the mounted Wasm inside each running gateway. A missing native plugin,
+ABI/load failure, unavailable Redis or stream startup failure fails the run;
+none qualifies as affected-source reproduction.
+
+`legacy_response_ack.cases()` owns the closed 36-case registry (37 POSTs):
+A1 direct result, A2 explicit-Legacy error and A3 two observed native heartbeats;
+C1 client ping; C2 initialize, initialized, list and call; 22 individually named
+C3 invalid-response cases; C4 header-result, header-error and body-result;
+and C5 Modern discovery, list and call. The same single REST echo tool performs
+GET `/unified/rest/legacy-ack` on the unchanged synthetic backend. Only the two
+submitted tool calls may reach it. Direct listener 15100 isolates protocol
+controls; listener 15101 places the real native filter before Wasm. Requests
+send `Host: gateway` to match the exact synthetic native rule. Redis publishes
+no host port and is recreated between affected/candidate roles.
+
+The SSE client first consumes the native endpoint, then initializes that actual
+session, observes two natural native pings, sends their matching replies and
+lists/calls the tool on the same connection. Its reader drains concurrently for
+at most 20 seconds and always closes/joins. Raw synthetic frames, POST bytes,
+access identities, endpoint/session bindings and ping/reply equality are
+retained per role. Equivalence normalizes only the bound endpoint session ID
+and corresponding top-level ping-reply IDs to ordered logical labels. It does
+not normalize status, result, error, arbitrary values, headers or extra fields.
+Native heartbeat/control/business and backend counts are recorded separately.
+
+`legacy-response-{affected,candidate}.json` retain actual observations and
+assertions; `legacy-response-inputs.json` binds source, compiler/module,
+image/native/Wasm/config and frozen-harness identities. Affected verification
+must exit 1 with actual 400/-32600 target failures while all controls pass;
+candidate verification must exit 0 with empty 202 target receipts. The focused
+`legacy-response-manifest.json` can pass only after validating both observations,
+unique gateway accesses, input equivalence and zero run-owned
+containers/networks/volumes. No host listeners are published; reader processes
+live only in removed verifier containers. Diagnostics are captured before
+cleanup. Build products and logs belong only in external evidence directories.
+
+Offline fixture/finalizer fault injection remains separate from actual runtime
+acceptance:
+
+```sh
+# From this runtime-verification directory:
+env -u GH_TOKEN -u GITHUB_TOKEN PYTHONDONTWRITEBYTECODE=1 \
+  /opt/homebrew/bin/python3.12 compat_self_test.py
+```
