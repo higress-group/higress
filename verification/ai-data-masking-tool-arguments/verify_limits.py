@@ -154,6 +154,15 @@ def main():
                 calls = [{'name': 'lookup', 'index': index, 'id': 'call-' + str(index), 'arguments': '{}'} for index in range(count)]
                 cases.append({'spec': {'calls': calls}, 'expected': 'pass' if count <= maximum else 'response-denied', 'streams': (True,)})
             group(f'count-{maximum}', config({'max_call_bytes': 1024, 'max_buffer_bytes': 100000, 'max_calls': maximum}), cases)
+        # Maintainer-requested production count boundary, with default limits.
+        for restore in (False, True):
+            settings = config({}, restore=restore)
+            settings['tool_arguments']['limits'] = {}
+            cases = []
+            for count in (127, 128, 129):
+                calls = [{'name': 'lookup', 'index': index, 'id': 'call-' + str(index), 'arguments': '{}'} for index in range(count)]
+                cases.append({'spec': {'calls': calls}, 'expected': 'pass' if count <= 128 else 'response-denied'})
+            group('default-count-' + ('restore' if restore else 'check'), settings, cases)
         # Restore expands a four-byte placeholder to 51/52/53 bytes; the
         # containing JSON adds 12 bytes. Request history is restore-only.
         for size in (63, 64, 65):

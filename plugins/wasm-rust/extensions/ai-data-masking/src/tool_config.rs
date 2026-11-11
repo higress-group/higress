@@ -24,7 +24,7 @@ pub(crate) struct ToolArgumentsConfig {
     pub(crate) limits: ToolLimits,
 }
 
-// Candidate defaults from the approved Design; release values require T5 evidence.
+// Transitional defaults retained after maintainer review; tightening needs size observations.
 #[derive(Clone, Debug)]
 pub(crate) struct ToolLimits {
     pub(crate) max_call_bytes: usize,

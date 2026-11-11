@@ -65,9 +65,9 @@ description: AI 数据脱敏插件配置参考
 | `tool_arguments.limits.max_unparsed_bytes` | 正整数 | 沿用 `max_buffer_bytes` | 单个原始 SSE 帧及响应格式识别缓存的硬上限，按网络字节计 |
 | `tool_arguments.limits.max_calls` | 正整数 | 128 | 每个响应登记过的需处理 call 数，结束后仍计数 |
 
-未解析缓存单独按 `max_unparsed_bytes` 限制，包含协议字段和外层 JSON 转义。可以单独调高它，同时保留较小的参数预算；未配置时沿用 `max_buffer_bytes`。帧边界之前先检查空间，再追加数据；一次回调中的多帧逐帧处理。超限后丢弃待发参数并保持拒绝状态。只开启定义检查不启用这项响应限制。
+未解析缓存单独按 `max_unparsed_bytes` 限制，包含协议字段和外层 JSON 转义。可以单独调高它，同时保留较小的参数预算；未配置时沿用 `max_buffer_bytes`。帧边界之前先检查空间，再追加数据；一次回调中的多帧逐帧处理。启用 `deny_raw` 时，原始检查也只接收已经检查过大小的帧，不复制整批回调。其关键词重叠窗口另有开销。已经识别为普通 JSON 的完整响应不受这项 SSE 限制。超限后丢弃待发参数并保持拒绝状态。只开启定义检查不启用这项响应限制。
 
-以上三项数值是当前开发分支的候选值，需完成容量验证后才能确定发布默认值。总量预算不等于网关 RSS 上限；解析树、协议编码、旧文字窗口和其他 HTTP 缓冲另有开销。请求历史只检查单 call 上限，不套用响应总量和 call 数上限。关闭新功能时，这些上限不影响旧路径。
+单 call 1 MiB、单响应 4 MiB、128 次调用作为过渡期默认值保留。后续收紧前，需要观察解码后参数大小的 P95/P99 和超限率。总量预算不等于网关 RSS 上限；解析树、协议编码、旧文字窗口和其他 HTTP 缓冲另有开销。请求历史只检查单 call 上限，不套用响应总量和 call 数上限。关闭新功能时，这些上限不影响旧路径。
 
 新检查复用 `deny_words`、`system_deny` 和 `replace_roles`。参数覆盖现代 `tool_calls[].function.arguments` 与 legacy `function_call.arguments`，包括请求历史、普通响应和 SSE delta；不依赖旧 `deny_openai` 开关。只开定义检查不接管响应。定义检查涵盖字符串叶子以及 schema 的 properties、patternProperties、$defs、definitions 等动态名称。
 

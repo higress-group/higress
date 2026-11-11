@@ -32,26 +32,30 @@ def cases():
     small = 'data: {"choices":[]}\n\n'
     yield 'batched', small * 100, len(small.encode()), True
     yield 'undecided-prefix', ' ' * 1030, 16, False
+    yield 'json-error', json.dumps({'error': {'message': 'x' * 1030}}, separators=(',', ':')), 16, True
 
 
 def main():
     args = arguments(__doc__).parse_args()
     rows = []
     with Lab(args, 'unparsed-buffer') as lab:
-        for variant in ('baseline', 'candidate'):
+        for variant, raw_mode in ((variant, raw) for raw in (False, True) for variant in ('baseline', 'candidate')):
             for label, wire, limit, allowed in cases():
                 settings = deepcopy(BASE_CONFIG)
+                if raw_mode:
+                    settings.update(deny_openai=False, deny_raw=True)
                 settings['tool_arguments'] = {'check': True, 'limits': {
                     'max_call_bytes': 16, 'max_buffer_bytes': 16}}
                 if limit is not None:
                     settings['tool_arguments']['limits']['max_unparsed_bytes'] = limit
-                gateway = lab.start(variant + '-' + label, settings, variant + '.wasm')
+                group = variant + '-' + ('raw-' if raw_mode else 'text-') + label
+                gateway = lab.start(group, settings, variant + '.wasm')
                 try:
                     for delivery in ('single', 'events', 'fragment17', 'prefix1'):
-                        case = variant + '-' + label + '-' + delivery
+                        case = group + '-' + delivery
                         lab.save('cases/' + case + '.fixture.json', {'raw': wire})
                         row, body = lab.request(gateway, case, request_for('normal', True),
-                                                scenario='missing-content-type' if label == 'undecided-prefix' else 'normal',
+                                                scenario='missing-content-type' if label in ('undecided-prefix', 'json-error') else 'normal',
                                                 delivery=delivery)
                         try:
                             assert row['curl_exit'] == 0 and row['status'] == '200' and row['upstream_received'], row
@@ -67,7 +71,7 @@ def main():
                                 assert body == b'', 'Rejected raw bytes reached the client'
                                 assert parse(body, True)['done'] == 0
                                 row['expected_baseline_failure'] = False
-                            row.update(passed=True, wire_bytes=len(original), max_unparsed_bytes=limit or 16)
+                            row.update(passed=True, raw_mode=raw_mode, wire_bytes=len(original), max_unparsed_bytes=limit or 16)
                         except Exception as error:
                             row.update(passed=False, error=str(error))
                             raise
@@ -76,7 +80,7 @@ def main():
                             lab.save('results.json', rows)
                 finally:
                     lab.stop(gateway)
-                print(json.dumps({'group': variant + '-' + label, 'passed': len(rows)}), flush=True)
+                print(json.dumps({'group': group, 'passed': len(rows)}), flush=True)
         lab.save('summary.json', {'passed': len(rows), 'failed': 0,
             'baseline_scope_failures': sum(row['expected_baseline_failure'] for row in rows), 'model_requests': 0})
 

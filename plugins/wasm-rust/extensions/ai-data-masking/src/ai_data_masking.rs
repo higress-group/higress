@@ -1969,7 +1969,7 @@ impl AiDataMasking {
                     Some(size) => size > config.tool_arguments.limits.max_unparsed_bytes,
                     None => true,
                 };
-                if exceeds_unparsed_limit {
+                if tools.response_stream.is_none() && exceeds_unparsed_limit {
                     return self.fail_tool_stream(tools, "unparsed response buffer limit exceeded");
                 }
                 tools.probe.extend_from_slice(body);
@@ -1992,15 +1992,21 @@ impl AiDataMasking {
             .map(|bytes| (bytes.as_slice(), false))
             .chain(std::iter::once((body, end)))
         {
-            if raw_mode {
-                if let Err(reason) = tools.raw_deny.push(part, part_end, &config, &self.log) {
-                    return self.fail_tool_stream(tools, reason);
-                }
-            }
-            match tools
-                .stream
-                .push(part, part_end, &config, &tools.restore, &self.log)
-            {
+            let result = if raw_mode {
+                tools.stream.push_with_raw_deny(
+                    part,
+                    part_end,
+                    &config,
+                    &tools.restore,
+                    &self.log,
+                    Some(&mut tools.raw_deny),
+                )
+            } else {
+                tools
+                    .stream
+                    .push(part, part_end, &config, &tools.restore, &self.log)
+            };
+            match result {
                 Ok(output) => actions.extend(output),
                 Err(reason) => return self.fail_tool_stream(tools, reason),
             }
@@ -4248,6 +4254,64 @@ mod tests {
             }
             assert!(!plugin.tools.as_ref().unwrap().failed);
             assert_eq!(output, wire);
+        }
+    }
+    #[test]
+    fn raw_deny_batched_frames_do_not_retain_the_callback_allocation() {
+        let frame = b"data: {\"choices\":[]}\n\n";
+        assert_eq!(frame.len(), 22);
+        for prefix in [0, 1, 3] {
+            crate::test_host::reset();
+            let config = serde_json::from_value(json!({"deny_openai":false,"deny_raw":true,
+                "deny_words":["BLOCKED"],"tool_arguments":{"check":true,
+                    "limits":{"max_unparsed_bytes":22}}}))
+            .unwrap();
+            let mut plugin = AiDataMasking::new();
+            plugin.on_config(Rc::new(config));
+            plugin.on_http_request_complete_body(&br#"{"stream":true,"messages":[]}"#.to_vec());
+            let wire = frame.repeat(100);
+            let mut output = Vec::new();
+            for part in [&wire[..prefix], &wire[prefix..]] {
+                crate::test_host::response_input(part);
+                plugin.on_http_response_body(part.len(), false);
+                output.extend(crate::test_host::take_response_body().unwrap());
+            }
+            let tools = plugin.tools.as_ref().unwrap();
+            assert!(!tools.failed);
+            assert_eq!(output, wire);
+            assert!(
+                tools.raw_deny.retained_capacity() <= frame.len(),
+                "raw deny allocated {} bytes for a {} byte frame limit",
+                tools.raw_deny.retained_capacity(),
+                frame.len()
+            );
+        }
+    }
+
+    #[test]
+    fn recognized_json_errors_do_not_use_the_unparsed_sse_limit() {
+        let input = json!({"error":{"message":"x".repeat(1030)}})
+            .to_string()
+            .into_bytes();
+        for size in [1, 7, usize::MAX] {
+            crate::test_host::reset();
+            let config =
+                serde_json::from_value(json!({"deny_openai":false,"deny_words":["BLOCKED"],
+                "tool_arguments":{"check":true,"limits":{"max_unparsed_bytes":16}}}))
+                .unwrap();
+            let mut plugin = AiDataMasking::new();
+            plugin.on_config(Rc::new(config));
+            plugin.on_http_request_complete_body(&br#"{"stream":true,"messages":[]}"#.to_vec());
+            let mut output = Vec::new();
+            let mut consumed = 0;
+            for chunk in input.chunks(size) {
+                consumed += chunk.len();
+                crate::test_host::response_input(chunk);
+                plugin.on_http_response_body(chunk.len(), consumed == input.len());
+                output.extend(crate::test_host::take_response_body().unwrap());
+            }
+            assert!(!plugin.tools.as_ref().unwrap().failed, "chunk size {size}");
+            assert_eq!(output, input, "chunk size {size}");
         }
     }
 }

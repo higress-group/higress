@@ -65,6 +65,16 @@ impl SseDecoder {
                 .iter()
                 .position(|byte| matches!(byte, b'\r' | b'\n'))
                 .map_or(piece.len(), |position| position + 1);
+            let required = self.pending.len() + count;
+            if required > self.pending.capacity() {
+                let capacity = self
+                    .pending
+                    .capacity()
+                    .saturating_mul(2)
+                    .max(required)
+                    .min(limit);
+                self.pending.reserve_exact(capacity - self.pending.len());
+            }
             self.pending.extend_from_slice(&input[..count]);
             *input = &input[count..];
         }
@@ -466,6 +476,18 @@ impl ToolStream {
         restore: &ToolRestore,
         log: &Log,
     ) -> Result<Vec<StreamAction>, &'static str> {
+        self.push_with_raw_deny(data, end, config, restore, log, None)
+    }
+
+    pub(super) fn push_with_raw_deny(
+        &mut self,
+        data: &[u8],
+        end: bool,
+        config: &AiDataMaskingConfig,
+        restore: &ToolRestore,
+        log: &Log,
+        mut raw_deny: Option<&mut tool_raw::RawDenyWindow>,
+    ) -> Result<Vec<StreamAction>, &'static str> {
         let mut actions = Vec::new();
         let mut input = data;
         while let Some(mut raw) = self.parser.next_event(
@@ -473,6 +495,11 @@ impl ToolStream {
             end,
             config.tool_arguments.limits.max_unparsed_bytes,
         )? {
+            // The decoder enforces the frame limit before the raw checker can
+            // copy bytes. A large callback of small events is processed in order.
+            if let Some(window) = raw_deny.as_deref_mut() {
+                window.push(&raw, false, config, log)?;
+            }
             // A flushed HTTP tail must end before any buffered args we append.
             ensure_event_boundary(&mut raw);
             let data = payload(&raw);
@@ -688,6 +715,11 @@ impl ToolStream {
         }
         if end && !self.errored {
             self.complete_choice(None, config, restore, log, &mut actions)?;
+        }
+        if end {
+            if let Some(window) = raw_deny {
+                window.push(&[], true, config, log)?;
+            }
         }
         Ok(actions)
     }
@@ -1050,6 +1082,113 @@ mod tests {
                         assert_eq!(events.concat(), all);
                     }
                 }
+            }
+        }
+    }
+    #[test]
+    fn raw_deny_sees_only_bounded_frames_and_matches_whole_body_checks() {
+        let mut config: AiDataMaskingConfig = serde_json::from_value(json!({
+            "deny_openai":false,"deny_raw":true,"deny_words":["BLOCKED", "one\n\n: two"],
+            "tool_arguments":{"check":true,"limits":{"max_unparsed_bytes":22}}
+        }))
+        .unwrap();
+        let log = Log::new("test".into());
+        let restore = ToolRestore::default();
+        let mut stream = ToolStream::default();
+        let mut window = tool_raw::RawDenyWindow::default();
+        let oversized = format!("data: {}\n\ndata: [DONE]\n\n", "x".repeat(2200));
+        assert!(stream
+            .push_with_raw_deny(
+                oversized.as_bytes(),
+                true,
+                &config,
+                &restore,
+                &log,
+                Some(&mut window)
+            )
+            .is_err());
+        assert_eq!(
+            window.retained_capacity(),
+            0,
+            "oversized frame was copied before validation"
+        );
+        config.tool_arguments.limits.max_unparsed_bytes = 64;
+        for wire in [
+            b": one\n\n: two\n\ndata: [DONE]\n\n".as_slice(),
+            b": heartbeat\n\ndata: {\"choices\":[],\"text\":\"BLOCKED\"}\n\n",
+        ] {
+            let expected = config.check_message(std::str::from_utf8(wire).unwrap(), &log);
+            for size in [1, 17, usize::MAX] {
+                let mut stream = ToolStream::default();
+                let mut window = tool_raw::RawDenyWindow::default();
+                let mut denied = false;
+                for chunk in wire.chunks(size) {
+                    if stream
+                        .push_with_raw_deny(
+                            chunk,
+                            false,
+                            &config,
+                            &restore,
+                            &log,
+                            Some(&mut window),
+                        )
+                        .is_err()
+                    {
+                        denied = true;
+                        break;
+                    }
+                }
+                if !denied {
+                    denied = stream
+                        .push_with_raw_deny(&[], true, &config, &restore, &log, Some(&mut window))
+                        .is_err();
+                }
+                assert_eq!(
+                    denied, expected,
+                    "raw checker changed whole-body semantics at chunk size {size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_response_call_count_accepts_127_and_128_but_rejects_129() {
+        let (mut config, restore) = fixture();
+        let log = Log::new("test".into());
+        for check in [false, true] {
+            config.tool_arguments.check = check;
+            for count in [127, 128, 129] {
+                let calls: Vec<_> = (0..count).map(|index| json!({"index":index,
+                    "id":format!("call-{index}"),"function":{"name":"lookup_customer","arguments":"{}"}})).collect();
+                let event = json!({"choices":[{"index":0,"delta":{"tool_calls":calls},"finish_reason":"tool_calls"}]});
+                let wire = format!("data: {event}\n\ndata: [DONE]\n\n");
+                let result =
+                    ToolStream::default().push(wire.as_bytes(), true, &config, &restore, &log);
+                assert_eq!(result.is_ok(), count <= 128, "check={check}, count={count}");
+                if let Ok(actions) = result {
+                    assert_eq!(
+                        actions
+                            .iter()
+                            .filter(|a| matches!(a, StreamAction::Arguments(_)))
+                            .count(),
+                        count
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn sse_allocation_stays_within_the_frame_limit() {
+        let wire = b"data: {\"choices\":[]}\n\n";
+        let mut parser = SseDecoder::default();
+        for _ in 0..100 {
+            for byte in wire.chunks(1) {
+                let mut input = byte;
+                while let Some(event) = parser.next_event(&mut input, false, wire.len()).unwrap() {
+                    assert_eq!(event, wire);
+                    assert!(event.capacity() <= wire.len());
+                }
+                assert!(parser.pending.capacity() <= wire.len());
             }
         }
     }

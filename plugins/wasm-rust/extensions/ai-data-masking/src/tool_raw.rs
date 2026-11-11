@@ -260,6 +260,11 @@ pub(super) struct RawDenyWindow {
     bytes: Vec<u8>,
 }
 impl RawDenyWindow {
+    #[cfg(test)]
+    pub(super) fn retained_capacity(&self) -> usize {
+        self.bytes.capacity()
+    }
+
     pub(super) fn push(
         &mut self,
         data: &[u8],
@@ -270,6 +275,8 @@ impl RawDenyWindow {
         if config.deny_words.is_empty() && !config.system_deny {
             return Ok(());
         }
+        // Production input is one size-checked SSE frame, never a host batch.
+        self.bytes.reserve_exact(data.len());
         self.bytes.extend_from_slice(data);
         let valid = match std::str::from_utf8(&self.bytes) {
             Ok(text) => text.len(),
@@ -313,6 +320,10 @@ impl RawDenyWindow {
             cutoff = at;
         }
         self.bytes.drain(..cutoff);
+        // Keep only the deny-word overlap, not a previous frame's allocation.
+        if self.bytes.capacity() > config.tool_arguments.limits.max_unparsed_bytes {
+            self.bytes.shrink_to_fit();
+        }
         Ok(())
     }
 }
