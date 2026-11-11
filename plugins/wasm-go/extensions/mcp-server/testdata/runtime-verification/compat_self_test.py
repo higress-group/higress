@@ -787,6 +787,65 @@ def legacy_response_ack_checks():
     with mock.patch("sys.argv", ["run_compat.py", "--output", "/synthetic", "--legacy-response-ack", "--response-baseline", ack.AFFECTED, "--redis-image", "synthetic"]), mock.patch.object(ack, "run", return_value=73) as runner:
         require(run_compat.main() == 73 and runner.call_count == 1, "focused mode did not delegate exactly once")
 
+    # Exercise the actual focused runner through loaded-hash parsing without
+    # executing builds or containers. The fake command boundary preserves the
+    # recorded_run stderr=STDOUT behavior unless stderr_target is supplied.
+    import argparse
+    import subprocess
+    import tarfile
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        output = root / "evidence"
+        banner = '\x1b[4m>>>> synthetic compose provider <<<<\n\x1b[0m'
+        native_hash = "b" * 64
+        args = argparse.Namespace(candidate="HEAD", response_baseline=ack.AFFECTED, output=str(output),
+                                  gateway_image="synthetic/gateway@sha256:" + "c" * 64,
+                                  backend_image="synthetic/backend@sha256:" + "d" * 64,
+                                  redis_image="synthetic/redis@sha256:" + "e" * 64)
+
+        def fake_command(argv, log, **options):
+            stdout = ""
+            diagnostic = banner if argv[0] == "podman" or argv[:2] == ["go", "version"] else ""
+            if argv[:3] == ["podman", "image", "inspect"]:
+                stdout = json.dumps([{"RepoDigests": [argv[-1]]}])
+            elif argv[:2] == ["podman", "run"]:
+                stdout = native_hash + "  " + ack.NATIVE_PATH + "\n"
+            elif argv[:2] == ["git", "archive"]:
+                archive = Path(next(value.removeprefix("--output=") for value in argv if value.startswith("--output=")))
+                with tarfile.open(archive, "w") as bundle:
+                    for name in ("go.mod", "go.sum"):
+                        raw = b"synthetic module input\n"
+                        member = tarfile.TarInfo("plugins/wasm-go/extensions/mcp-server/" + name)
+                        member.size = len(raw)
+                        bundle.addfile(member, io.BytesIO(raw))
+            elif argv[:2] == ["go", "version"]:
+                stdout = "go version synthetic linux/arm64\n"
+            elif argv[:2] == ["go", "build"]:
+                Path(argv[argv.index("-o") + 1]).write_bytes(b"synthetic-wasm")
+            elif argv[:2] == ["podman", "compose"] and "config" in argv:
+                stdout = json.dumps({"services": {"gateway": {}}})
+            elif argv[:2] == ["podman", "compose"] and "sha256sum /runtime/plugin.wasm " + ack.NATIVE_PATH in argv:
+                stdout = ack.sha(output / "plugin.wasm") + "  /runtime/plugin.wasm\n" + native_hash + "  " + ack.NATIVE_PATH + "\n"
+            elif argv[-2:] == ["/usr/local/bin/envoy", "--version"]:
+                raise RuntimeError("synthetic-stop-after-loaded-hash")
+            stderr = diagnostic if options.get("stderr_target") else None
+            if stderr is None:
+                stdout = diagnostic + stdout
+            else:
+                Path(options["stderr_target"]).write_text(stderr)
+            if options.get("target"):
+                Path(options["target"]).write_text(stdout)
+            log.write(json.dumps({"command": argv, "exit_code": 0}) + "\n")
+            return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr=stderr)
+
+        with mock.patch.object(ack, "recorded_run", side_effect=fake_command), mock.patch.object(run_compat, "source_is_clean", return_value=True), mock.patch.object(ack.subprocess, "check_output", return_value="a" * 40), contextlib.redirect_stdout(io.StringIO()):
+            require(ack.run(args) == 1, "synthetic stopped run unexpectedly passed")
+        inputs = json.loads((output / "legacy-response-inputs.json").read_text())
+        require(inputs["error"] == "RuntimeError: synthetic-stop-after-loaded-hash", "provider banner prevented loaded-hash parsing")
+        require(inputs["loaded"]["affected"] == {"wasm": ack.sha(output / "plugin.wasm"), "native": native_hash}, "loaded hashes changed")
+        require(len((output / "loaded-affected.txt").read_text().splitlines()) == 2 and (output / "loaded-affected.stderr.log").read_text() == banner, "hash stdout/stderr were filtered or merged")
+        require(inputs["cleanupComplete"] is True, "diagnostic stderr polluted cleanup inventory")
+
 
 def main():
     legacy_response_ack_checks(); sse_no_space_focused_checks(); strict_peer_checks(); concurrent_control_checks(); nov25_focused_checks(); sse_get_auth_focused_checks(); sse_correlation_checks(); cleanup_failure_checks(); counter_and_legacy_diagnostic_checks(); registry_and_body_checks(); backend_checks(); fixture_checks(); evidence_checks()

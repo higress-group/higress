@@ -528,7 +528,7 @@ def run(args):
         return recorded_run(argv, log, env=env, **options)
 
     def pinned(role, image):
-        inspection = json.loads(command(["podman", "image", "inspect", image]).stdout)[0]
+        inspection = json.loads(command(["podman", "image", "inspect", image], stderr_target=out / f"image-{role}.stderr.log").stdout)[0]
         reference = image if "@sha256:" in image else next((value for value in inspection.get("RepoDigests", []) if "@sha256:" in value), None)
         require(reference, "cannot freeze immutable " + role + " image")
         inputs["images"][reference] = inspection
@@ -548,7 +548,7 @@ def run(args):
     try:
         gateway, backend, redis = (pinned(role, image) for role, image in (("gateway", args.gateway_image), ("backend", args.backend_image), ("redis", args.redis_image)))
         inputs["engine"] = command(["podman", "version"]).stdout
-        native_hash = command(["podman", "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh", gateway, "-c", "sha256sum " + NATIVE_PATH], target=out / "native-preflight.log").stdout.split()[0]
+        native_hash = command(["podman", "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh", gateway, "-c", "sha256sum " + NATIVE_PATH], target=out / "native-preflight.log", stderr_target=out / "native-preflight.stderr.log").stdout.split()[0]
         require(len(native_hash) == 64 and all(value in "0123456789abcdef" for value in native_hash), "native library hash unavailable")
         inputs["native"] = {"path": NATIVE_PATH, "sha256": native_hash}
         # Normal Compose paths/images stay unchanged; Redis has no host port or
@@ -567,10 +567,10 @@ def run(args):
                 with tarfile.open(archive) as bundle:
                     bundle.extractall(source, filter="data")
                 extension = source / "plugins/wasm-go/extensions/mcp-server"
-                version = {"source": revision, "go": command(["go", "version"], cwd=extension).stdout.strip(), "wasm": {},
+                version = {"source": revision, "go": command(["go", "version"], cwd=extension, stderr_target=out / f"go-{role}.stderr.log").stdout.strip(), "wasm": {},
                            "moduleFiles": {str(path.relative_to(source)): sha(path) for path in sorted(source.rglob("go.*")) if path.name in ("go.mod", "go.sum")}}
                 inputs["versions"][role] = version
-                command(["go", "list", "-m", "-json", "all"], cwd=extension, target=out / f"modules-{role}.json")
+                command(["go", "list", "-m", "-json", "all"], cwd=extension, target=out / f"modules-{role}.json", stderr_target=out / f"modules-{role}.stderr.log")
                 wasm = out / f"plain-{role}.wasm"
                 recorded_run(["go", "build", "-trimpath", "-buildmode=c-shared", "-o", str(wasm), "."], log, cwd=extension,
                              env={**env, "GOOS": "wasip1", "GOARCH": "wasm"}, target=out / f"build-plain-{role}.log")
@@ -586,7 +586,10 @@ def run(args):
             compose("up", "-d", "gateway")
             # Measure the actual mounted Wasm and same native binary inside each
             # running role before accepting any product observation.
-            measured = compose("exec", "-T", "gateway", "/bin/sh", "-c", "sha256sum /runtime/plugin.wasm " + NATIVE_PATH, target=out / f"loaded-{role}.txt").stdout.splitlines()
+            # Compose provider diagnostics belong to stderr evidence, never to
+            # the two unmodified sha256sum records consumed by this parser.
+            measured = compose("exec", "-T", "gateway", "/bin/sh", "-c", "sha256sum /runtime/plugin.wasm " + NATIVE_PATH,
+                               target=out / f"loaded-{role}.txt", stderr_target=out / f"loaded-{role}.stderr.log").stdout.splitlines()
             require(len(measured) == 2, "loaded module/native hash unavailable")
             inputs["loaded"][role] = {"wasm": measured[0].split()[0], "native": measured[1].split()[0]}
             compose("exec", "-T", "gateway", "/usr/local/bin/envoy", "--version", target=out / f"envoy-{role}-version.txt")
@@ -611,7 +614,7 @@ def run(args):
             cleanup = compose("--profile", "verify", "down", "--volumes", "--remove-orphans", allow_failure=True)
             inventories = {}
             for kind, arguments in (("containers", ["ps", "-a"]), ("networks", ["network", "ls"]), ("volumes", ["volume", "ls"])):
-                result = command(["podman", *arguments, "--filter", "label=com.docker.compose.project=" + project, "--format", "{{.Name}}" if kind == "volumes" else "{{.ID}}"], allow_failure=True, target=out / f"cleanup-{kind}.txt")
+                result = command(["podman", *arguments, "--filter", "label=com.docker.compose.project=" + project, "--format", "{{.Name}}" if kind == "volumes" else "{{.ID}}"], allow_failure=True, target=out / f"cleanup-{kind}.txt", stderr_target=out / f"cleanup-{kind}.stderr.log")
                 require(result.returncode == 0, "cleanup inventory failed: " + kind)
                 inventories[kind] = result.stdout.split()
             # No host process/listener is created by this mode. The joined
