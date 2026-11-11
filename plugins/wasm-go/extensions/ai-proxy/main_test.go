@@ -43,6 +43,8 @@ func Test_getApiName(t *testing.T) {
 		{"openai retrieve video content", "/v1/videos/videoid/content", provider.ApiNameRetrieveVideoContent},
 		{"openai video remix", "/v1/videos/videoid/remix", provider.ApiNameVideoRemix},
 		{"openai models", "/v1/models", provider.ApiNameModels},
+		{"openai retrieve model", "/v1/models/gpt-4o-mini", provider.ApiNameRetrieveModel},
+		{"openai retrieve model with prefix", "/gateway/openai/v1/models/gpt-4o-mini", provider.ApiNameRetrieveModel},
 		{"openai fine tuning jobs", "/v1/fine_tuning/jobs", provider.ApiNameFineTuningJobs},
 		{"openai retrieve fine tuning job", "/v1/fine_tuning/jobs/jobid", provider.ApiNameRetrieveFineTuningJob},
 		{"openai fine tuning job events", "/v1/fine_tuning/jobs/jobid/events", provider.ApiNameFineTuningJobEvents},
