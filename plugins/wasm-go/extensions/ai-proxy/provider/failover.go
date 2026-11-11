@@ -233,11 +233,6 @@ func (c *ProviderConfig) transformRequestHeadersAndBody(ctx wrapper.HttpContext,
 		handler.TransformRequestHeaders(ctx, ApiNameChatCompletion, modifiedHeaders)
 	}
 
-	// Apply providerBasePath if configured
-	if c.providerBasePath != "" {
-		modifiedHeaders.Set(":path", c.applyProviderBasePath(modifiedHeaders.Get(":path")))
-	}
-
 	var err error
 	if handler, ok := activeProvider.(TransformRequestBodyHandler); ok {
 		body, err = handler.TransformRequestBody(ctx, ApiNameChatCompletion, body)
@@ -248,6 +243,16 @@ func (c *ProviderConfig) transformRequestHeadersAndBody(ctx wrapper.HttpContext,
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to transform request body: %v", err)
+	}
+
+	// Apply providerBasePath and providerDomain after all provider transforms so
+	// that providers which overwrite path/host in TransformRequestBodyHeaders
+	// (e.g. Gemini for path, Deepl/Triton for host) do not undo the overrides.
+	if c.providerBasePath != "" {
+		modifiedHeaders.Set(":path", c.applyProviderBasePath(modifiedHeaders.Get(":path")))
+	}
+	if c.providerDomain != "" {
+		util.OverwriteRequestHostHeader(modifiedHeaders, c.providerDomain)
 	}
 
 	return modifiedHeaders, body, nil
