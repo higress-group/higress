@@ -24,7 +24,6 @@ import uuid
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import generate_envoy as base
-from run_routing import ROOT, recorded_run, sha
 
 AFFECTED = "d388d06a92dd125bbe99330888690fd6deeb352f"
 NATIVE_PATH = "/var/lib/istio/envoy/golang-filter.so"
@@ -465,6 +464,7 @@ def observation_errors(snapshot):
 
 
 def final_errors(out, inputs):
+    from run_routing import sha
     errors = []
     try:
         require(inputs.get("mode") == "legacy-response-ack" and inputs.get("responseBaseline") == AFFECTED, "mode/affected source mismatch")
@@ -506,6 +506,9 @@ def final_errors(out, inputs):
 
 def run(args):
     """Build separate plain archives, then run the existing bounded Compose loop."""
+    # Source discovery and command orchestration are host-only. The verifier
+    # imports Fixture in a Python image with neither Git nor a source checkout.
+    from run_routing import ROOT, recorded_run, sha
     from run_compat import clean_environment, source_is_clean
     candidate = subprocess.check_output(["git", "rev-parse", args.candidate + "^{commit}"], cwd=ROOT, text=True).strip()
     require(args.response_baseline == AFFECTED and source_is_clean(candidate), "focused source must be exact affected/clean candidate HEAD")

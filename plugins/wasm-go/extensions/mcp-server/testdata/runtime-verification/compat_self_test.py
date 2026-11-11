@@ -756,15 +756,15 @@ def legacy_response_ack_checks():
                   "native": {"path": ack.NATIVE_PATH, "sha256": "b" * 64},
                   "images": {"synthetic/" + name + "@sha256:" + "c" * 64: {} for name in ("gateway", "backend", "redis")},
                   "imageRoles": {name: "synthetic/" + name + "@sha256:" + "c" * 64 for name in ("gateway", "backend", "redis")},
-                  "harness": {"frozen": ack.sha(root / "harness" / "frozen")}}
+                  "harness": {"frozen": run_compat.sha(root / "harness" / "frozen")}}
         for role, observed in (("affected", before), ("candidate", after)):
             (root / ("legacy-response-" + role + ".json")).write_text(json.dumps(observed))
             (root / ("plain-" + role + ".wasm")).write_bytes(b"synthetic-" + role.encode())
             (root / ("envoy-" + role + ".yaml")).write_text(config)
             (root / ("gateway-" + role + ".log")).write_text("".join("access request_id=" + identity + " listener=synthetic\n" for identity in [row["accessRequestId"] for row in observed["exchanges"]] + ["legacy-ack-sse"]))
-            digest = ack.sha(root / ("plain-" + role + ".wasm"))
+            digest = run_compat.sha(root / ("plain-" + role + ".wasm"))
             inputs["versions"][role] = {"source": ack.AFFECTED if role == "affected" else inputs["candidate"], "go": "synthetic-go", "moduleFiles": {}, "wasm": {"plain": digest}}
-            inputs["configs"][role] = ack.sha(root / ("envoy-" + role + ".yaml"))
+            inputs["configs"][role] = run_compat.sha(root / ("envoy-" + role + ".yaml"))
             inputs["loaded"][role] = {"wasm": digest, "native": inputs["native"]["sha256"]}
         require(not ack.final_errors(root, inputs), "valid focused synthetic manifest rejected")
         for mutate in (
@@ -786,6 +786,30 @@ def legacy_response_ack_checks():
             else: raise AssertionError("incomplete/mixed focused mode accepted")
     with mock.patch("sys.argv", ["run_compat.py", "--output", "/synthetic", "--legacy-response-ack", "--response-baseline", ack.AFFECTED, "--redis-image", "synthetic"]), mock.patch.object(ack, "run", return_value=73) as runner:
         require(run_compat.main() == 73 and runner.call_count == 1, "focused mode did not delegate exactly once")
+
+    # Match the verifier image: pure client imports cannot depend on Git,
+    # RUNTIME_SOURCE_ROOT or a source checkout, even when host helpers exist.
+    import os
+    import shutil
+    import subprocess
+    import sys
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        for name in ("legacy_response_ack.py", "generate_envoy.py", "typed_canonical.py", "run_routing.py"):
+            shutil.copyfile(Path(ack.__file__).with_name(name), root / name)
+        code = """import os, shutil, sys
+sys.path.insert(0, sys.argv[1])
+assert shutil.which('git') is None
+assert 'RUNTIME_SOURCE_ROOT' not in os.environ
+from legacy_response_ack import Fixture
+assert 'run_routing' not in sys.modules and 'run_compat' not in sys.modules
+assert Fixture('candidate', '/synthetic-unused').role == 'candidate'
+print('container-equivalent pure fixture import passed')
+"""
+        environment = {key: value for key, value in os.environ.items() if key not in ("RUNTIME_SOURCE_ROOT", "GH_TOKEN", "GITHUB_TOKEN")}
+        environment.update(PATH=str(root / "no-executables"), PYTHONDONTWRITEBYTECODE="1")
+        imported = subprocess.run([sys.executable, "-I", "-c", code, str(root)], env=environment, cwd=root, text=True, capture_output=True)
+        require(imported.returncode == 0 and imported.stdout.strip() == "container-equivalent pure fixture import passed", "client import required host Git/source discovery: " + imported.stderr)
 
     # Exercise the actual focused runner through loaded-hash parsing without
     # executing builds or containers. The fake command boundary preserves the
@@ -825,7 +849,7 @@ def legacy_response_ack_checks():
             elif argv[:2] == ["podman", "compose"] and "config" in argv:
                 stdout = json.dumps({"services": {"gateway": {}}})
             elif argv[:2] == ["podman", "compose"] and "sha256sum /runtime/plugin.wasm " + ack.NATIVE_PATH in argv:
-                stdout = ack.sha(output / "plugin.wasm") + "  /runtime/plugin.wasm\n" + native_hash + "  " + ack.NATIVE_PATH + "\n"
+                stdout = run_compat.sha(output / "plugin.wasm") + "  /runtime/plugin.wasm\n" + native_hash + "  " + ack.NATIVE_PATH + "\n"
             elif argv[-2:] == ["/usr/local/bin/envoy", "--version"]:
                 raise RuntimeError("synthetic-stop-after-loaded-hash")
             stderr = diagnostic if options.get("stderr_target") else None
@@ -838,11 +862,11 @@ def legacy_response_ack_checks():
             log.write(json.dumps({"command": argv, "exit_code": 0}) + "\n")
             return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr=stderr)
 
-        with mock.patch.object(ack, "recorded_run", side_effect=fake_command), mock.patch.object(run_compat, "source_is_clean", return_value=True), mock.patch.object(ack.subprocess, "check_output", return_value="a" * 40), contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch("run_routing.recorded_run", side_effect=fake_command), mock.patch.object(run_compat, "source_is_clean", return_value=True), mock.patch.object(ack.subprocess, "check_output", return_value="a" * 40), contextlib.redirect_stdout(io.StringIO()):
             require(ack.run(args) == 1, "synthetic stopped run unexpectedly passed")
         inputs = json.loads((output / "legacy-response-inputs.json").read_text())
         require(inputs["error"] == "RuntimeError: synthetic-stop-after-loaded-hash", "provider banner prevented loaded-hash parsing")
-        require(inputs["loaded"]["affected"] == {"wasm": ack.sha(output / "plugin.wasm"), "native": native_hash}, "loaded hashes changed")
+        require(inputs["loaded"]["affected"] == {"wasm": run_compat.sha(output / "plugin.wasm"), "native": native_hash}, "loaded hashes changed")
         require(len((output / "loaded-affected.txt").read_text().splitlines()) == 2 and (output / "loaded-affected.stderr.log").read_text() == banner, "hash stdout/stderr were filtered or merged")
         require(inputs["cleanupComplete"] is True, "diagnostic stderr polluted cleanup inventory")
 
