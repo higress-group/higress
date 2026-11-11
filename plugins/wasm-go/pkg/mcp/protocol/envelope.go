@@ -48,7 +48,9 @@ func (id ID) Raw() json.RawMessage {
 	return bytes.Clone(id.raw)
 }
 
-// Envelope is a single JSON-RPC request or notification.
+// Envelope is a single JSON-RPC request, notification, or acknowledged Legacy
+// response. A Legacy response intentionally has an empty Method and is not a
+// notification; the existing Legacy dispatcher sends its bodyless receipt.
 type Envelope struct {
 	ID           ID
 	Method       string
@@ -57,8 +59,9 @@ type Envelope struct {
 	Raw          json.RawMessage
 }
 
-// decodeEnvelope checks message framing independently of the control decoder.
-// Ordinary fields use the same first occurrence as the legacy gjson handlers.
+// decodeEnvelope 校验输入报文的完整 JSON 边界并返回独立持有原文和 ID 的 Envelope。
+// 普通请求字段保留 Legacy gjson 的首次出现语义；合法 Legacy 响应以空 Method
+// 返回，仅交给现有 dispatcher 确认收件，不查找方法或赋予通知语义。Modern 响应仍拒绝。
 func decodeEnvelope(body []byte, modern bool) (Envelope, *Error) {
 	if !utf8.Valid(body) || !gjson.ValidBytes(body) {
 		return Envelope{}, ParseError()
@@ -79,7 +82,11 @@ func decodeEnvelope(body []byte, modern bool) (Envelope, *Error) {
 		return envelope, ParseError()
 	}
 	if len(members["result"]) != 0 || len(members["error"]) != 0 {
-		return envelope, InvalidRequest("JSON-RPC response envelopes are not accepted")
+		// 只承认合法 Legacy 响应，避免把缺少方法的畸形请求误吞为收件确认。
+		if modern || !validLegacyResponse(owned, members, id) {
+			return envelope, InvalidRequest("JSON-RPC response envelopes are not accepted")
+		}
+		return envelope, nil
 	}
 	if modern {
 		var jsonrpc string
@@ -94,6 +101,69 @@ func decodeEnvelope(body []byte, modern bool) (Envelope, *Error) {
 	envelope.Method = method.String()
 	envelope.Notification = !id.IsPresent()
 	return envelope, nil
+}
+
+// validLegacyResponse 校验已通过完整 JSON 和 ParseID 检查的 Legacy 响应。
+// 输入成员借用 body；返回值只表示可确认收件，不关联 pending 请求。仅响应身份字段
+// 和 error.code/message 禁止重复，result/error.data 保持不透明且不施加递归深度限制。
+func validLegacyResponse(body []byte, members JSONObject, id ID) bool {
+	version := gjson.ParseBytes(members["jsonrpc"])
+	if version.Type != gjson.String || version.String() != "2.0" || !id.IsPresent() || len(members["method"]) != 0 {
+		return false
+	}
+	if (len(members["result"]) != 0) == (len(members["error"]) != 0) || duplicateResponseMembers(body, false) {
+		return false
+	}
+	if len(members["error"]) == 0 {
+		return true
+	}
+	errorBody := members["error"]
+	if !isJSONObject(errorBody) || duplicateResponseMembers(errorBody, true) {
+		return false
+	}
+	errorMembers := businessObjectMembers(errorBody)
+	return integerToken(errorMembers["code"]) && gjson.ParseBytes(errorMembers["message"]).Type == gjson.String
+}
+
+// duplicateResponseMembers 只统计当前对象的响应判别字段，返回是否有歧义。
+// errorObject 选择 error.code/message 范围，不递归遍历业务值或改变普通请求语义。
+func duplicateResponseMembers(body []byte, errorObject bool) bool {
+	seen := make(map[string]bool)
+	duplicate := false
+	gjson.ParseBytes(body).ForEach(func(key, _ gjson.Result) bool {
+		name := key.String()
+		tracked := name == "jsonrpc" || name == "id" || name == "method" || name == "result" || name == "error"
+		if errorObject {
+			tracked = name == "code" || name == "message"
+		}
+		if tracked {
+			if seen[name] {
+				duplicate = true
+				return false
+			}
+			seen[name] = true
+		}
+		return true
+	})
+	return duplicate
+}
+
+// integerToken 判断合法 JSON 数字是否使用整数词法，返回值不受 int64 范围影响。
+// 输入已经过完整 JSON 校验；禁止小数和指数，不做 float64 转换或截断。
+func integerToken(raw json.RawMessage) bool {
+	token := bytes.TrimSpace(raw)
+	if len(token) > 0 && token[0] == '-' {
+		token = token[1:]
+	}
+	if len(token) == 0 {
+		return false
+	}
+	for _, digit := range token {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ParseID retains an independently owned client token, including explicit null.

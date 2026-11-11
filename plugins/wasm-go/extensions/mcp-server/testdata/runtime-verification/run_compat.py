@@ -96,7 +96,17 @@ def main():
     parser.add_argument("--skip-routing", action="store_true", help="Development only; evidence cannot pass A12 without routing")
     parser.add_argument("--sse-no-space", action="store_true", help="Only the closed #5308 plain baseline/candidate matrix")
     parser.add_argument("--sse-baseline", help="Exact affected #5308 source, required with --sse-no-space")
+    parser.add_argument("--legacy-response-ack", action="store_true", help="Only the closed #5336 real native-session response matrix")
+    parser.add_argument("--response-baseline", help="Exact affected #5336 source, required with --legacy-response-ack")
+    parser.add_argument("--redis-image", help="Run-owned Redis image, required with --legacy-response-ack")
     args = parser.parse_args()
+    if args.legacy_response_ack or args.response_baseline or args.redis_image:
+        from legacy_response_ack import AFFECTED, run
+        if not args.legacy_response_ack or args.response_baseline != AFFECTED or not args.redis_image:
+            parser.error("--legacy-response-ack requires --response-baseline " + AFFECTED + " and --redis-image")
+        if args.sse_no_space or args.sse_baseline or args.skip_routing or args.oracle != contract.ORACLE or args.control != contract.CONTROL:
+            parser.error("focused legacy-response mode cannot mix ordinary or other focused modes")
+        return run(args)
     if args.sse_no_space != bool(args.sse_baseline) or args.sse_no_space and args.sse_baseline != SSE_NO_SPACE_BASELINE:
         parser.error("--sse-no-space requires --sse-baseline " + SSE_NO_SPACE_BASELINE)
     candidate = subprocess.check_output(["git", "rev-parse", args.candidate + "^{commit}"], cwd=ROOT, text=True).strip()

@@ -1276,3 +1276,74 @@ func TestProductionEntryModernUsesLegacyOrdinaryHTTPPolicy(t *testing.T) {
 		})
 	}
 }
+
+// TestProductionEntryLegacyResponseAck 通过生产入口验证 Legacy 响应只得到空 202，
+// 非法候选和 Modern 响应仍拒绝；注册工具计数和 HTTP callout 共同证明没有业务分派。
+func TestProductionEntryLegacyResponseAck(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	for _, version := range append([]protocol.Version{""}, protocol.LegacyVersions()...) {
+		for _, token := range []string{`"native-ping"`, `9223372036854775808`, `1.50`, `1E+03`, `null`} {
+			for _, field := range []string{`"result":{}`, `"result":null`, `"error":{"code":-32603,"message":"synthetic","data":{"duplicate":1,"duplicate":2}}`} {
+				t.Run(string(version)+"/"+token+"/"+field, func(t *testing.T) {
+					host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+					headers := legacyToolHeaders()
+					if version != "" {
+						headers = append(headers, [2]string{protocol.HeaderProtocolVersion, string(version)})
+					}
+					require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+					require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":`+token+`,`+field+`}`)))
+					response := host.GetLocalResponse()
+					require.NotNil(t, response)
+					assert.Equal(t, uint32(202), response.StatusCode)
+					assert.Empty(t, response.Data)
+					assert.Zero(t, counters.create)
+					assert.Zero(t, counters.call)
+					assert.Empty(t, host.GetHttpCalloutAttributes())
+				})
+			}
+		}
+	}
+	for _, test := range []struct {
+		name, body string
+		modern     bool
+	}{
+		{"missing id", `{"jsonrpc":"2.0","result":{}}`, false},
+		{"mixed method", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"count","arguments":{"count":1}},"result":{}}`, false},
+		{"duplicate id", `{"jsonrpc":"2.0","id":1,"id":2,"result":{}}`, false},
+		{"invalid error", `{"jsonrpc":"2.0","id":1,"error":{"code":1.5,"message":"x"}}`, false},
+		{"modern headers", `{"jsonrpc":"2.0","id":1,"result":{}}`, true},
+		{"modern metadata", `{"jsonrpc":"2.0","id":1,"result":{},"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+			headers := legacyToolHeaders()
+			if test.modern {
+				headers = modernToolListHeaders()
+			}
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+			host.CallOnHttpRequestBody([]byte(test.body))
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			assert.Equal(t, uint32(400), response.StatusCode)
+			assert.Zero(t, counters.create)
+			assert.Zero(t, counters.call)
+			assert.Empty(t, host.GetHttpCalloutAttributes())
+		})
+	}
+}
+
+// TestProductionEntryLegacyResponseAckClientPing 保留客户端主动 ping 的原始 ID 和空结果。
+func TestProductionEntryLegacyResponseAckClientPing(t *testing.T) {
+	counters := &validationToolCounters{}
+	installRegisteredValidationServer(t, counters)
+	host := newValidationHost(t, json.RawMessage(`{"server":{"name":"registered"}}`))
+	require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(legacyToolHeaders()))
+	host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":"client-ping","method":"ping"}`))
+	response := host.GetLocalResponse()
+	require.NotNil(t, response)
+	assert.Equal(t, uint32(200), response.StatusCode)
+	assert.Equal(t, `"client-ping"`, gjson.GetBytes(response.Data, "id").Raw)
+	assert.JSONEq(t, `{}`, gjson.GetBytes(response.Data, "result").Raw)
+	assert.Empty(t, host.GetHttpCalloutAttributes())
+}
