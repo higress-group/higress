@@ -350,13 +350,14 @@ type ConfigOptions struct {
 }
 
 type McpServerConfig struct {
-	serverName     string // Store the server name directly
-	serverVersion  string
-	server         Server // Can be a single server or a composed server
-	methodHandlers utils.MethodHandlers
-	toolSet        *ToolSetConfig // Parsed toolset configuration
-	isComposed     bool
-	directTools    directToolSnapshot
+	serverName         string // Store the server name directly
+	serverVersion      string
+	serverInstructions string
+	server             Server // Can be a single server or a composed server
+	methodHandlers     utils.MethodHandlers
+	toolSet            *ToolSetConfig // Parsed toolset configuration
+	isComposed         bool
+	directTools        directToolSnapshot
 }
 
 // GetServerName returns the server name for external access
@@ -443,6 +444,11 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 	serverJson := configJson.Get("server")                        // This is for single server or REST server definition
 	pluginServerConfigJson := configJson.Get("server.config").Raw // Config for the plugin instance itself, if any.
 	config.serverVersion = DefaultServerVersion
+	config.serverInstructions = ""
+	instructionsJson := serverJson.Get("instructions")
+	if instructionsJson.Exists() && instructionsJson.Type != gjson.String {
+		return errors.New("server.instructions must be a string")
+	}
 
 	if value := serverJson.Get("passthroughInstructions"); value.Exists() {
 		if value.Type != gjson.True && value.Type != gjson.False {
@@ -591,6 +597,13 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		return errors.New("either 'server' or 'toolSet' field must be present in the configuration")
 	}
 
+	if instructionsJson.Exists() {
+		if _, isRest := config.server.(*RestMCPServer); !isRest {
+			return errors.New("server.instructions requires a REST-to-MCP server")
+		}
+		config.serverInstructions = instructionsJson.String()
+	}
+
 	// Proxy descriptors remain upstream-owned. Both direct profiles publish the
 	// same isolated JSON descriptor generation without schema admission gates.
 	if config.server != nil {
@@ -625,6 +638,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 	// Use config.serverName which is now reliably set
 	currentServerNameForHandlers := config.serverName
 	currentServerVersionForHandlers := config.serverVersion
+	currentServerInstructionsForHandlers := config.serverInstructions
 
 	config.methodHandlers["ping"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
 		utils.OnMCPResponseSuccess(ctx, map[string]any{}, fmt.Sprintf("mcp:%s:ping", currentServerNameForHandlers))
@@ -657,7 +671,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				requestedVersion, negotiatedVersion)
 		}
 
-		utils.OnMCPResponseSuccess(ctx, map[string]any{
+		result := map[string]any{
 			"protocolVersion": negotiatedVersion,
 			"capabilities": map[string]any{
 				"tools": map[string]any{},
@@ -666,7 +680,11 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				"name":    currentServerNameForHandlers, // Use the actual server name (single or composed)
 				"version": currentServerVersionForHandlers,
 			},
-		}, fmt.Sprintf("mcp:%s:initialize", currentServerNameForHandlers))
+		}
+		if currentServerInstructionsForHandlers != "" {
+			result["instructions"] = currentServerInstructionsForHandlers
+		}
+		utils.OnMCPResponseSuccess(ctx, result, fmt.Sprintf("mcp:%s:initialize", currentServerNameForHandlers))
 		return nil
 	}
 	config.methodHandlers["server/discover"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
@@ -678,6 +696,9 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		toolsAvailable := !config.isComposed && modernMethodPolicy(*config, "tools/list").Available &&
 			modernMethodPolicy(*config, "tools/call").Available
 		result := ShapeResult(request, currentServerNameForHandlers, DiscoveryResult(toolsAvailable))
+		if currentServerInstructionsForHandlers != "" {
+			result["instructions"] = currentServerInstructionsForHandlers
+		}
 		if proxyServer, ok := config.server.(*McpProxyServer); ok && proxyServer.passthroughInstructions {
 			return proxyServer.forwardDiscovery(ctx, result)
 		}
