@@ -47,9 +47,27 @@ REST-to-MCP 路径参数安全升级：`position: path` 的参数现在只会在
 | `server.defaultDownstreamSecurity` | object | 选填 | - | 默认的客户端凭证提取配置，可被工具级 `security` 覆盖。支持 `id` 和 `passthrough`，不负责校验客户端身份。适用范围见“认证与安全”。 |
 | `server.defaultUpstreamSecurity` | object | 选填 | - | 默认的后端认证配置，可被工具级 `requestTemplate.security` 覆盖。`id` 引用认证方案；REST-to-MCP 还支持通过 `credential` 覆盖默认凭证。MCP 代理的固定凭证使用认证方案的 `defaultCredential`。 |
 | `server.version` | string | 选填 | `1.0.0` | 服务版本号，用于旧版 MCP 的初始化响应。此字段不用于选择 MCP 协议版本。 |
+| `server.instructions` | string | 选填 | - | REST-to-MCP 服务的使用说明，返回在 `initialize` 和 modern `server/discover` 的 `result.instructions` 中。未配置或为空字符串时省略。 |
 | `server.protocolStrategy` | string | 选填 | `legacy` | MCP 代理访问后端时使用的协议策略：`legacy`、`modern` 或 `auto`。仅适用于 `mcp-proxy`，详见“协议支持与后端连接”。 |
 | `server.passthroughInstructions` | boolean | 选填 | false | 仅在单个显式 `mcp-proxy`、`transport: http`、`protocolStrategy: modern` 配置下可设为 `true`。从上游成功 discover 结果中提取 instructions，详见下文。 |
 | `server.autoDetection.probeTimeoutMs` | integer | 选填 | `1000` | 自动识别后端协议时的探测超时，单位为毫秒，必须为正整数。仅在 `protocolStrategy: auto` 且 `transport: http` 时使用；实际探测超时不超过 `server.timeout`。 |
+
+### HTTP to MCP 自定义 instructions
+
+在现有 REST-to-MCP 配置的 `server` 下添加 `instructions`，保留原有的 `tools` 配置：
+
+```yaml
+server:
+  name: order-service
+  type: rest
+  instructions: |-
+    提供订单查询和退款工具。
+    申请退款前，请先查询订单状态并向用户确认。
+```
+
+客户端调用 `initialize` 或 modern `server/discover` 时，响应中的 `result.instructions` 会包含上述文本，与 `capabilities` 同级。该说明由网关本地返回，保留换行、首尾空白和 Unicode 字符。省略该配置或设置为 `""` 时，响应不包含 `instructions`；非字符串（包括 `null`）会导致配置错误。
+
+此字段仅支持 REST-to-MCP，配置到 MCP 代理、内置 Go 服务或 `toolSet` 时会导致配置错误。MCP 代理获取上游说明仍使用 `server.passthroughInstructions`，详见“上游 instructions”。
 
 ### 工具集配置
 

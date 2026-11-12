@@ -53,9 +53,27 @@ Plugin execution priority: `30`
 | `server.defaultDownstreamSecurity` | object | No | - | Default client credential extraction configuration, overridden by tool-level `security`. Supports `id` and `passthrough`; it does not validate client identity. See Authentication and Security for its scope. |
 | `server.defaultUpstreamSecurity` | object | No | - | Default backend authentication configuration, overridden by tool-level `requestTemplate.security`. `id` references a security scheme. REST-to-MCP also supports `credential` overrides; for MCP proxy, configure fixed credentials with the scheme's `defaultCredential`. |
 | `server.version` | string | No | `1.0.0` | Server version reported in legacy MCP initialization responses. Does not select the MCP protocol version. |
+| `server.instructions` | string | No | - | REST-to-MCP usage instructions returned in `result.instructions` by `initialize` and modern `server/discover`. Omitted when unset or an empty string. |
 | `server.protocolStrategy` | string | No | `legacy` | Backend protocol strategy: `legacy`, `modern`, or `auto`. For `mcp-proxy` only; see Protocol Support and Backend Connections. |
 | `server.passthroughInstructions` | boolean | No | false | May be enabled only for one explicit `mcp-proxy` with `transport: http` and `protocolStrategy: modern`. Extracts instructions from a successful upstream discover result; see below. |
 | `server.autoDetection.probeTimeoutMs` | integer | No | `1000` | Backend protocol detection timeout, in milliseconds. Must be a positive integer. Used only with `protocolStrategy: auto` and `transport: http`; the effective detection timeout does not exceed `server.timeout`. |
+
+### Custom HTTP to MCP instructions
+
+Add `instructions` under `server` in an existing REST-to-MCP configuration, keeping its `tools` configuration:
+
+```yaml
+server:
+  name: order-service
+  type: rest
+  instructions: |-
+    Provides order lookup and refund tools.
+    Before requesting a refund, check the order status and ask the user to confirm.
+```
+
+When the client calls `initialize` or modern `server/discover`, the response includes this text in `result.instructions`, alongside `capabilities`. The gateway serves it locally and preserves newlines, leading/trailing whitespace and Unicode characters. If the setting is absent or `""`, the response omits `instructions`. Non-string values, including `null`, are configuration errors.
+
+This field supports REST-to-MCP only. Setting it on an MCP proxy, a built-in Go server or a `toolSet` configuration is an error. MCP proxies continue to use `server.passthroughInstructions` for upstream guidance; see Upstream instructions.
 
 ### Tool Set Configuration
 

@@ -452,6 +452,87 @@ impl MsgWindow {
         output
     }
 
+    // The tool path already owns incremental SSE decoding and strict JSON
+    // validation. Keep the existing text barrier for its parsed events.
+    pub(crate) fn push_tool_event(
+        &mut self,
+        raw: Vec<u8>,
+        payload: &[u8],
+        char_window_size: usize,
+        byte_window_size: usize,
+        inspect: &mut impl FnMut(&mut Vec<u8>) -> bool,
+    ) {
+        self.char_window_size = char_window_size;
+        self.byte_window_size = byte_window_size;
+        if payload.iter().all(u8::is_ascii_whitespace) {
+            self.queued_events.push(QueuedEvent::Raw(raw));
+            return;
+        }
+        let before = self.queued_events.len();
+        let mut canonical = b"data: ".to_vec();
+        canonical.extend_from_slice(payload);
+        self.update_event(canonical, inspect);
+        let has_text = serde_json::from_slice::<Value>(payload)
+            .ok()
+            .is_some_and(|value| {
+                value["choices"].as_array().is_some_and(|choices| {
+                    choices.iter().any(|choice| {
+                        ["content", "reasoning_content"].iter().any(|field| {
+                            choice["delta"][field]
+                                .as_str()
+                                .is_some_and(|text| !text.is_empty())
+                        })
+                    })
+                })
+            });
+        if !has_text {
+            if let Some(QueuedEvent::Raw(event)) = self.queued_events[before..]
+                .iter_mut()
+                .rev()
+                .find(|event| matches!(event, QueuedEvent::Raw(_)))
+            {
+                *event = raw;
+            }
+        } else {
+            let mut fields = Vec::new();
+            for line in raw.split(|byte| *byte == b'\r' || *byte == b'\n') {
+                if !line.is_empty() && !line.starts_with(b"data:") && line != b"data" {
+                    fields.extend_from_slice(line);
+                    fields.push(b'\n');
+                }
+            }
+            if !fields.is_empty() {
+                if let Some(QueuedEvent::Raw(event)) = self.queued_events[before..]
+                    .iter_mut()
+                    .find(|event| matches!(event, QueuedEvent::Raw(_)))
+                {
+                    fields.append(event);
+                    *event = fields;
+                } else {
+                    fields.extend_from_slice(b"data: {\"choices\":[]}\n\n");
+                    self.queued_events.push(QueuedEvent::Raw(fields));
+                }
+            }
+        }
+        for window in self.message_windows.values_mut() {
+            window.check(inspect);
+        }
+    }
+
+    pub(crate) fn flush_tool_choice(
+        &mut self,
+        index: i64,
+        inspect: &mut impl FnMut(&mut Vec<u8>) -> bool,
+    ) {
+        self.queue_text(index, true, inspect);
+    }
+    pub(crate) fn flush_tool_text(&mut self, inspect: &mut impl FnMut(&mut Vec<u8>) -> bool) {
+        self.queue_all_text(inspect);
+    }
+    pub(crate) fn queue_tool_arguments(&mut self, value: Value) {
+        self.queue_raw(format!("data: {value}").into_bytes());
+    }
+
     pub(crate) fn push(
         &mut self,
         data: &[u8],

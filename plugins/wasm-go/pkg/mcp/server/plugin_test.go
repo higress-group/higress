@@ -664,6 +664,44 @@ func TestParseConfigCore_ServerVersion(t *testing.T) {
 	}
 }
 
+func TestParseConfigCore_ServerInstructionsValidation(t *testing.T) {
+	for _, value := range []string{`null`, `true`, `false`, `42`, `[]`, `{}`} {
+		t.Run(value, func(t *testing.T) {
+			raw := `{"server":{"name":"rest","instructions":` + value + `},"tools":[{"name":"health","requestTemplate":{"url":"/health","method":"GET"}}]}`
+			err := ParseConfigCore(gjson.Parse(raw), &McpServerConfig{}, newValidationOpts())
+			require.EqualError(t, err, "server.instructions must be a string")
+		})
+	}
+
+	for _, raw := range []string{
+		`{"server":{"name":"proxy","type":"mcp-proxy","transport":"http","mcpServerURL":"/mcp","instructions":"local"}}`,
+		`{"server":{"instructions":"local"},"toolSet":{"name":"composed","serverTools":[]}}`,
+		`{"server":{"name":"registered","instructions":"local"}}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			opts := newValidationOpts()
+			opts.Servers["registered"] = &stubServer{}
+			err := ParseConfigCore(gjson.Parse(raw), &McpServerConfig{}, opts)
+			require.EqualError(t, err, "server.instructions requires a REST-to-MCP server")
+		})
+	}
+}
+
+func TestParseConfigCore_ServerInstructionsResetOnReload(t *testing.T) {
+	config := &McpServerConfig{}
+	opts := newValidationOpts()
+	for _, tc := range []struct{ field, want string }{
+		{`,"instructions":"first"`, "first"},
+		{`,"instructions":""`, ""},
+		{`,"instructions":"second"`, "second"},
+		{"", ""},
+	} {
+		raw := `{"server":{"name":"rest"` + tc.field + `},"tools":[{"name":"health","requestTemplate":{"url":"/health","method":"GET"}}]}`
+		require.NoError(t, ParseConfigCore(gjson.Parse(raw), config, opts))
+		require.Equal(t, tc.want, config.serverInstructions)
+	}
+}
+
 func TestParseConfigCore_McpProxy_BadProxyToolJson(t *testing.T) {
 	c := &McpServerConfig{}
 	err := ParseConfigCore(gjson.Parse(`{
