@@ -293,7 +293,7 @@ func TestRequest_BodyJson_AddAndRemove(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"},
 			{":path", "/p"},
 			{"content-type", "application/json"},
@@ -322,7 +322,7 @@ func TestRequest_BodyJson_ValueTypeNumber(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"},
 			{":path", "/p"},
 			{"content-type", "application/json"},
@@ -348,7 +348,7 @@ func TestRequest_BodyForm_Urlencoded(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"},
 			{":path", "/p"},
 			{"content-type", "application/x-www-form-urlencoded"},
@@ -651,7 +651,7 @@ func TestRequest_BodyJson_Rename(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
 		}))
 		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{"old":"v","keep":1}`)))
@@ -674,7 +674,7 @@ func TestRequest_BodyJson_Replace(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
 		}))
 		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{"status":"raw"}`)))
@@ -699,7 +699,7 @@ func TestRequest_BodyJson_AppendNewExistingScalarAndArray(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
 		}))
 		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(
@@ -743,7 +743,7 @@ func TestRequest_BodyJson_DedupeStrategies(t *testing.T) {
 				defer host.Reset()
 				require.Equal(t, types.OnPluginStartStatusOK, status)
 
-				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+				require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 					{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
 				}))
 				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(tc.body)))
@@ -767,7 +767,7 @@ func TestRequest_BodyJson_ValueTypeBooleanObject(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
 		}))
 		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{}`)))
@@ -796,7 +796,7 @@ func TestRequest_BodyJson_NestedPathAndArrayIndex(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
 		}))
 		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(
@@ -819,7 +819,7 @@ func TestRequest_BodyJson_InvalidJsonReturnsAction(t *testing.T) {
 		}))
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
 		}))
 		// not valid json — handler returns err, plugin logs warn but does not crash.
@@ -846,7 +846,7 @@ func TestRequest_MapFromHeaders_ToBody(t *testing.T) {
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
 			{"X-Tenant", "acme"},
 		}))

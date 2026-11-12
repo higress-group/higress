@@ -64,6 +64,11 @@ func init() {
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.HmacAuthConfig) types.Action {
+	// Reject paths send a local response without consuming the request body.
+	// Disable body reading by default; the validated raw-body path below opts
+	// back in with RequireRequestBody.
+	ctx.DontReadRequestBody()
+
 	var (
 		noAllow            = len(cfg.Allow) == 0
 		globalAuthNoSet    = cfg.GlobalAuth == nil
