@@ -375,6 +375,18 @@ func (c *McpServerConfig) GetIsComposed() bool {
 	return c.isComposed
 }
 
+// buildToolList 为已成功解析的配置生成独立的响应描述，并应用已求交集的工具白名单。
+// 组合服务必须在规则全部加载后的请求阶段读取其绑定的本代 registry，避免冻结尚未注册的来源；
+// 普通服务继续使用解析时的冻结快照，不重新调用来源工具的描述 getter。返回值允许调用方修改，
+// 空集合返回空切片；组合快照只保存在当前调用中，不写回配置或跨配置代共享。
+func (c *McpServerConfig) buildToolList(effectiveAllowTools *map[string]struct{}) []map[string]any {
+	if c.isComposed {
+		// 使用配置持有的 ComposedMCPServer，而不是重载后可能替换的全局 registry。
+		return captureDirectToolSnapshot(c.server).buildToolList(effectiveAllowTools)
+	}
+	return c.directTools.buildToolList(effectiveAllowTools)
+}
+
 func normalizeServerVersion(version string) string {
 	version = strings.TrimSpace(version)
 	if version == "" {
@@ -438,7 +450,9 @@ func computeEffectiveAllowToolsFromHeader(configAllowTools *map[string]struct{},
 	}
 }
 
-// parseConfigCore contains the core config parsing logic with dependency injection
+// parseConfigCore 校验单条服务/工具集配置并安装协议处理器；opts 提供本配置代的依赖与 registry。
+// 成功后普通服务发布冻结描述，组合服务保留本代 registry 引用并在请求阶段生成列表；
+// 无效配置返回错误，不将代理工具部分发布。调用方在全部规则解析成功后再接收新配置请求。
 func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *ConfigOptions) error {
 	toolSetJson := configJson.Get("toolSet")
 	serverJson := configJson.Get("server")                        // This is for single server or REST server definition
@@ -607,16 +621,15 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		for name, tool := range proxyServer.GetMCPTools() {
 			opts.ToolRegistry.RegisterTool(config.serverName, name, tool)
 		}
-	} else if config.server != nil {
+	} else if config.server != nil && !config.isComposed {
+		// 组合规则之后仍可能加载来源，不能在此阶段捕获不完整的组合描述。
 		if config.directTools.ordered == nil {
 			config.directTools = captureDirectToolSnapshot(config.server)
 		}
-		if !config.isComposed {
-			// Publish direct tools to the shared registry only after the complete
-			// generation snapshot has captured each tool descriptor.
-			for _, entry := range config.directTools.ordered {
-				opts.ToolRegistry.registerCapturedTool(config.serverName, entry)
-			}
+		// Publish direct tools to the shared registry only after the complete
+		// generation snapshot has captured each tool descriptor.
+		for _, entry := range config.directTools.ordered {
+			opts.ToolRegistry.registerCapturedTool(config.serverName, entry)
 		}
 	}
 
@@ -723,7 +736,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			// Compute effective allowTools using helper function
 			effectiveAllowTools := computeEffectiveAllowTools(allowTools)
 			request, _ := ModernRequestContext(ctx)
-			tools := config.directTools.buildToolList(effectiveAllowTools)
+			tools := config.buildToolList(effectiveAllowTools)
 			semantic := protocol.SemanticResult{
 				Value: map[string]any{
 					"tools": tools,
