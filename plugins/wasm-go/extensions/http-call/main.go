@@ -100,7 +100,7 @@ func parseConfig(json gjson.Result, config *HttpCallConfig, log log.Log) error {
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config HttpCallConfig, log log.Log) types.Action {
-	config.client.Get(config.requestPath, nil,
+	err := config.client.Get(config.requestPath, nil,
 		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 			defer proxywasm.ResumeHttpRequest()
 			if statusCode != http.StatusOK {
@@ -117,5 +117,14 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config HttpCallConfig, log lo
 				proxywasm.AddHttpRequestHeader(config.tokenHeader, token)
 			}
 		})
+	if err != nil {
+		// A synchronous dispatch failure means the callback above will never
+		// run, so the request would stay paused at the watermark forever.
+		// Keep the plugin's fail-open behaviour (a non-200 upstream response
+		// is logged and the request is forwarded anyway) and let the request
+		// continue without the extra headers.
+		log.Errorf("http call dispatch failed: %v", err)
+		return types.ActionContinue
+	}
 	return types.HeaderStopAllIterationAndWatermark
 }
