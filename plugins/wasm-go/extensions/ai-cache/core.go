@@ -270,11 +270,16 @@ func uploadEmbeddingAndAnswer(ctx wrapper.HttpContext, c config.PluginConfig, ke
 		log.Debugf("[%s] [uploadEmbeddingAndAnswer] no vector provider configured for uploading embedding", PLUGIN_NAME)
 		return
 	}
+	onUploadComplete := func(_ wrapper.HttpContext, log logs.Log, err error) {
+		if err != nil {
+			log.Warnf("[%s] [uploadEmbeddingAndAnswer] asynchronous embedding upload failed: %v", PLUGIN_NAME, err)
+		}
+	}
 
 	// Attempt to upload answer embedding first
 	if ansEmbUploader, ok := activeVectorProvider.(vector.AnswerAndEmbeddingUploader); ok {
 		log.Infof("[%s] uploading answer embedding for key: %s", PLUGIN_NAME, key)
-		err := ansEmbUploader.UploadAnswerAndEmbedding(key, emb, value, ctx, log, nil)
+		err := ansEmbUploader.UploadAnswerAndEmbedding(key, emb, value, ctx, log, onUploadComplete)
 		if err != nil {
 			log.Warnf("[%s] [uploadEmbeddingAndAnswer] failed to upload answer embedding for key: %s, error: %v", PLUGIN_NAME, key, err)
 		} else {
@@ -285,7 +290,7 @@ func uploadEmbeddingAndAnswer(ctx wrapper.HttpContext, c config.PluginConfig, ke
 	// If answer embedding upload fails, attempt normal embedding upload
 	if embUploader, ok := activeVectorProvider.(vector.EmbeddingUploader); ok {
 		log.Infof("[%s] uploading embedding for key: %s", PLUGIN_NAME, key)
-		err := embUploader.UploadEmbedding(key, emb, ctx, log, nil)
+		err := embUploader.UploadEmbedding(key, emb, ctx, log, onUploadComplete)
 		if err != nil {
 			log.Warnf("[%s] [uploadEmbeddingAndAnswer] failed to upload embedding for key: %s, error: %v", PLUGIN_NAME, key, err)
 		}
