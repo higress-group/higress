@@ -1,18 +1,18 @@
 # Tool Search MCP Server
 
-这是一个基于 Higress Golang Filter 实现的 MCP Server，用于提供工具语义搜索功能。当前实现**仅支持向量语义搜索**（基于 Milvus 向量数据库），**不包含全文检索或混合搜索**。
+这是一个基于 Higress Golang Filter 实现的 MCP Server，用于提供工具语义搜索功能。当前实现仅支持向量语义搜索，后端可以是 Milvus 或 Qdrant，不包含全文检索或混合搜索。
 
 ## 功能特性
 
-- **向量语义搜索**：使用 OpenAI 兼容的 Embedding API 将用户查询转换为向量，并在 Milvus 中进行相似度检索
+- **向量语义搜索**：使用 OpenAI 兼容的 Embedding API 将用户查询转换为向量，并在 Milvus 或 Qdrant 中进行相似度检索
 - **工具元数据支持**：从数据库中读取完整的工具定义（JSON 格式），并动态拼接工具名称
 - **全量工具列表**：支持获取数据库中所有可用工具
 - **可配置 Embedding 模型**：支持自定义模型、维度及 API 端点（如 DashScope）
-- **Milvus 集成**：通过标准 gRPC 接口连接 Milvus 向量数据库
+- **向量库**：Milvus 或 Qdrant，二选一即可
 
-## 数据库要求（Milvus）
+## 数据库要求
 
-本服务依赖 **Milvus 向量数据库**，需预先创建集合（Collection），其 Schema 应包含以下字段：
+集合需预先创建，字段如下：
 
 | 字段名          | 类型                | 说明                      |
 |--------------|-------------------|-------------------------|
@@ -37,13 +37,13 @@
 
 | 参数        | 类型   | 必填 | 默认值             | 说明 |
 |-------------|--------|------|--------------------|------|
-| `type`      | string | 是   | -                  | **必须为 `"milvus"`** |
-| `host`      | string | 是   | -                  | Milvus 服务地址（如 `localhost`） |
-| `port`      | int    | 是   | -                  | Milvus gRPC 端口（如 `19530`） |
-| `database`  | string | 否   | `"default"`        | Milvus 数据库名 |
-| `tableName` | string | 否   | `"apig_mcp_tools"` | Milvus 集合名 |
-| `username`  | string | 否   | -                  | 认证用户名（可选） |
-| `password`  | string | 否   | -                  | 认证密码（可选） |
+| `type`      | string | 是   | -                  | `milvus` 或 `qdrant` |
+| `host`      | string | 是   | -                  | 服务地址（如 `localhost`） |
+| `port`      | int    | 是   | -                  | Milvus 默认 `19530`，Qdrant gRPC 默认 `6334` |
+| `database`  | string | 否   | `"default"`        | Milvus 数据库名。Qdrant 忽略 |
+| `tableName` | string | 否   | `"apig_mcp_tools"` | 集合名 |
+| `username`  | string | 否   | -                  | Milvus 用户名。Qdrant 忽略 |
+| `password`  | string | 否   | -                  | Milvus 密码，或 Qdrant API key |
 
 ### Embedding 配置（`embedding` 对象）
 
@@ -103,6 +103,19 @@ data:
             dimensions: 1024
           description: "Higress 工具语义搜索服务"
 ```
+
+Qdrant 把 `vector` 改成：
+
+```yaml
+          vector:
+            type: "qdrant"
+            host: "localhost"
+            port: 6334
+            tableName: "apig_mcp_tools"
+            password: ""
+```
+
+Qdrant 点 ID 必须是 UUID 或无符号整数。`database` 和 `username` 无效。
 
 ## 工具搜索接口
 
