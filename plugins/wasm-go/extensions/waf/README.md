@@ -64,7 +64,7 @@ spec:
           - 'SecRule REQUEST_URI "@streq /admin" "id:1000001,phase:1,deny,status:403"'
 ```
 
-Higress WAF 没有独立的系统规则类别开关。可以在 `secRules` 末尾加入 `SecRuleRemoveById 920000-922999` 关闭对应 ID 范围，或加入 `SecRuleRemoveById 920100` 关闭单条规则；规则 ID 应以所用 CRS 版本为准，关闭规则会削弱相应防护。[WAF 2.0.0 源码](https://github.com/higress-group/higress/blob/76605194e6fc/plugins/wasm-go/extensions/waf/wasmplugin/plugin.go#L35-L61)先加入全部 CRS `Include`，再加入 `secRules`，最后创建 Coraza WAF。因此 `SecRuleRemoveById` 在 CRS 加载和解析之后处理：它能从最终规则集合中移除规则，但不能避免加载时的内存峰值。关闭类别或单条规则能节省多少稳定内存，需要按实际规则和流量测量。
+Higress WAF 没有独立的系统规则类别开关。管理界面的“请求方法”（911xxx，检查允许的 HTTP 方法）和“协议与请求格式”（920/921xxx，检查请求行、头部和消息体格式）只是对同一套 CRS 规则按 ID 分组，规则 ID 不重叠，不会额外加载规则。可以在 `secRules` 末尾加入 `SecRuleRemoveById 920000-922999` 关闭对应 ID 范围，或加入 `SecRuleRemoveById 920100` 关闭单条规则；规则 ID 应以所用 CRS 版本为准，关闭规则会削弱相应防护。[WAF 2.0.0 源码](https://github.com/higress-group/higress/blob/76605194e6fc/plugins/wasm-go/extensions/waf/wasmplugin/plugin.go#L35-L61)先加入全部 CRS `Include`，再加入 `secRules`，最后创建 Coraza WAF。因此 `SecRuleRemoveById` 在 CRS 加载和解析之后处理：它能从最终规则集合中移除规则，但不能避免加载时的内存峰值。关闭类别或单条规则能节省多少稳定内存，需要按实际规则和流量测量。
 
 ### 容量观察与测试范围
 
