@@ -574,6 +574,18 @@ func TestParseConfigCore_McpProxy_BubblesUpSetupError(t *testing.T) {
 	assert.Contains(t, err.Error(), "mcpServerURL")
 }
 
+func TestParseConfigCore_McpProxy_InvalidSchemaLeavesRegistryUnchanged(t *testing.T) {
+	opts := newValidationOpts()
+	config := gjson.Parse(`{
+		"server":{"name":"p","type":"mcp-proxy","transport":"http","mcpServerURL":"/mcp"},
+		"tools":[{"name":"valid"},{"name":"invalid","inputSchema":{"type":"object","required":null}}]
+	}`)
+	err := ParseConfigCore(config, &McpServerConfig{}, opts)
+	require.ErrorContains(t, err, "failed to add proxy tool invalid: inputSchema.required")
+	_, found := opts.ToolRegistry.GetToolInfo("p", "valid")
+	assert.False(t, found)
+}
+
 func TestParseConfigCore_McpProxy_HappyPath_NoTools(t *testing.T) {
 	c := &McpServerConfig{}
 	err := ParseConfigCore(gjson.Parse(`{

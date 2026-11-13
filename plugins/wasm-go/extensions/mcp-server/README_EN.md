@@ -103,6 +103,8 @@ toolSet:
 
 Combined tool names use the format `serverName___toolName`, such as `weather-server___get_weather`.
 
+For `mcp-proxy` tools, store the full upstream schema in `tools[].inputSchema` so the tool set can publish nested properties, array items, and reference definitions. This field is a JSON Schema with `type: object`. When both fields are set, `inputSchema` takes precedence over `args`. When `inputSchema` is absent, the tool set builds the schema from `args`. For tools without required arguments, the tool set omits the top-level `required` field. Direct proxy `tools/list` responses use the upstream tool descriptors.
+
 ### Allowed Tools Configuration
 
 | Name         | Data Type        | Required | Default | Description                                   |
