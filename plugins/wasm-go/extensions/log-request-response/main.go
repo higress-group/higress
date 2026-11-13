@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -25,6 +27,24 @@ const (
 const (
 	contextKeyRequestBodyBuffer  = "request_body_buffer"
 	contextKeyResponseBodyBuffer = "response_body_buffer"
+	// contextKeyRequestHeaders stores the raw request headers when the status code
+	// condition is configured, until serialization and writing happen at the
+	// response headers phase where the status code is known
+	contextKeyRequestHeaders = "request_headers"
+	// contextKeyStatusMatched stores whether the status code condition matched for
+	// the current request (only set when the condition is configured)
+	contextKeyStatusMatched = "status_code_matched"
+)
+
+// Supported comparison operators for the status code condition
+const (
+	opGte = ">="
+	opGt  = ">"
+	opEq  = "="
+	opEq2 = "=="
+	opNeq = "!="
+	opLt  = "<"
+	opLte = "<="
 )
 
 // HTTP/2 header name mapping
@@ -57,6 +77,17 @@ func init() {
 
 // PluginConfig Custom plugin configuration
 type PluginConfig struct {
+	// StatusCode condition configuration (global, optional)
+	// When configured, content is logged only if the response status code matches;
+	// when not configured, everything is logged as before
+	StatusCode struct {
+		// Whether the status code condition is enabled
+		Enabled bool
+		// Comparison operator: >=, >, =, ==, !=, <, <= (default: >=)
+		Operator string
+		// Target status code to compare against
+		Value int
+	}
 	// Request configuration
 	Request struct {
 		// Headers configuration
@@ -150,7 +181,51 @@ func parseConfig(json gjson.Result, config *PluginConfig) error {
 		}
 	}
 
+	// Parse status code condition configuration
+	// The condition is enabled only when statusCode.value is set to a valid HTTP status code;
+	// when it is absent, everything is logged regardless of the status code
+	if statusCode := json.Get("statusCode"); statusCode.Exists() {
+		value := int(statusCode.Get("value").Int())
+		if value != 0 {
+			if value < 100 || value > 599 {
+				return fmt.Errorf("invalid statusCode.value: %d, must be a valid HTTP status code in [100, 599]", value)
+			}
+			operator := statusCode.Get("operator").String()
+			if operator == "" {
+				operator = opGte
+			}
+			switch operator {
+			case opGte, opGt, opEq, opEq2, opNeq, opLt, opLte:
+				config.StatusCode.Enabled = true
+				config.StatusCode.Operator = operator
+				config.StatusCode.Value = value
+			default:
+				return fmt.Errorf("invalid statusCode.operator: %s, must be one of >=, >, =, ==, !=, <, <=", operator)
+			}
+		}
+	}
+
 	return nil
+}
+
+// matchStatusCode evaluates whether the response status code satisfies the configured condition
+func matchStatusCode(status int, target int, operator string) bool {
+	switch operator {
+	case opGt:
+		return status > target
+	case opGte:
+		return status >= target
+	case opEq, opEq2:
+		return status == target
+	case opNeq:
+		return status != target
+	case opLt:
+		return status < target
+	case opLte:
+		return status <= target
+	default:
+		return false
+	}
 }
 
 // normalizeHeaderName standardizes HTTP/2 header names by removing the colon prefix
@@ -170,10 +245,29 @@ func normalizeHeaderName(name string) string {
 	return name
 }
 
+// serializeHeadersToJSON converts headers into a JSON object string with
+// normalized HTTP/2 header names
+func serializeHeadersToJSON(headers [][2]string) string {
+	jsonStr := "{}"
+	for _, header := range headers {
+		normalizedName := normalizeHeaderName(header[0])
+		var err error
+		jsonStr, err = sjson.Set(jsonStr, normalizedName, header[1])
+		if err != nil {
+			log.Errorf("Failed to convert request header to JSON: name=%s, value=%s, error=%v", normalizedName, header[1], err)
+		}
+	}
+	return jsonStr
+}
+
 // processStreamingBody common function to process streaming body
+// When deferred is true (status code condition configured), chunks are only
+// accumulated in the context and no property is written here; the write decision
+// is deferred to the response headers phase where the status code is known
 func processStreamingBody(
 	ctx wrapper.HttpContext,
 	enabled bool,
+	deferred bool,
 	maxSize int,
 	bufferKey string,
 	logKey string,
@@ -187,6 +281,31 @@ func processStreamingBody(
 
 	// Get the buffer from context
 	buffer, _ := ctx.GetContext(bufferKey).([]byte)
+
+	// In deferred mode, accumulate the body up to maxSize without writing anything
+	if deferred {
+		if len(buffer) < maxSize {
+			remainingCapacity := maxSize - len(buffer)
+			if len(chunk) <= remainingCapacity {
+				buffer = append(buffer, chunk...)
+			} else {
+				buffer = append(buffer, chunk[:remainingCapacity]...)
+			}
+			ctx.SetContext(bufferKey, buffer)
+		}
+
+		// If the status decision was already made and matched (e.g. an early response
+		// arrived before the request body finished), re-write the cumulative buffer so
+		// the logged content covers everything received so far
+		if isEndStream && len(buffer) > 0 {
+			if matched, ok := ctx.GetContext(contextKeyStatusMatched).(bool); ok && matched {
+				setPropertyWithMarshal(logKey, string(buffer))
+			}
+		}
+
+		// Always return the original chunk unmodified
+		return chunk
+	}
 
 	// If we haven't reached max size yet, append chunk to buffer
 	if len(buffer) < maxSize {
@@ -263,17 +382,14 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig) types.Ac
 
 	// Check if request headers need to be logged
 	if config.Request.Headers.Enabled {
-		jsonStr := "{}"
-		for _, header := range headers {
-			var err error
-			normalizedName := normalizeHeaderName(header[0])
-			jsonStr, err = sjson.Set(jsonStr, normalizedName, header[1])
-			if err != nil {
-				log.Errorf("Failed to convert request header to JSON: name=%s, value=%s, error=%v", normalizedName, header[1], err)
-			}
+		if config.StatusCode.Enabled {
+			// Defer both serialization and writing to the response headers phase where
+			// the status code is known: storing the raw headers avoids building the
+			// JSON string up front, and non-matching requests skip serialization entirely
+			ctx.SetContext(contextKeyRequestHeaders, headers)
+		} else {
+			setPropertyWithMarshal(logKeyRequestHeaders, serializeHeadersToJSON(headers))
 		}
-
-		setPropertyWithMarshal(logKeyRequestHeaders, jsonStr)
 	}
 
 	// Get request method and Content-Type for subsequent processing
@@ -317,6 +433,9 @@ func onStreamingRequestBody(ctx wrapper.HttpContext, config PluginConfig, chunk 
 	return processStreamingBody(
 		ctx,
 		config.Request.Body.Enabled,
+		// With a status code condition configured, defer the write until the status
+		// code is known at the response headers phase
+		config.StatusCode.Enabled,
 		config.Request.Body.MaxSize,
 		contextKeyRequestBodyBuffer,
 		logKeyRequestBody,
@@ -332,6 +451,40 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig) types.A
 	if err != nil {
 		log.Errorf("Failed to get response headers: %v", err)
 		return types.ActionContinue
+	}
+
+	// Evaluate the status code condition if configured
+	matched := true
+	if config.StatusCode.Enabled {
+		statusCode := 0
+		for _, header := range headers {
+			if strings.ToLower(header[0]) == ":status" {
+				if code, err := strconv.Atoi(header[1]); err == nil {
+					statusCode = code
+				}
+				break
+			}
+		}
+		matched = matchStatusCode(statusCode, config.StatusCode.Value, config.StatusCode.Operator)
+		ctx.SetContext(contextKeyStatusMatched, matched)
+	}
+
+	// When the condition is configured but not matched, skip all logging for this request:
+	// response headers/body are not written, and the deferred request-side data is discarded
+	if !matched {
+		ctx.DontReadResponseBody()
+		return types.ActionContinue
+	}
+
+	// Flush the request-side data that was deferred until the status code is known
+	if config.StatusCode.Enabled {
+		// Serialize the raw request headers now, only for matching requests
+		if deferredHeaders, ok := ctx.GetContext(contextKeyRequestHeaders).([][2]string); ok {
+			setPropertyWithMarshal(logKeyRequestHeaders, serializeHeadersToJSON(deferredHeaders))
+		}
+		if buffer, ok := ctx.GetContext(contextKeyRequestBodyBuffer).([]byte); ok && len(buffer) > 0 {
+			setPropertyWithMarshal(logKeyRequestBody, string(buffer))
+		}
 	}
 
 	// Check if response headers need to be logged
@@ -400,6 +553,9 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, config PluginConfig, chunk
 	return processStreamingBody(
 		ctx,
 		config.Response.Body.Enabled,
+		// The response body is processed after the status code is known,
+		// so it never needs deferred handling
+		false,
 		config.Response.Body.MaxSize,
 		contextKeyResponseBodyBuffer,
 		logKeyResponseBody,
