@@ -99,6 +99,20 @@ func TestToolSetListOwnsDescriptorsAcrossGenerations(t *testing.T) {
 	require.NotContains(t, fresh[1]["inputSchema"].(map[string]any)["properties"], "mutated")
 	require.Len(t, current.buildToolList(nil), 1)
 	require.Len(t, old.buildToolList(nil), 2)
+	// 缺失引用已在上面串行验证；并发阶段只读取有效引用，避免单线程 proxytest 日志宿主
+	// 在 Warnf 中并发追加日志切片。仍通过解析器绑定同两个 registry，验证完整列表的隔离。
+	resolvedConfig := func(registry *GlobalToolRegistry, includeSecond bool) *McpServerConfig {
+		references := []ServerToolConfig{{ServerName: "source-a", Tools: []string{"list_records"}}}
+		if includeSecond {
+			references = append(references, ServerToolConfig{ServerName: "source-b", Tools: []string{"lookup_record"}})
+		}
+		raw, err := json.Marshal(map[string]any{"toolSet": ToolSetConfig{Name: "concurrent", ServerTools: references}})
+		require.NoError(t, err)
+		config := &McpServerConfig{}
+		require.NoError(t, ParseConfigCore(gjson.ParseBytes(raw), config, &ConfigOptions{Servers: map[string]Server{}, ToolRegistry: registry}))
+		return config
+	}
+	oldConcurrent, currentConcurrent := resolvedConfig(oldRegistry, true), resolvedConfig(currentRegistry, false)
 	// 并发读取使用同一已发布配置，但每次快照和返回值独立；由 race 检查潜在的跨请求写入。
 	var wg sync.WaitGroup
 	failures := make(chan string, 8)
@@ -107,7 +121,7 @@ func TestToolSetListOwnsDescriptorsAcrossGenerations(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for repeat := 0; repeat < 20; repeat++ {
-				if len(old.buildToolList(nil)) != 2 || len(current.buildToolList(nil)) != 1 {
+				if len(oldConcurrent.buildToolList(nil)) != 2 || len(currentConcurrent.buildToolList(nil)) != 1 {
 					failures <- "generation changed"
 					return
 				}
