@@ -1,0 +1,58 @@
+2026-10-23T02:55:44.545366Z info    ingress Disable status update for cluster snapshot
+2026-10-23T02:55:44.545535Z info    Add kind networking.istio.io/v1/ServiceEntry config service
+2026-10-23T02:55:44.545539Z info    Add kind extensions.istio.io/v1alpha1/WasmPlugin config mcp-plugin
+2026-10-23T02:55:44.545968Z info    ingress resource type extensions.istio.io/v1alpha1/WasmPlugin, ingress number 100, convert configs number 2
+2026-10-23T02:55:44.546325Z info    ingress resource type extensions.istio.io/v1alpha1/WasmPlugin, ingress number 100, convert configs number 2
+2026-10-23T02:55:44.546537Z info    ingress resource type extensions.istio.io/v1alpha1/WasmPlugin, ingress number 100, convert configs number 2
+2026-10-23T02:55:44.547887Z info    ingress Disable status update for cluster snapshot
+2026-10-23T02:55:44.548098Z info    Add kind networking.istio.io/v1/ServiceEntry config service
+2026-10-23T02:55:44.548108Z info    Add kind extensions.istio.io/v1alpha1/WasmPlugin config mcp-plugin
+2026-10-23T02:55:44.548714Z info    ingress Found mcp serviceEntries []
+2026-10-23T02:55:44.548770Z info    ingress resource type networking.istio.io/v1/ServiceEntry, ingress number 100, convert configs number 1
+2026-10-23T02:55:44.549412Z info    ingress Found mcp serviceEntries []
+2026-10-23T02:55:44.549426Z info    ingress resource type networking.istio.io/v1/ServiceEntry, ingress number 100, convert configs number 1
+2026-10-23T02:55:44.549787Z info    ingress Found mcp serviceEntries []
+2026-10-23T02:55:44.549795Z info    ingress resource type networking.istio.io/v1/ServiceEntry, ingress number 100, convert configs number 1
+--- FAIL: TestIndependentSnapshotsSkipIngressConversion (0.04s)
+    --- FAIL: TestIndependentSnapshotsSkipIngressConversion/WasmPlugin (0.03s)
+        snapshot_test.go:102:
+                Error Trace:    /private/tmp/higress-batch-route-analysis/pkg/ingress/config/snapshot_test.go:102
+                Error:          Should be zero, but was 3
+                Test:           TestIndependentSnapshotsSkipIngressConversion/WasmPlugin
+                Messages:       cache-backed resources must not list unrelated ingresses
+    --- FAIL: TestIndependentSnapshotsSkipIngressConversion/ServiceEntry (0.00s)
+        snapshot_test.go:102:
+                Error Trace:    /private/tmp/higress-batch-route-analysis/pkg/ingress/config/snapshot_test.go:102
+                Error:          Should be zero, but was 3
+                Test:           TestIndependentSnapshotsSkipIngressConversion/ServiceEntry
+                Messages:       cache-backed resources must not list unrelated ingresses
+2026-10-23T02:55:44.551047Z info    ingress Disable status update for cluster snapshot
+2026-10-23T02:55:44.551108Z info    ingress resource type extensions.istio.io/v1alpha1/WasmPlugin, ingress number 10, convert configs number 0
+2026-10-23T02:55:44.551135Z info    ingress resource type extensions.istio.io/v1alpha1/WasmPlugin, ingress number 10, convert configs number 1
+2026-10-23T02:55:44.551165Z info    ingress resource type extensions.istio.io/v1alpha1/WasmPlugin, ingress number 10, convert configs number 0
+--- FAIL: TestIndependentSnapshotsObserveCacheChanges (0.00s)
+    snapshot_test.go:116:
+            Error Trace:    /private/tmp/higress-batch-route-analysis/pkg/ingress/config/snapshot_test.go:116
+            Error:          Should be zero, but was 3
+            Test:           TestIndependentSnapshotsObserveCacheChanges
+2026-10-23T02:55:44.552343Z info    ingress Disable status update for cluster snapshot
+2026-10-23T02:55:44.552385Z info    ingress resource type networking.istio.io/v1/DestinationRule, ingress number 1, convert configs number 0
+2026-10-23T02:55:44.552396Z info    ingress resource type extensions.istio.io/v1alpha1/WasmPlugin, ingress number 1, convert configs number 0
+2026-10-23T02:55:44.552403Z info    ingress resource type networking.istio.io/v1/ServiceEntry, ingress number 1, convert configs number 0
+--- FAIL: TestRouteSnapshotStillRefreshesMCPAnnotations (0.00s)
+    snapshot_test.go:150:
+            Error Trace:    /private/tmp/higress-batch-route-analysis/pkg/ingress/config/snapshot_test.go:150
+            Error:          Not equal:
+                            expected: 1
+                            actual  : 3
+            Test:           TestRouteSnapshotStillRefreshesMCPAnnotations
+2026-10-23T02:55:44.553556Z info    ingress Disable status update for cluster snapshot
+2026-10-23T02:55:44.553619Z info    ingress resource type extensions.istio.io/v1alpha1/WasmPlugin, ingress number 10, convert configs number 1
+--- FAIL: TestPluginSnapshotPreservesGatewayAPIPlugins (0.00s)
+    snapshot_test.go:187:
+            Error Trace:    /private/tmp/higress-batch-route-analysis/pkg/ingress/config/snapshot_test.go:187
+            Error:          Should be zero, but was 1
+            Test:           TestPluginSnapshotPreservesGatewayAPIPlugins
+FAIL
+FAIL    github.com/alibaba/higress/v2/pkg/ingress/config    0.086s
+FAIL

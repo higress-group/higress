@@ -355,6 +355,14 @@ func (m *IngressConfig) listFromIngressControllers(typ config.GroupVersionKind, 
 		return envoyFilters
 	}
 
+	// These snapshots use their own caches; ingress-derived state is refreshed during route/config conversion.
+	switch typ {
+	case gvk.WasmPlugin:
+		return m.convertWasmPlugin()
+	case gvk.ServiceEntry:
+		return m.convertServiceEntry()
+	}
+
 	var configs []config.Config
 	m.mutex.RLock()
 	for _, ingressController := range m.remoteIngressControllers {
@@ -373,10 +381,6 @@ func (m *IngressConfig) listFromIngressControllers(typ config.GroupVersionKind, 
 		result = m.convertVirtualService(wrapperConfigs)
 	case gvk.DestinationRule:
 		result = m.convertDestinationRule(wrapperConfigs)
-	case gvk.ServiceEntry:
-		result = m.convertServiceEntry(wrapperConfigs)
-	case gvk.WasmPlugin:
-		result = m.convertWasmPlugin(wrapperConfigs)
 	}
 	IngressLog.Infof("resource type %s, ingress number %d, convert configs number %d", typ, len(configs), len(result))
 	return result
@@ -961,7 +965,7 @@ func (m *IngressConfig) convertEnvoyFilter(convertOptions *common.ConvertOptions
 	m.mutex.Unlock()
 }
 
-func (m *IngressConfig) convertWasmPlugin([]common.WrapperConfig) []config.Config {
+func (m *IngressConfig) convertWasmPlugin() []config.Config {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	out := make([]config.Config, 0, len(m.wasmPlugins))
@@ -985,7 +989,7 @@ func (m *IngressConfig) convertWasmPlugin([]common.WrapperConfig) []config.Confi
 	return out
 }
 
-func (m *IngressConfig) convertServiceEntry([]common.WrapperConfig) []config.Config {
+func (m *IngressConfig) convertServiceEntry() []config.Config {
 	if m.RegistryReconciler == nil {
 		return nil
 	}
