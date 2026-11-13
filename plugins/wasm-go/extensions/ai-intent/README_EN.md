@@ -19,7 +19,7 @@ Plugin execution priority: `700`
 
 | Name           |   Data Type        | Requirement | Default Value | Description                                                      |
 | -------------- | --------------- | ----------- | ------------- | --------------------------------------------------------------- |
-| `scene.category`         | string          | Required     | -             | Preset scene categories, separated by "|", e.g.: "Finance|E-commerce|Law|Higress" |
+| `scene.category`         | string          | Required     | -             | Preset scene categories, separated by "\|", e.g.: "Finance\|E-commerce\|Law\|Higress" |
 | `scene.prompt`         | string          | Optional     | You are a smart category recognition assistant responsible for determining which preset category a user’s question belongs to based on the question posed by the user and the preset categories, and returning the corresponding category. The user's question is: %s, the preset categories are %s, directly return a specific category; if not found, return 'NotFound'.     | llm request prompt template |
 | `llm.proxyServiceName`         | string          | Required     | -             | Newly created Higress service pointing to the large model (use the FQDN value from Higress) |
 | `llm.proxyUrl`         | string          | Required     | -             | The full path to the large model route request address, which can be the gateway’s own address or the address of another large model (OpenAI protocol), for example: http://127.0.0.1:80/intent/compatible-mode/v1/chat/completions |
