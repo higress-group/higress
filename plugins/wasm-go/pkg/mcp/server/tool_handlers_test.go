@@ -447,7 +447,7 @@ func TestDescriptorSnapshotsUseJSONAndPreservePublicViews(t *testing.T) {
 	composed := &McpServerConfig{}
 	require.NoError(t, ParseConfigCore(gjson.Parse(`{"toolSet":{"name":"composed","serverTools":[{"serverName":"registered","tools":["tool"]}]}}`), composed, opts))
 	for _, config := range []*McpServerConfig{direct, composed} {
-		listed := config.directTools.buildToolList(nil)
+		listed := config.buildToolList(nil)
 		require.Len(t, listed, 1)
 		gotInput, err := json.Marshal(listed[0]["inputSchema"])
 		require.NoError(t, err)
@@ -459,7 +459,7 @@ func TestDescriptorSnapshotsUseJSONAndPreservePublicViews(t *testing.T) {
 		assert.NotEqual(t, "mutated", listed[0]["description"])
 		listed[0]["inputSchema"].(map[string]any)["integer"] = 12
 		listed[0]["outputSchema"].(map[string]any)["mutated"] = true
-		fresh := config.directTools.buildToolList(nil)
+		fresh := config.buildToolList(nil)
 		assert.Equal(t, int32(7), fresh[0]["inputSchema"].(map[string]any)["integer"])
 		assert.NotContains(t, fresh[0]["outputSchema"], "mutated")
 	}
