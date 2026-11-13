@@ -97,6 +97,8 @@ toolSet:
 
 组合后的工具名称为 `服务名称___工具名称`，例如 `weather-server___get_weather`。
 
+对于 `mcp-proxy` 工具，在 `tools[].inputSchema` 中保存上游工具返回的完整 Schema，工具集即可发布嵌套属性、数组元素和引用定义。该字段是一个 `type: object` 的 JSON Schema。它与 `args` 同时配置时，工具集采用 `inputSchema`。省略 `inputSchema` 时，工具集从 `args` 生成 Schema。无必填参数时省略顶层 `required`。直接代理的 `tools/list` 读取上游工具描述。
+
 ### 允许的工具配置
 
 | 名称         | 数据类型        | 填写要求 | 默认值 | 描述                                   |

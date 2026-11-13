@@ -79,6 +79,7 @@ type McpProxyToolConfig struct {
 	Description     string              `json:"description"`
 	Security        SecurityRequirement `json:"security,omitempty"` // Tool-level security for MCP Client to MCP Server
 	Args            []ToolArg           `json:"args"`
+	InputSchema     json.RawMessage     `json:"inputSchema,omitempty"`
 	OutputSchema    map[string]any      `json:"outputSchema,omitempty"` // Output schema for MCP Protocol Version 2025-06-18
 	RequestTemplate RequestTemplate     `json:"requestTemplate,omitempty"`
 }
@@ -199,11 +200,21 @@ func (s *McpProxyServer) AddMCPTool(name string, tool Tool) Server {
 
 // AddProxyTool adds a proxy tool configuration
 func (s *McpProxyServer) AddProxyTool(toolConfig McpProxyToolConfig) error {
+	var inputSchema map[string]any
+	if len(toolConfig.InputSchema) > 0 {
+		var err error
+		inputSchema, err = parseProxyInputSchema(toolConfig.InputSchema)
+		if err != nil {
+			return err
+		}
+	}
+
 	s.toolsConfig[toolConfig.Name] = toolConfig
 	s.base.AddMCPTool(toolConfig.Name, &McpProxyTool{
-		serverName: s.Name,
-		name:       toolConfig.Name,
-		toolConfig: toolConfig,
+		serverName:  s.Name,
+		name:        toolConfig.Name,
+		toolConfig:  toolConfig,
+		inputSchema: inputSchema,
 	})
 	return nil
 }
@@ -336,19 +347,21 @@ func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error
 
 // McpProxyTool implements Tool interface for MCP-to-MCP proxy
 type McpProxyTool struct {
-	serverName string
-	name       string
-	toolConfig McpProxyToolConfig
-	arguments  map[string]interface{}
+	serverName  string
+	name        string
+	toolConfig  McpProxyToolConfig
+	inputSchema map[string]any
+	arguments   map[string]interface{}
 }
 
 // Create implements Tool interface
 func (t *McpProxyTool) Create(params []byte) Tool {
 	newTool := &McpProxyTool{
-		serverName: t.serverName,
-		name:       t.name,
-		toolConfig: t.toolConfig,
-		arguments:  make(map[string]interface{}),
+		serverName:  t.serverName,
+		name:        t.name,
+		toolConfig:  t.toolConfig,
+		inputSchema: t.inputSchema,
+		arguments:   make(map[string]interface{}),
 	}
 
 	if len(params) > 0 {
@@ -459,13 +472,11 @@ func (t *McpProxyTool) Description() string {
 
 // InputSchema implements Tool interface
 func (t *McpProxyTool) InputSchema() map[string]any {
-	schema := map[string]any{
-		"type":       "object",
-		"properties": make(map[string]any),
-		"required":   []string{},
+	if t.inputSchema != nil {
+		return t.inputSchema
 	}
 
-	properties := schema["properties"].(map[string]any)
+	properties := make(map[string]any)
 	var required []string
 
 	for _, arg := range t.toolConfig.Args {
@@ -489,8 +500,42 @@ func (t *McpProxyTool) InputSchema() map[string]any {
 		}
 	}
 
-	schema["required"] = required
+	schema := map[string]any{"type": "object", "properties": properties}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
 	return schema
+}
+
+// parseProxyInputSchema checks the MCP tool's root fields and retains nested schemas as supplied.
+func parseProxyInputSchema(raw json.RawMessage) (map[string]any, error) {
+	schema, err := decodeBusinessJSONObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid inputSchema: %w", err)
+	}
+	if schema["type"] != "object" {
+		return nil, fmt.Errorf("inputSchema must be a JSON object with type \"object\"")
+	}
+	if value, exists := schema["properties"]; exists {
+		if _, ok := value.(map[string]any); !ok {
+			return nil, fmt.Errorf("inputSchema.properties must be an object")
+		}
+	}
+	if value, exists := schema["required"]; exists {
+		required, ok := value.([]any)
+		if !ok {
+			return nil, fmt.Errorf("inputSchema.required must be an array of strings")
+		}
+		for _, name := range required {
+			if _, ok := name.(string); !ok {
+				return nil, fmt.Errorf("inputSchema.required must be an array of strings")
+			}
+		}
+		if len(required) == 0 {
+			delete(schema, "required")
+		}
+	}
+	return schema, nil
 }
 
 // OutputSchema implements Tool interface (MCP Protocol Version 2025-06-18)

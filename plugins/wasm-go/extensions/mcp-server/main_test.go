@@ -304,6 +304,69 @@ func TestSchemaCompatibilityConfigurationLoadsGloballyAndAtRuleLevel(t *testing.
 	})
 }
 
+func TestComposedProxyToolInputSchemas(t *testing.T) {
+	const nestedSchema = `{
+		"$schema":"https://json-schema.org/draft/2020-12/schema",
+		"type":"object",
+		"properties":{
+			"payload":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]},
+			"records":{"type":"array","items":{"$ref":"#/$defs/record"}}
+		},
+		"$defs":{"record":{"type":"object","properties":{"id":{"type":"integer","minimum":9007199254740993}},"required":["id"]}},
+		"required":["payload","records"],
+		"additionalProperties":false
+	}`
+	config := json.RawMessage(fmt.Sprintf(`{
+		"server":{"name":"source","type":"mcp-proxy","transport":"http","mcpServerURL":"http://source.example.test/mcp"},
+		"tools":[
+			{"name":"empty"},
+			{"name":"optional","args":[{"name":"query","type":"string","description":"Search term","default":"all"}]},
+			{"name":"required","args":[{"name":"query","type":"string","description":"Search term","required":true}]},
+			{"name":"nested","args":[{"name":"old","type":"string","required":true}],"inputSchema":%s}
+		],
+		"_rules_":[{"_match_domain_":["virtual.example.test"],"toolSet":{
+			"name":"virtual",
+			"serverTools":[{"serverName":"source","tools":["empty","optional","required","nested"]}]
+		}}]
+	}`, nestedSchema))
+
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(config)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+		host.InitHttp()
+		defer host.CompleteHttp()
+		require.NoError(t, host.SetDomainName("virtual.example.test"))
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "virtual.example.test"}, {":method", "POST"}, {":path", "/mcp"},
+			{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"},
+		}))
+		host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		require.EqualValues(t, 200, response.StatusCode)
+		var envelope struct {
+			Result struct {
+				Tools []struct {
+					Name        string          `json:"name"`
+					InputSchema json.RawMessage `json:"inputSchema"`
+				} `json:"tools"`
+			} `json:"result"`
+		}
+		require.NoError(t, json.Unmarshal(response.Data, &envelope))
+		require.Len(t, envelope.Result.Tools, 4)
+		schemas := make(map[string]json.RawMessage)
+		for _, tool := range envelope.Result.Tools {
+			schemas[tool.Name] = tool.InputSchema
+		}
+		require.JSONEq(t, `{"type":"object","properties":{}}`, string(schemas["source___empty"]))
+		require.JSONEq(t, `{"type":"object","properties":{"query":{"type":"string","description":"Search term","default":"all"}}}`, string(schemas["source___optional"]))
+		require.JSONEq(t, `{"type":"object","properties":{"query":{"type":"string","description":"Search term"}},"required":["query"]}`, string(schemas["source___required"]))
+		require.JSONEq(t, nestedSchema, string(schemas["source___nested"]))
+		require.Contains(t, string(schemas["source___nested"]), `"minimum":9007199254740993`)
+	})
+}
+
 func TestLargeSchemaDescriptionsLoadGloballyAndAtRuleLevel(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		for _, fixture := range []struct {

@@ -517,8 +517,6 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 					if err := proxyServer.AddProxyTool(proxyTool); err != nil {
 						return fmt.Errorf("failed to add proxy tool %s: %v", proxyTool.Name, err)
 					}
-					// Register tool to registry
-					opts.ToolRegistry.RegisterTool(config.serverName, proxyTool.Name, proxyServer.GetMCPTools()[proxyTool.Name])
 				}
 			}
 			// Set the proxy server regardless of whether tools are configured
@@ -604,13 +602,16 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		config.serverInstructions = instructionsJson.String()
 	}
 
-	// Proxy descriptors remain upstream-owned. Both direct profiles publish the
-	// same isolated JSON descriptor generation without schema admission gates.
-	if config.server != nil {
-		if _, isProxy := config.server.(*McpProxyServer); !isProxy && config.directTools.ordered == nil {
+	if proxyServer, isProxy := config.server.(*McpProxyServer); isProxy {
+		// Publish local descriptors for tool sets only after the server config parses.
+		for name, tool := range proxyServer.GetMCPTools() {
+			opts.ToolRegistry.RegisterTool(config.serverName, name, tool)
+		}
+	} else if config.server != nil {
+		if config.directTools.ordered == nil {
 			config.directTools = captureDirectToolSnapshot(config.server)
 		}
-		if _, isProxy := config.server.(*McpProxyServer); !isProxy && !config.isComposed {
+		if !config.isComposed {
 			// Publish direct tools to the shared registry only after the complete
 			// generation snapshot has captured each tool descriptor.
 			for _, entry := range config.directTools.ordered {
