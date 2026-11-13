@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -1100,6 +1101,26 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body
 
 // fetches the tracing span value from the specified source.
 
+// truncateUtf8Safe truncates s to a head and tail of limit/2 bytes each,
+// backing the cut points off to UTF-8 rune start boundaries so the recorded
+// value stays valid UTF-8 for multi-byte content. The truncation trigger
+// (len(s) > limit) and the " [truncated] " marker are unchanged.
+func truncateUtf8Safe(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	half := limit / 2
+	prefixEnd := half
+	for prefixEnd > 0 && !utf8.RuneStart(s[prefixEnd]) {
+		prefixEnd--
+	}
+	suffixStart := len(s) - half
+	for suffixStart < len(s) && !utf8.RuneStart(s[suffixStart]) {
+		suffixStart++
+	}
+	return s[:prefixEnd] + " [truncated] " + s[suffixStart:]
+}
+
 func setAttributeBySource(ctx wrapper.HttpContext, config AIStatisticsConfig, source string, body []byte) {
 	for _, attribute := range config.attributes {
 		var key string
@@ -1158,7 +1179,7 @@ func setAttributeBySource(ctx wrapper.HttpContext, config AIStatisticsConfig, so
 		default:
 			formattedValue = value
 			if len(fmt.Sprint(value)) > config.valueLengthLimit {
-				formattedValue = fmt.Sprint(value)[:config.valueLengthLimit/2] + " [truncated] " + fmt.Sprint(value)[len(fmt.Sprint(value))-config.valueLengthLimit/2:]
+				formattedValue = truncateUtf8Safe(fmt.Sprint(value), config.valueLengthLimit)
 			}
 		}
 
