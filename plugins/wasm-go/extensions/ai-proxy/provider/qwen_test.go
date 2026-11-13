@@ -212,3 +212,80 @@ func TestTransformRequestBodyHeadersCompatibleModeOmitsPreserveThinkingWithoutRe
 	require.NoError(t, err)
 	assert.False(t, gjson.GetBytes(modifiedBody, "preserve_thinking").Exists())
 }
+
+// TestQwenDefaultCapabilitiesIncludeResponsesInBothModes guards the behaviour
+// reported in the issue where the default Tongyi Qianwen provider did not
+// support the Responses API. DashScope has no native Responses endpoint, so the
+// capability must be present even when compatible mode is disabled, and it must
+// always point at the OpenAI-compatible endpoint on the same host.
+func TestQwenDefaultCapabilitiesIncludeResponsesInBothModes(t *testing.T) {
+	initializer := &qwenProviderInitializer{}
+
+	withCompatible := initializer.DefaultCapabilities(true)
+	require.Equal(t, qwenCompatibleResponsesPath, withCompatible[string(ApiNameResponses)])
+	require.Equal(t, qwenCompatibleChatCompletionPath, withCompatible[string(ApiNameChatCompletion)])
+
+	withoutCompatible := initializer.DefaultCapabilities(false)
+	require.Equal(t, qwenCompatibleResponsesPath, withoutCompatible[string(ApiNameResponses)],
+		"the default provider must still route the Responses API to the compatible endpoint")
+	// Every other API must keep using the native protocol so that the existing
+	// request/response conversion behaviour is preserved.
+	require.Equal(t, qwenChatCompletionPath, withoutCompatible[string(ApiNameChatCompletion)])
+	require.Equal(t, qwenTextEmbeddingPath, withoutCompatible[string(ApiNameEmbeddings)])
+	require.Len(t, withoutCompatible, 7, "non-compatible capabilities should be the native APIs plus Responses")
+	// File/Batches/Conversations remain compatible-mode only because the native
+	// protocol has no equivalent for them.
+	require.NotContains(t, withoutCompatible, string(ApiNameFiles))
+	require.NotContains(t, withoutCompatible, string(ApiNameQwenV1Conversations))
+}
+
+// TestQwenNonCompatibleProviderSupportsResponses verifies that a provider built
+// without compatible mode reports the Responses API as supported, so requests to
+// /v1/responses are no longer rejected with an "unsupported API name" error.
+func TestQwenNonCompatibleProviderSupportsResponses(t *testing.T) {
+	cfg := ProviderConfig{qwenEnableCompatible: false}
+	cfg.setDefaultCapabilities((&qwenProviderInitializer{}).DefaultCapabilities(false))
+
+	require.True(t, cfg.isSupportedAPI(ApiNameResponses))
+	require.Equal(t, qwenCompatibleResponsesPath, cfg.capabilities[string(ApiNameResponses)])
+
+	qwen := &qwenProvider{config: cfg}
+	body := []byte(`{"id":"resp-1","object":"response","output":[{"type":"message","content":[{"type":"output_text","text":"hi"}]}]}`)
+	// The compatible Responses endpoint already speaks OpenAI, so the response
+	// body has to be forwarded untouched instead of being parsed as a native
+	// DashScope response (which would fail to unmarshal and return an error).
+	out, err := qwen.TransformResponseBody(nil, ApiNameResponses, body)
+	require.NoError(t, err)
+	require.Equal(t, body, out)
+}
+
+// TestQwenGetApiNameRecognizesResponsesPath makes sure the compatible Responses
+// path used as the capability target is recognised by the provider so that
+// "protocol: original" deployments keep working end to end.
+func TestQwenGetApiNameRecognizesResponsesPath(t *testing.T) {
+	qwen := &qwenProvider{}
+	require.Equal(t, ApiNameResponses, qwen.GetApiName(qwenCompatibleResponsesPath))
+	// Older Bailian deployments still expose the legacy prefixed path.
+	require.Equal(t, ApiNameResponses, qwen.GetApiName("/api/v2/apps/protocols/compatible-mode/v1/responses"))
+}
+
+// TestQwenCompatibleCapabilitiesStillExposeCompatibleOnlyAPIs is a regression
+// guard for the generalised Responses capability: enabling compatible mode must
+// keep exposing the APIs that only exist on the compatible endpoint (files,
+// batches and conversations), which the native protocol cannot serve.
+func TestQwenCompatibleCapabilitiesStillExposeCompatibleOnlyAPIs(t *testing.T) {
+	capabilities := (&qwenProviderInitializer{}).DefaultCapabilities(true)
+
+	require.Equal(t, qwenCompatibleChatCompletionPath, capabilities[string(ApiNameChatCompletion)])
+	require.Equal(t, qwenCompatibleResponsesPath, capabilities[string(ApiNameResponses)])
+	require.Equal(t, qwenCompatibleFilesPath, capabilities[string(ApiNameFiles)])
+	require.Equal(t, qwenCompatibleBatchesPath, capabilities[string(ApiNameBatches)])
+	require.Equal(t, qwenCompatibleConversationsPath, capabilities[string(ApiNameQwenV1Conversations)])
+
+	// The compatible provider has to report all of them as supported so that the
+	// router does not reject the requests.
+	cfg := ProviderConfig{qwenEnableCompatible: true}
+	cfg.setDefaultCapabilities(capabilities)
+	require.True(t, cfg.isSupportedAPI(ApiNameResponses))
+	require.True(t, cfg.isSupportedAPI(ApiNameFiles))
+}

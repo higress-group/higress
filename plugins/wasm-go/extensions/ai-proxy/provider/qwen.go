@@ -85,9 +85,18 @@ func (m *qwenProviderInitializer) DefaultCapabilities(qwenEnableCompatible bool)
 			string(ApiNameAnthropicMessages):   qwenAnthropicMessagesPath,
 		}
 	} else {
+		// DashScope's native protocol does not expose a Responses endpoint. The
+		// Responses API is only served by the OpenAI-compatible endpoint on the
+		// same host, so always expose the capability here and route it to
+		// qwenCompatibleResponsesPath. In non-compatible mode this API only gets
+		// the model mapping applied to the request body and its response body is
+		// passed through unchanged, which is exactly what the compatible endpoint
+		// expects, so users do not have to give up the native protocol for the
+		// other APIs just to use the Responses API.
 		return map[string]string{
 			string(ApiNameChatCompletion):    qwenChatCompletionPath,
 			string(ApiNameEmbeddings):        qwenTextEmbeddingPath,
+			string(ApiNameResponses):         qwenCompatibleResponsesPath,
 			string(ApiNameQwenAsyncAIGC):     qwenAsyncAIGCPath,
 			string(ApiNameQwenAsyncTask):     qwenAsyncTaskPath,
 			string(ApiNameQwenV1Rerank):      qwenTextRerankPath,
