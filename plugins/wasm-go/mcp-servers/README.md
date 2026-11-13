@@ -243,6 +243,7 @@ The REST-to-MCP feature uses the [GJSON Template](https://github.com/higress-gro
 - **Request Templates**: Used to construct the HTTP request URL, headers, and body
   - Access configuration values with `.config.fieldName`
   - Access tool arguments with `.args.argName`
+  - Access the resolved outgoing request in header and body templates with `.request.method`, `.request.url`, `.request.uri`, `.request.path`, `.request.query`, `.request.scheme`, and `.request.host`
 
 - **Response Templates**: Used to transform the HTTP response into a format suitable for AI consumption
   - Access JSON response fields using GJSON path syntax
