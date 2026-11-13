@@ -16,7 +16,7 @@ waf插件实现了基于ModSecurity的规则防护引擎，可以根据用户配
 ## 配置字段
 | 名称 | 数据类型 | 填写要求 |  默认值 | 描述 |
 | -------- | -------- | -------- | -------- | -------- |
-| useCRS | bool | 选填 | false | 是否开启OWASP CRS，详情可参考[coreruleset](https://github.com/coreruleset/coreruleset/tree/v3.3.2) |
+| useCRS | bool | 选填 | false | 是否开启OWASP CRS；WAF 2.0.0 内嵌的规则标记为 [CRS 4.0.0-rc1](https://github.com/coreruleset/coreruleset/tree/v4.0.0-rc1) |
 | secRules | array of string | 选填 | - | 用户自定义的waf防护规则，语法规则可参考[ModSecurity中文手册](http://www.modsecurity.cn/chm/) |
 
 ## 配置示例
@@ -38,7 +38,7 @@ curl http://example.com -d "maliciouspayload"
 
 ## 系统规则、单条规则与内存
 
-`useCRS: true` 会加载插件内置的 OWASP CRS 3.3.2 全部规则文件，并开启规则引擎。`useCRS: false` 不加载 CRS，`secRules` 中的自定义规则仍会解析和执行。关闭 CRS 后，针对 CRS 规则 ID 的关闭指令不再有可匹配的系统规则。
+`useCRS: true` 会加载插件内置的 OWASP CRS 规则文件，并开启规则引擎；WAF 2.0.0 内嵌文件标记为 CRS 4.0.0-rc1。`useCRS: false` 不加载 CRS，`secRules` 中的自定义规则仍会解析和执行。关闭 CRS 后，针对 CRS 规则 ID 的关闭指令不再有可匹配的系统规则。
 
 下面是只对一个 Ingress 启用 WAF 的完整 `WasmPlugin` 示例。请替换 Ingress 名称和镜像版本；这不是下文现场的原始配置。将 `useCRS` 改为 `true` 即可启用整套系统规则。
 
