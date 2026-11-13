@@ -295,7 +295,7 @@ lb_config:
 
 | 名称 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `cluster` | string | 是 | 上游集群名称，如 `outbound|443||llm-xxx.internal.static` |
+| `cluster` | string | 是 | 上游集群名称，如 `outbound\|443\|\|llm-xxx.internal.static` |
 | `weight` | int | 是 | 百分比权重，所有 cluster 的 weight 之和必须为 100 |
 
 ## 配置示例
