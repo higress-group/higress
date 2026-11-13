@@ -54,6 +54,7 @@ description: AI 代理插件配置参考
 | `customSettings`       | array of customSetting | 非必填   | -      | 为 AI 请求指定覆盖或者填充参数                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `failover`             | object                 | 非必填   | -      | 配置 apiToken 的 failover 策略，当 apiToken 不可用时，将其移出 apiToken 列表，待健康检测通过或冷却时间到期后重新添加回 apiToken 列表                                                                                                                                                                                                                                                                                                       |
 | `retryOnFailure`       | object                 | 非必填   | -      | 当请求失败时立即进行重试                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `apiKeyAffinity`       | object                 | 非必填   | -      | 按 `x-mse-consumer` 将消费者持久绑定到同一 apiToken，并在 Key 失败时切换。默认关闭，启用时必须配置 Redis。                                                                                                                                                                                                                                                                                                                                  |
 | `reasoningContentMode` | string                 | 非必填   | -      | 如何处理大模型服务返回的推理内容。目前支持以下取值：passthrough（正常输出推理内容）、ignore（不输出推理内容）、concat（将推理内容拼接在常规输出内容之前）。默认为 passthrough。仅支持通义千问服务。                                                                                                                                                                                                                                        |
 | `capabilities`         | map of string          | 非必填   | -      | 部分 provider 的部分 ai 能力原生兼容 openai/v1 格式，不需要重写，可以直接转发，通过此配置项指定来开启转发, key 表示的是采用的厂商协议能力，values 表示的真实的厂商该能力的 api path, 厂商协议能力当前支持: openai/v1/chatcompletions, openai/v1/embeddings, openai/v1/imagegeneration, openai/v1/audiospeech, cohere/v1/rerank                                                                                                             |
 | `basePath`             | string                 | 非必填   | -      | 如果配置了 basePath，可用于在请求 path 中移除该前缀，或添加至请求 path 中，默认为进行移除                                                                                                                                                                                                                                                                                                                                                 |
@@ -105,6 +106,40 @@ custom-setting 会遵循如下表格，根据`name`和协议来替换对应的�
 | failoverOnStatus    | array of string | 非必填                                    | ["4.*", "5.*"] | 需要进行 failover 的原始请求的状态码，支持正则表达式匹配             |
 
 `healthCheckModel` 和 `cooldownDuration` 至少需要配置一个。当两者同时配置时，apiToken 可通过健康检测提前恢复，也会在冷却时间到期后自动恢复。
+
+`apiKeyAffinity` 的配置字段说明如下：
+
+| 名称             | 数据类型 | 填写要求             | 默认值 | 描述                                                                 |
+| ---------------- | -------- | -------------------- | ------ | -------------------------------------------------------------------- |
+| enabled          | bool     | 非必填               | false  | 是否启用 API Key 亲和                                                |
+| redis            | object   | 启用亲和时必填       | -      | Redis 连接配置                                                       |
+| bindingTTLDays   | int      | 非必填               | 7      | 绑定保留天数；成功请求到达 80% 后才续期，阈值按整天四舍五入          |
+| maxRetries       | int      | 非必填               | 3      | 原始请求失败后最多换 Key 的次数，范围 0-10                           |
+| retryTimeout     | int      | 非必填               | 30000  | 从第一次失败开始计算的全部换 Key 时间预算，单位毫秒                  |
+
+`redis` 支持 `serviceName`、`servicePort`、`username`、`password`、`database` 和 `timeout`。`serviceName` 必填；静态服务默认端口为 80，其他服务默认端口为 6379，默认超时为 1000 毫秒。
+
+```yaml
+provider:
+  type: claude
+  apiTokens:
+    - key-a
+    - key-b
+  apiKeyAffinity:
+    enabled: true
+    redis:
+      serviceName: redis.static
+      servicePort: 6379
+      database: 0
+      timeout: 1000
+    bindingTTLDays: 7
+    maxRetries: 3
+    retryTimeout: 30000
+```
+
+开启后，同一消费者会持续使用绑定 Key。首次没有 Redis 绑定时沿用网关原有 Key 选择算法，首次成功后才写入绑定。上游返回 `401`、`402`、`403` 或 `429` 时，当前请求会在剩余可用 Key 中重试；备用 Key 返回任意 `2xx` 后才更新绑定。重试请求的上游超时会收紧到 `retryTimeout` 的剩余预算。存在可用 Key 时，亲和选择只使用 `failover` 当前可用列表；全部 Key 均不可用时，仅保留 failover 原有的首次兜底尝试，失败后不会继续在已暂停 Key 中切换。Redis 临时故障时请求继续处理，并在现有 `ai_log` 中记录 `api_key_affinity_status=redis_degraded`。
+
+该能力不查询 Coding Plan 套餐额度，不判断日限额、周限额或恢复时间，也不提供账号池管理。流式换 Key 依赖当前版本 Helm 中的全局 `custom_response` 内部重试规则，升级插件时应同步升级网关配置。该规则仅在内部状态码 `299` 和专用重试响应头同时出现时触发，避免普通路由仅因同名响应头而重放请求。内部重试的请求体重放沿用网关已有的下游缓冲配置，本能力不额外覆盖全局请求体缓存大小。
 
 `retryOnFailure` 的配置字段说明如下：
 
