@@ -15,6 +15,7 @@
 package tests
 
 import (
+	"fmt"
 	"testing"
 
 	conformancehttp "github.com/alibaba/higress/v2/test/e2e/conformance/utils/http"
@@ -27,7 +28,7 @@ func init() {
 
 var WasmPluginsMCP20260728 = suite.ConformanceTest{
 	ShortName:   "WasmPluginsMCP20260728",
-	Description: "The mcp-server WASM plugin serves the 2026-07-28 tools baseline while preserving legacy and origin-security behavior.",
+	Description: "The mcp-server WASM plugin serves the 2026-07-28 tools baseline while preserving legacy business compatibility and protocol identity boundaries.",
 	Manifests:   []string{"tests/go-wasm-mcp-2026-07-28.yaml"},
 	Features:    []suite.SupportedFeature{suite.WASMGoConformanceFeature},
 	Test: func(t *testing.T, suite *suite.ConformanceTestSuite) {
@@ -47,7 +48,7 @@ var WasmPluginsMCP20260728 = suite.ConformanceTest{
 			mcpResponseAssertion(
 				"modern discovery", modernHeaders("server/discover", ""),
 				[]byte(`{"jsonrpc":"2.0","id":"discover-e2e","method":"server/discover","params":{`+modernMeta+`}}`),
-				[]byte(`{"jsonrpc":"2.0","id":"discover-e2e","result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"e2e-mcp-2026","version":"1.0.0"}},"cacheScope":"private","capabilities":{"tools":{}},"resultType":"complete","supportedVersions":["2024-11-05","2025-03-26","2025-06-18","2026-07-28"],"ttlMs":0}}`),
+				[]byte(`{"jsonrpc":"2.0","id":"discover-e2e","result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"e2e-mcp-2026","version":"1.0.0"}},"cacheScope":"private","capabilities":{"tools":{}},"resultType":"complete","supportedVersions":["2024-11-05","2025-03-26","2025-06-18","2025-11-25","2026-07-28"],"ttlMs":0}}`),
 			),
 			mcpResponseAssertion(
 				"modern tools/list", modernHeaders("tools/list", ""),
@@ -64,17 +65,26 @@ var WasmPluginsMCP20260728 = suite.ConformanceTest{
 				[]byte(`{"jsonrpc":"2.0","id":"legacy-list","method":"tools/list","params":{}}`),
 				[]byte(`{"jsonrpc":"2.0","id":"legacy-list","result":{"tools":[{"description":"Return deterministic fixture weather","inputSchema":{"properties":{"location":{"description":"City name","type":"string"}},"required":["location"],"type":"object"},"name":"get_weather"}]}}`),
 			),
-			{
-				Meta: conformancehttp.AssertionMeta{TestCaseName: "cross-origin request rejected", CompareTarget: conformancehttp.CompareTargetResponse},
-				Request: conformancehttp.AssertionRequest{ActualRequest: conformancehttp.Request{
-					Host: "mcp-2026.example.com", Path: "/mcp", Method: "POST",
-					Headers: modernHeaders("tools/list", ""), ContentType: conformancehttp.ContentTypeApplicationJson,
-					Body: []byte(`{"jsonrpc":"2.0","id":"origin-e2e","method":"tools/list","params":{` + modernMeta + `}}`),
-				}},
-				Response: conformancehttp.AssertionResponse{ExpectedResponse: conformancehttp.Response{StatusCode: 403}},
-			},
+			mcpResponseAssertion(
+				"cross-origin request accepted", modernHeaders("tools/list", ""),
+				[]byte(`{"jsonrpc":"2.0","id":"origin-e2e","method":"tools/list","params":{`+modernMeta+`}}`),
+				[]byte(`{"jsonrpc":"2.0","id":"origin-e2e","result":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"e2e-mcp-2026","version":"1.0.0"}},"cacheScope":"private","resultType":"complete","tools":[{"description":"Return deterministic fixture weather","inputSchema":{"properties":{"location":{"description":"City name","type":"string"}},"required":["location"],"type":"object"},"name":"get_weather"}],"ttlMs":0}}`),
+			),
 		}
 		cases[len(cases)-1].Request.ActualRequest.Headers["Origin"] = "https://evil.example"
+		for _, profile := range []string{"modern", "legacy"} {
+			headers := modernHeaders("tools/call", "proxy_echo")
+			headers["baggage"] = "e2e-auto-" + profile
+			serverName, version, text := "auto-backend", "1", "modern:2"
+			if profile == "legacy" {
+				serverName, version, text = "mcp-proxy", "1.0.0", "legacy:4"
+			}
+			assertion := mcpResponseAssertion("auto "+profile+" discovers before direct call", headers,
+				[]byte(`{"jsonrpc":"2.0","id":"auto-`+profile+`","method":"tools/call","params":{`+modernMeta+`,"name":"proxy_echo","arguments":{}}}`),
+				[]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":"auto-%s","result":{"content":[{"type":"text","text":"%s"}],"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"%s","version":"%s"}}}}`, profile, text, serverName, version)))
+			assertion.Request.ActualRequest.Host = "mcp-auto-" + profile + ".example.com"
+			cases = append(cases, assertion)
+		}
 		for _, testcase := range cases {
 			t.Run(testcase.Meta.TestCaseName, func(t *testing.T) {
 				conformancehttp.MakeRequestAndExpectEventuallyConsistentResponse(t, suite.RoundTripper, suite.TimeoutConfig, suite.GatewayAddress, testcase)

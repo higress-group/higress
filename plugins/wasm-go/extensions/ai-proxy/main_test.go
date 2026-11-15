@@ -42,7 +42,8 @@ func TestApiKeyAffinityPausesRequestUntilRedisBindingIsLoaded(t *testing.T) {
 		{"x-mse-consumer", "consumer-a"},
 	})
 
-	require.Equal(t, types.ActionPause, action)
+	// Redis 回调前必须连请求体也暂停；HeaderStopIteration 仍会继续收到 body。
+	require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 	require.Len(t, host.GetRedisCalloutAttributes(), 1)
 }
 
@@ -82,7 +83,7 @@ func TestApiKeyAffinityRewritesRequestTargetBeforeRedisReturns(t *testing.T) {
 				{"x-mse-consumer", "consumer-a"},
 			})
 
-			require.Equal(t, types.ActionPause, action)
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 			require.Len(t, host.GetRedisCalloutAttributes(), 1)
 			path, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), ":path")
 			require.True(t, ok)
@@ -133,7 +134,7 @@ func TestApiKeyAffinityPreservesOriginalTargetWhenRedisChangesKlingKey(t *testin
 		{":method", "GET"},
 		{"x-mse-consumer", "consumer-a"},
 	})
-	require.Equal(t, types.ActionPause, action)
+	require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
 	initialAuth, ok := wasmtest.GetHeaderValue(host.GetRequestHeaders(), "Authorization")
 	require.True(t, ok)
@@ -173,7 +174,7 @@ func TestApiKeyAffinityUsesRedisBoundTokenBeforeSendingHeaders(t *testing.T) {
 		{"content-type", "application/json"},
 		{"x-mse-consumer", "consumer-a"},
 	})
-	require.Equal(t, types.ActionPause, action)
+	require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 
 	binding := map[string]interface{}{
 		"tokenFingerprint": apiKeyAffinityTestFingerprint("sk-a"),
@@ -926,7 +927,7 @@ func Test_convertResponseBodyToClaude_glue(t *testing.T) {
 func Test_convertStreamingResponseToClaude_glue(t *testing.T) {
 	chunk := []byte("data: {\"x\":1}\n\n")
 	ctx := test.NewMockHttpContext()
-	out, err := convertStreamingResponseToClaude(ctx, chunk)
+	out, err := convertStreamingResponseToClaude(ctx, chunk, false)
 	if err != nil || string(out) != string(chunk) {
 		t.Fatalf("without conversion flag: err=%v out=%q", err, string(out))
 	}
@@ -1035,6 +1036,10 @@ func TestUtil(t *testing.T) {
 
 func TestMainEdgeCases(t *testing.T) {
 	test.RunMainEdgeCaseTests(t)
+}
+
+func TestDuplicateModelMember(t *testing.T) {
+	test.RunDuplicateModelMemberTests(t)
 }
 
 func TestApiPathRegression(t *testing.T) {
@@ -1206,9 +1211,9 @@ func Test_normalizeOpenAiRequestBody_disableStreamUsageStats(t *testing.T) {
 
 func TestProviderConfig_disableStreamUsageStats_fromJson(t *testing.T) {
 	tests := []struct {
-		name   string
-		json   string
-		want   bool
+		name string
+		json string
+		want bool
 	}{
 		{
 			name: "omitted defaults to false",

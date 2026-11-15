@@ -17,9 +17,9 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
+	"github.com/alibaba/higress/v2/pkg/ingress/kube/util"
 	. "github.com/alibaba/higress/v2/pkg/ingress/log"
 	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/config"
@@ -42,7 +42,16 @@ func NewTemplateProcessor(getValue func(valueType, namespace, name, key string) 
 	}
 }
 
-// ProcessConfig processes a config and substitutes any template variables
+// ProcessConfig processes a config and substitutes every template variable in it, allowing
+// references to secrets in any namespace.
+//
+// Only call this for config sources whose references have already been restricted to the
+// namespace of the object that supplied them, or that already require write access to the
+// Higress control plane namespace, such as WasmPlugin CRs and the higress-config ConfigMap:
+// those are operator-owned, and cross-namespace references are their intended use. Anything
+// a tenant can write must be passed through RestrictTemplatesToNamespace or
+// util.DefuseSpecTemplates first, otherwise a tenant could read secrets from arbitrary
+// namespaces.
 func (p *TemplateProcessor) ProcessConfig(cfg *config.Config) error {
 	// Convert spec to JSON string to process substitutions
 	jsonBytes, err := json.Marshal(cfg.Spec)
@@ -51,10 +60,7 @@ func (p *TemplateProcessor) ProcessConfig(cfg *config.Config) error {
 	}
 
 	configStr := string(jsonBytes)
-	// Find all value references in format:
-	// ${type.name.key} or ${type.namespace/name.key}
-	valueRegex := regexp.MustCompile(`\$\{([^.}/]+)\.(?:([^/}]+)/)?([^.}/]+)\.([^}]+)\}`)
-	matches := valueRegex.FindAllStringSubmatch(configStr, -1)
+	matches := util.TemplateRegex.FindAllStringSubmatch(configStr, -1)
 	// If there are no value references, return immediately
 	if len(matches) == 0 {
 		if p.secretConfigMgr != nil {
@@ -116,4 +122,24 @@ func (p *TemplateProcessor) ProcessConfig(cfg *config.Config) error {
 
 	IngressLog.Infof("end to process config %s/%s", cfg.Namespace, cfg.Name)
 	return nil
+}
+
+// RestrictTemplatesToNamespace defuses every reference in values that resolves to a namespace
+// other than ownerNamespace, and expands every reference that has no namespace at all to
+// ownerNamespace, so that ProcessConfig can only substitute what the owning object is allowed
+// to read. A refused reference is logged and replaced with util.RefusedReferencePlaceholder,
+// an opaque fixed-form string that cannot be reassembled into a reference.
+//
+// It exists because configs generated from Ingresses are merged across namespaces (one
+// VirtualService per host, one EnvoyFilter per plugin) and always carry the Higress system
+// namespace, so the owning namespace cannot be recovered from the generated config. Raw
+// Ingress annotations are the last place where a template and the namespace of the object
+// that supplied it are both known. The Gateway API path faces the same problem and defuses at
+// the equivalent point via util.DefuseSpecTemplates.
+//
+// The returned map is the input map unless something was defused, in which case it is a
+// copy; the input map is never modified because it is shared with the informer cache. The
+// second return value describes the defused references for logging.
+func (p *TemplateProcessor) RestrictTemplatesToNamespace(values map[string]string, ownerNamespace string) (map[string]string, []string) {
+	return util.DefuseTemplates(values, ownerNamespace)
 }

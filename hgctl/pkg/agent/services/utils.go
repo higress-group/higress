@@ -42,7 +42,7 @@ func BuildAIProviderServiceBody(name, url string) map[string]interface{} {
 func BuildAddAIRouteBody(name, _url string) map[string]interface{} {
 	return map[string]interface{}{
 		"name": fmt.Sprintf("%s-route", name),
-		// "version": "627198", // It's unecessary to provide when create a new one
+		// "version": "627198", // It's unnecessary to provide when create a new one
 		"domains": []interface{}{},
 		"pathPredicate": map[string]interface{}{
 			"matchType": "PRE",

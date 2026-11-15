@@ -4,10 +4,105 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-agent/dashscope"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
 )
+
+type messageStoreTestContext struct {
+	values map[string]interface{}
+}
+
+func newMessageStoreTestContext() *messageStoreTestContext {
+	return &messageStoreTestContext{values: map[string]interface{}{}}
+}
+
+func TestRequestMessagesAreIsolatedAcrossInterleavedRequests(t *testing.T) {
+	requestA := newMessageStoreTestContext()
+	messagesA := dashscope.ChatMessages{}
+	messagesA.AddForUser("request A prompt")
+	requestA.SetContext(messageStoreContextKey, &messagesA)
+
+	// Request A has already received an assistant action when request B starts.
+	storedA, ok := requestMessages(requestA)
+	require.True(t, ok)
+	storedA.AddForAssistant("request A action")
+
+	requestB := newMessageStoreTestContext()
+	messagesB := dashscope.ChatMessages{}
+	messagesB.AddForUser("request B prompt")
+	requestB.SetContext(messageStoreContextKey, &messagesB)
+
+	// Resume request A after B initialized its own list, matching the async tool callback window.
+	storedA, ok = requestMessages(requestA)
+	require.True(t, ok)
+	storedA.AddForUser("request A observation")
+
+	require.Equal(t, dashscope.ChatMessages{
+		{Role: dashscope.RoleUser, Content: "request A prompt"},
+		{Role: dashscope.RoleAssistant, Content: "request A action"},
+		{Role: dashscope.RoleUser, Content: "request A observation"},
+	}, *storedA)
+
+	storedB, ok := requestMessages(requestB)
+	require.True(t, ok)
+	require.Equal(t, dashscope.ChatMessages{{Role: dashscope.RoleUser, Content: "request B prompt"}}, *storedB)
+
+	_, ok = requestMessages(newMessageStoreTestContext())
+	require.False(t, ok)
+}
+
+func (c *messageStoreTestContext) Scheme() string                           { return "" }
+func (c *messageStoreTestContext) Host() string                             { return "" }
+func (c *messageStoreTestContext) Path() string                             { return "" }
+func (c *messageStoreTestContext) Method() string                           { return "" }
+func (c *messageStoreTestContext) SetContext(key string, value interface{}) { c.values[key] = value }
+func (c *messageStoreTestContext) GetContext(key string) interface{}        { return c.values[key] }
+func (c *messageStoreTestContext) GetBoolContext(key string, defaultValue bool) bool {
+	value, ok := c.values[key].(bool)
+	if !ok {
+		return defaultValue
+	}
+	return value
+}
+func (c *messageStoreTestContext) GetStringContext(key, defaultValue string) string {
+	value, ok := c.values[key].(string)
+	if !ok {
+		return defaultValue
+	}
+	return value
+}
+func (c *messageStoreTestContext) GetByteSliceContext(key string, defaultValue []byte) []byte {
+	value, ok := c.values[key].([]byte)
+	if !ok {
+		return defaultValue
+	}
+	return value
+}
+func (c *messageStoreTestContext) GetUserAttribute(string) interface{}         { return nil }
+func (c *messageStoreTestContext) SetUserAttribute(string, interface{})        {}
+func (c *messageStoreTestContext) SetUserAttributeMap(map[string]interface{})  {}
+func (c *messageStoreTestContext) GetUserAttributeMap() map[string]interface{} { return nil }
+func (c *messageStoreTestContext) WriteUserAttributeToLog() error              { return nil }
+func (c *messageStoreTestContext) WriteUserAttributeToLogWithKey(string) error { return nil }
+func (c *messageStoreTestContext) WriteUserAttributeToTrace() error            { return nil }
+func (c *messageStoreTestContext) DontReadRequestBody()                        {}
+func (c *messageStoreTestContext) DontReadResponseBody()                       {}
+func (c *messageStoreTestContext) BufferRequestBody()                          {}
+func (c *messageStoreTestContext) BufferResponseBody()                         {}
+func (c *messageStoreTestContext) NeedPauseStreamingResponse()                 {}
+func (c *messageStoreTestContext) PushBuffer([]byte)                           {}
+func (c *messageStoreTestContext) PopBuffer() []byte                           { return nil }
+func (c *messageStoreTestContext) BufferQueueSize() int                        { return 0 }
+func (c *messageStoreTestContext) DisableReroute()                             {}
+func (c *messageStoreTestContext) SetRequestBodyBufferLimit(uint32)            {}
+func (c *messageStoreTestContext) SetResponseBodyBufferLimit(uint32)           {}
+func (c *messageStoreTestContext) RouteCall(string, string, [][2]string, []byte, iface.RouteResponseCallback) error {
+	return nil
+}
+func (c *messageStoreTestContext) GetExecutionPhase() iface.HTTPExecutionPhase { return iface.Done }
 
 // 测试配置：完整配置
 var completeConfig = func() json.RawMessage {

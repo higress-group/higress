@@ -20,6 +20,31 @@ const (
 	catalogSchemaVersion  = 1
 	planSchemaVersion     = 1
 	snapshotSchemaVersion = 1
+
+	migrationReportSchemaVersion = 1
+)
+
+// Migration preflight vocabulary. A planned public version tag that is already
+// occupied by a different artifact is classified at prepare time instead of
+// hard-failing the promote batch later.
+const (
+	// migrationProbeCandidateDigest compares the public tag against the built
+	// candidate digest and can block a plugin. migrationProbeExistenceOnly is
+	// the dry-run rehearsal: it reports occupied planned tags without a
+	// candidate digest to compare, so it can never block or enter a snapshot.
+	migrationProbeCandidateDigest = "candidate-digest"
+	migrationProbeExistenceOnly   = "existence-only"
+
+	migrationStateBlocked   = "blocked"
+	migrationStateSuspected = "suspected"
+
+	migrationRecommendDeleteLegacy = "delete-legacy"
+	migrationRecommendBumpVersion  = "bump-version"
+	migrationRecommendAdoptPublic  = "adopt-public"
+
+	migrationSourceMatch       = "match"
+	migrationSourceMismatch    = "mismatch"
+	migrationSourceUnannotated = "unannotated"
 )
 
 type Catalog struct {
@@ -134,10 +159,21 @@ type CandidateEvidenceFile struct {
 }
 
 type CandidateEvidence struct {
-	CandidateRef string `json:"candidateRef"`
-	Digest       string `json:"digest"`
-	SourceCommit string `json:"sourceCommit"`
-	InputHash    string `json:"inputHash"`
+	CandidateRef string             `json:"candidateRef"`
+	Digest       string             `json:"digest"`
+	SourceCommit string             `json:"sourceCommit"`
+	InputHash    string             `json:"inputHash"`
+	Lineage      []EmergencyLineage `json:"lineage,omitempty"`
+}
+
+// EmergencyLineage records a successful same-version emergency publication
+// without replacing the immutable candidate evidence that authorized the
+// original release.
+type EmergencyLineage struct {
+	Digest        string `json:"digest"`
+	InputHash     string `json:"inputHash"`
+	SourceCommit  string `json:"sourceCommit"`
+	WorkflowRunID string `json:"workflowRunId"`
 }
 
 // BootstrapEvidenceFile is deliberately separate from candidate evidence. A
@@ -159,6 +195,41 @@ type BootstrapEvidence struct {
 	Digest    string `json:"digest,omitempty"`
 }
 
+// MigrationReportFile is the prepare-time public registry sweep. It records the
+// control tag the probe was calibrated against, so a reviewer can see that the
+// present/absent classifications came from a method proven against a known-good
+// public artifact rather than from an unvalidated lookup.
+type MigrationReportFile struct {
+	SchemaVersion  int                    `json:"schemaVersion"`
+	GatewayVersion string                 `json:"gatewayVersion"`
+	SourceCommit   string                 `json:"sourceCommit"`
+	PlanID         string                 `json:"planId"`
+	Registry       string                 `json:"registry"`
+	ProbeMode      string                 `json:"probeMode"`
+	ControlRef     string                 `json:"controlRef"`
+	ControlDigest  string                 `json:"controlDigest"`
+	Entries        []MigrationReportEntry `json:"entries"`
+}
+
+// MigrationReportEntry describes one planned public version tag that is already
+// occupied. PlannedDigest is empty in existence-only mode, which is also the
+// only mode that reports State "suspected"; a suspected entry never blocks a
+// plugin and never enters a snapshot.
+type MigrationReportEntry struct {
+	LogicalID         string `json:"logicalId"`
+	Version           string `json:"version"`
+	OCIRef            string `json:"ociRef"`
+	ExistingDigest    string `json:"existingDigest"`
+	PlannedDigest     string `json:"plannedDigest,omitempty"`
+	InputHash         string `json:"inputHash"`
+	ExistingVersion   string `json:"existingVersion,omitempty"`
+	ExistingRevision  string `json:"existingRevision,omitempty"`
+	ExistingInputHash string `json:"existingInputHash,omitempty"`
+	SourceComparison  string `json:"sourceComparison"`
+	State             string `json:"state"`
+	Recommendation    string `json:"recommendation,omitempty"`
+}
+
 type Snapshot struct {
 	SchemaVersion   int    `json:"schemaVersion"`
 	GatewayVersion  string `json:"gatewayVersion"`
@@ -172,7 +243,46 @@ type Snapshot struct {
 	// committed bootstrap evidence the preparation PR must carry. Validation
 	// never infers bootstrap mode from a missing previous-snapshot file.
 	BootstrapEvidence *SnapshotBootstrapEvidence `json:"bootstrapEvidence,omitempty"`
-	Plugins           []SnapshotEntry            `json:"plugins"`
+	// MigrationPreflight records the prepare-time public registry sweep that
+	// excluded one or more planned plugins from this release batch. It is
+	// present exactly when some entry carries a migration marker, and its
+	// control tag proves the sweep's probe method was validated against a
+	// known-good public artifact before any classification was trusted.
+	MigrationPreflight *SnapshotMigrationPreflight `json:"migrationPreflight,omitempty"`
+	Plugins            []SnapshotEntry             `json:"plugins"`
+}
+
+// SnapshotMigrationPreflight binds the excluded set to the calibrated sweep.
+// Excluded lists every entry this snapshot keeps out of the promote batch,
+// whether this release's sweep blocked it or an earlier release did and this
+// snapshot carries the exclusion forward.
+type SnapshotMigrationPreflight struct {
+	ControlRef    string   `json:"controlRef"`
+	ControlDigest string   `json:"controlDigest"`
+	Excluded      []string `json:"excluded"`
+}
+
+// SnapshotMigration marks an entry that the promote batch must skip: the
+// planned public version tag is already occupied by a different artifact, so
+// publishing this entry would either fail the immutable-tag preflight or
+// overwrite an artifact nobody reviewed. The entry stays in the snapshot (it is
+// still the authoritative record of the planned version and candidate digest)
+// and is carried forward verbatim until a later release re-plans the plugin
+// after its disposition completes.
+type SnapshotMigration struct {
+	State string `json:"state"`
+	// SourceCommit is the plan source commit of the sweep that decided this
+	// disposition. The recommendation compares the occupant's annotations with
+	// that commit, so recording it keeps a carried exclusion re-derivable — and
+	// therefore still valid — in every later release.
+	SourceCommit      string `json:"sourceCommit"`
+	ExistingDigest    string `json:"existingDigest"`
+	PlannedDigest     string `json:"plannedDigest"`
+	ExistingVersion   string `json:"existingVersion,omitempty"`
+	ExistingRevision  string `json:"existingRevision,omitempty"`
+	ExistingInputHash string `json:"existingInputHash,omitempty"`
+	SourceComparison  string `json:"sourceComparison"`
+	Recommendation    string `json:"recommendation"`
 }
 
 // SnapshotBootstrapEvidence binds the first managed release to the exact
@@ -201,8 +311,13 @@ type SnapshotEntry struct {
 	// version tag from the candidate; the marker records bootstrap provenance
 	// and migration state and is not an exclusion from the serialized
 	// monotonic latest policy.
-	Backfill  bool            `json:"backfill,omitempty"`
-	Consumers PluginConsumers `json:"consumers,omitempty"`
+	Backfill bool `json:"backfill,omitempty"`
+	// Migration marks an entry excluded from this release's promote batch by
+	// the prepare-time registry sweep. Promotion skips it in both the version
+	// and latest phases and journals the exclusion; verification tolerates the
+	// divergent public tag it records.
+	Migration *SnapshotMigration `json:"migration,omitempty"`
+	Consumers PluginConsumers    `json:"consumers,omitempty"`
 }
 
 func cloneConsumers(in PluginConsumers) PluginConsumers {

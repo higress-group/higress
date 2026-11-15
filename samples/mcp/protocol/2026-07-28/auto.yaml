@@ -1,0 +1,27 @@
+# Opt in on a route whose upstream pool exposes one consistent MCP endpoint.
+# Configure the route/service separately; this plugin keeps its existing route cluster.
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: mcp-server-auto-example
+  namespace: higress-system
+spec:
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/mcp-server:2.0.3-alpha
+  defaultConfigDisable: true
+  matchRules:
+    - ingress:
+        - default/mcp-upstream
+      configDisable: false
+      config:
+        server:
+          name: upstream-tools
+          type: mcp-proxy
+          transport: http
+          protocolStrategy: auto
+          mcpServerURL: https://mcp.example.com/mcp
+          timeout: 5000
+          autoDetection:
+            probeTimeoutMs: 1000
+# The candidate image is built/published by the release process; replace the tag
+# with your built candidate when testing. Omitted protocolStrategy remains legacy.
+# Roll back configuration to legacy before rolling back to an older plugin image.

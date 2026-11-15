@@ -200,34 +200,35 @@ func (g *geminiProvider) onEmbeddingsRequestBody(ctx wrapper.HttpContext, body [
 
 func (g *geminiProvider) OnStreamingResponseBody(ctx wrapper.HttpContext, name ApiName, chunk []byte, isLastChunk bool) ([]byte, error) {
 	log.Debugf("chunk body:%s", string(chunk))
-	if isLastChunk || len(chunk) == 0 {
-		return nil, nil
-	}
 	if name != ApiNameChatCompletion {
 		return chunk, nil
+	}
+	if len(chunk) == 0 && !isLastChunk {
+		return nil, nil
 	}
 	// sample end event response:
 	// data: {"candidates": [{"content": {"parts": [{"text": "我是 Gemini，一个大型多模态模型，由 Google 训练。我的职责是尽我所能帮助您，并尽力提供全面且信息丰富的答复。"}],"role": "model"},"finishReason": "STOP","index": 0,"safetyRatings": [{"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT","probability": "NEGLIGIBLE"},{"category": "HARM_CATEGORY_HATE_SPEECH","probability": "NEGLIGIBLE"},{"category": "HARM_CATEGORY_HARASSMENT","probability": "NEGLIGIBLE"},{"category": "HARM_CATEGORY_DANGEROUS_CONTENT","probability": "NEGLIGIBLE"}]}],"usageMetadata": {"promptTokenCount": 2,"candidatesTokenCount": 35,"totalTokenCount": 37}}
 	responseBuilder := &strings.Builder{}
-	lines := strings.Split(string(chunk), "\n")
-	for _, data := range lines {
-		if len(data) < 6 {
-			// ignore blank line or wrong format
-			continue
+	for _, event := range frameSSEEvents(ctx, ctxKeyGeminiSSEFraming, chunk, isLastChunk) {
+		for _, data := range strings.Split(event, "\n") {
+			if len(data) < 6 {
+				// ignore blank line or wrong format
+				continue
+			}
+			data = data[6:]
+			var geminiResp geminiChatResponse
+			if err := json.Unmarshal([]byte(data), &geminiResp); err != nil {
+				log.Errorf("unable to unmarshal gemini response: %v", err)
+				continue
+			}
+			response := g.buildChatCompletionStreamResponse(ctx, &geminiResp)
+			responseBody, err := json.Marshal(response)
+			if err != nil {
+				log.Errorf("unable to marshal response: %v", err)
+				return nil, err
+			}
+			g.appendResponse(responseBuilder, string(responseBody))
 		}
-		data = data[6:]
-		var geminiResp geminiChatResponse
-		if err := json.Unmarshal([]byte(data), &geminiResp); err != nil {
-			log.Errorf("unable to unmarshal gemini response: %v", err)
-			continue
-		}
-		response := g.buildChatCompletionStreamResponse(ctx, &geminiResp)
-		responseBody, err := json.Marshal(response)
-		if err != nil {
-			log.Errorf("unable to marshal response: %v", err)
-			return nil, err
-		}
-		g.appendResponse(responseBuilder, string(responseBody))
 	}
 	modifiedResponseChunk := responseBuilder.String()
 	log.Debugf("=== modified response chunk: %s", modifiedResponseChunk)
@@ -752,28 +753,37 @@ func (g *geminiProvider) buildChatCompletionResponse(ctx wrapper.HttpContext, re
 			TotalTokens:      response.UsageMetadata.TotalTokenCount,
 		},
 	}
-	choiceIndex := 0
 	for _, candidate := range response.Candidates {
-		for _, part := range candidate.Content.Parts {
-			choice := chatCompletionChoice{
-				Index: choiceIndex,
-				Message: &chatMessage{
-					Role: roleAssistant,
-				},
-				FinishReason: util.Ptr(finishReasonStop),
-			}
-			if part.FunctionCall != nil {
-				choice.Message.ToolCalls = g.buildToolCalls(&candidate)
-			} else if part.InlineData != nil {
-				choice.Message.Content = part.InlineData.Data
-			} else {
-				choice.Message.Content = part.Text
-			}
-
-			choice.FinishReason = util.Ptr(strings.ToLower(candidate.FinishReason))
-			fullTextResponse.Choices = append(fullTextResponse.Choices, choice)
-			choiceIndex += 1
+		if len(candidate.Content.Parts) == 0 {
+			continue
 		}
+		choice := chatCompletionChoice{
+			Index: int(candidate.Index),
+			Message: &chatMessage{
+				Role: roleAssistant,
+			},
+			FinishReason: util.Ptr(strings.ToLower(candidate.FinishReason)),
+		}
+		var content strings.Builder
+		for _, part := range candidate.Content.Parts {
+			switch {
+			case part.FunctionCall != nil:
+				// Function calls are collected below so that one Gemini candidate
+				// remains one OpenAI choice even when it contains multiple calls.
+			case part.InlineData != nil:
+				content.WriteString(part.InlineData.Data)
+			default:
+				content.WriteString(part.Text)
+			}
+		}
+		if content.Len() > 0 {
+			choice.Message.Content = content.String()
+		}
+		choice.Message.ToolCalls = g.buildToolCalls(&candidate)
+		if len(choice.Message.ToolCalls) > 0 {
+			choice.FinishReason = util.Ptr(finishReasonToolCall)
+		}
+		fullTextResponse.Choices = append(fullTextResponse.Choices, choice)
 	}
 	return &fullTextResponse
 }
@@ -781,24 +791,25 @@ func (g *geminiProvider) buildChatCompletionResponse(ctx wrapper.HttpContext, re
 func (g *geminiProvider) buildToolCalls(candidate *geminiChatCandidate) []toolCall {
 	var toolCalls []toolCall
 
-	item := candidate.Content.Parts[0]
-	if item.FunctionCall != nil {
-		return toolCalls
+	for _, item := range candidate.Content.Parts {
+		if item.FunctionCall == nil {
+			continue
+		}
+		argsBytes, err := json.Marshal(item.FunctionCall.Arguments)
+		if err != nil {
+			log.Errorf("get toolCalls from gemini response failed: " + err.Error())
+			continue
+		}
+		toolCalls = append(toolCalls, toolCall{
+			Index: len(toolCalls),
+			Id:    fmt.Sprintf("call_%s", uuid.New().String()),
+			Type:  "function",
+			Function: functionCall{
+				Arguments: string(argsBytes),
+				Name:      item.FunctionCall.FunctionName,
+			},
+		})
 	}
-	argsBytes, err := json.Marshal(item.FunctionCall.Arguments)
-	if err != nil {
-		log.Errorf("get toolCalls from gemini response failed: " + err.Error())
-		return toolCalls
-	}
-	toolCall := toolCall{
-		Id:   fmt.Sprintf("call_%s", uuid.New().String()),
-		Type: "function",
-		Function: functionCall{
-			Arguments: string(argsBytes),
-			Name:      item.FunctionCall.FunctionName,
-		},
-	}
-	toolCalls = append(toolCalls, toolCall)
 	return toolCalls
 }
 

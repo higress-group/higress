@@ -337,7 +337,7 @@ For Vertex, the corresponding `type` is `vertex`. It supports two authentication
 | `vertexRegion`              | string        | Required      | -      | Google Cloud region (e.g., us-central1, europe-west4) used to build the Vertex API address                                                                  |
 | `vertexProjectId`           | string        | Required      | -      | Google Cloud Project ID, used to identify the target GCP project                                                                                            |
 | `vertexAuthServiceName`     | string        | Required      | -      | Service name for OAuth2 authentication, used to access oauth2.googleapis.com                                                                                |
-| `vertexGeminiSafetySetting` | map of string | Optional      | -      | Gemini model content safety filtering settings.                                                                                                             |
+| `geminiSafetySetting`       | map of string | Optional      | -      | Gemini model content safety filtering settings.                                                                                                             |
 | `vertexTokenRefreshAhead`   | number        | Optional      | -      | Vertex access token refresh ahead time in seconds                                                                                                           |
 
 **Express Mode** (using API Key, simplified configuration):
@@ -347,7 +347,7 @@ Express Mode is a simplified access mode introduced by Vertex AI. You can quickl
 | Name                        | Data Type        | Requirement   | Default | Description                                                                                                                                                 |
 |-----------------------------|------------------|---------------| ------ |-------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `apiTokens`                 | array of string  | Required      | -      | API Key for Express Mode, obtained from Google Cloud Console under API & Services > Credentials                                                              |
-| `vertexGeminiSafetySetting` | map of string    | Optional      | -      | Gemini model content safety filtering settings.                                                                                                             |
+| `geminiSafetySetting`       | map of string    | Optional      | -      | Gemini model content safety filtering settings.                                                                                                             |
 
 **OpenAI Compatible Mode** (using Vertex AI Chat Completions API):
 
@@ -2304,7 +2304,7 @@ providers:
             "index": 0,
             "message": {
                 "role": "assistant",
-                "content": "I am a lagguage model."
+                "content": "I am a language model."
             },
             "finish_reason": "stop",
         }

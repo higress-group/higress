@@ -17,6 +17,9 @@ The `hmac-auth-apisix` plugin is compatible with Apache APISIX's HMAC authentica
 **Note:**
 - In a single rule, authentication configuration and authorization configuration cannot coexist.
 - For requests that pass authentication and authorization, a `X-Mse-Consumer` field will be added to the request header to identify the caller's name.
+  The gateway **replaces** this header instead of appending to it: any client-supplied `X-Mse-Consumer` is removed
+  before the consumer name from this authentication is set. Downstream therefore always reads the gateway's own
+  assertion, so a caller cannot forge its identity by sending the header itself.
 
 
 ### Authentication Configuration
@@ -27,10 +30,12 @@ The `hmac-auth-apisix` plugin is compatible with Apache APISIX's HMAC authentica
 | `consumers`             | array of object  | Required                                  | -                                                   | Configures service callers for request authentication.                                                                                                                                                     |
 | `allowed_algorithms`    | array of string  | Optional                                  | ["hmac-sha1", "hmac-sha256", "hmac-sha512"]        | List of allowed HMAC algorithms. Valid values are combinations of "hmac-sha1", "hmac-sha256", and "hmac-sha512".                                                                                           |
 | `clock_skew`            | number           | Optional                                  | 300                                                 | Maximum allowed time difference (in seconds) between the timestamp of the client request and the current time of the Higress server. This helps resolve time synchronization differences between the client and server and prevents replay attacks. The timestamp is calculated based on the time in the `Date` header (must be in GMT format). If set to `0`, this check is skipped. |
-| `signed_headers`        | array of string  | Optional                                  | -                                                   | List of HTTP headers that should be included in the HMAC signature of the client request.                                                                                                                  |
+| `signed_headers`        | array of string  | Optional                                  | ["date"]                                            | List of HTTP headers required in the client HMAC signature. Every configured header must appear both in the `Authorization` header's `headers` field and in the actual request, or the request is rejected with `401`; `@request-target` is derived from the request method and path. When omitted, signing and sending `Date` are required by default. An explicit `[]` temporarily preserves the legacy behavior of requiring no signed headers during migration. |
 | `validate_request_body` | boolean          | Optional                                  | false                                               | If set to `true`, the integrity of the request body is verified to ensure no tampering during transmission. Specifically, the plugin creates a SHA-256 base64-encoded digest and compares it with the `Digest` header. Verification fails if the `Digest` header is missing or the digest does not match. |
 | `hide_credentials`      | boolean          | Optional                                  | false                                               | If set to `true`, the authorization request header will not be passed to the upstream service.                                                                                                              |
 | `anonymous_consumer`    | string           | Optional                                  | -                                                   | Name of the anonymous consumer. If configured, anonymous users are allowed to bypass identity authentication.                                                                                              |
+
+**`signed_headers` migration:** When omitted, signing and sending `date` are required by default. An explicit empty list `[]` is only a temporary compatibility path. New configurations should omit the field and sign `date`, or configure the required non-empty list explicitly. `clock_skew: 0` skips only the time-difference check; it does not disable the default `date` signing or request-header presence requirements. The presence check also applies to explicitly configured non-empty lists: if a listed header is advertised in the `Authorization` header's `headers` field but is absent from the actual request, the request is rejected with `401`. Clients must both sign and send every configured header.
 
 
 ### Configuration Fields for Each Item in `consumers`
@@ -46,7 +51,14 @@ The `hmac-auth-apisix` plugin is compatible with Apache APISIX's HMAC authentica
 
 | Name    | Data Type        | Requirements                              | Default Value | Description                                                                                                                                 |
 |---------|------------------| ----------------------------------------- |---------------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| `allow` | array of string  | Optional (**Non-instance-level configuration only**) | -             | Can only be configured in fine-grained rules such as routes or domains. For requests that match the criteria, it configures the consumers allowed to access, enabling fine-grained permission control. |
+| `allow` | array of string  | Optional (**Non-instance-level configuration only**) | -             | Can only be configured in fine-grained rules such as routes or domains. For requests that match the criteria, it configures the consumers allowed to access, enabling fine-grained permission control. **When a rule enables the plugin but `allow` is missing (or an empty list), no consumer is authorized and matching requests are rejected (fail closed).** |
+
+**Fail-closed semantics of `allow`:**
+
+- Once a fine-grained rule (`_rules_`) matches the current request, the plugin is in effect on that domain or route. A missing or empty `allow` list there **no longer means "the plugin is not in effect"**; it means no consumer is authorized, so every request matching that rule is rejected with `401` and the message `{"message":"client request can't be validated: no consumer is allowed"}` instead of being forwarded without authentication.
+- This also holds when `anonymous_consumer` is configured: the anonymous identity cannot bypass the rejection above.
+- With `global_auth: true`, authentication applies globally and `allow` is only an additional fine-grained restriction, so a rule without `allow` adds no restriction and requests still have to pass signature verification.
+- With `global_auth: false`, only domains and routes matched by a rule are authenticated; requests that match no rule are passed through.
 
 
 ## Configuration Examples
@@ -87,6 +99,7 @@ allow:
 - **Route Names** (e.g., `route-a`, `route-b`): Correspond to the names defined when creating gateway routes. Only `consumer1` is allowed access when matched.
 - **Domain Matching** (e.g., `*.example.com`, `test.com`): Used to filter request domains. Only `consumer2` is allowed access when matched.
 - Callers not in the `allow` list will be denied access.
+- If the plugin is enabled on a route or domain without an `allow` list (or with an empty one), then **all** requests on that route or domain are rejected with `401` — the plugin fails closed instead of skipping authentication.
 
 
 #### To Generate a Signature, Use the Following Go Code Snippet or Other Tech Stacks:

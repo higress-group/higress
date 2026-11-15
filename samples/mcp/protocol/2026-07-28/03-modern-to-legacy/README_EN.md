@@ -2,7 +2,7 @@
 
 [中文](./README.md) | [Back to version index](../README_EN.md)
 
-This demo proves that a modern stateless client can call an MCP `2025-03-26` server through Higress. Higress performs an isolated legacy handshake inside each downstream request, adapts the modern result contract, and prevents sensitive downstream headers from crossing the protocol boundary.
+This demo proves that a modern stateless client can call an MCP `2025-03-26` server through Higress. Higress performs an isolated legacy handshake inside each downstream request, adapts the modern result contract, preserves ordinary business headers, and isolates credentials, sessions and internal headers managed by the current policy.
 
 ## Prerequisites
 
@@ -50,7 +50,7 @@ curl -sS -D /tmp/mcp-bridge-list-headers \
   -H 'Mcp-Session-Id: downstream-session' \
   -H 'Last-Event-ID: downstream-event' \
   -H 'Authorization: Bearer downstream-not-policy' \
-  -H 'x-unrelated-credential: should-not-pass' \
+  -H 'x-unrelated-credential: ordinary-marker' \
   -H 'Mcp-Param-Future: must-not-cross-era' \
   -H 'X-Request-ID: demo-bridge-list' \
   --data-binary @requests/list-tools.json | jq
@@ -78,7 +78,7 @@ curl -sS -D /tmp/mcp-bridge-call-headers \
   -H 'Mcp-Session-Id: downstream-session' \
   -H 'Last-Event-ID: downstream-event' \
   -H 'Authorization: Bearer downstream-not-policy' \
-  -H 'x-unrelated-credential: should-not-pass' \
+  -H 'x-unrelated-credential: ordinary-marker' \
   -H 'Mcp-Param-Future: must-not-cross-era' \
   -H 'X-Request-ID: demo-bridge-call' \
   --data-binary @requests/call-tool.json | jq
@@ -105,7 +105,7 @@ notifications/initialized
 tools/call
 ```
 
-`cookiePresent`, `lastEventIDPresent`, `authorizationPresent`, and `unrelatedCredentialPresent` must be `false`; `futureParam` must be `null`. The session created by the legacy handshake remains upstream-only.
+`cookiePresent` and `unrelatedCredentialPresent` must be `true`, proving ordinary Cookie and custom business header forwarding. `lastEventIDPresent` and `authorizationPresent` must be `false`; `futureParam` must be `null`. The incoming MCP session and internal route control header are not reused; the session created by the legacy handshake remains upstream-only.
 
 ## Clean up
 

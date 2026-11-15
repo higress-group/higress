@@ -673,12 +673,21 @@ func createRuleKey(annots map[string]string, hostAndPath string) string {
 	// headers && params
 	for k, val := range annots {
 		if idx := strings.Index(k, annotations.MatchHeader); idx != -1 {
+			if idx < start || idx+len(annotations.MatchHeader)+1 > len(k) {
+				continue
+			}
 			key := k[start:idx] + k[idx+len(annotations.MatchHeader)+1:]
 			headers = append(headers, [2]string{key, val})
 		} else if idx := strings.Index(k, annotations.MatchPseudoHeader); idx != -1 {
+			if idx < start || idx+len(annotations.MatchPseudoHeader)+1 > len(k) {
+				continue
+			}
 			key := k[start:idx] + ":" + k[idx+len(annotations.MatchPseudoHeader)+1:]
 			headers = append(headers, [2]string{key, val})
 		} else if idx := strings.Index(k, annotations.MatchQuery); idx != -1 {
+			if idx < start || idx+len(annotations.MatchQuery)+1 > len(k) {
+				continue
+			}
 			key := k[start:idx] + k[idx+len(annotations.MatchQuery)+1:]
 			params = append(params, [2]string{key, val})
 		}

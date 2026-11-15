@@ -14,6 +14,7 @@ import (
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/config"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/provider"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-proxy/util"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -315,7 +316,8 @@ func onHttpRequestHeader(ctx wrapper.HttpContext, pluginConfig config.PluginConf
 				_ = proxywasm.ResumeHttpRequest()
 			})
 			if err == nil {
-				return types.ActionPause
+				// Redis 返回前同时阻止 header/body 向后续过滤器推进，避免 provisional Key 提前发出。
+				return types.HeaderStopAllIterationAndWatermark
 			}
 			return initialAction
 		}
@@ -418,6 +420,28 @@ func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig
 		return types.ActionContinue
 	}
 	log.Debugf("[onHttpRequestBody] provider=%s", activeProvider.GetProviderType())
+
+	// Reject a body declaring "model" more than once before any provider logic
+	// runs. gjson reads the first occurrence while the sjson rewrite below and
+	// upstream parsers settle on the last one, so model mapping, routing and
+	// credential selection would otherwise act on a different model than the
+	// upstream does. Once this passes, first and last occurrence are the same
+	// member, which makes the sjson rewrite in defaultTransformRequestBody
+	// unambiguous.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "model"); err != nil {
+		log.Debugf("[onHttpRequestBody] skip duplicate model member check: %v", err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage("model")
+		log.Warnf("[onHttpRequestBody] %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(
+			http.StatusBadRequest,
+			"duplicate_model_member",
+			util.CreateHeaders(util.HeaderContentType, util.MimeTypeTextPlain),
+			[]byte(message),
+			-1,
+		)
+		return types.ActionPause
+	}
 
 	defer func() {
 		saveContextsToHeaders(ctx)
@@ -558,7 +582,7 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 				modifiedChunk = promoteThinkingInStreamingChunk(ctx, modifiedChunk, isLastChunk)
 			}
 			// Convert to Claude format if needed
-			claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, modifiedChunk)
+			claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, modifiedChunk, isLastChunk)
 			if convertErr != nil {
 				return modifiedChunk
 			}
@@ -605,7 +629,7 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 		}
 
 		// Convert to Claude format if needed
-		claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, result)
+		claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, result, isLastChunk)
 		if convertErr != nil {
 			return result
 		}
@@ -639,7 +663,7 @@ func onStreamingResponseBody(ctx wrapper.HttpContext, pluginConfig config.Plugin
 	}
 
 	// Convert to Claude format if needed
-	claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, result)
+	claudeChunk, convertErr := convertStreamingResponseToClaude(ctx, result, isLastChunk)
 	if convertErr != nil {
 		return result
 	}
@@ -751,7 +775,7 @@ func needsClaudeResponseConversion(ctx wrapper.HttpContext) bool {
 }
 
 // Helper function to convert OpenAI streaming response to Claude format
-func convertStreamingResponseToClaude(ctx wrapper.HttpContext, data []byte) ([]byte, error) {
+func convertStreamingResponseToClaude(ctx wrapper.HttpContext, data []byte, isLastChunk bool) ([]byte, error) {
 	if !needsClaudeResponseConversion(ctx) {
 		return data, nil
 	}
@@ -771,7 +795,7 @@ func convertStreamingResponseToClaude(ctx wrapper.HttpContext, data []byte) ([]b
 		ctx.SetContext(claudeConverterKey, converter)
 	}
 
-	claudeChunk, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, data)
+	claudeChunk, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, data, isLastChunk)
 	if err != nil {
 		log.Errorf("failed to convert streaming response to claude format: %v", err)
 		return data, err

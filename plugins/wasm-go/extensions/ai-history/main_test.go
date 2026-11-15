@@ -15,10 +15,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
 )
@@ -123,6 +125,111 @@ var authRedisConfig = func() json.RawMessage {
 	})
 	return data
 }()
+
+// fakeLog 记录 Errorf 调用，用于断言错误被记录（而非静默吞掉）。
+type fakeLog struct {
+	errors []string
+}
+
+func (l *fakeLog) Trace(msg string)                     {}
+func (l *fakeLog) Tracef(format string, args ...any)    {}
+func (l *fakeLog) Debug(msg string)                     {}
+func (l *fakeLog) Debugf(format string, args ...any)    {}
+func (l *fakeLog) Info(msg string)                      {}
+func (l *fakeLog) Infof(format string, args ...any)     {}
+func (l *fakeLog) Warn(msg string)                      {}
+func (l *fakeLog) Warnf(format string, args ...any)     {}
+func (l *fakeLog) Error(msg string)                     { l.errors = append(l.errors, msg) }
+func (l *fakeLog) Critical(msg string)                  {}
+func (l *fakeLog) Criticalf(format string, args ...any) {}
+func (l *fakeLog) Errorf(format string, args ...any) {
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
+}
+func (l *fakeLog) ResetID(pluginID string) {}
+
+// fakeHttpContext 只实现 saveChatHistory / processSSEMessage 需要的 context 方法，
+// 用于直接验证类型异常分支。
+type fakeHttpContext struct {
+	values map[string]interface{}
+}
+
+func newFakeHttpContext() *fakeHttpContext {
+	return &fakeHttpContext{values: map[string]interface{}{}}
+}
+
+func (c *fakeHttpContext) SetContext(key string, value interface{})          { c.values[key] = value }
+func (c *fakeHttpContext) GetContext(key string) interface{}                 { return c.values[key] }
+func (c *fakeHttpContext) GetStringContext(key, defaultValue string) string  { return defaultValue }
+func (c *fakeHttpContext) GetBoolContext(key string, defaultValue bool) bool { return defaultValue }
+func (c *fakeHttpContext) GetByteSliceContext(key string, d []byte) []byte   { return d }
+func (c *fakeHttpContext) GetUserAttribute(key string) interface{}           { return nil }
+func (c *fakeHttpContext) SetUserAttribute(key string, value interface{})    {}
+func (c *fakeHttpContext) SetUserAttributeMap(kvmap map[string]interface{})  {}
+func (c *fakeHttpContext) GetUserAttributeMap() map[string]interface{}       { return nil }
+func (c *fakeHttpContext) WriteUserAttributeToLog() error                    { return nil }
+func (c *fakeHttpContext) WriteUserAttributeToLogWithKey(key string) error   { return nil }
+func (c *fakeHttpContext) WriteUserAttributeToTrace() error                  { return nil }
+func (c *fakeHttpContext) DontReadRequestBody()                              {}
+func (c *fakeHttpContext) DontReadResponseBody()                             {}
+func (c *fakeHttpContext) BufferRequestBody()                                {}
+func (c *fakeHttpContext) BufferResponseBody()                               {}
+func (c *fakeHttpContext) NeedPauseStreamingResponse()                       {}
+func (c *fakeHttpContext) PushBuffer(buffer []byte)                          {}
+func (c *fakeHttpContext) PopBuffer() []byte                                 { return nil }
+func (c *fakeHttpContext) BufferQueueSize() int                              { return 0 }
+func (c *fakeHttpContext) DisableReroute()                                   {}
+func (c *fakeHttpContext) SetRequestBodyBufferLimit(byteSize uint32)         {}
+func (c *fakeHttpContext) SetResponseBodyBufferLimit(byteSize uint32)        {}
+func (c *fakeHttpContext) RouteCall(method, url string, headers [][2]string, body []byte, callback iface.RouteResponseCallback) error {
+	return nil
+}
+func (c *fakeHttpContext) GetExecutionPhase() iface.HTTPExecutionPhase { return iface.DecodeHeader }
+func (c *fakeHttpContext) HasRequestBody() bool                        { return false }
+func (c *fakeHttpContext) HasResponseBody() bool                       { return false }
+func (c *fakeHttpContext) IsWebsocket() bool                           { return false }
+func (c *fakeHttpContext) IsBinaryRequestBody() bool                   { return false }
+func (c *fakeHttpContext) IsBinaryResponseBody() bool                  { return false }
+func (c *fakeHttpContext) Scheme() string                              { return "" }
+func (c *fakeHttpContext) Host() string                                { return "" }
+func (c *fakeHttpContext) Path() string                                { return "" }
+func (c *fakeHttpContext) Method() string                              { return "" }
+
+// TestSaveChatHistoryTypeMismatchLogsError 回归测试：questionI 类型异常时不再 panic，
+// 且必须记录错误日志（review 要求：不允许静默吞掉错误）。
+func TestSaveChatHistoryTypeMismatchLogsError(t *testing.T) {
+	fLog := &fakeLog{}
+	ctx := newFakeHttpContext()
+	config := PluginConfig{FillHistoryCnt: 3}
+
+	// 修复前这里会因 questionI.(string) 断言失败直接 panic。
+	require.NotPanics(t, func() {
+		saveChatHistory(ctx, config, 12345, "answer", fLog)
+	})
+	require.Len(t, fLog.errors, 1, "type mismatch must be logged, not silently swallowed")
+	require.Contains(t, fLog.errors[0], "unexpected type")
+	require.Contains(t, fLog.errors[0], "int")
+}
+
+// TestProcessSSEMessageTypeMismatchResetsContent 回归测试：上下文中 answer content
+// 类型异常时不再 panic，重置内容并记录错误日志。
+func TestProcessSSEMessageTypeMismatchResetsContent(t *testing.T) {
+	fLog := &fakeLog{}
+	ctx := newFakeHttpContext()
+	config := PluginConfig{
+		AnswerStreamValueFrom: KVExtractor{ResponseBody: "choices.0.delta.content"},
+	}
+	// 故意写入非 string 类型
+	ctx.SetContext(AnswerContentContextKey, []byte("not-a-string"))
+
+	// 修复前这里会因 tempContentI.(string) 断言失败直接 panic。
+	require.NotPanics(t, func() {
+		content := processSSEMessage(ctx, config,
+			"data: {\"choices\":[{\"delta\":{\"content\":\" World\"}}]}", fLog)
+		require.Equal(t, " World", content, "type mismatch must reset (not skip) the content")
+	})
+	require.NotEmpty(t, fLog.errors, "type mismatch must be logged, not silently swallowed")
+	require.Contains(t, fLog.errors[0], "unexpected type")
+}
 
 func TestDistinctChat(t *testing.T) {
 	type args struct {

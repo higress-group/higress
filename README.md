@@ -1,6 +1,6 @@
 <a name="readme-top"></a>
 <h1 align="center">
-    <img src="https://img.alicdn.com/imgextra/i2/O1CN01NwxLDd20nxfGBjxmZ_!!6000000006895-2-tps-960-290.png" alt="Higress" width="240" height="72.5">
+    <img src="https://github.com/user-attachments/assets/14dbde2b-e1f3-414b-b694-aa81952eea00" alt="Higress" width="240" height="72.5">
   <br>
   AI Gateway
 </h1>
@@ -14,7 +14,7 @@
 [![CNCF Sandbox](https://img.shields.io/badge/CNCF-Sandbox-30638E?logo=linuxfoundation&logoColor=white)](https://www.cncf.io/projects/)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12667/badge)](https://www.bestpractices.dev/projects/12667)
 
-<a href="https://trendshift.io/repositories/26458" target="_blank"><img src="https://trendshift.io/api/badge/repositories/26458" alt="higress-group%2Fhigress | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a> <a href="https://www.producthunt.com/posts/higress?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-higress" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=951287&theme=light&t=1745492822283" alt="Higress - Global&#0032;APIs&#0032;as&#0032;MCP&#0032;powered&#0032;by&#0032;AI&#0032;Gateway | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
+<a href="https://trendshift.io/repositories/26458" target="_blank"><img src="https://trendshift.io/api/badge/repositories/26458" alt="higress-group%2Fhigress | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a> <a href="https://www.producthunt.com/posts/higress?embed=true&utm_source=badge-featured&utm_medium=badge&utm_source=badge-higress" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=951287&theme=light&t=1745492822283" alt="Higress - Global&#0032;APIs&#0032;as&#0032;MCP&#0032;powered&#0032;by&#0032;AI&#0032;Gateway | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
 
 </div>
 
@@ -32,7 +32,7 @@
 
 ## What is Higress?
 
-Higress is a cloud-native API gateway based on Istio and Envoy, which can be extended with Wasm plugins written in Go/Rust/JS. It provides dozens of ready-to-use general-purpose plugins and an out-of-the-box console (try the [demo here](http://demo.higress.io/)).
+Higress is a cloud-native API gateway based on Istio and Envoy, which can be extended with Wasm plugins written in Go/Rust/JS. It provides dozens of ready-to-use general-purpose plugins and an out-of-the-box console (try the [demo here](https://demo.higress.io/)).
 
 ### Core Use Cases
 
@@ -124,13 +124,15 @@ For other installation methods such as Helm deployment under K8s, please refer t
 
   Higress connects to all LLM model providers using a unified protocol, with AI observability, multi-model load balancing, token rate limiting, and caching capabilities:
 
+  Higress is also listed as a conformant [Gateway API Inference Extension implementation](https://gateway-api-inference-extension.sigs.k8s.io/implementations/gateways/#higress), supporting inference-aware routing on Kubernetes.
+
   ![](https://img.alicdn.com/imgextra/i2/O1CN01izmBNX1jbHT7lP3Yr_!!6000000004566-0-tps-1920-1080.jpg)
 
 - **Kubernetes ingress controller**:
 
-  Higress can function as a feature-rich ingress controller, which is compatible with many annotations of K8s' nginx ingress controller.
+  Higress can function as a feature-rich ingress controller and is listed in the official [Kubernetes Ingress Controllers documentation](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/). It is compatible with many annotations of the Kubernetes NGINX Ingress Controller.
 
-  [Gateway API](https://gateway-api.sigs.k8s.io/) is already supported, and it supports a smooth migration from Ingress API to Gateway API.
+  Higress supports the [Gateway API](https://gateway-api.sigs.k8s.io/) standard and is listed as a [conformant Gateway API implementation](https://gateway-api.sigs.k8s.io/implementations/#higress), enabling smooth migration from the Ingress API to the Gateway API.
 
   Compared to ingress-nginx, the resource overhead has significantly decreased, and the speed at which route changes take effect has improved by ten times.
 
@@ -224,8 +226,8 @@ Higress would not be possible without the valuable open-source work of projects 
 
 - Higress Console: https://github.com/higress-group/higress-console
 - Higress Standalone: https://github.com/higress-group/higress-standalone
-- Higress Plugin Server：https://github.com/higress-group/plugin-server
-- Higress Wasm Plugin Golang SDK：https://github.com/higress-group/wasm-go
+- Higress Plugin Server: https://github.com/higress-group/plugin-server
+- Higress Wasm Plugin Golang SDK: https://github.com/higress-group/wasm-go
 
 ### Contributors
 

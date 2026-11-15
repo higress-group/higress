@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 var (
@@ -480,7 +481,10 @@ func buildPlan(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersi
 	plugins := append([]Plugin(nil), c.Plugins...)
 	sort.Slice(plugins, func(i, j int) bool { return plugins[i].LogicalID < plugins[j].LogicalID })
 	plan := Plan{SchemaVersion: planSchemaVersion, GatewayVersion: gatewayVersion, SourceCommit: target, BaseCommit: base,
-		PreviousRelease: previous.GatewayVersion, CatalogSHA256: sha256Hex(catalogData)}
+		PreviousRelease: previous.GatewayVersion, CatalogSHA256: sha256Hex(catalogData),
+		// Empty plans must serialize as [] rather than null: workflow jq
+		// iteration over .plugins[] fails on null.
+		Plugins: []PlanEntry{}, Deferred: []DeferredPlugin{}}
 	for _, p := range plugins {
 		if !p.ReleaseEligible {
 			continue
@@ -509,7 +513,22 @@ func buildPlan(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersi
 		}
 		prev, hasPrevious := previousEntries[p.LogicalID]
 		_, hasOverride := overrides[p.LogicalID]
-		affected := base == "" || len(changed) > 0 || hasOverride
+		// A VERSION-only change whose tree value exactly restates the version
+		// the previous snapshot already recorded is that preparation's own
+		// bookkeeping edit, not a release signal: a managed snapshot's
+		// sourceCommit is its freeze point, which always predates the VERSION
+		// edits its preparation PR applies, so a re-preparation against an
+		// unpromoted previous snapshot would otherwise re-bump every plugin.
+		// A hand-edited VERSION (differing from the recorded version) and
+		// bootstrap-public baselines keep the historical behavior.
+		restatePrevious := hasPrevious && previous.ProvenanceMode != "bootstrap-public" && current == prev.Version
+		affected := base == "" || hasOverride
+		for _, path := range changed {
+			if restatePrevious && path == p.SourceDir+"/VERSION" {
+				continue
+			}
+			affected = true
+		}
 		if previous.ProvenanceMode == "bootstrap-public" && hasPrevious {
 			previousVersion, parseErr := parseSemver(prev.Version)
 			if parseErr != nil {
@@ -818,6 +837,9 @@ func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousP
 	if ociSource != "candidate" && ociSource != "public" {
 		return fmt.Errorf("OCI source must be candidate or public, got %q", ociSource)
 	}
+	if err := validateSnapshotMigration(snapshot); err != nil {
+		return err
+	}
 	if expectedSource != "" {
 		commit, err := resolveCommit(root, expectedSource)
 		if err != nil || commit != snapshot.SourceCommit {
@@ -919,6 +941,13 @@ func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousP
 		}
 		if resolve {
 			if ociSource == "candidate" && provenance == "public" {
+				continue
+			}
+			if ociSource == "public" && entry.Migration != nil {
+				// The prepare-time sweep already proved this public tag serves a
+				// different digest. That divergence is the recorded exclusion
+				// from this promote batch, not a verification failure; the
+				// candidate for the same entry is still resolved above.
 				continue
 			}
 			if err := verifyOCI(entry, provenance, snapshot.ProvenanceMode, ociSource); err != nil {
@@ -1051,11 +1080,15 @@ func verifySnapshotProvenanceBindings(root string, snapshot Snapshot, planPath, 
 					return fmt.Errorf("%s is neither planned nor carried by the previous snapshot", entry.LogicalID)
 				}
 				// Consumers are re-cloned from the catalog on carry, so the
-				// exact-field comparison excludes them deliberately.
+				// exact-field comparison excludes them deliberately. A carried
+				// migration exclusion is compared verbatim: the entry stays out
+				// of the promote batch until a later release re-plans the plugin
+				// after its disposition completes, and dropping the marker would
+				// re-expose the immutable tag conflict that created it.
 				if old.Version != entry.Version || old.OCIRef != entry.OCIRef || old.Digest != entry.Digest ||
 					old.InputHash != entry.InputHash || old.SourceCommit != entry.SourceCommit ||
 					old.CandidateRef != entry.CandidateRef || old.ProvenanceMode != entry.ProvenanceMode ||
-					old.Backfill != entry.Backfill {
+					old.Backfill != entry.Backfill || !reflect.DeepEqual(old.Migration, entry.Migration) {
 					return fmt.Errorf("%s carried snapshot entry differs from the previous snapshot", entry.LogicalID)
 				}
 				continue
@@ -1184,10 +1217,28 @@ func runORAS(args ...string) ([]byte, string, error) {
 	return output, stderr.String(), err
 }
 
+// transientORASTransportPattern matches transport-level ORAS failures
+// (connection resets and timeouts seen between GitHub runners and ACR).
+// Registry responses such as 404 absence evidence or authorization refusals
+// are semantic and must reach callers unchanged, so they are never retried.
+var transientORASTransportPattern = regexp.MustCompile(`connection reset by peer|connection refused|context deadline exceeded|i/o timeout|Client\.Timeout exceeded|broken pipe|unexpected EOF|no route to host|network is unreachable|TLS handshake timeout|proxyconnect`)
+
 func runORASManifestFetch(operation string, args ...string) ([]byte, error) {
-	output, stderr, err := orasRunner(args...)
-	if err == nil {
-		return output, nil
+	const attempts = 4
+	var output []byte
+	var stderr string
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			time.Sleep(2 * time.Duration(attempt-1) * time.Second)
+		}
+		output, stderr, err = orasRunner(args...)
+		if err == nil {
+			return output, nil
+		}
+		if attempt == attempts || !transientORASTransportPattern.MatchString(stderr+"\n"+err.Error()) {
+			break
+		}
 	}
 	if detail := sanitizeCommandStderr(stderr); detail != "" {
 		return nil, fmt.Errorf("%s failed: %w: %s", operation, err, detail)
@@ -1294,8 +1345,14 @@ func validateConsoleRecovery(root, catalogPath, manifestPath string) error {
 			return fmt.Errorf("%s: recovery artifact identity differs from unchanged 2.2.4 snapshot", id)
 		}
 		plugin, ok := catalogByID[id]
+		if !ok {
+			// A plugin de-listed after the recovery window keeps its recorded
+			// mapping as immutable history; the catalog can no longer
+			// corroborate it, but the snapshot bindings above still hold.
+			continue
+		}
 		expectedConsumers := catalogConsumers(catalog, plugin)
-		if !ok || expectedConsumers.Console == nil || !reflect.DeepEqual(entry.Console, *expectedConsumers.Console) {
+		if expectedConsumers.Console == nil || !reflect.DeepEqual(entry.Console, *expectedConsumers.Console) {
 			return fmt.Errorf("%s: recovery Console mapping differs from reviewed catalog", id)
 		}
 	}
@@ -1531,6 +1588,7 @@ func commandRender(args []string) error {
 	previous := fs.String("previous", "", "previous snapshot")
 	evidence := fs.String("candidate-evidence", "", "candidate evidence path")
 	bootstrapEvidence := fs.String("bootstrap-evidence", "", "bootstrap evidence path (first managed release only)")
+	migrationReport := fs.String("migration-report", "", "prepare-time public registry sweep bound into the snapshot")
 	output := fs.String("output", "-", "snapshot output")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -1540,6 +1598,14 @@ func commandRender(args []string) error {
 	}
 	snapshot, err := renderSnapshot(*catalog, *plan, *previous, *evidence, *bootstrapEvidence)
 	if err != nil {
+		return err
+	}
+	if *migrationReport != "" {
+		snapshot, err = applyMigrationReport(snapshot, *migrationReport)
+		if err != nil {
+			return err
+		}
+	} else if err := requireNoCarriedMigration(snapshot); err != nil {
 		return err
 	}
 	return writeCanonical(*output, snapshot)

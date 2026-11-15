@@ -71,13 +71,18 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, c config.PluginConfig) types.
 
 		ctx.SetContext(CACHE_KEY_CONTEXT_KEY, key)
 
-		if err := CheckCacheForKey(key, ctx, c); err != nil {
+		err := CheckCacheForKey(key, ctx, c)
+		if err != nil {
 			log.Errorf("[onHttpRequestHeaders] check cache for key: %s failed, error: %v", key, err)
 		}
 		ctx.DisableReroute()
 		_ = proxywasm.RemoveHttpRequestHeader("Accept-Encoding")
 		ctx.DontReadRequestBody()
-		return types.ActionContinue
+		if err != nil {
+			return types.ActionContinue
+		}
+		// The Redis callback responds locally on a hit or resumes on a miss/error.
+		return types.HeaderStopAllIterationAndWatermark
 	}
 
 	// cache from request body but does not have a body or not application/json format

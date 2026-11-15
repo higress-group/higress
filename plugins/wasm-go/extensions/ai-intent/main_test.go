@@ -16,12 +16,65 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
+
+type recordingConfigLog struct {
+	entries []string
+}
+
+func (l *recordingConfigLog) append(format string, args ...interface{}) {
+	l.entries = append(l.entries, fmt.Sprintf(format, args...))
+}
+
+func (l *recordingConfigLog) Trace(msg string)                             { l.append("%s", msg) }
+func (l *recordingConfigLog) Tracef(format string, args ...interface{})    { l.append(format, args...) }
+func (l *recordingConfigLog) Debug(msg string)                             { l.append("%s", msg) }
+func (l *recordingConfigLog) Debugf(format string, args ...interface{})    { l.append(format, args...) }
+func (l *recordingConfigLog) Info(msg string)                              { l.append("%s", msg) }
+func (l *recordingConfigLog) Infof(format string, args ...interface{})     { l.append(format, args...) }
+func (l *recordingConfigLog) Warn(msg string)                              { l.append("%s", msg) }
+func (l *recordingConfigLog) Warnf(format string, args ...interface{})     { l.append(format, args...) }
+func (l *recordingConfigLog) Error(msg string)                             { l.append("%s", msg) }
+func (l *recordingConfigLog) Errorf(format string, args ...interface{})    { l.append(format, args...) }
+func (l *recordingConfigLog) Critical(msg string)                          { l.append("%s", msg) }
+func (l *recordingConfigLog) Criticalf(format string, args ...interface{}) { l.append(format, args...) }
+func (l *recordingConfigLog) ResetID(string)                               {}
+
+func TestParseConfigDoesNotLogProxyAPIKey(t *testing.T) {
+	const (
+		apiKey       = "fixture-api-key-must-not-be-logged"
+		secretPrompt = "fixture-private-prompt-must-not-be-logged"
+		secretURL    = "user:password@"
+	)
+	configJSON, err := json.Marshal(map[string]interface{}{
+		"scene": map[string]interface{}{
+			"category": "test",
+			"prompt":   secretPrompt,
+		},
+		"llm": map[string]interface{}{
+			"proxyServiceName": "ai-service",
+			"proxyUrl":         "https://" + secretURL + "ai.example.com/v1/chat/completions",
+			"proxyApiKey":      apiKey,
+		},
+	})
+	require.NoError(t, err)
+
+	logger := &recordingConfigLog{}
+	config := &PluginConfig{}
+	require.NoError(t, parseConfig(gjson.ParseBytes(configJSON), config, logger))
+	logs := strings.Join(logger.entries, "\n")
+	require.NotContains(t, logs, apiKey)
+	require.NotContains(t, logs, secretPrompt)
+	require.NotContains(t, logs, secretURL)
+}
 
 // 测试配置：基本意图识别配置
 var basicIntentConfig = func() json.RawMessage {

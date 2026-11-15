@@ -34,6 +34,8 @@ import (
 	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/revisions"
 	"istio.io/istio/pkg/slices"
+
+	"github.com/alibaba/higress/v2/pkg/ingress/kube/util"
 )
 
 type Gateway struct {
@@ -69,6 +71,23 @@ func (g ListenerSet) Equals(other ListenerSet) bool {
 		g.GatewayParent == other.GatewayParent &&
 		g.Valid == other.Valid // TODO: ok to ignore parent/parentInfo?
 }
+
+// Start - Added by Higress
+
+// defuseGatewaySecretTemplates restricts the secret references in a converted listener to the
+// namespace of the Gateway or ListenerSet it was built from, the same way the route conversion
+// does: by the time these configs are listed, the namespace of the object they came from is no
+// longer distinguishable from a namespace a tenant wrote into the reference itself.
+//
+// The error is fatal for that listener and the caller has to drop it. Emitting a spec that
+// could not be inspected would resolve its references against the namespace of the generated
+// config, which is the cross-namespace secret read this exists to prevent.
+func defuseGatewaySecretTemplates(kind config.GroupVersionKind, namespace, name string, spec any) error {
+	_, err := util.DefuseSpecTemplates(spec, namespace, fmt.Sprintf("%s %s/%s", kind.Kind, namespace, name))
+	return err
+}
+
+// End - Added by Higress
 
 func ListenerSetCollection(
 	listenerSets krt.Collection[*gateway.ListenerSet],
@@ -199,6 +218,12 @@ func ListenerSetCollection(
 						// End - Added by Higress
 					},
 				}
+
+				// Start - Added by Higress
+				if err := defuseGatewaySecretTemplates(gvk.ListenerSet, obj.Namespace, obj.Name, gatewayConfig.Spec); err != nil {
+					continue
+				}
+				// End - Added by Higress
 
 				allowed, _ := generateSupportedKinds(standardListener)
 				ref := parentKey{
@@ -361,6 +386,12 @@ func GatewayCollection(
 					// End - Added by Higress
 				},
 			}
+
+			// Start - Added by Higress
+			if err := defuseGatewaySecretTemplates(gvk.KubernetesGateway, obj.Namespace, obj.Name, gatewayConfig.Spec); err != nil {
+				continue
+			}
+			// End - Added by Higress
 
 			allowed, _ := generateSupportedKinds(l)
 			ref := parentKey{

@@ -156,8 +156,8 @@ foo: bar
 		},
 		{
 			desc:    "blank",
-			base:    `R#)*J#FN`,
-			overlay: `FM#)M#F(*#M`,
+			base:    `{ invalid`,
+			overlay: `[a, b`,
 			expect:  "",
 			err:     errors.New("invalid json"),
 		},

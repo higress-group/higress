@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -88,6 +89,47 @@ var weightGrayConfig = func() json.RawMessage {
 				"enabled":        true,
 				"backendVersion": "gray-backend",
 				"weight":         80,
+			},
+		},
+	})
+	return data
+}()
+
+// rewriteHostWithSkippedHeadersConfig 同时配置 rewrite.host 与 skippedByHeaders，
+// 用于验证 header 跳过判断优先于 host 重写（见 issue #5268）。
+var rewriteHostWithSkippedHeadersConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"grayKey": "userid",
+		"rules": []map[string]interface{}{
+			{
+				"name": "inner-user",
+				"grayKeyValue": []string{
+					"00000001",
+				},
+			},
+		},
+		"skippedByHeaders": map[string]string{
+			"x-skip-gray": "true",
+		},
+		"rewrite": map[string]interface{}{
+			"host": "frontend-gray.example.com",
+			"indexRouting": map[string]interface{}{
+				"/": "/mfe/app1/{version}/index.html",
+			},
+			"fileRouting": map[string]interface{}{
+				"/": "/mfe/app1/{version}",
+			},
+		},
+		"baseDeployment": map[string]interface{}{
+			"version":        "base",
+			"backendVersion": "base-backend",
+		},
+		"grayDeployments": []map[string]interface{}{
+			{
+				"name":           "inner-user",
+				"version":        "gray",
+				"enabled":        true,
+				"backendVersion": "gray-backend",
 			},
 		},
 	})
@@ -218,6 +260,47 @@ var skippedPathsConfig = func() json.RawMessage {
 	})
 	return data
 }()
+
+// 测试配置：带 HTML fallback 的配置（上游 404 时返回该 HTML）
+var htmlFallbackConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"grayKey": "userid",
+		"rules": []map[string]interface{}{
+			{
+				"name": "inner-user",
+				"grayKeyValue": []string{
+					"00000001",
+					"00000005",
+				},
+			},
+		},
+		"baseDeployment": map[string]interface{}{
+			"version":        "base",
+			"backendVersion": "base-backend",
+		},
+		"grayDeployments": []map[string]interface{}{
+			{
+				"name":           "inner-user",
+				"version":        "gray",
+				"enabled":        true,
+				"backendVersion": "gray-backend",
+			},
+		},
+		"html": "<html><body>fallback page</body></html>",
+	})
+	return data
+}()
+
+// 统计同名响应头的数量（大小写不敏感）
+func countHeaderValues(headers [][2]string, headerName string) int {
+	count := 0
+	for _, h := range headers {
+		if strings.EqualFold(h[0], headerName) {
+			count++
+		}
+	}
+	return count
+}
 
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
@@ -391,6 +474,74 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 
 			host.CompleteHttp()
 		})
+
+		// 回归 #5268：配置了 rewrite.host 时，匹配 skippedByHeaders 的非 HTML 请求
+		// 仍必须被跳过，不能被 host 重写分支抢先放行。
+		t.Run("skippedByHeaders wins over rewrite.host", func(t *testing.T) {
+			host, status := test.NewTestHost(rewriteHostWithSkippedHeadersConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/data.json"},
+				{":method", "GET"},
+				{"x-skip-gray", "true"},
+				{"cookie", "userid=00000001"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			// 命中 skippedByHeaders：不注入版本标签，也不改写 :authority
+			require.False(t, test.HasHeader(requestHeaders, "x-higress-tag"))
+			require.False(t, test.HasHeaderWithValue(requestHeaders, ":authority", "frontend-gray.example.com"))
+
+			host.CompleteHttp()
+		})
+
+		// 对照：同样配置下不带头部的非 HTML 请求仍应被 host 重写
+		t.Run("rewrite.host still applies without skip header", func(t *testing.T) {
+			host, status := test.NewTestHost(rewriteHostWithSkippedHeadersConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/data.json"},
+				{":method", "GET"},
+				{"cookie", "userid=00000001"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.True(t, test.HasHeaderWithValue(requestHeaders, ":authority", "frontend-gray.example.com"))
+
+			host.CompleteHttp()
+		})
+
+		// 对照：HTML 请求不受 skippedByHeaders 影响（README 约定）
+		t.Run("html request ignores skippedByHeaders", func(t *testing.T) {
+			host, status := test.NewTestHost(rewriteHostWithSkippedHeadersConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/"},
+				{":method", "GET"},
+				{"x-skip-gray", "true"},
+				{"cookie", "userid=00000001"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.True(t, test.HasHeader(requestHeaders, "x-higress-tag"))
+
+			host.CompleteHttp()
+		})
 	})
 }
 
@@ -446,6 +597,75 @@ func TestOnHttpResponseHeader(t *testing.T) {
 			})
 
 			require.Equal(t, types.ActionContinue, action)
+
+			// 未配置 html fallback 时行为不变：响应头保持原样
+			responseHeaders := host.GetResponseHeaders()
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "content-type", "text/plain"))
+
+			host.CompleteHttp()
+		})
+
+		// 回归：404 且无 content-type 时，html fallback 不应 panic，
+		// 应补上 content-type: text/html 并将状态改为 200（issue #4354）
+		t.Run("404 without content-type falls back to html", func(t *testing.T) {
+			host, status := test.NewTestHost(htmlFallbackConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// HTML 请求但非首页，使 404 fallback 分支可达
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/app"},
+				{":method", "GET"},
+				{"cookie", "userid=00000001"},
+			})
+
+			// 上游 404 响应没有 content-type，只有 content-length
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "404"},
+				{"content-length", "9"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+
+			responseHeaders := host.GetResponseHeaders()
+			statusValue, ok := test.GetHeaderValue(responseHeaders, ":status")
+			require.True(t, ok)
+			require.Equal(t, "200", statusValue)
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "content-type", "text/html"))
+			require.Equal(t, 1, countHeaderValues(responseHeaders, "content-type"))
+			require.False(t, test.HasHeader(responseHeaders, "content-length"))
+
+			host.CompleteHttp()
+		})
+
+		// 回归：404 且已有非 HTML Content-Type 时应被替换为唯一的 text/html，
+		// 不产生重复的 content-type 响应头
+		t.Run("404 with existing content-type is replaced by html", func(t *testing.T) {
+			host, status := test.NewTestHost(htmlFallbackConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/app"},
+				{":method", "GET"},
+				{"cookie", "userid=00000001"},
+			})
+
+			action := host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "404"},
+				{"content-type", "text/plain"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+
+			responseHeaders := host.GetResponseHeaders()
+			statusValue, ok := test.GetHeaderValue(responseHeaders, ":status")
+			require.True(t, ok)
+			require.Equal(t, "200", statusValue)
+			require.True(t, test.HasHeaderWithValue(responseHeaders, "content-type", "text/html"))
+			require.Equal(t, 1, countHeaderValues(responseHeaders, "content-type"))
 
 			host.CompleteHttp()
 		})

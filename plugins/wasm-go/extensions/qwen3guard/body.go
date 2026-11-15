@@ -7,6 +7,20 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// requestStreamJSONPath is the GJSON path of the OpenAI-compatible streaming
+// switch. The OpenAI SDKs, Dify, LangChain and the other OpenAI-compatible
+// clients all put this field at the top level of the chat completions request.
+const requestStreamJSONPath = "stream"
+
+// isStreamingRequest reports whether the intercepted request asked for a
+// streaming (SSE) answer. Anything that is not an explicit truthy value counts
+// as non-streaming so that requests without the field keep the historical JSON
+// behaviour. gjson's Bool covers true, "true" and non-zero numbers, which are
+// the encodings seen in the wild.
+func isStreamingRequest(body []byte) bool {
+	return gjson.GetBytes(body, requestStreamJSONPath).Bool()
+}
+
 func extractJSONText(body []byte, path string) (string, bool) {
 	result := gjson.GetBytes(body, path)
 	if !result.Exists() {

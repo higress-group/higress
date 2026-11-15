@@ -1411,11 +1411,12 @@ func TestClaudeToOpenAIConverter_ConvertReasoningResponseToClaude(t *testing.T) 
 
 func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_WithCachedTokens(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
+	ctx := newMapCtx()
 
 	streamChunk := "data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
 		"data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\n"
 
-	result, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(streamChunk))
+	result, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(streamChunk), false)
 	require.NoError(t, err)
 
 	resultStr := string(result)
@@ -1429,6 +1430,7 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_WithCachedT
 
 func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_BedrockStyleUsage(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
+	ctx := newMapCtx()
 
 	// Bedrock-style usage: prompt_tokens does NOT include cached_tokens.
 	// total_tokens (180) != prompt_tokens (100) + completion_tokens (20),
@@ -1436,7 +1438,7 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_BedrockStyl
 	streamChunk := "data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
 		"data: {\"id\":\"chatcmpl-test\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":180,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\n"
 
-	result, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(streamChunk))
+	result, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(streamChunk), false)
 	require.NoError(t, err)
 
 	resultStr := string(result)
@@ -1619,19 +1621,20 @@ func TestNormalizeFinishReason(t *testing.T) {
 
 func TestClaudeToOpenAIConverter_streaming_tool_call_smoke(t *testing.T) {
 	converter := &ClaudeToOpenAIConverter{}
+	ctx := newMapCtx()
 
 	start := `data: {"id":"tc1","choices":[{"index":0,"delta":{"role":"assistant","content":""}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
-	_, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(start))
+	_, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(start), false)
 	require.NoError(t, err)
 
 	toolChunk := `data: {"id":"tc1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"my_fn","arguments":""}}]}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
-	out, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(toolChunk))
+	out, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(toolChunk), false)
 	require.NoError(t, err)
 	require.Contains(t, string(out), "content_block_start")
 	require.Contains(t, string(out), "tool_use")
 
 	argChunk := `data: {"id":"tc1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"x\":1}"}}]}}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
-	out2, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(argChunk))
+	out2, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(argChunk), false)
 	require.NoError(t, err)
 	require.Contains(t, string(out2), "input_json_delta")
 }
@@ -1639,16 +1642,17 @@ func TestClaudeToOpenAIConverter_streaming_tool_call_smoke(t *testing.T) {
 func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_Compatibility(t *testing.T) {
 	t.Run("finish_reason empty string should not stop stream", func(t *testing.T) {
 		converter := &ClaudeToOpenAIConverter{}
+	ctx := newMapCtx()
 
 		chunk1 := `data: {"id":"stream-1","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":""}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
-		out1, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunk1))
+		out1, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(chunk1), false)
 		require.NoError(t, err)
 		events1 := parseClaudeSSEEvents(t, out1)
 		require.Len(t, events1, 1)
 		assert.Equal(t, "message_start", events1[0].Name)
 
 		chunk2 := `data: {"id":"stream-1","choices":[{"index":0,"delta":{"reasoning_content":"Let"},"finish_reason":""}],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}` + "\n\n"
-		out2, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunk2))
+		out2, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(chunk2), false)
 		require.NoError(t, err)
 		events2 := parseClaudeSSEEvents(t, out2)
 		require.Len(t, events2, 3)
@@ -1664,13 +1668,14 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_Compatibili
 
 	t.Run("usage in every chunk should not trigger early message_stop", func(t *testing.T) {
 		converter := &ClaudeToOpenAIConverter{}
+	ctx := newMapCtx()
 
 		chunkStart := `data: {"id":"stream-2","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
-		_, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkStart))
+		_, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(chunkStart), false)
 		require.NoError(t, err)
 
 		chunkThinking1 := `data: {"id":"stream-2","choices":[{"index":0,"delta":{"reasoning_content":"Let"},"finish_reason":null}],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}` + "\n\n"
-		outThinking1, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkThinking1))
+		outThinking1, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(chunkThinking1), false)
 		require.NoError(t, err)
 		eventsThinking1 := parseClaudeSSEEvents(t, outThinking1)
 		require.Len(t, eventsThinking1, 3)
@@ -1678,7 +1683,7 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_Compatibili
 		assert.Nil(t, eventsThinking1[2].Payload.Delta.StopReason)
 
 		chunkThinking2 := `data: {"id":"stream-2","choices":[{"index":0,"delta":{"reasoning_content":" me"},"finish_reason":null}],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}` + "\n\n"
-		outThinking2, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkThinking2))
+		outThinking2, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(chunkThinking2), false)
 		require.NoError(t, err)
 		eventsThinking2 := parseClaudeSSEEvents(t, outThinking2)
 		require.Len(t, eventsThinking2, 2)
@@ -1687,14 +1692,14 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_Compatibili
 		assert.Nil(t, eventsThinking2[1].Payload.Delta.StopReason)
 
 		chunkFinishNoUsage := `data: {"id":"stream-2","choices":[{"index":0,"delta":{"content":"","reasoning_content":""},"finish_reason":"length"}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
-		outFinishNoUsage, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkFinishNoUsage))
+		outFinishNoUsage, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(chunkFinishNoUsage), false)
 		require.NoError(t, err)
 		eventsFinishNoUsage := parseClaudeSSEEvents(t, outFinishNoUsage)
 		require.Len(t, eventsFinishNoUsage, 1)
 		assert.Equal(t, "content_block_stop", eventsFinishNoUsage[0].Name)
 
 		chunkFinalUsage := `data: {"id":"stream-2","choices":[],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":100,"total_tokens":110}}` + "\n\n"
-		outFinalUsage, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkFinalUsage))
+		outFinalUsage, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(chunkFinalUsage), false)
 		require.NoError(t, err)
 		eventsFinalUsage := parseClaudeSSEEvents(t, outFinalUsage)
 		require.Len(t, eventsFinalUsage, 2)
@@ -1704,17 +1709,17 @@ func TestClaudeToOpenAIConverter_ConvertOpenAIStreamResponseToClaude_Compatibili
 		assert.Equal(t, "message_stop", eventsFinalUsage[1].Name)
 
 		chunkDuplicateUsage := `data: {"id":"stream-2","choices":[],"created":1,"model":"m","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":100,"total_tokens":110}}` + "\n\n"
-		outDuplicateUsage, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(chunkDuplicateUsage))
+		outDuplicateUsage, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(chunkDuplicateUsage), false)
 		require.NoError(t, err)
 		assert.Empty(t, strings.TrimSpace(string(outDuplicateUsage)), "duplicate trailing chunks after message_stop should be ignored")
 
 		doneChunk := "data: [DONE]\n\n"
-		outDone, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(doneChunk))
+		outDone, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(doneChunk), false)
 		require.NoError(t, err)
 		assert.Empty(t, strings.TrimSpace(string(outDone)))
 
 		nextRequestChunk := `data: {"id":"stream-3","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"created":1,"model":"m","object":"chat.completion.chunk"}` + "\n\n"
-		outNextRequest, err := converter.ConvertOpenAIStreamResponseToClaude(nil, []byte(nextRequestChunk))
+		outNextRequest, err := converter.ConvertOpenAIStreamResponseToClaude(ctx, []byte(nextRequestChunk), false)
 		require.NoError(t, err)
 		eventsNextRequest := parseClaudeSSEEvents(t, outNextRequest)
 		require.Len(t, eventsNextRequest, 1)

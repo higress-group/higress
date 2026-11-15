@@ -57,6 +57,14 @@ func (r redirect) Parse(annotations Annotations, config *Ingress, _ *GlobalConte
 		return nil
 	}
 
+	// MCP server traffic is fully intercepted by the mcp-server plugin before routing,
+	// and tool calls reuse the matched route's cluster to reach the backend. A redirect
+	// route has no cluster, so every tool call would end in a local redirect instead of
+	// reaching the backend. Redirect annotations are meaningless on MCP server routes.
+	if enabled, _ := annotations.ParseBoolASAP(enableMcpServer); enabled {
+		return nil
+	}
+
 	redirectConfig := &RedirectConfig{
 		Code: defaultPermanentRedirectCode,
 	}

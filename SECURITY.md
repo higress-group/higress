@@ -17,16 +17,17 @@ your contributions.
 **Please do NOT report security vulnerabilities through public GitHub issues,
 discussions, or pull requests.**
 
-Every vulnerability report must be submitted through both of the following
-private channels. Please provide the same substantive report to each channel
-and, when available, include the case identifier from the other channel so the
-Security Response Team can correlate the records. Do not wait for one channel
-to acknowledge the report before submitting it to the other.
+Submit vulnerability reports through the project's vendor-neutral,
+authoritative private intake:
 
-1. **GitHub Private Security Advisory (required)**:
+1. **GitHub Private Security Advisory (required and sufficient)**:
    <https://github.com/higress-group/higress/security/advisories/new>
-2. **Alibaba Security Response Center (required)**:
-   <https://security.alibaba.com/>
+
+Reporters may also submit the same report to the
+[Alibaba Security Response Center](https://security.alibaba.com/) when the
+issue affects an Alibaba Cloud service or they prefer that additional channel.
+An ASRC submission is optional and is not required for the Higress project to
+receive or act on a report.
 
 Please include as much of the following information as possible to help us
 triage and address the issue:
@@ -90,11 +91,13 @@ independent review.
 
 ### Report handling, conflicts, and escalation
 
-1. The SRT correlates the required GitHub Private Security Advisory and Alibaba
-   Security Response Center submissions. The GitHub advisory or an equivalent
-   access-controlled project record contains the report, assignments,
-   decisions, timeline, fix, and disclosure plan; material status and
-   disclosure updates are reflected in both required reporting records.
+1. The GitHub Private Security Advisory, or an equivalent project-controlled
+   confidential record, is the system of record for the report, assignments,
+   decisions, timeline, fix, and disclosure plan. If a reporter also opens an
+   ASRC case, an SRT member with ASRC access may correlate it with the project
+   record. ASRC access is not required for SRT membership, and project handling
+   does not depend on every SRT member having access to that vendor-operated
+   system.
 2. An SRT member with a personal, employer, or product conflict must disclose
    it privately and recuse from severity, release, or disclosure decisions for
    that case. The triage coordinator assigns an unconflicted replacement.
@@ -103,9 +106,9 @@ independent review.
    case to the full unconflicted SRT and records a revised plan. Critical
    vulnerabilities are escalated immediately.
 4. If a reporter receives no acknowledgement within three business days, they
-   should follow up through both private reporting channels and reference both
-   case identifiers when available. No vulnerability details should be posted
-   publicly.
+   should follow up through the GitHub Private Security Advisory and may
+   reference an optional ASRC case identifier when available. No vulnerability
+   details should be posted publicly.
 5. If fewer than two SRT members are unconflicted, the unconflicted member
    escalates confidentially to the CNCF TOC private mailing list at
    [cncf-private-toc@lists.cncf.io](mailto:cncf-private-toc@lists.cncf.io)

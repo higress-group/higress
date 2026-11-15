@@ -19,6 +19,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	gotypes "go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -265,7 +266,7 @@ func (p *ModelParser) parseModelFields(model string) (fields []Model, err error)
 		if field.Tag != nil {
 			ignore, err := fd.setTag(field.Tag.Value)
 			if err != nil {
-				return nil, errors.Wrapf(err, "failed to parse tag %q of the field %q", field.Tag, fd.Name)
+				return nil, errors.Wrapf(err, "failed to parse tag %q of the field %q", field.Tag.Value, fd.Name)
 			}
 			if ignore {
 				continue
@@ -273,16 +274,16 @@ func (p *ModelParser) parseModelFields(model string) (fields []Model, err error)
 		}
 		fd.Type, err = p.parseFieldType(pkgName, field.Type)
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to parse type %q of the field %q", field.Type, fd.Name)
+			return nil, errors.Wrapf(err, "failed to parse type %q of the field %q", gotypes.ExprString(field.Type), fd.Name)
 		}
 		if IsObject(fd.Type) {
 			subModel, err := p.doGetModelName(pkgName, field.Type)
 			if err != nil {
-				return nil, errors.Wrapf(err, "failed to get the sub-model name of the field %q with type %q", fd.Name, field.Type)
+				return nil, errors.Wrapf(err, "failed to get the sub-model name of the field %q with type %q", fd.Name, gotypes.ExprString(field.Type))
 			}
 			fd.Fields, err = p.parseModelFields(subModel)
 			if err != nil {
-				return nil, errors.Wrapf(err, "failed to parse sub-model of the field %q with type %q", fd.Name, field.Type)
+				return nil, errors.Wrapf(err, "failed to parse sub-model of the field %q with type %q", fd.Name, gotypes.ExprString(field.Type))
 			}
 		}
 		fields = append(fields, fd)

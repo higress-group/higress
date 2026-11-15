@@ -1,10 +1,10 @@
 package expr
 
 import (
+	"regexp"
 	"strings"
 
 	"ext-auth/util"
-	"regexp"
 )
 
 const (
@@ -18,9 +18,32 @@ type MatchRules struct {
 }
 
 type Rule struct {
-	Domain string
-	Method []string
-	Path   Matcher
+	Domain  string
+	Method  []string
+	Path    Matcher
+	Headers []HeaderCondition
+}
+
+type HeaderCondition struct {
+	Name   string
+	Exists bool
+}
+
+type HeaderNameSet map[string]struct{}
+
+type RequestAttributes struct {
+	Domain      string
+	Method      string
+	Path        string
+	HeaderNames HeaderNameSet
+}
+
+func NewHeaderNameSet(headers [][2]string) HeaderNameSet {
+	headerNames := make(HeaderNameSet, len(headers))
+	for _, header := range headers {
+		headerNames[strings.ToLower(header[0])] = struct{}{}
+	}
+	return headerNames
 }
 
 func MatchRulesDefaults() MatchRules {
@@ -30,43 +53,60 @@ func MatchRulesDefaults() MatchRules {
 	}
 }
 
-// IsAllowedByMode checks if the given domain, method and path are allowed based on the configuration mode.
-func (config *MatchRules) IsAllowedByMode(domain, method, path string) bool {
+func (config *MatchRules) RequiresRequestHeaders() bool {
+	for _, rule := range config.RuleList {
+		if len(rule.Headers) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Matches reports whether the request is within the external authorization scope.
+func (config *MatchRules) Matches(request RequestAttributes) bool {
 	switch config.Mode {
 	case ModeWhitelist:
-		for _, rule := range config.RuleList {
-			if rule.matchesAllConditions(domain, method, path) {
-				return true
-			}
-		}
-		return false
+		return !config.matchesAnyRule(request)
 	case ModeBlacklist:
-		for _, rule := range config.RuleList {
-			if rule.matchesAllConditions(domain, method, path) {
-				return false
-			}
-		}
-		return true
+		return config.matchesAnyRule(request)
 	default:
-		return false
+		return true
 	}
 }
 
-// matchesAllConditions checks if the given domain, method and path match all conditions of the rule.
-func (rule *Rule) matchesAllConditions(domain, method, path string) bool {
+func (config *MatchRules) matchesAnyRule(request RequestAttributes) bool {
+	for _, rule := range config.RuleList {
+		if rule.matchesAllConditions(request) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAllConditions checks if the given domain, method, path and headers match all conditions of the rule.
+func (rule *Rule) matchesAllConditions(request RequestAttributes) bool {
 	// If all conditions are empty, return false
-	if rule.Domain == "" && rule.Path == nil && len(rule.Method) == 0 {
+	if rule.Domain == "" && rule.Path == nil && len(rule.Method) == 0 && len(rule.Headers) == 0 {
 		return false
 	}
 
 	// Check domain and path matching
-	domainMatch := rule.Domain == "" || matchDomain(domain, rule.Domain)
-	pathMatch := rule.Path == nil || rule.Path.Match(path)
+	domainMatch := rule.Domain == "" || matchDomain(request.Domain, rule.Domain)
+	pathMatch := rule.Path == nil || rule.Path.Match(request.Path)
 
 	// Check HTTP method matching: if no methods are specified, any method is allowed
-	methodMatch := len(rule.Method) == 0 || util.ContainsString(rule.Method, method)
+	methodMatch := len(rule.Method) == 0 || util.ContainsString(rule.Method, request.Method)
 
-	return domainMatch && pathMatch && methodMatch
+	headerMatch := true
+	for _, condition := range rule.Headers {
+		_, present := request.HeaderNames[condition.Name]
+		if present != condition.Exists {
+			headerMatch = false
+			break
+		}
+	}
+
+	return domainMatch && pathMatch && methodMatch && headerMatch
 }
 
 // matchDomain checks if the given domain matches the pattern.

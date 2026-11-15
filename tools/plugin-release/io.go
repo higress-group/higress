@@ -43,6 +43,17 @@ func writeCanonical(path string, value any) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+func writeText(path, text string) error {
+	if path == "-" {
+		_, err := os.Stdout.WriteString(text)
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(text), 0o644)
+}
+
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])

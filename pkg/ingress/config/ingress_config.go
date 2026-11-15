@@ -41,6 +41,7 @@ import (
 	"istio.io/istio/pkg/cluster"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/constants"
+	gatewaykube "istio.io/istio/pkg/config/gateway/kube"
 	"istio.io/istio/pkg/config/schema/collection"
 	"istio.io/istio/pkg/config/schema/gvk"
 	"istio.io/istio/pkg/log"
@@ -56,6 +57,7 @@ import (
 	extlisterv1 "github.com/alibaba/higress/v2/client/pkg/listers/extensions/v1alpha1"
 	netlisterv1 "github.com/alibaba/higress/v2/client/pkg/listers/networking/v1"
 	"github.com/alibaba/higress/v2/pkg/cert"
+	higressconfig "github.com/alibaba/higress/v2/pkg/config"
 	higressconst "github.com/alibaba/higress/v2/pkg/config/constants"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/annotations"
 	"github.com/alibaba/higress/v2/pkg/ingress/kube/common"
@@ -308,7 +310,10 @@ func (m *IngressConfig) List(typ config.GroupVersionKind, namespace string) []co
 	}
 
 	if configsFromGateway := m.listFromGatewayControllers(typ, namespace); configsFromGateway != nil {
-		// Process templates for gateway configs
+		// Process templates for gateway configs. These are merged across namespaces and some of
+		// them are re-stamped with the Higress system namespace, so the namespace of the object
+		// a config was generated from cannot be recovered here. Their references are restricted
+		// during the Gateway API conversion instead, while that namespace is still known.
 		for i := range configsFromGateway {
 			if err := m.templateProcessor.ProcessConfig(&configsFromGateway[i]); err != nil {
 				IngressLog.Errorf("Failed to process template for config %s/%s: %v",
@@ -318,6 +323,9 @@ func (m *IngressConfig) List(typ config.GroupVersionKind, namespace string) []co
 		configs = append(configs, configsFromGateway...)
 	}
 
+	if typ == gvk.VirtualService {
+		stripMcpServerConfigHeaderFromConfigs(configs)
+	}
 	return configs
 }
 
@@ -375,6 +383,13 @@ func (m *IngressConfig) listFromIngressControllers(typ config.GroupVersionKind, 
 }
 
 func (m *IngressConfig) listFromGatewayControllers(typ config.GroupVersionKind, namespace string) []config.Config {
+	if typ == gvk.WasmPlugin {
+		var virtualServices []config.Config
+		for _, gatewayController := range m.remoteGatewayControllers {
+			virtualServices = append(virtualServices, gatewayController.List(gvk.VirtualService, namespace)...)
+		}
+		return m.convertBuiltinInferenceEndpointPicker(virtualServices)
+	}
 	var configs []config.Config
 	for _, gatewayController := range m.remoteGatewayControllers {
 		if clusterConfigs := gatewayController.List(typ, namespace); clusterConfigs != nil {
@@ -382,6 +397,52 @@ func (m *IngressConfig) listFromGatewayControllers(typ config.GroupVersionKind, 
 		}
 	}
 	return configs
+}
+
+// Keep the synthetic resource name valid for the namespace/name resource key
+// used by MCP when forwarding it to Pilot.
+const builtinInferenceEndpointPickerPluginName = "higress-internal-ai-endpoint-picker"
+
+func (m *IngressConfig) convertBuiltinInferenceEndpointPicker(virtualServices []config.Config) []config.Config {
+	routeSet := sets.New[string]()
+	for _, virtualService := range virtualServices {
+		configs, ok := virtualService.Extra[constants.ConfigExtraPerRouteRuleInferencePoolConfigs].(map[string]gatewaykube.InferencePoolRouteRuleConfig)
+		if !ok {
+			continue
+		}
+		for routeName, routeConfig := range configs {
+			if routeConfig.Mode == gatewaykube.InferencePoolEndpointPickerModeBuiltin {
+				routeSet.Insert(routeName)
+			}
+		}
+	}
+	if routeSet.Len() == 0 {
+		return nil
+	}
+	routeNames := sets.SortedList(routeSet)
+	rules := make([]*_struct.Value, 0, len(routeNames))
+	for _, routeName := range routeNames {
+		rules = append(rules, &_struct.Value{Kind: &_struct.Value_StructValue{StructValue: &_struct.Struct{Fields: map[string]*_struct.Value{
+			"_match_route_": {Kind: &_struct.Value_ListValue{ListValue: &_struct.ListValue{Values: []*_struct.Value{
+				{Kind: &_struct.Value_StringValue{StringValue: routeName}},
+			}}}},
+		}}}})
+	}
+	pluginConfig := &_struct.Struct{Fields: map[string]*_struct.Value{
+		"_rules_": {Kind: &_struct.Value_ListValue{ListValue: &_struct.ListValue{Values: rules}}},
+	}}
+	return []config.Config{{
+		Meta: config.Meta{GroupVersionKind: gvk.WasmPlugin, Name: builtinInferenceEndpointPickerPluginName, Namespace: m.namespace},
+		Spec: &extensions.WasmPlugin{
+			Selector: &istiotype.WorkloadSelector{MatchLabels: map[string]string{
+				m.commonOptions.GatewaySelectorKey: m.commonOptions.GatewaySelectorValue,
+			}},
+			Url:          higressconfig.AIEndpointPickerPluginURL,
+			PluginName:   "ai-endpoint-picker",
+			PluginConfig: pluginConfig,
+			FailStrategy: extensions.FailStrategy_FAIL_OPEN,
+		},
+	}}
 }
 
 func (m *IngressConfig) createWrapperConfigs(configs []config.Config) []common.WrapperConfig {
@@ -404,6 +465,17 @@ func (m *IngressConfig) createWrapperConfigs(configs []config.Config) []common.W
 
 	for idx := range configs {
 		rawConfig := configs[idx]
+		// Annotation values are the only tenant-writable strings that reach generated
+		// configs, and those configs are merged across namespaces under the Higress system
+		// namespace, so this is the last point where the owning namespace is still known.
+		// A reference with no namespace is expanded to the Ingress's own namespace and a
+		// reference to any other namespace is replaced with an opaque placeholder.
+		sanitizedAnnotations, refused := m.templateProcessor.RestrictTemplatesToNamespace(rawConfig.Annotations, rawConfig.Namespace)
+		rawConfig.Annotations = sanitizedAnnotations
+		if len(refused) > 0 {
+			IngressLog.Errorf("Ingress %s/%s references secrets outside its own namespace, replacing them with %q: %v",
+				rawConfig.Namespace, rawConfig.Name, util.RefusedReferencePlaceholder, refused)
+		}
 		annotationsConfig := &annotations.Ingress{
 			Meta: annotations.Meta{
 				Namespace:    rawConfig.Namespace,
@@ -481,6 +553,52 @@ func (m *IngressConfig) convertGateways(configs []common.WrapperConfig) []config
 		})
 	}
 	return out
+}
+
+const mcpServerConfigHeader = "x-higress-mcpserver-config"
+
+func stripMcpServerConfigHeader(route *networking.HTTPRoute) {
+	if route == nil {
+		return
+	}
+	if route.Headers == nil {
+		route.Headers = &networking.Headers{}
+	}
+	if route.Headers.Request == nil {
+		route.Headers.Request = &networking.Headers_HeaderOperations{}
+	}
+	requestHeaders := route.Headers.Request
+	remove := make([]string, 0, len(requestHeaders.Remove)+1)
+	for _, name := range requestHeaders.Remove {
+		if !strings.EqualFold(name, mcpServerConfigHeader) {
+			remove = append(remove, name)
+		}
+	}
+	requestHeaders.Remove = append(remove, mcpServerConfigHeader)
+
+	for name := range requestHeaders.Add {
+		if strings.EqualFold(name, mcpServerConfigHeader) {
+			delete(requestHeaders.Add, name)
+		}
+	}
+
+	for name := range requestHeaders.Set {
+		if strings.EqualFold(name, mcpServerConfigHeader) {
+			delete(requestHeaders.Set, name)
+		}
+	}
+}
+
+func stripMcpServerConfigHeaderFromConfigs(configs []config.Config) {
+	for i := range configs {
+		virtualService, ok := configs[i].Spec.(*networking.VirtualService)
+		if !ok {
+			continue
+		}
+		for _, route := range virtualService.Http {
+			stripMcpServerConfigHeader(route)
+		}
+	}
 }
 
 func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []config.Config {
@@ -593,6 +711,7 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 		common.SortHTTPRoutes(routes)
 
 		for _, route := range routes {
+			stripMcpServerConfigHeader(route.HTTPRoute)
 			vs.Http = append(vs.Http, route.HTTPRoute)
 		}
 
@@ -617,6 +736,11 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 	if m.RegistryReconciler != nil {
 		allConfigsFromMcp := m.RegistryReconciler.GetAllConfigs(gvk.VirtualService)
 		for _, cfg := range allConfigsFromMcp {
+			if virtualService, ok := cfg.Spec.(*networking.VirtualService); ok {
+				for _, route := range virtualService.Http {
+					stripMcpServerConfigHeader(route)
+				}
+			}
 			out = append(out, *cfg)
 		}
 	}
@@ -821,10 +945,12 @@ func (m *IngressConfig) convertEnvoyFilter(convertOptions *common.ConvertOptions
 		}
 	}
 
-	if proxyEnvoyFilters := constructProxyEnvoyFilters(convertOptions.ProxyWrappers, convertOptions.ServiceWrappers, m.namespace); len(proxyEnvoyFilters) != 0 {
-		for _, ef := range proxyEnvoyFilters {
-			envoyFilters = append(envoyFilters, *ef)
-		}
+	proxyEnvoyFilters, err := constructProxyEnvoyFilters(convertOptions.ProxyWrappers, convertOptions.ServiceWrappers, m.namespace)
+	if err != nil {
+		IngressLog.Errorf("Failed to construct proxy envoy filters, skipping them: %v", err)
+	}
+	for _, ef := range proxyEnvoyFilters {
+		envoyFilters = append(envoyFilters, *ef)
 	}
 
 	// TODO Support other envoy filters
@@ -868,6 +994,10 @@ func (m *IngressConfig) convertServiceEntry([]common.WrapperConfig) []config.Con
 	out := make([]config.Config, 0, len(serviceEntries))
 	hostSets := sets.Set[string]{}
 	for _, se := range serviceEntries {
+		if len(se.ServiceEntry.Hosts) == 0 {
+			IngressLog.Warnf("Skipping service entry with empty hosts: %s", se.ServiceName)
+			continue
+		}
 		out = append(out, config.Config{
 			Meta: config.Meta{
 				GroupVersionKind:  gvk.ServiceEntry,
@@ -887,6 +1017,9 @@ func (m *IngressConfig) convertServiceEntry([]common.WrapperConfig) []config.Con
 	seFromMcp := m.RegistryReconciler.GetAllConfigs(gvk.ServiceEntry)
 	for _, cfg := range seFromMcp {
 		se := cfg.Spec.(*networking.ServiceEntry)
+		if len(se.Hosts) == 0 {
+			continue
+		}
 		if !hostSets.Contains(se.Hosts[0]) {
 			out = append(out, *cfg)
 		}
@@ -1588,6 +1721,10 @@ func (m *IngressConfig) constructHttp2RpcEnvoyFilter(http2rpcConfig *annotations
 	}
 
 	httpRoute := route.HTTPRoute
+	if len(httpRoute.Route) == 0 {
+		IngressLog.Errorf("Http2RpcConfig %s has no route destination", http2rpcConfig.Name)
+		return nil, errors.New("invalid http2rpcConfig has no route destination")
+	}
 	httpRouteDestination := httpRoute.Route[0]
 	typeStruct, err := m.constructHttp2RpcMethods(http2rpcCRD.GetDubbo())
 	if err != nil {
@@ -1729,6 +1866,10 @@ func (m *IngressConfig) constructHttp2RpcMethods(dubbo *higressv1.DubboService) 
 		}
 		method["parameter_mapping"] = params
 		path_matcher := make(map[string]interface{})
+		if len(serviceMethod.HttpMethods) == 0 {
+			IngressLog.Errorf("Http2Rpc serviceMethod %s has no http methods", serviceMethod.GetHttpPath())
+			continue
+		}
 		path_matcher["match_http_method_spec"] = Http2RpcMethodMap()[serviceMethod.HttpMethods[0]]
 		path_matcher["match_pattern"] = serviceMethod.GetHttpPath()
 		method["path_matcher"] = path_matcher
@@ -1852,7 +1993,7 @@ func constructBasicAuthEnvoyFilter(rules *common.BasicAuthRules, namespace strin
 	}, nil
 }
 
-func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, serviceWrappers map[string]*common.ServiceWrapper, namespace string) []*config.Config {
+func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, serviceWrappers map[string]*common.ServiceWrapper, namespace string) ([]*config.Config, error) {
 	var envoyFilters []*config.Config
 	for _, proxyWrapper := range proxyWrappers {
 		envoyFilters = append(envoyFilters, &config.Config{
@@ -1955,6 +2096,10 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 					}
 				}
 				patchJson, _ := json.Marshal(patchObj)
+				patchValue, err := util.BuildPatchStruct(string(patchJson))
+				if err != nil {
+					return nil, err
+				}
 				serviceProxyPatches = append(serviceProxyPatches, &networking.EnvoyFilter_EnvoyConfigObjectPatch{
 					ApplyTo: networking.EnvoyFilter_CLUSTER,
 					Match: &networking.EnvoyFilter_EnvoyConfigObjectMatch{
@@ -1962,7 +2107,7 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 					},
 					Patch: &networking.EnvoyFilter_Patch{
 						Operation: networking.EnvoyFilter_Patch_ADD,
-						Value:     util.BuildPatchStruct(string(patchJson)),
+						Value:     patchValue,
 					},
 				})
 			}
@@ -1981,7 +2126,7 @@ func constructProxyEnvoyFilters(proxyWrappers map[string]*common.ProxyWrapper, s
 		})
 	}
 
-	return envoyFilters
+	return envoyFilters, nil
 }
 
 func validateServiceWrapperForProxy(serviceWrapper *common.ServiceWrapper) error {

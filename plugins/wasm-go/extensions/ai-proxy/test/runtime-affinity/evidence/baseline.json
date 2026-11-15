@@ -1,0 +1,42 @@
+{
+  "wasm_sha256": "f98fbe08843884522f3ebc248e0630d4d13d0e9e550476ea2d8bb75851ecdbb5",
+  "gateway_image": "higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway@sha256:5d0618399fa98b9f4ad3c34b58f084b51624e3cc4eccdde72554b636d16b5da4",
+  "expected_affinity": true,
+  "redis_delay_ms": 100,
+  "redis_image_id": "sha256:487efc0616382465781b8fdc3d6d1db449e6fd80ae23bf48432a2da6b6929908",
+  "mock_image_id": "sha256:78976a69c067520ef8be34cde307ef9f6fea6dcefa50edb57039773d241ca0db",
+  "envoy_image_id": "sha256:e56ff20e0dff76468342e2b994073d8a2c2d098335203cbdf78a7fe5819e6108",
+  "first_selected": "synthetic-A",
+  "first_binding": {
+    "tokenFingerprint": "b4698dbd327f6ffb328d6d6cf82c471e0b7051cb739d518d90cc70c640d8fa79",
+    "renewAfter": 1795242666
+  },
+  "stable_selected": [
+    "synthetic-A",
+    "synthetic-B"
+  ],
+  "upstream_events": [
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "8a82b64a-3c31-4c6c-9b76-402686ffe1ca"
+    },
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "0d7c825a-fdc2-45c7-ae68-e1ffcc4749a5"
+    },
+    {
+      "key": "synthetic-B",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "4a256db2-3dd1-45f2-93c0-ad2a8cc38500"
+    }
+  ],
+  "cleanup_remaining": ""
+}

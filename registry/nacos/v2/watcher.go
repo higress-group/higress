@@ -86,12 +86,13 @@ type WatcherOption func(w *watcher)
 
 func NewWatcher(cache memory.Cache, opts ...WatcherOption) (provider.Watcher, error) {
 	w := &watcher{
-		WatchingServices: make(map[string]bool),
-		RegistryType:     provider.Nacos2,
-		Status:           provider.UnHealthy,
-		cache:            cache,
-		mutex:            &sync.Mutex{},
-		stop:             make(chan struct{}),
+		WatchingServices:     make(map[string]bool),
+		RegistryType:         provider.Nacos2,
+		Status:               provider.UnHealthy,
+		cache:                cache,
+		mutex:                &sync.Mutex{},
+		stop:                 make(chan struct{}),
+		updateCacheWhenEmpty: DefaultUpdateCacheWhenEmpty,
 	}
 
 	w.NacosRefreshInterval = int64(DefaultRefreshInterval)

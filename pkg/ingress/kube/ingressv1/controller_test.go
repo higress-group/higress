@@ -1096,3 +1096,73 @@ func ingressRule(host string, paths ...v1.HTTPIngressPath) v1.IngressRule {
 		},
 	}
 }
+
+func TestCreateRuleKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		annots      map[string]string
+		hostAndPath string
+		wantPanic   bool
+	}{
+		{
+			name:        "normal header annotation",
+			annots:      map[string]string{"higress.io/exact-match-header-x": "val1"},
+			hostAndPath: "example.com/foo",
+			wantPanic:   false,
+		},
+		{
+			name:        "match-header before higress prefix position",
+			annots:      map[string]string{"foo/match-header-x": "val"},
+			hostAndPath: "example.com/foo",
+			wantPanic:   false,
+		},
+		{
+			name:        "match-header at end with no suffix key",
+			annots:      map[string]string{"higress.io/match-header": "val"},
+			hostAndPath: "example.com/foo",
+			wantPanic:   false,
+		},
+		{
+			name:        "match-query before higress prefix position",
+			annots:      map[string]string{"x/match-query-foo": "val"},
+			hostAndPath: "example.com/bar",
+			wantPanic:   false,
+		},
+		{
+			name:        "match-pseudo-header at end with no suffix",
+			annots:      map[string]string{"higress.io/match-pseudo-header": "val"},
+			hostAndPath: "example.com/baz",
+			wantPanic:   false,
+		},
+		{
+			name:        "empty annotations",
+			annots:      nil,
+			hostAndPath: "example.com/path",
+			wantPanic:   false,
+		},
+		{
+			name:        "normal query annotation",
+			annots:      map[string]string{"higress.io/exact-match-query-param": "value"},
+			hostAndPath: "example.com/test",
+			wantPanic:   false,
+		},
+		{
+			name:        "normal pseudo-header annotation",
+			annots:      map[string]string{"higress.io/exact-match-pseudo-header-foo": "val"},
+			hostAndPath: "example.com/test",
+			wantPanic:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// createRuleKey should not panic on any of these inputs
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("createRuleKey panicked: %v", r)
+				}
+			}()
+			_ = createRuleKey(tt.annots, tt.hostAndPath)
+		})
+	}
+}

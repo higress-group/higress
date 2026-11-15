@@ -2,6 +2,7 @@ package common
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
@@ -40,6 +41,7 @@ type HostMatcher struct {
 
 // MatchRule defines the structure for a matching rule
 type MatchRule struct {
+	ServerName        string       `json:"server_name"`         // MCP server that owns this rule, when known
 	MatchRuleDomain   string       `json:"match_rule_domain"`   // Domain pattern, supports wildcards
 	MatchRulePath     string       `json:"match_rule_path"`     // Path pattern to match
 	MatchRuleType     RuleType     `json:"match_rule_type"`     // Type of match rule
@@ -55,6 +57,9 @@ func ParseMatchList(matchListConfig []interface{}) []MatchRule {
 	for _, item := range matchListConfig {
 		if ruleMap, ok := item.(map[string]interface{}); ok {
 			rule := MatchRule{}
+			if serverName, ok := ruleMap["server_name"].(string); ok {
+				rule.ServerName = serverName
+			}
 			if domain, ok := ruleMap["match_rule_domain"].(string); ok {
 				rule.MatchRuleDomain = domain
 			}
@@ -99,6 +104,24 @@ func ParseMatchList(matchListConfig []interface{}) []MatchRule {
 		}
 	}
 	return matchList
+}
+
+// SessionServerName returns the identity a session must be bound to for this
+// rule. A rule that carries an explicit server name uses it directly. When the
+// server name is unavailable, the rule's own match key is used so that distinct
+// rules never share sessions. There is deliberately no global fallback: using
+// one would make sessions replayable across routes.
+func (rule MatchRule) SessionServerName() string {
+	if rule.ServerName != "" {
+		return rule.ServerName
+	}
+	return "rule:" +
+		encodeKeyComponent(rule.MatchRuleDomain) + ":" +
+		encodeKeyComponent(rule.MatchRulePath) + ":" +
+		encodeKeyComponent(string(rule.MatchRuleType)) + ":" +
+		encodeKeyComponent(string(rule.UpstreamType)) + ":" +
+		encodeKeyComponent(strconv.FormatBool(rule.EnablePathRewrite)) + ":" +
+		encodeKeyComponent(rule.PathRewritePrefix)
 }
 
 // stripPortFromHost removes port from host string

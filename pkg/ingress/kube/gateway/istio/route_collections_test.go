@@ -156,7 +156,7 @@ func TestMergeHTTPRoutesMergesInferencePoolExtra(t *testing.T) {
 	if len(gotInferenceConfigs) != 2 {
 		t.Fatalf("expected 2 merged InferencePool configs, got %d: %v", len(gotInferenceConfigs), gotInferenceConfigs)
 	}
-	if gotInferenceConfigs[baseRouteName].FQDN != baseInferenceConfigs[baseRouteName].FQDN {
+	if gotInferenceConfigs[baseRouteName].FQDN != baseInferenceConfigs[baseRouteName].FQDN || gotInferenceConfigs[baseRouteName].Mode != "" {
 		t.Fatalf("expected base route InferencePool config to be preserved, got %v", gotInferenceConfigs[baseRouteName])
 	}
 	if gotInferenceConfigs[otherRouteName].FQDN != otherInferenceConfigs[otherRouteName].FQDN {
@@ -170,5 +170,15 @@ func TestMergeHTTPRoutesMergesInferencePoolExtra(t *testing.T) {
 	}
 	if _, found := baseInferenceConfigs[otherRouteName]; found {
 		t.Fatalf("expected base InferencePool config map not to be mutated by merge")
+	}
+}
+
+func TestMixedEndpointPickerModesUseUniqueHTTPRouteNames(t *testing.T) {
+	first := &istio.HTTPRoute{Name: "default/mixed-picker-route"}
+	second := &istio.HTTPRoute{Name: first.Name}
+	disambiguateHTTPRouteName(first, 0, 0)
+	disambiguateHTTPRouteName(second, 1, 0)
+	if first.Name == second.Name {
+		t.Fatalf("expected unique mixed-mode route names, both were %q", first.Name)
 	}
 }

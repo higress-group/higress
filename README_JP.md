@@ -26,7 +26,7 @@
 
 ## Higressとは？
 
-Higressは、IstioとEnvoyをベースにしたクラウドネイティブAPIゲートウェイで、Go/Rust/JSなどを使用してWasmプラグインを作成できます。数十の既製の汎用プラグインと、すぐに使用できるコンソールを提供しています（デモは[こちら](http://demo.higress.io/)）。
+Higressは、IstioとEnvoyをベースにしたクラウドネイティブAPIゲートウェイで、Go/Rust/JSなどを使用してWasmプラグインを作成できます。数十の既製の汎用プラグインと、すぐに使用できるコンソールを提供しています（デモは[こちら](https://demo.higress.io/)）。
 
 ### 主な使用シナリオ
 
@@ -83,6 +83,8 @@ K8sでのHelmデプロイなどの他のインストール方法については�
 
   Higressは、国内外のすべてのLLMモデルプロバイダーと統一されたプロトコルで接続でき、豊富なAI可観測性、多モデル負荷分散/フォールバック、AIトークンフロー制御、AIキャッシュなどの機能を備えています。
 
+  Higressは、Kubernetesで推論を考慮したルーティングをサポートする[Gateway API Inference Extension準拠実装](https://gateway-api-inference-extension.sigs.k8s.io/implementations/gateways/#higress)としても掲載されています。
+
   ![](https://img.alicdn.com/imgextra/i1/O1CN01fNnhCp1cV8mYPRFeS_!!6000000003605-0-tps-1080-608.jpg)
 
 - **MCP Server ホスティング**:
@@ -101,9 +103,9 @@ K8sでのHelmデプロイなどの他のインストール方法については�
 
 - **Kubernetes Ingressゲートウェイ**:
 
-  HigressはK8sクラスターのIngressエントリーポイントゲートウェイとして機能し、多くのK8s Nginx Ingressの注釈に対応しています。K8s Nginx IngressからHigressへのスムーズな移行が可能です。
+  Higressは[Kubernetes Ingress Controllersの公式ドキュメント](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/)に掲載されており、K8sクラスターのIngressエントリーポイントゲートウェイとして機能します。多くのK8s Nginx Ingressの注釈に対応しているため、K8s Nginx IngressからHigressへのスムーズな移行が可能です。
   
-  [Gateway API](https://gateway-api.sigs.k8s.io/)標準をサポートし、ユーザーがIngress APIからGateway APIにスムーズに移行できるようにします。
+  Higressは[Gateway API](https://gateway-api.sigs.k8s.io/)標準をサポートし、[Gateway API準拠実装](https://gateway-api.sigs.k8s.io/implementations/#higress)として掲載されています。Ingress APIからGateway APIへのスムーズな移行が可能です。
 
   ingress-nginxと比較して、リソースの消費が大幅に減少し、ルーティングの変更が10倍速く反映されます。
 

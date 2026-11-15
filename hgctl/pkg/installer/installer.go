@@ -51,14 +51,39 @@ type Installer interface {
 	Upgrade() error
 }
 
+type ProfilePersistenceMode int
+
+const (
+	PersistProfile ProfilePersistenceMode = iota
+	DoNotPersistProfile
+)
+
+type ExecutionSourceMode int
+
+const (
+	NormalExecutionSource ExecutionSourceMode = iota
+	RecoveredHelmExecutionSource
+)
+
+type ExecutionOptions struct {
+	ProfilePersistence ProfilePersistenceMode
+	SourceMode         ExecutionSourceMode
+	ReleaseName        string
+	ReleaseNamespace   string
+}
+
 func NewInstaller(profile *helm.Profile, writer io.Writer, quiet bool, devel bool, installerMode InstallerMode) (Installer, error) {
+	return NewInstallerWithOptions(profile, writer, quiet, devel, installerMode, ExecutionOptions{ProfilePersistence: PersistProfile})
+}
+
+func NewInstallerWithOptions(profile *helm.Profile, writer io.Writer, quiet bool, devel bool, installerMode InstallerMode, execOptions ExecutionOptions) (Installer, error) {
 	switch profile.Global.Install {
 	case helm.InstallK8s, helm.InstallLocalK8s:
 		cliClient, err := kubernetes.NewCLIClient(options.DefaultConfigFlags.ToRawKubeConfigLoader())
 		if err != nil {
 			return nil, fmt.Errorf("failed to build kubernetes client: %w", err)
 		}
-		installer, err := NewK8sInstaller(profile, cliClient, writer, quiet, devel, installerMode)
+		installer, err := NewK8sInstaller(profile, cliClient, writer, quiet, devel, installerMode, execOptions)
 		return installer, err
 	case helm.InstallLocalDocker:
 		installer, err := NewDockerInstaller(profile, writer, quiet)

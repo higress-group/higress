@@ -462,6 +462,9 @@ func (m *MilvusProvider) AddDoc(ctx context.Context, docs []schema.Document) err
 			for i, doc := range docs {
 				vectors[i] = doc.Vector
 			}
+			if len(vectors) == 0 || len(vectors[0]) == 0 {
+				return fmt.Errorf("vector dimension is 0, cannot create float vector column")
+			}
 			columns = append(columns, entity.NewColumnFloatVector(field.RawName, len(vectors[0]), vectors))
 		case "metadata":
 			// Handle JSON type fields (like metadata)
@@ -663,7 +666,6 @@ func (m *MilvusProvider) SearchDocs(ctx context.Context, vector []float32, optio
 		options.TopK,
 		sp,
 	)
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to search documents: %w", err)
 	}
@@ -673,6 +675,9 @@ func (m *MilvusProvider) SearchDocs(ctx context.Context, vector []float32, optio
 	for _, result := range searchResults {
 		for i := 0; i < result.ResultCount; i++ {
 			id, _ := result.IDs.Get(i)
+			if i >= len(result.Scores) {
+				break
+			}
 			score := result.Scores[i]
 			// Get field data
 			var content string
@@ -763,7 +768,6 @@ func (m *MilvusProvider) ListDocs(ctx context.Context, limit int) ([]schema.Docu
 		outputFields,
 		client.WithOffset(0), client.WithLimit(int64(limit)),
 	)
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to query documents: %w", err)
 	}
