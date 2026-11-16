@@ -16,10 +16,12 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/santhosh-tekuri/jsonschema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -122,25 +124,19 @@ func TestOnHttpRequestHeaders_CompileFailure_PassThrough(t *testing.T) {
 }
 
 // === Module C — onHttpRequestBody parse / compile failure paths ==========
-//
-// onHttpRequestBody is 72.7%. Two uncovered branches:
-//   - main.go:174-177 — json.Unmarshal failure (body is not JSON) → continue
-//   - main.go:189-192 — Compile failure (bad schema keywords) → continue
-// Both are fail-open (request not blocked) — encoding the contract that a
-// malformed payload or operator schema bug must not turn into a 500.
 
-func TestOnHttpRequestBody_InvalidJson_PassThrough(t *testing.T) {
+func TestOnHttpRequestBody_MalformedJSON(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		// Body schema fixture — valid schema, then we feed a non-JSON body.
 		cfg := mustConfig(t, map[string]interface{}{
-			"body_schema": `{"type":"object","required":["name"]}`,
-			"enable_oas3": true,
+			"body_schema":   `{"type":"object","required":["name"]}`,
+			"enable_oas3":   true,
+			"rejected_code": 422,
+			"rejected_msg":  "Invalid request body",
 		})
 		host, status := test.NewTestHost(cfg)
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		// Headers must run first to advance lifecycle.
 		action := host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "example.com"},
 			{":path", "/api/test"},
@@ -148,12 +144,216 @@ func TestOnHttpRequestBody_InvalidJson_PassThrough(t *testing.T) {
 		})
 		require.Equal(t, types.ActionContinue, action)
 
-		// Body is not JSON — Unmarshal fails and the plugin must
-		// fail-open rather than 4xx (would otherwise turn arbitrary
-		// upstream content into a hard reject).
 		action = host.CallOnHttpRequestBody([]byte("not a json {{{"))
-		require.Equal(t, types.ActionContinue, action)
-		require.Nil(t, host.GetLocalResponse())
+		require.Equal(t, types.ActionPause, action)
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		require.Equal(t, uint32(422), response.StatusCode)
+		require.Equal(t, "Invalid request body", string(response.Data))
+	})
+}
+
+func TestOnHttpRequestBodyTopLevelTypes(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		drafts := []struct {
+			name      string
+			configKey string
+		}{
+			{name: "draft4", configKey: "enable_swagger"},
+			{name: "draft7", configKey: "enable_oas3"},
+		}
+		typesToTest := []struct {
+			name        string
+			validBody   string
+			invalidBody string
+		}{
+			{name: "object", validBody: `{"name":"example"}`, invalidBody: `[]`},
+			{name: "array", validBody: `[1,"two"]`, invalidBody: `{}`},
+			{name: "string", validBody: `"hello"`, invalidBody: `1`},
+			{name: "number", validBody: `42.5`, invalidBody: `"42"`},
+			{name: "boolean", validBody: `true`, invalidBody: `"true"`},
+			{name: "null", validBody: `null`, invalidBody: `false`},
+		}
+
+		for _, draft := range drafts {
+			for _, bodyType := range typesToTest {
+				t.Run(draft.name+"/"+bodyType.name, func(t *testing.T) {
+					cfg := mustConfig(t, map[string]interface{}{
+						"body_schema":   `{"type":"` + bodyType.name + `"}`,
+						draft.configKey: true,
+						"rejected_code": 422,
+						"rejected_msg":  "Invalid request body",
+					})
+					bodies := []struct {
+						name         string
+						body         string
+						expectAccept bool
+					}{
+						{name: "accept", body: bodyType.validBody, expectAccept: true},
+						{name: "reject", body: bodyType.invalidBody},
+					}
+					for _, bodyCase := range bodies {
+						t.Run(bodyCase.name, func(t *testing.T) {
+							host, status := test.NewTestHost(cfg)
+							defer host.Reset()
+							require.Equal(t, types.OnPluginStartStatusOK, status)
+
+							action := host.CallOnHttpRequestHeaders([][2]string{
+								{":authority", "example.com"},
+								{":path", "/api/test"},
+								{":method", "POST"},
+							})
+							require.Equal(t, types.ActionContinue, action)
+							action = host.CallOnHttpRequestBody([]byte(bodyCase.body))
+
+							response := host.GetLocalResponse()
+							if bodyCase.expectAccept {
+								require.Equal(t, types.ActionContinue, action)
+								require.Nil(t, response)
+							} else {
+								require.Equal(t, types.ActionPause, action)
+								require.NotNil(t, response)
+								require.Equal(t, uint32(422), response.StatusCode)
+								require.Equal(t, "Invalid request body", string(response.Data))
+							}
+							host.CompleteHttp()
+						})
+					}
+				})
+			}
+		}
+	})
+}
+
+func TestOnHttpRequestBodyNumberBounds(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		cfg := mustConfig(t, map[string]interface{}{
+			"body_schema":   `{"type":"number","minimum":0}`,
+			"enable_oas3":   true,
+			"rejected_code": 422,
+			"rejected_msg":  "Invalid request body",
+		})
+		testCases := []struct {
+			name         string
+			literal      string
+			expectAccept bool
+		}{
+			{name: "finite subnormal", literal: "1e-310", expectAccept: true},
+			{name: "smallest subnormal", literal: "5e-324", expectAccept: true},
+			{name: "underflow to zero", literal: "1e-400", expectAccept: true},
+			{name: "overflow", literal: "1e309"},
+			{name: "pathological overflow", literal: "1e100000000000000000000"},
+			{name: "high precision decimal", literal: "1234567890.123456789012345678901234567890", expectAccept: true},
+		}
+
+		for _, testCase := range testCases {
+			t.Run(testCase.name, func(t *testing.T) {
+				host, status := test.NewTestHost(cfg)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				action := host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/api/test"},
+					{":method", "POST"},
+				})
+				require.Equal(t, types.ActionContinue, action)
+				action = host.CallOnHttpRequestBody([]byte(testCase.literal))
+
+				response := host.GetLocalResponse()
+				if testCase.expectAccept {
+					require.Equal(t, types.ActionContinue, action)
+					require.Nil(t, response)
+				} else {
+					require.Equal(t, types.ActionPause, action)
+					require.NotNil(t, response)
+					require.Equal(t, uint32(422), response.StatusCode)
+					require.Equal(t, "Invalid request body", string(response.Data))
+				}
+				host.CompleteHttp()
+			})
+		}
+	})
+}
+
+func TestValidateJSONDocumentRecoversLibraryPanic(t *testing.T) {
+	compiler := jsonschema.NewCompiler()
+	require.NoError(t, compiler.AddResource(defaultBodySchema, strings.NewReader(`{"type":"number","minimum":0}`)))
+	schema, err := compiler.Compile(defaultBodySchema)
+	require.NoError(t, err)
+
+	err = validateJSONDocument(schema, json.Number(`1e100000000000000000000`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validation panic")
+}
+
+func TestOnHttpRequestBodyNumberNormalization(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		drafts := []struct {
+			name      string
+			configKey string
+		}{
+			{name: "draft4", configKey: "enable_swagger"},
+			{name: "draft7", configKey: "enable_oas3"},
+		}
+		testCases := []struct {
+			name        string
+			literal     string
+			validInt    bool
+			validNumber bool
+		}{
+			{name: "integer", literal: "1", validInt: true, validNumber: true},
+			{name: "zero fraction", literal: "1.0", validInt: true, validNumber: true},
+			{name: "zero exponent", literal: "1e0", validInt: true, validNumber: true},
+			{name: "fraction", literal: "1.5", validNumber: true},
+			{name: "negative zero", literal: "-0.0e2", validInt: true, validNumber: true},
+			{name: "integral exponent", literal: "1.5e1", validInt: true, validNumber: true},
+			{name: "fractional exponent", literal: "1e-1", validNumber: true},
+			{name: "underflow to zero", literal: "1e-400", validInt: true, validNumber: true},
+			{name: "negative underflow to zero", literal: "-1e-400", validInt: true, validNumber: true},
+		}
+
+		for _, draft := range drafts {
+			for _, schemaType := range []string{"integer", "number"} {
+				for _, testCase := range testCases {
+					t.Run(draft.name+"/"+schemaType+"/"+testCase.name, func(t *testing.T) {
+						cfg := mustConfig(t, map[string]interface{}{
+							"body_schema":   `{"type":"object","properties":{"n":{"type":"` + schemaType + `"}},"required":["n"]}`,
+							draft.configKey: true,
+							"rejected_code": 422,
+							"rejected_msg":  "Invalid request body",
+						})
+						host, status := test.NewTestHost(cfg)
+						defer host.Reset()
+						require.Equal(t, types.OnPluginStartStatusOK, status)
+
+						action := host.CallOnHttpRequestHeaders([][2]string{
+							{":authority", "example.com"},
+							{":path", "/api/test"},
+							{":method", "POST"},
+						})
+						require.Equal(t, types.ActionContinue, action)
+						action = host.CallOnHttpRequestBody([]byte(`{"n":` + testCase.literal + `}`))
+
+						expectAccept := testCase.validNumber
+						if schemaType == "integer" {
+							expectAccept = testCase.validInt
+						}
+						response := host.GetLocalResponse()
+						if expectAccept {
+							require.Equal(t, types.ActionContinue, action)
+							require.Nil(t, response)
+						} else {
+							require.Equal(t, types.ActionPause, action)
+							require.NotNil(t, response)
+							require.Equal(t, uint32(422), response.StatusCode)
+							require.Equal(t, "Invalid request body", string(response.Data))
+						}
+						host.CompleteHttp()
+					})
+				}
+			}
+		}
 	})
 }
 

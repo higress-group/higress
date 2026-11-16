@@ -15,8 +15,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"math"
+	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -34,6 +40,87 @@ const (
 )
 
 func main() {}
+
+func decodeJSON(body []byte) (interface{}, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var document interface{}
+	if err := decoder.Decode(&document); err != nil {
+		return nil, err
+	}
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple JSON values in request body")
+		}
+		return nil, err
+	}
+	return normalizeJSONNumbers(document)
+}
+
+func normalizeJSONNumbers(value interface{}) (interface{}, error) {
+	switch typed := value.(type) {
+	case json.Number:
+		return normalizeJSONNumber(typed)
+	case []interface{}:
+		for i, item := range typed {
+			normalized, err := normalizeJSONNumbers(item)
+			if err != nil {
+				return nil, err
+			}
+			typed[i] = normalized
+		}
+	case map[string]interface{}:
+		for key, item := range typed {
+			normalized, err := normalizeJSONNumbers(item)
+			if err != nil {
+				return nil, err
+			}
+			typed[key] = normalized
+		}
+	}
+	return value, nil
+}
+
+func normalizeJSONNumber(number json.Number) (json.Number, error) {
+	literal := number.String()
+	// Overflowing literals are rejected; underflow to zero is accepted, matching
+	// the float64 semantics of the previous decoding path.
+	value, err := strconv.ParseFloat(literal, 64)
+	if errors.Is(err, strconv.ErrRange) {
+		if value == 0 {
+			return json.Number("0"), nil
+		}
+		return "", fmt.Errorf("JSON number overflows float64")
+	}
+	if err != nil {
+		return "", fmt.Errorf("invalid JSON number")
+	}
+	rational, ok := new(big.Rat).SetString(literal)
+	if !ok {
+		return "", fmt.Errorf("invalid JSON number")
+	}
+	if rational.IsInt() {
+		return json.Number(rational.Num().String()), nil
+	}
+	// Numeric literals are normalized to their float64 value when the exact literal
+	// cannot be represented as an integer or finite decimal within float64 semantics;
+	// this matches the previous decoding path's semantics.
+	if _, exact := rational.Float64(); !exact && math.Abs(value) < 0x1p-1022 {
+		return json.Number(strconv.FormatFloat(value, 'g', -1, 64)), nil
+	}
+	return number, nil
+}
+
+func validateJSONDocument(schema *jsonschema.Schema, document interface{}) (err error) {
+	// Defense against upstream library panics: report them as validation failures rather than crashing.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("JSON schema validation panic: %v", recovered)
+		}
+	}()
+	return schema.ValidateInterface(document)
+}
 
 func init() {
 	wrapper.SetCtx(
@@ -169,29 +256,15 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte, log 
 		return types.ActionContinue
 	}
 
-	// covert to schema
-	schema := make(map[string]interface{})
-	err := json.Unmarshal(body, &schema)
-	if err != nil {
-		log.Errorf("unmarshal body failed: %v", err)
-		return types.ActionContinue
-	}
-
-	// convert to json string
-	schemaBytes, err := json.Marshal(schema)
-	if err != nil {
-		log.Errorf("marshal schema failed: %v", err)
-		return types.ActionContinue
-	}
-
-	// validate
-	document := strings.NewReader(string(schemaBytes))
 	compile, err := config.compiler.Compile(defaultBodySchema)
 	if err != nil {
 		log.Errorf("compile schema failed: %v", err)
 		return types.ActionContinue
 	}
-	err = compile.Validate(document)
+	document, err := decodeJSON(body)
+	if err == nil {
+		err = validateJSONDocument(compile, document)
+	}
 	if err != nil {
 		log.Errorf("validate request body failed: %v", err)
 		proxywasm.SendHttpResponseWithDetail(config.rejectedCode, "request-validation.invalid_body", nil, []byte(config.rejectedMsg), -1)

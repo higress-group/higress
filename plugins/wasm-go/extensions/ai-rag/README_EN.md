@@ -28,6 +28,8 @@ Plugin execution priority: `400`
 
 Once the plugin is enabled, while using the tracing feature, the document ID information retrieved by RAG will be added to the span's attributes for troubleshooting purposes.
 
+The embedding lookup is best effort. If the embedding request fails or returns a response without an embedding vector, the plugin logs the failure and forwards the original request without recalled documents, so the chat completion still succeeds.
+
 ## Example
 ```yaml
 dashscope:

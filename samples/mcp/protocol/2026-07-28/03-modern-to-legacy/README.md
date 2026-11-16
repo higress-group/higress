@@ -2,7 +2,7 @@
 
 [English](./README_EN.md) | [返回版本目录](../README.md)
 
-本 Demo 验证新版无状态客户端通过 Higress 访问 MCP `2025-03-26` Server。Higress 在每个下游请求内部执行隔离的 legacy handshake，同时适配新版结果合同并阻止敏感下游 Header 穿越协议边界。
+本 Demo 验证新版无状态客户端通过 Higress 访问 MCP `2025-03-26` Server。Higress 在每个下游请求内部执行隔离的 legacy handshake，同时适配新版结果合同，保留普通业务 Header，并隔离当前策略管理的凭据、Session 和内部 Header。
 
 ## 前置条件
 
@@ -57,7 +57,7 @@ curl -sS -D /tmp/mcp-bridge-list-headers \
   -H 'Mcp-Session-Id: downstream-session' \
   -H 'Last-Event-ID: downstream-event' \
   -H 'Authorization: Bearer downstream-not-policy' \
-  -H 'x-unrelated-credential: should-not-pass' \
+  -H 'x-unrelated-credential: ordinary-marker' \
   -H 'Mcp-Param-Future: must-not-cross-era' \
   -H 'X-Request-ID: demo-bridge-list' \
   --data-binary @requests/list-tools.json | jq
@@ -85,7 +85,7 @@ curl -sS -D /tmp/mcp-bridge-call-headers \
   -H 'Mcp-Session-Id: downstream-session' \
   -H 'Last-Event-ID: downstream-event' \
   -H 'Authorization: Bearer downstream-not-policy' \
-  -H 'x-unrelated-credential: should-not-pass' \
+  -H 'x-unrelated-credential: ordinary-marker' \
   -H 'Mcp-Param-Future: must-not-cross-era' \
   -H 'X-Request-ID: demo-bridge-call' \
   --data-binary @requests/call-tool.json | jq
@@ -120,7 +120,7 @@ kubectl -n mcp-demo exec deployment/legacy-mcp -- python -c \
   jq -e '[.events[].rpcMethod] == ["initialize","notifications/initialized","tools/list","initialize","notifications/initialized","tools/call"]'
 ```
 
-事件中的 `cookiePresent`、`lastEventIDPresent`、`authorizationPresent`、`unrelatedCredentialPresent` 应全部为 `false`，`futureParam` 应为 `null`。Legacy handshake 自己产生的 `Mcp-Session-Id` 只在上游交换中使用。
+事件中的 `cookiePresent`、`unrelatedCredentialPresent` 应为 `true`，证明普通 Cookie 和自定义业务头被保留；`lastEventIDPresent`、`authorizationPresent` 应为 `false`，`futureParam` 应为 `null`。传入的 MCP Session 和内部路由控制头不会沿用；legacy handshake 自己产生的 `Mcp-Session-Id` 只在上游交换中使用。
 
 ## 清理
 

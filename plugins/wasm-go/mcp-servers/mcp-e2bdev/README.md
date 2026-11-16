@@ -1,6 +1,6 @@
 # E2BDev MCP Server
 
-An implementation of the Model Context Protocol (MCP) server that integrates E2B Code Interpreter API, providing sandbox environment management capabilities, which enables execution of Python code.
+An implementation of the Model Context Protocol (MCP) server that integrates the E2B API for sandbox lifecycle management. The server provides only the `create_sandbox` and `kill_sandbox` tools; it does not execute code.
 
 
 ## Usage Guide
@@ -23,16 +23,12 @@ On the user's MCP Client interface, add E2BDev MCP Server configuration.
 
 ### Tools
 
+The server provides only the following sandbox lifecycle tools:
+
 - **create_sandbox**: Create E2B sandbox environment
   - Parameters:
     - timeout: Sandbox timeout in seconds, sandbox will be terminated after timeout
   - Returns: Sandbox ID
-
-- **execute_code_sandbox**: Execute code in sandbox
-  - Parameters:
-    - sandbox_id: Sandbox ID, obtained from create_sandbox
-    - code: Python code to execute
-  - Returns: Execution result
 
 - **kill_sandbox**: Terminate sandbox environment
   - Parameters:

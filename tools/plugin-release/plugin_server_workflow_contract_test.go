@@ -111,6 +111,32 @@ func TestPluginServerWorkflowReusesImmutableCandidateBeforeBuild(t *testing.T) {
 	}
 }
 
+func TestPluginServerBuildPublishesLegacyMcpServerCompatibilityPaths(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/build-plugin-server-from-snapshot.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(data)
+	seed := strings.Index(workflow, `compatibility_versions="1.0.0 2.0.0"`)
+	build := strings.Index(workflow, `docker buildx build --platform linux/amd64,linux/arm64`)
+	verify := strings.Index(workflow, `cmp "/tmp/managed-$version.wasm" /tmp/managed-oci.wasm`)
+	if seed < 0 || build < 0 || verify < 0 || !(seed < build && build < verify) {
+		t.Fatal("plugin-server build must seed legacy mcp-server paths before the image build and verify them after")
+	}
+	for _, required := range []string{
+		`test "$managed_path" = "mcp-server"`,
+		`oras blob fetch "$managed_ref@$managed_layer" -o /tmp/managed-oci.wasm`,
+		`mkdir -p "plugin-server/plugins/$managed_path/$version"`,
+		`cp /tmp/managed-oci.wasm "plugin-server/plugins/$managed_path/$version/plugin.wasm"`,
+		`--build-arg USE_LOCAL_PLUGINS=true`,
+		`fetch_wasm "$managed_path" "$version" "/tmp/managed-$version.wasm"`,
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("plugin-server legacy mcp-server compatibility contract lacks %q", required)
+		}
+	}
+}
+
 func TestReleaseWorkflowsPairORASSetupMetadataWithPinnedCLI(t *testing.T) {
 	const orasSetup = "oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20 # v1.2.3"
 	const orasSetupWithCLI = orasSetup + "\n        with:\n          version: 1.2.3"

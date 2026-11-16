@@ -83,8 +83,8 @@ var GoWasmMcpProxyRoutingCompatibility = suite.ConformanceTest{
 							require.False(t, gjson.GetBytes(response.Body, "result").Exists(), string(response.Body))
 							require.Equal(t, int64(-32603), gjson.GetBytes(response.Body, "error.code").Int(), string(response.Body))
 							if strategy == "auto" {
-								require.Equal(t, 504, response.StatusCode)
-								require.Contains(t, gjson.GetBytes(response.Body, "error.message").String(), "upstream_timeout")
+								require.Equal(t, 200, response.StatusCode)
+								require.Contains(t, gjson.GetBytes(response.Body, "error.message").String(), "backend tools/call failed")
 							} else {
 								require.Equal(t, 200, response.StatusCode, "explicit profiles retain their JSON-RPC error contract")
 								require.Equal(t, "backend tools/call failed", gjson.GetBytes(response.Body, "error.message").String())

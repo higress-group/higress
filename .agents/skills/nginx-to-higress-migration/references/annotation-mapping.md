@@ -17,7 +17,6 @@ These nginx annotations work directly with Higress without any changes:
 | `nginx.ingress.kubernetes.io/ssl-redirect` | `higress.io/ssl-redirect` | Force HTTPS |
 | `nginx.ingress.kubernetes.io/force-ssl-redirect` | `higress.io/force-ssl-redirect` | Same behavior |
 | `nginx.ingress.kubernetes.io/backend-protocol` | `higress.io/backend-protocol` | HTTP/HTTPS/GRPC |
-| `nginx.ingress.kubernetes.io/proxy-body-size` | `higress.io/proxy-body-size` | Max body size |
 
 ### CORS
 
@@ -35,10 +34,10 @@ These nginx annotations work directly with Higress without any changes:
 
 | nginx annotation | Higress annotation |
 |------------------|-------------------|
-| `nginx.ingress.kubernetes.io/proxy-connect-timeout` | `higress.io/proxy-connect-timeout` |
-| `nginx.ingress.kubernetes.io/proxy-send-timeout` | `higress.io/proxy-send-timeout` |
-| `nginx.ingress.kubernetes.io/proxy-read-timeout` | `higress.io/proxy-read-timeout` |
 | `nginx.ingress.kubernetes.io/proxy-next-upstream-tries` | `higress.io/proxy-next-upstream-tries` |
+| `nginx.ingress.kubernetes.io/proxy-next-upstream` | `higress.io/proxy-next-upstream` |
+| `nginx.ingress.kubernetes.io/proxy-next-upstream-timeout` | `higress.io/proxy-next-upstream-timeout` |
+| (no nginx equivalent) | `higress.io/timeout` |
 
 ### Canary (Grayscale)
 
@@ -46,18 +45,25 @@ These nginx annotations work directly with Higress without any changes:
 |------------------|-------------------|
 | `nginx.ingress.kubernetes.io/canary` | `higress.io/canary` |
 | `nginx.ingress.kubernetes.io/canary-weight` | `higress.io/canary-weight` |
-| `nginx.ingress.kubernetes.io/canary-header` | `higress.io/canary-header` |
-| `nginx.ingress.kubernetes.io/canary-header-value` | `higress.io/canary-header-value` |
-| `nginx.ingress.kubernetes.io/canary-header-pattern` | `higress.io/canary-header-pattern` |
+| `nginx.ingress.kubernetes.io/canary-by-header` | `higress.io/canary-by-header` |
+| `nginx.ingress.kubernetes.io/canary-by-header-value` | `higress.io/canary-by-header-value` |
+| `nginx.ingress.kubernetes.io/canary-by-header-pattern` | `higress.io/canary-by-header-pattern` |
 | `nginx.ingress.kubernetes.io/canary-by-cookie` | `higress.io/canary-by-cookie` |
 
 ### Authentication
 
 | nginx annotation | Higress annotation |
 |------------------|-------------------|
-| `nginx.ingress.kubernetes.io/auth-type` | `higress.io/auth-type` |
-| `nginx.ingress.kubernetes.io/auth-secret` | `higress.io/auth-secret` |
-| `nginx.ingress.kubernetes.io/auth-realm` | `higress.io/auth-realm` |
+> **Not supported since 2.0.0.** `pkg/ingress/kube/annotations/auth.go` configures nothing and only
+> logs: "The annotation nginx.ingress.kubernetes.io/auth-type is no longer supported after version
+> 2.0.0, please use the higress wasm plugin (e.g., basic-auth) as an alternative." Use the
+> `basic-auth` / `key-auth` / `hmac-auth` / `jwt-auth` / `oidc` wasm plugin instead.
+
+| nginx annotation | Replacement |
+|------------------|-------------|
+| `nginx.ingress.kubernetes.io/auth-type` | `basic-auth` wasm plugin |
+| `nginx.ingress.kubernetes.io/auth-secret` | `basic-auth` wasm plugin (`consumers` config) |
+| `nginx.ingress.kubernetes.io/auth-realm` | `basic-auth` wasm plugin (realm in its config) |
 
 ### Load Balancing
 
@@ -71,7 +77,6 @@ These nginx annotations work directly with Higress without any changes:
 | nginx annotation | Higress annotation |
 |------------------|-------------------|
 | `nginx.ingress.kubernetes.io/whitelist-source-range` | `higress.io/whitelist-source-range` |
-| `nginx.ingress.kubernetes.io/denylist-source-range` | `higress.io/denylist-source-range` |
 
 ### Redirect
 
@@ -85,9 +90,12 @@ These nginx annotations work directly with Higress without any changes:
 
 | nginx annotation | Higress annotation |
 |------------------|-------------------|
-| `nginx.ingress.kubernetes.io/proxy-set-headers` | `higress.io/proxy-set-headers` |
-| `nginx.ingress.kubernetes.io/proxy-hide-headers` | `higress.io/proxy-hide-headers` |
-| `nginx.ingress.kubernetes.io/proxy-pass-headers` | `higress.io/proxy-pass-headers` |
+| (no nginx equivalent) | `higress.io/request-header-control-add` |
+| (no nginx equivalent) | `higress.io/request-header-control-update` |
+| (no nginx equivalent) | `higress.io/request-header-control-remove` |
+| (no nginx equivalent) | `higress.io/response-header-control-add` |
+| (no nginx equivalent) | `higress.io/response-header-control-update` |
+| (no nginx equivalent) | `higress.io/response-header-control-remove` |
 
 ### Upstream TLS
 
