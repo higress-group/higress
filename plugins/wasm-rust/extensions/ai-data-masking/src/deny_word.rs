@@ -68,4 +68,12 @@ impl DenyWord {
         }
         None
     }
+
+    pub(crate) fn max_word_bytes(&self) -> usize {
+        self.words.iter().map(String::len).max().unwrap_or(0)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
 }

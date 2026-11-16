@@ -50,6 +50,7 @@ func (c *pineconeProvider) GetProviderType() string {
 type pineconeMetadata struct {
 	Question string `json:"question"`
 	Answer   string `json:"answer"`
+	Consumer string `json:"consumer"`
 }
 
 type pineconeVector struct {
@@ -70,6 +71,10 @@ func (d *pineconeProvider) UploadAnswerAndEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 	// 最少需要填写的参数为 vector 和 question
 	// 下面是一个例子
 	// {
@@ -86,7 +91,7 @@ func (d *pineconeProvider) UploadAnswerAndEmbedding(
 			{
 				ID:         uuid.New().String(),
 				Values:     queryEmb,
-				Properties: pineconeMetadata{Question: queryString, Answer: queryAnswer},
+				Properties: pineconeMetadata{Question: queryString, Answer: queryAnswer, Consumer: consumer},
 			},
 		},
 		Namespace: d.config.collectionID,
@@ -113,11 +118,12 @@ func (d *pineconeProvider) UploadAnswerAndEmbedding(
 }
 
 type pineconeQueryRequest struct {
-	Namespace       string    `json:"namespace"`
-	Vector          []float64 `json:"vector"`
-	TopK            int       `json:"topK"`
-	IncludeMetadata bool      `json:"includeMetadata"`
-	IncludeValues   bool      `json:"includeValues"`
+	Namespace       string                       `json:"namespace"`
+	Vector          []float64                    `json:"vector"`
+	TopK            int                          `json:"topK"`
+	IncludeMetadata bool                         `json:"includeMetadata"`
+	IncludeValues   bool                         `json:"includeValues"`
+	Filter          map[string]map[string]string `json:"filter"`
 }
 
 func (d *pineconeProvider) QueryEmbedding(
@@ -125,6 +131,10 @@ func (d *pineconeProvider) QueryEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(results []QueryResult, ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 	// 最少需要填写的参数为 vector
 	// 下面是一个例子
 	// {
@@ -139,6 +149,7 @@ func (d *pineconeProvider) QueryEmbedding(
 		TopK:            d.config.topK,
 		IncludeMetadata: true,
 		IncludeValues:   false,
+		Filter:          map[string]map[string]string{TenantField: {"$eq": consumer}},
 	})
 	if err != nil {
 		log.Errorf("[Pinecone] Failed to marshal query embedding: %v", err)
@@ -184,9 +195,10 @@ func (d *pineconeProvider) parseQueryResponse(responseBody []byte, log log.Log) 
 	results := make([]QueryResult, 0, resultNum)
 	for i := 0; i < int(resultNum); i++ {
 		result := QueryResult{
-			Text:   gjson.GetBytes(responseBody, fmt.Sprintf("matches.%d.metadata.question", i)).String(),
-			Score:  gjson.GetBytes(responseBody, fmt.Sprintf("matches.%d.score", i)).Float(),
-			Answer: gjson.GetBytes(responseBody, fmt.Sprintf("matches.%d.metadata.answer", i)).String(),
+			Text:     gjson.GetBytes(responseBody, fmt.Sprintf("matches.%d.metadata.question", i)).String(),
+			Score:    gjson.GetBytes(responseBody, fmt.Sprintf("matches.%d.score", i)).Float(),
+			Answer:   gjson.GetBytes(responseBody, fmt.Sprintf("matches.%d.metadata.answer", i)).String(),
+			Consumer: gjson.GetBytes(responseBody, fmt.Sprintf("matches.%d.metadata.consumer", i)).String(),
 		}
 		results = append(results, result)
 	}
