@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -305,6 +306,21 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 			return types.ActionContinue
 		}
 		log.Debugf("Plugin enabled by web_search_options in request")
+	}
+
+	// The query index below is taken from the first occurrence of "messages"
+	// (gjson), and the search result is written back to that same occurrence
+	// with sjson, while the upstream parser keeps the last one: a body that
+	// declares the member twice would have its search results written into the
+	// occurrence the model never receives, silently dropping the augmentation.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "messages"); err != nil {
+		log.Debugf("skip duplicate messages member check: %v", err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage("messages")
+		log.Warnf("rejecting request: %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "duplicate_messages_member",
+			[][2]string{{"content-type", "text/plain"}}, []byte(message), -1)
+		return types.ActionPause
 	}
 
 	var queryIndex int
