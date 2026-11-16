@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +39,7 @@ func init() {
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingBody),
 		wrapper.ProcessResponseBody(onHttpResponseBody),
+		wrapper.WithRebuildAfterRequests[AIStatisticsConfig](1000),
 		wrapper.WithRebuildMaxMemBytes[AIStatisticsConfig](200*1024*1024),
 	)
 }
@@ -51,17 +51,12 @@ const (
 	StatisticsFirstTokenTime   = "ai-statistics-first-token-time"
 	CtxGeneralAtrribute        = "attributes"
 	CtxLogAtrribute            = "logAttributes"
-	CtxStreamingBodyBuffer     = "streamingBodyBuffer"
 	RouteName                  = "route"
 	ClusterName                = "cluster"
 	APIName                    = "api"
 	ConsumerKey                = "x-mse-consumer"
 	RequestPath                = "request_path"
 	SkipProcessing             = "skip_processing"
-
-	// ctxKeySseFramer stores the request-scoped SSE event framer (see
-	// sse_framer.go) in HttpContext for the lifetime of a streaming response.
-	ctxKeySseFramer = "sseFramer"
 
 	// Session ID related
 	SessionID = "session_id"
@@ -87,7 +82,6 @@ const (
 	LLMServiceDuration     = "llm_service_duration"
 	LLMDurationCount       = "llm_duration_count"
 	LLMStreamDurationCount = "llm_stream_duration_count"
-	LLMFailureCount        = "llm_failure_count"
 	ResponseType           = "response_type"
 	ChatID                 = "chat_id"
 	ChatRound              = "chat_round"
@@ -151,6 +145,13 @@ const (
 
 	// Context key for streaming tool calls buffer
 	CtxStreamingToolCallsBuffer = "streamingToolCallsBuffer"
+
+	// Context keys for streaming attribute accumulation (OOM 根治改造)
+	ctxKeySseFramer              = "sseFramer"
+	ctxKeyStreamingAttrAccPrefix = "streamingAttrAcc/" // + attribute.Key
+
+	// 流式 tool_calls 防御上限:map 条目数(异常 index 流防御)
+	maxStreamingToolCalls = 128
 )
 
 // getDefaultAttributes returns the default attributes configuration for empty config
@@ -284,7 +285,8 @@ type StreamingToolCallsBuffer struct {
 }
 
 // extractStreamingToolCalls extracts and assembles tool calls from streaming response chunks (OpenAI format)
-func extractStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer) *StreamingToolCallsBuffer {
+// limit: Function.Arguments 累积上限(到限即停,OOM 根治改造);条目数上限 maxStreamingToolCalls
+func extractStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer, limit int) *StreamingToolCallsBuffer {
 	if buffer == nil {
 		buffer = &StreamingToolCallsBuffer{
 			ToolCalls:       make(map[int]*ToolCall),
@@ -306,6 +308,10 @@ func extractStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer) *S
 			// Get or create tool call entry
 			tc, exists := buffer.ToolCalls[index]
 			if !exists {
+				if len(buffer.ToolCalls) >= maxStreamingToolCalls {
+					// 防御异常 index 流撑大 map
+					continue
+				}
 				tc = &ToolCall{Index: index}
 				buffer.ToolCalls[index] = tc
 			}
@@ -320,9 +326,14 @@ func extractStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer) *S
 			if funcName := tcResult.Get("function.name").String(); funcName != "" {
 				tc.Function.Name = funcName
 			}
-			// Append arguments (they come in chunks)
+			// Append arguments (they come in chunks), 到限即停
 			if args := tcResult.Get("function.arguments").String(); args != "" {
-				tc.Function.Arguments += args
+				if remain := limit - len(tc.Function.Arguments); remain > 0 {
+					if len(args) > remain {
+						args = args[:remain]
+					}
+					tc.Function.Arguments += args
+				}
 			}
 		}
 	}
@@ -332,7 +343,10 @@ func extractStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer) *S
 
 // extractClaudeStreamingToolCalls extracts and assembles tool calls from Claude/Anthropic streaming response chunks
 // Claude format uses events: content_block_start, content_block_delta, content_block_stop
-func extractClaudeStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer) *StreamingToolCallsBuffer {
+// limit: ArgumentsBuffer 累积上限(到限即停,OOM 根治改造;partial_json 在流式期间累积于此,
+// content_block_stop 才拷给 Function.Arguments,限长必须落在本累积点);
+// ToolCalls/InToolBlock/ArgumentsBuffer 条目数上限 maxStreamingToolCalls
+func extractClaudeStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuffer, limit int) *StreamingToolCallsBuffer {
 	if buffer == nil {
 		buffer = &StreamingToolCallsBuffer{
 			ToolCalls:       make(map[int]*ToolCall),
@@ -356,6 +370,11 @@ func extractClaudeStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuff
 			if contentBlockType.Exists() && contentBlockType.String() == "tool_use" {
 				index := int(gjson.GetBytes(chunk, ClaudeIndex).Int())
 
+				if _, exists := buffer.ToolCalls[index]; !exists && len(buffer.ToolCalls) >= maxStreamingToolCalls {
+					// 防御异常 index 流撑大 map
+					continue
+				}
+
 				// Create tool call entry
 				tc := &ToolCall{Index: index}
 
@@ -372,10 +391,13 @@ func extractClaudeStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuff
 				buffer.InToolBlock[index] = true
 				buffer.ArgumentsBuffer[index] = ""
 
-				// Try to extract initial input if present
+				// Try to extract initial input if present(同样按限长截断)
 				if input := gjson.GetBytes(chunk, ClaudeContentBlockInput); input.Exists() {
 					if inputMap, ok := input.Value().(map[string]interface{}); ok {
 						if jsonBytes, err := json.Marshal(inputMap); err == nil {
+							if len(jsonBytes) > limit {
+								jsonBytes = jsonBytes[:limit]
+							}
 							buffer.ArgumentsBuffer[index] = string(jsonBytes)
 						}
 					}
@@ -386,10 +408,16 @@ func extractClaudeStreamingToolCalls(data []byte, buffer *StreamingToolCallsBuff
 			// Check if we're in a tool block
 			index := int(gjson.GetBytes(chunk, ClaudeIndex).Int())
 			if buffer.InToolBlock[index] {
-				// Accumulate partial JSON arguments
+				// Accumulate partial JSON arguments, 到限即停
 				partialJSON := gjson.GetBytes(chunk, ClaudeDeltaPartialJSON)
 				if partialJSON.Exists() {
-					buffer.ArgumentsBuffer[index] += partialJSON.String()
+					if remain := limit - len(buffer.ArgumentsBuffer[index]); remain > 0 {
+						s := partialJSON.String()
+						if len(s) > remain {
+							s = s[:remain]
+						}
+						buffer.ArgumentsBuffer[index] += s
+					}
 				}
 			}
 
@@ -799,35 +827,16 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config AIStatisticsConfig) t
 	return types.ActionContinue
 }
 
-func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, data []byte, endOfStream bool) (ret []byte) {
-	// Fail-open boundary (Design #4249): the named return is pre-set to the
-	// original data and all observability logic below runs under a local
-	// recovery boundary, so a panic in the framer or any consumer produces one
-	// error log line and the upstream response bytes still pass through
-	// unchanged. The wrapper-level recover cannot be relied on for this
-	// contract: it recovers at OnHttpResponseBody scope and would skip
-	// proxywasm.ReplaceHttpResponseBody entirely.
-	ret = data
-	defer func() {
-		if r := recover(); r != nil {
-			log.Errorf("ai-statistics: onHttpStreamingBody recovered from observability panic, passing response chunk through unchanged: %v", r)
-		}
-	}()
-
+func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, data []byte, endOfStream bool) []byte {
 	// Check if processing should be skipped
 	if ctx.GetBoolContext(SkipProcessing, false) {
-		return ret
+		return data
 	}
 
-	// Buffer stream body for record log & span attributes
+	// 逐事件累积流式属性(替代原整流无界 append,OOM 根治改造):
+	// SSE chunk 经 sseFramer 分帧后,按属性提取并累积,每属性上限 value_length_limit
 	if config.shouldBufferStreamingBody {
-		streamingBodyBuffer, ok := ctx.GetContext(CtxStreamingBodyBuffer).([]byte)
-		if !ok {
-			streamingBodyBuffer = data
-		} else {
-			streamingBodyBuffer = append(streamingBodyBuffer, data...)
-		}
-		ctx.SetContext(CtxStreamingBodyBuffer, streamingBodyBuffer)
+		accumulateStreamingAttributes(ctx, config, data, endOfStream)
 	}
 
 	ctx.SetUserAttribute(ResponseType, "stream")
@@ -844,7 +853,7 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, dat
 	requestStartTime, ok := ctx.GetContext(StatisticsRequestStartTime).(int64)
 	if !ok {
 		log.Error("failed to get requestStartTime from http context")
-		return ret
+		return data
 	}
 
 	// If this is the first chunk, record first token duration metric and span attribute
@@ -854,156 +863,46 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config AIStatisticsConfig, dat
 		ctx.SetUserAttribute(LLMFirstTokenDuration, firstTokenTime-requestStartTime)
 	}
 
-	// Frame the raw callback bytes into complete SSE events: one callback is an
-	// arbitrary byte chunk, not a complete event. Token usage and stream-error
-	// detection consume the reassembled complete events, so values split across
-	// host callbacks are recovered exactly as if delivered intact. ChatID
-	// extraction stays on raw data, and tool-call extraction / full-body
-	// JSONPath stay on the end-of-stream accumulated-body path below.
-	framer, ok := ctx.GetContext(ctxKeySseFramer).(*sseFramer)
-	if !ok || framer == nil {
-		framer = &sseFramer{}
-		ctx.SetContext(ctxKeySseFramer, framer)
-	}
-	for _, event := range framer.frameCallback(data) {
-		// Set information about this request
-		if !config.disableOpenaiUsage {
-			processTokenUsageEvent(ctx, event)
-		}
-		// Track streaming errors across events — SSE failures often appear as
-		// data: {"error":{...}} before data: [DONE], so the last chunk alone is
-		// insufficient for error detection. writeMetric consumes this flag once
-		// at end of stream, so one request yields exactly one failure increment
-		// regardless of how many error events matched.
-		if !ctx.GetBoolContext("hasStreamError", false) && isErrorResponse(event) {
-			ctx.SetContext("hasStreamError", true)
-		}
-	}
+	// Set information about this request
+	if !config.disableOpenaiUsage {
+		if usage := tokenusage.GetTokenUsage(ctx, data); usage.TotalToken > 0 {
+			// Set span attributes for ARMS.
+			setSpanAttribute(ArmsTotalToken, usage.TotalToken)
+			setSpanAttribute(ArmsModelName, usage.Model)
+			setSpanAttribute(ArmsInputToken, usage.InputToken)
+			setSpanAttribute(ArmsOutputToken, usage.OutputToken)
 
+			// Set token details to context for later use in attributes
+			if len(usage.InputTokenDetails) > 0 {
+				ctx.SetContext(tokenusage.CtxKeyInputTokenDetails, usage.InputTokenDetails)
+			}
+			if len(usage.OutputTokenDetails) > 0 {
+				ctx.SetContext(tokenusage.CtxKeyOutputTokenDetails, usage.OutputTokenDetails)
+			}
+
+			// Write once
+			_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
+		}
+	}
 	// If the end of the stream is reached, record metrics/logs/spans.
 	if endOfStream {
-		// An unterminated tail is not recoverable and is discarded here. If the
-		// incomplete suffix ever overflowed the cap, the framer entered RESYNC
-		// and counted it; summarize the diagnostic once per request.
-		if overflowCount := framer.drain(); overflowCount > 0 {
-			log.Debugf("ai-statistics: sse framer discarded %d oversized incomplete event(s) during this request", overflowCount)
-		}
-
 		responseEndTime := time.Now().UnixMilli()
 		ctx.SetUserAttribute(LLMServiceDuration, responseEndTime-requestStartTime)
 
 		// Set user defined log & span attributes from streaming body.
 		// Always call setAttributeBySource even if shouldBufferStreamingBody is false,
 		// because token-related attributes are extracted from context (not buffered body).
-		var streamingBodyBuffer []byte
-		if config.shouldBufferStreamingBody {
-			streamingBodyBuffer, _ = ctx.GetContext(CtxStreamingBodyBuffer).([]byte)
-		}
-		setAttributeBySource(ctx, config, ResponseStreamingBody, streamingBodyBuffer)
+		// 流式属性的值来自逐事件累积器(accumulateStreamingAttributes),不再传整流 buffer。
+		setAttributeBySource(ctx, config, ResponseStreamingBody, nil)
 
 		// Write log
 		debugLogAiLog(ctx)
 		_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 
-		// Write metrics — prefer the accumulated buffer for error detection
-		// so that errors split across multiple SSE chunks are not missed.
-		bodyForMetric := data
-		if config.shouldBufferStreamingBody && len(streamingBodyBuffer) > 0 {
-			bodyForMetric = streamingBodyBuffer
-		}
-		writeMetric(ctx, config, bodyForMetric)
+		// Write metrics
+		writeMetric(ctx, config)
 	}
-	return ret
-}
-
-// getTokenUsage is an indirection over tokenusage.GetTokenUsage so integration
-// tests can inject an observability-side panic and pin the fail-open contract
-// (Design #4249 T-19). It is never reassigned in production.
-var getTokenUsage = tokenusage.GetTokenUsage
-
-// inputTokenDetailsProbePaths and outputTokenDetailsProbePaths mirror exactly
-// the paths tokenusage.ExtractInputTokenDetails / ExtractOutputTokenDetails
-// read (github.com/higress-group/wasm-go/pkg/tokenusage). They are used to
-// detect field PRESENCE in a framed event so the token-details policy can
-// distinguish "absent" (retain the previously recorded map) from "present"
-// (replace the whole map with the event's value). Keep in sync with
-// tokenusage: a details-path addition there must be mirrored here, which fails
-// loudly in review (Design #4249).
-var inputTokenDetailsProbePaths = []string{
-	tokenusage.UsageInputTokensDetailsPathOpenAIChatCompletions,
-	tokenusage.UsageInputTokensDetailsPathOpenAIResponses,
-	tokenusage.UsageInputTokensDetailsPathDoubao,
-	tokenusage.UsageInputTokensDetailsPathGemini,
-	tokenusage.UsageMetadataCachedContentTokenCountPathGemini,
-	tokenusage.UsageMetadataToolUsePromptTokenCountPathGemini,
-	tokenusage.UsageCacheCreationInputTokensPathAnthropicMessages,
-	tokenusage.UsageCacheReadInputTokensPathAnthropicMessages,
-}
-
-var outputTokenDetailsProbePaths = []string{
-	tokenusage.UsageOutputTokensDetailsPathOpenAIChatCompletions,
-	tokenusage.UsageOutputTokensDetailsPathOpenAIResponses,
-	tokenusage.UsageOutputTokensDetailsPathDoubao,
-	tokenusage.UsageOutputTokensDetailsPathGemini,
-	tokenusage.UsageMetadataThoughtsTokenCountPathGemini,
-	tokenusage.UsageGeneratedImagesPathDoubao,
-}
-
-// processTokenUsageEvent records token usage from one complete framed SSE
-// event. Scalar merge semantics stay entirely inside tokenusage.GetTokenUsage
-// (an event's explicit value wins; otherwise the stored attribute is reused;
-// values are never summed across events). The token-details policy of Design
-// #4249 is applied around the call: replace the details map when the event
-// carries the corresponding details field, retain the previously recorded map
-// when it does not, never sum, and keep the context layer and the
-// user-attribute layer synchronized. tokenusage creates fresh details maps per
-// call and writes them to the user-attribute layer unconditionally, so without
-// this policy a usage-bearing event that omits details would wipe previously
-// recorded details with an empty map.
-func processTokenUsageEvent(ctx wrapper.HttpContext, event []byte) {
-	// Snapshot the previously recorded details maps BEFORE the call. The
-	// context layer is the source of truth: ai-statistics only ever writes it
-	// with effective (non-nil) maps.
-	prevInputDetails, _ := ctx.GetContext(tokenusage.CtxKeyInputTokenDetails).(map[string]int64)
-	prevOutputDetails, _ := ctx.GetContext(tokenusage.CtxKeyOutputTokenDetails).(map[string]int64)
-
-	usage := getTokenUsage(ctx, event)
-
-	inputDetails := prevInputDetails
-	if wrapper.GetValueFromBody(event, inputTokenDetailsProbePaths) != nil {
-		inputDetails = usage.InputTokenDetails
-	}
-	outputDetails := prevOutputDetails
-	if wrapper.GetValueFromBody(event, outputTokenDetailsProbePaths) != nil {
-		outputDetails = usage.OutputTokenDetails
-	}
-	// Write the effective maps to BOTH layers, undoing tokenusage's
-	// unconditional empty-map user-attribute write when the event omitted the
-	// details. A nil effective map (no details ever seen) skips both writes so
-	// intact-event behavior stays byte-equivalent to before: tokenusage's empty
-	// map remains in the user-attribute layer and the context layer stays
-	// unset.
-	if inputDetails != nil {
-		ctx.SetContext(tokenusage.CtxKeyInputTokenDetails, inputDetails)
-		ctx.SetUserAttribute(tokenusage.CtxKeyInputTokenDetails, inputDetails)
-	}
-	if outputDetails != nil {
-		ctx.SetContext(tokenusage.CtxKeyOutputTokenDetails, outputDetails)
-		ctx.SetUserAttribute(tokenusage.CtxKeyOutputTokenDetails, outputDetails)
-	}
-
-	if usage.TotalToken > 0 {
-		// Set span attributes for ARMS. Repeated writes across multiple usage
-		// events are per-key last-write-wins, so the final complete usage event
-		// determines the span (Design #4249 output consistency).
-		setSpanAttribute(ArmsTotalToken, usage.TotalToken)
-		setSpanAttribute(ArmsModelName, usage.Model)
-		setSpanAttribute(ArmsInputToken, usage.InputToken)
-		setSpanAttribute(ArmsOutputToken, usage.OutputToken)
-
-		// Write once
-		_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
-	}
+	return data
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body []byte) types.Action {
@@ -1055,7 +954,7 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config AIStatisticsConfig, body
 	_ = ctx.WriteUserAttributeToLogWithKey(wrapper.AILogKey)
 
 	// Write metrics
-	writeMetric(ctx, config, body)
+	writeMetric(ctx, config)
 
 	return types.ActionContinue
 }
@@ -1086,7 +985,8 @@ func setAttributeBySource(ctx wrapper.HttpContext, config AIStatisticsConfig, so
 			case ResponseHeader:
 				value, _ = proxywasm.GetHttpResponseHeader(attribute.Value)
 			case ResponseStreamingBody:
-				value = extractStreamingBodyByJsonPath(body, attribute.Value, attribute.Rule)
+				// 读该属性的逐事件累积器;nil 表示无值,走原有 fallback/DefaultValue 逻辑
+				value = getStreamingAccValue(ctx, attribute.Key)
 			case ResponseBody:
 				value = gjson.GetBytes(body, attribute.Value).Value()
 			default:
@@ -1223,12 +1123,8 @@ func getBuiltinAttributeFallback(ctx wrapper.HttpContext, config AIStatisticsCon
 		}
 	case BuiltinAnswerKey:
 		if source == ResponseStreamingBody {
-			// Try OpenAI format first
-			if value := extractStreamingBodyByJsonPath(body, AnswerPathOpenAIStreaming, rule); value != nil && value != "" {
-				return value
-			}
-			// Try Claude format
-			if value := extractStreamingBodyByJsonPath(body, AnswerPathClaudeStreaming, rule); value != nil && value != "" {
+			// 读逐事件累积器(协议优先级已在累积时按事件内 OpenAI→Claude 顺序处理)
+			if value := getStreamingAccValue(ctx, BuiltinAnswerKey); value != nil && value != "" {
 				return value
 			}
 		} else if source == ResponseBody {
@@ -1243,22 +1139,14 @@ func getBuiltinAttributeFallback(ctx wrapper.HttpContext, config AIStatisticsCon
 		}
 	case BuiltinToolCallsKey:
 		if source == ResponseStreamingBody {
-			// Get or create buffer from context
-			var buffer *StreamingToolCallsBuffer
-			if existingBuffer, ok := ctx.GetContext(CtxStreamingToolCallsBuffer).(*StreamingToolCallsBuffer); ok {
-				buffer = existingBuffer
-			}
-			// Try OpenAI format first
-			buffer = extractStreamingToolCalls(body, buffer)
-			// Also try Claude format (both formats can be checked)
-			buffer = extractClaudeStreamingToolCalls(body, buffer)
-			ctx.SetContext(CtxStreamingToolCallsBuffer, buffer)
-
-			// Also set tool_calls to user attributes so they appear in ai_log
-			toolCalls := getToolCallsFromBuffer(buffer)
-			if len(toolCalls) > 0 {
-				ctx.SetUserAttribute(BuiltinToolCallsKey, toolCalls)
-				return toolCalls
+			// 逐事件喂入的状态机在流式期间已存 ctx,EOS 时直接装配
+			if buffer, ok := ctx.GetContext(CtxStreamingToolCallsBuffer).(*StreamingToolCallsBuffer); ok && buffer != nil {
+				// Also set tool_calls to user attributes so they appear in ai_log
+				toolCalls := getToolCallsFromBuffer(buffer)
+				if len(toolCalls) > 0 {
+					ctx.SetUserAttribute(BuiltinToolCallsKey, toolCalls)
+					return toolCalls
+				}
 			}
 		} else if source == ResponseBody {
 			if value := gjson.GetBytes(body, ToolCallsPathNonStreaming).Value(); value != nil {
@@ -1267,7 +1155,8 @@ func getBuiltinAttributeFallback(ctx wrapper.HttpContext, config AIStatisticsCon
 		}
 	case BuiltinReasoningKey:
 		if source == ResponseStreamingBody {
-			if value := extractStreamingBodyByJsonPath(body, ReasoningPathStreaming, RuleAppend); value != nil && value != "" {
+			// 读逐事件累积器(固定 append,与改造前一致)
+			if value := getStreamingAccValue(ctx, BuiltinReasoningKey); value != nil && value != "" {
 				return value
 			}
 		} else if source == ResponseBody {
@@ -1311,18 +1200,176 @@ func getBuiltinAttributeFallback(ctx wrapper.HttpContext, config AIStatisticsCon
 	return nil
 }
 
-// extractStreamingBodyByJsonPath 从 SSE 流式响应中按 jsonPath 提取属性值。
-// 入参 data 允许包含一个或多个已经拼接的 SSE chunk，jsonPath 使用 gjson 语法，rule 决定多 chunk 场景下取首个、覆盖或拼接。
-// 返回值为提取到的业务值；当规则为 first/replace 时，仅把路径存在且非空的 chunk 视为有效 chunk，避免首个空字符串覆盖后续真实值。
-// 边界情况：append 会保留历史行为继续拼接字符串，空 chunk 不产生额外内容；不支持的 rule 返回 nil 并记录错误日志。
+// ==================== 流式属性逐事件累积(OOM 根治改造) ====================
+// 替代原 CtxStreamingBodyBuffer 整流无界累积:SSE chunk 经 sseFramer 分帧后,
+// 逐事件按属性提取并累积,每属性累积上限 = config.valueLengthLimit,到限即停。
+// 累积器存 ctx,请求结束即释放。
+
+// 流式属性累积器:每个流式来源属性一份
+type streamingAttrAcc struct {
+	rule     string // first/replace/append,取 attribute.Rule
+	value    string // 累积值(append=拼接;replace=最新;first=首个)
+	finished bool   // append 到限 / first 已取值 / rule 非法 → 后续事件跳过该属性
+	logged   bool   // rule 非法的错误日志每请求只记一次(不刷屏)
+}
+
+// isStreamingSourced 判定与 parseConfig 的 shouldBufferStreamingBody 判定保持一致
+func isStreamingSourced(attr *Attribute) bool {
+	if attr.ValueSource == ResponseStreamingBody {
+		return true
+	}
+	if attr.ValueSource == "" && isBuiltinAttribute(attr.Key) {
+		for _, src := range getBuiltinAttributeDefaultSources(attr.Key) {
+			if src == ResponseStreamingBody && needsBodyBuffering(attr.Key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func getOrCreateStreamingAcc(ctx wrapper.HttpContext, attr *Attribute) *streamingAttrAcc {
+	key := ctxKeyStreamingAttrAccPrefix + attr.Key
+	if acc, ok := ctx.GetContext(key).(*streamingAttrAcc); ok && acc != nil {
+		return acc
+	}
+	acc := &streamingAttrAcc{rule: attr.Rule}
+	ctx.SetContext(key, acc)
+	return acc
+}
+
+// getStreamingAccValue 读取累积器值;无累积器返回 nil(走原有 fallback/DefaultValue 逻辑)。
+// 注意:读出端 main.go setAttributeBySource 以 (value == nil || value == "") 判空,
+// 累积器存在但值为空串与无值同路径,与改造前 extractStreamingBodyByJsonPath 返回 "" 一致。
+func getStreamingAccValue(ctx wrapper.HttpContext, attrKey string) interface{} {
+	if acc, ok := ctx.GetContext(ctxKeyStreamingAttrAccPrefix + attrKey).(*streamingAttrAcc); ok && acc != nil {
+		return acc.value
+	}
+	return nil
+}
+
+// accumulateStreamingAttributes 分帧并逐事件累积所有流式来源属性
+func accumulateStreamingAttributes(ctx wrapper.HttpContext, config AIStatisticsConfig, data []byte, endOfStream bool) {
+	framer, ok := ctx.GetContext(ctxKeySseFramer).(*sseFramer)
+	if !ok || framer == nil {
+		framer = &sseFramer{}
+		ctx.SetContext(ctxKeySseFramer, framer)
+	}
+	events := framer.frameCallback(data)
+	if endOfStream {
+		if tail := framer.flush(); len(tail) > 0 { // 本地增量:尽力解析无终止符尾事件
+			events = append(events, tail)
+		}
+	}
+	if len(events) == 0 {
+		return
+	}
+	for i := range config.attributes {
+		attr := &config.attributes[i]
+		if !isStreamingSourced(attr) {
+			continue
+		}
+		// 内置 tool_calls 走 consumeEvent 内的状态机分支,累积器仅作 finished 占位
+		acc := getOrCreateStreamingAcc(ctx, attr)
+		if acc.finished {
+			continue
+		}
+		for _, ev := range events {
+			consumeEvent(ctx, config, attr, acc, ev)
+			if acc.finished {
+				break
+			}
+		}
+	}
+}
+
+// consumeEvent 对单个 SSE 事件按属性提取并累积。提取路径选择与改造前逐条对应:
+//   - attr.Value != "":用配置路径 + attr.Rule
+//   - 内置 answer:先试 choices.0.delta.content(OpenAI),不存在再试 delta.text(Claude),
+//     事件内顺序与原 main.go getBuiltinAttributeFallback 的 OpenAI→Claude 一致
+//   - 内置 reasoning:choices.0.delta.reasoning_content,固定 append
+func consumeEvent(ctx wrapper.HttpContext, config AIStatisticsConfig, attr *Attribute, acc *streamingAttrAcc, ev []byte) {
+	if attr.Value == "" && attr.Key == BuiltinToolCallsKey {
+		// 内置 tool_calls:复用现有状态机,限长落在累积点(函数内部追加处)
+		buffer, _ := ctx.GetContext(CtxStreamingToolCallsBuffer).(*StreamingToolCallsBuffer)
+		buffer = extractStreamingToolCalls(ev, buffer, config.valueLengthLimit)
+		buffer = extractClaudeStreamingToolCalls(ev, buffer, config.valueLengthLimit)
+		ctx.SetContext(CtxStreamingToolCallsBuffer, buffer)
+		return
+	}
+
+	var paths []string
+	rule := acc.rule
+	if attr.Value != "" {
+		paths = []string{attr.Value}
+	} else {
+		switch attr.Key {
+		case BuiltinAnswerKey:
+			paths = []string{AnswerPathOpenAIStreaming, AnswerPathClaudeStreaming}
+		case BuiltinReasoningKey:
+			paths = []string{ReasoningPathStreaming}
+			rule = RuleAppend // 固定 append,与原 main.go:1144 一致
+		default:
+			return
+		}
+	}
+
+	// rule 为空/非法:保持改造前现状(不支持、值为空),错误日志每请求只记一次
+	if rule != RuleFirst && rule != RuleReplace && rule != RuleAppend {
+		if !acc.logged {
+			log.Errorf("unsupported rule type: %s", rule)
+			acc.logged = true
+		}
+		acc.finished = true // 值恒为空,跳过后续解析省 CPU(输出无差异)
+		return
+	}
+
+	// 事件内按路径顺序取首个 Exists 的值
+	var jsonObj gjson.Result
+	matched := false
+	for _, p := range paths {
+		jsonObj = gjson.GetBytes(ev, p)
+		if jsonObj.Exists() {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return
+	}
+
+	switch rule {
+	case RuleAppend:
+		s := jsonObj.String()
+		if remain := config.valueLengthLimit - len(acc.value); remain > 0 {
+			if len(s) > remain {
+				s = s[:remain]
+			}
+			acc.value += s
+		}
+		if len(acc.value) >= config.valueLengthLimit {
+			acc.finished = true // 到限即停,后续事件跳过该属性
+		}
+	case RuleFirst:
+		// Exists 即取值(含空串)并停止,与 extractStreamingBodyByJsonPath 的 break 语义一致
+		acc.value = jsonObj.String()
+		acc.finished = true
+	case RuleReplace:
+		s := jsonObj.String()
+		if len(s) > config.valueLengthLimit {
+			s = s[:config.valueLengthLimit]
+		}
+		acc.value = s
+	}
+}
+
 func extractStreamingBodyByJsonPath(data []byte, jsonPath string, rule string) interface{} {
 	chunks := bytes.Split(bytes.TrimSpace(wrapper.UnifySSEChunk(data)), []byte("\n\n"))
 	var value interface{}
 	if rule == RuleFirst {
 		for _, chunk := range chunks {
 			jsonObj := gjson.GetBytes(chunk, jsonPath)
-			// 流式响应中首个 chunk 可能携带空 model/payload，first 语义应取首个非空有效值。
-			if isNonEmptyJSONValue(jsonObj) {
+			if jsonObj.Exists() {
 				value = jsonObj.Value()
 				break
 			}
@@ -1330,8 +1377,7 @@ func extractStreamingBodyByJsonPath(data []byte, jsonPath string, rule string) i
 	} else if rule == RuleReplace {
 		for _, chunk := range chunks {
 			jsonObj := gjson.GetBytes(chunk, jsonPath)
-			// replace 语义取最后一个非空有效值，防止后续空值把已提取的业务值清空。
-			if isNonEmptyJSONValue(jsonObj) {
+			if jsonObj.Exists() {
 				value = jsonObj.Value()
 			}
 		}
@@ -1349,21 +1395,6 @@ func extractStreamingBodyByJsonPath(data []byte, jsonPath string, rule string) i
 		log.Errorf("unsupported rule type: %s", rule)
 	}
 	return value
-}
-
-// isNonEmptyJSONValue 判断 gjson 结果是否可以作为 first/replace 的有效流式提取值。
-// 输入必须是已经按 jsonPath 查询出的结果；路径不存在、JSON null 或空字符串都视为无效。
-// 返回 true 表示该值可以写入日志、指标或 span；数字 0、布尔 false、空对象/数组仍保留为有效值，避免破坏非字符串字段的历史兼容性。
-// 边界情况：只跳过明确的空字符串，不裁剪空白字符串，避免改变调用方对原始文本值的处理。
-func isNonEmptyJSONValue(result gjson.Result) bool {
-	if !result.Exists() {
-		return false
-	}
-	value := result.Value()
-	if value == nil || value == "" {
-		return false
-	}
-	return true
 }
 
 // shouldLogDebug returns true if the log level is debug or trace
@@ -1468,59 +1499,7 @@ func setSpanAttribute(key string, value interface{}) {
 	}
 }
 
-// isErrorResponse checks whether the LLM response indicates an error.
-// Detects errors by:
-// 1. Response body contains non-null "error" field at root level (OpenAI/Anthropic format).
-//    Handles both raw JSON and SSE "data: " prefixed chunks, including multi-event
-//    streaming buffers.
-// 2. HTTP status code >= 400 as fallback when body is empty.
-//
-// Note: some providers (e.g. Anthropic streaming responses) emit {"error":""}
-// even on success; an empty-string error is treated as not-an-error to avoid
-// false positives.
-func isErrorResponse(body []byte) bool {
-	if len(body) > 0 {
-		// SSE chunks are prefixed with "data: "; accumulated buffers contain
-		// multiple SSE events separated by \n\n. Split and check each event.
-		trimmed := bytes.TrimSpace(body)
-		if bytes.HasPrefix(trimmed, []byte("data: ")) {
-			for _, event := range bytes.Split(trimmed, []byte("\n\n")) {
-				jsonBody := bytes.TrimSpace(event)
-				if bytes.HasPrefix(jsonBody, []byte("data: ")) {
-					jsonBody = jsonBody[len("data: "):]
-				}
-				if hasErrorField(jsonBody) {
-					return true
-				}
-			}
-			return false
-		}
-		return hasErrorField(body)
-	}
-	// Fallback: check HTTP status code for errors with empty body (connection reset, timeout, etc.)
-	if len(body) == 0 {
-		if statusCode, err := proxywasm.GetHttpResponseHeader(":status"); err == nil {
-			if code, err := strconv.Atoi(statusCode); err == nil && code >= 400 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// hasErrorField checks whether a JSON body contains a non-null, non-empty-string "error" field.
-func hasErrorField(jsonBody []byte) bool {
-	errorVal := gjson.GetBytes(jsonBody, "error")
-	if errorVal.Exists() && errorVal.Value() != nil {
-		if errorVal.Type == gjson.String && errorVal.String() == "" {
-			return false
-		}
-		return true
-	}
-	return false
-}
-
-func writeMetric(ctx wrapper.HttpContext, config AIStatisticsConfig, body []byte) {
+func writeMetric(ctx wrapper.HttpContext, config AIStatisticsConfig) {
 	// Generate usage metrics
 	var ok bool
 	var route, cluster, model string
@@ -1534,29 +1513,6 @@ func writeMetric(ctx wrapper.HttpContext, config AIStatisticsConfig, body []byte
 	if !ok {
 		log.Info("ClusterName type assert failed, skip metric record")
 		return
-	}
-
-	// Get model for metric label (may be empty for error responses)
-	modelStr := "-"
-	if m := ctx.GetUserAttribute(tokenusage.CtxKeyModel); m != nil {
-		if ms, ok := m.(string); ok {
-			modelStr = ms
-		}
-	}
-	// Fallback to request model for error responses where usage info is unavailable
-	if modelStr == "-" {
-		if rm, ok := ctx.GetContext(tokenusage.CtxKeyRequestModel).(string); ok && rm != "" {
-			modelStr = rm
-		}
-	}
-
-	// Count failure before usage check, so error responses without usage info are still counted.
-	// For streaming, also check the hasStreamError flag set during onHttpStreamingBody.
-	// llm_failure_count is intentionally incremented regardless of disableOpenaiUsage,
-	// because error responses carry no usage info and operators still need the failure
-	// signal even when usage tracking is off.
-	if isErrorResponse(body) || ctx.GetBoolContext("hasStreamError", false) {
-		config.incrementCounter(generateMetricName(route, cluster, modelStr, consumer, LLMFailureCount), 1)
 	}
 
 	if config.disableOpenaiUsage {

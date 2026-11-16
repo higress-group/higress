@@ -129,6 +129,23 @@ func (f *sseFramer) drain() (overflowCount int) {
 	return f.overflowCount
 }
 
+// [本地增量，非上游代码] flush 在 endOfStream == true 时调用，返回保留的 tail
+// （无终止符的尾事件）经 wrapper.UnifySSEChunk 归一化后的内容，供尽力解析——
+// 与改造前"整流 buffer 的最后一段也会被 split 后解析"的行为对齐。
+// 两个实现约定（评审确认）：
+//   - RESYNC 状态下必须返回 nil：进入 RESYNC 时 tail 已置 nil（被丢弃的超大
+//     事件），朴素实现天然满足，此处注释钉死，不得"恢复"残片；
+//   - 返回前必须过 wrapper.UnifySSEChunk，与 frameCallback 对正常事件的
+//     归一化保持一致（bytes.ReplaceAll 总是返回拷贝，不会改动 tail 本身）。
+func (f *sseFramer) flush() []byte {
+	if f.tail == nil {
+		return nil
+	}
+	out := wrapper.UnifySSEChunk(f.tail)
+	f.tail = nil
+	return out
+}
+
 // byteWindow is a read-only view over the virtual concatenation a‖b. It lets
 // the scanner run index arithmetic over the retained tail (or RESYNC carry)
 // and the current callback chunk without materializing a combined buffer.
