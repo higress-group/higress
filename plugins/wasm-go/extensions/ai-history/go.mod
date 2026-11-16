@@ -7,6 +7,7 @@ go 1.24.1
 toolchain go1.24.4
 
 require (
+	github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody v0.0.0
 	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250822030947-8345453fddd0
 	github.com/higress-group/wasm-go v1.0.6-0.20251103065747-41d65dbb2f9e
 	github.com/stretchr/testify v1.9.0
@@ -24,3 +25,5 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody => ../../pkg/jsonbody

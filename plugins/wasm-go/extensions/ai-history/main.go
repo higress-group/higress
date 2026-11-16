@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -197,6 +199,21 @@ func TrimQuote(source string) string {
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte, log log.Log) types.Action {
+	// The question is extracted from the first occurrence of "messages" (gjson
+	// resolves config.questionFrom.requestBody against it), and the cache-hit
+	// path below rebuilds the body from that same occurrence, while the upstream
+	// parser keeps the last one: a body that declares the member twice would be
+	// recorded with one conversation and served another, so reject it before any
+	// Redis access.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "messages"); err != nil {
+		log.Debugf("skip duplicate messages member check: %v", err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage("messages")
+		log.Warnf("rejecting request: %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "duplicate_messages_member",
+			[][2]string{{"content-type", "text/plain"}}, []byte(message), -1)
+		return types.ActionPause
+	}
 	bodyJson := gjson.ParseBytes(body)
 	if bodyJson.Get("stream").Bool() {
 		ctx.SetContext(StreamContextKey, struct{}{})
