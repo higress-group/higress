@@ -331,3 +331,162 @@ func TestMatchesPreservesBypassSemantics(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchDomainASCIICase(t *testing.T) {
+	tests := []struct {
+		name    string
+		domain  string
+		pattern string
+		want    bool
+	}{
+		{
+			name:    "exact uppercase pattern",
+			domain:  "api.example.com",
+			pattern: "API.EXAMPLE.COM",
+			want:    true,
+		},
+		{
+			name:    "exact uppercase domain",
+			domain:  "API.EXAMPLE.COM",
+			pattern: "api.example.com",
+			want:    true,
+		},
+		{
+			name:    "exact mixed case",
+			domain:  "ApI.ExAmPlE.CoM",
+			pattern: "aPi.eXaMpLe.cOm",
+			want:    true,
+		},
+		{
+			name:    "wildcard mixed case",
+			domain:  "V1.API.Example.COM",
+			pattern: "*.api.EXAMPLE.com",
+			want:    true,
+		},
+		{
+			name:    "different domain",
+			domain:  "api.example.net",
+			pattern: "API.EXAMPLE.COM",
+			want:    false,
+		},
+		{
+			name:    "non ASCII exact",
+			domain:  "bücher.example",
+			pattern: "bücher.example",
+			want:    true,
+		},
+		{
+			name:    "non ASCII case variant",
+			domain:  "bücher.example",
+			pattern: "BÜCHER.EXAMPLE",
+			want:    false,
+		},
+		{
+			name:    "wildcard does not match apex",
+			domain:  "example.com",
+			pattern: "*.EXAMPLE.COM",
+			want:    false,
+		},
+		{
+			name:    "question mark remains literal",
+			domain:  "api1.example.com",
+			pattern: "api?.EXAMPLE.COM",
+			want:    false,
+		},
+		{
+			name:    "character class remains literal",
+			domain:  "a.example.com",
+			pattern: "[ab].EXAMPLE.COM",
+			want:    false,
+		},
+		{
+			name:    "dot remains literal",
+			domain:  "apiXexample.com",
+			pattern: "API.EXAMPLE.COM",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, matchDomain(tt.domain, tt.pattern))
+		})
+	}
+}
+
+func TestMatchRulesDomainASCIICase(t *testing.T) {
+	tests := []struct {
+		name           string
+		mode           string
+		requestDomain  string
+		configuredRule string
+		want           bool
+	}{
+		{
+			name:           "blacklist uppercase pattern",
+			mode:           ModeBlacklist,
+			requestDomain:  "api.example.com",
+			configuredRule: "API.EXAMPLE.COM",
+			want:           true,
+		},
+		{
+			name:           "blacklist uppercase domain",
+			mode:           ModeBlacklist,
+			requestDomain:  "API.EXAMPLE.COM",
+			configuredRule: "api.example.com",
+			want:           true,
+		},
+		{
+			name:           "blacklist mixed case wildcard",
+			mode:           ModeBlacklist,
+			requestDomain:  "V1.API.Example.COM",
+			configuredRule: "*.api.EXAMPLE.com",
+			want:           true,
+		},
+		{
+			name:           "whitelist uppercase pattern",
+			mode:           ModeWhitelist,
+			requestDomain:  "api.example.com",
+			configuredRule: "API.EXAMPLE.COM",
+			want:           false,
+		},
+		{
+			name:           "whitelist uppercase domain",
+			mode:           ModeWhitelist,
+			requestDomain:  "API.EXAMPLE.COM",
+			configuredRule: "api.example.com",
+			want:           false,
+		},
+		{
+			name:           "whitelist mixed case wildcard",
+			mode:           ModeWhitelist,
+			requestDomain:  "V1.API.Example.COM",
+			configuredRule: "*.api.EXAMPLE.com",
+			want:           false,
+		},
+		{
+			name:           "blacklist different domain",
+			mode:           ModeBlacklist,
+			requestDomain:  "api.example.net",
+			configuredRule: "API.EXAMPLE.COM",
+			want:           false,
+		},
+		{
+			name:           "whitelist different domain",
+			mode:           ModeWhitelist,
+			requestDomain:  "api.example.net",
+			configuredRule: "API.EXAMPLE.COM",
+			want:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := MatchRules{
+				Mode:     tt.mode,
+				RuleList: []Rule{{Domain: tt.configuredRule}},
+			}
+			assert.Equal(t, tt.want, config.Matches(RequestAttributes{Domain: tt.requestDomain}))
+		})
+	}
+}
