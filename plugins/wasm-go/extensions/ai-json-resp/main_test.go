@@ -312,7 +312,7 @@ func TestRequestSchemaValidation(t *testing.T) {
 				host, status := test.NewTestHost(data)
 				defer host.Reset()
 				require.Equal(t, types.OnPluginStartStatusOK, status)
-				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+				require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
 					{":authority", "example.com"}, {":path", "/v1/chat/completions"},
 					{":method", "POST"}, {"content-type", "application/json"},
 				}))
@@ -359,8 +359,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"Content-Length", "100"},
 			})
 
-			// 应该返回ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取并处理请求体，因此暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 		})
 
 		// 测试来自插件的请求头处理
@@ -397,8 +397,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"Content-Length", "100"},
 			})
 
-			// 应该返回ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取并处理请求体，因此暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 		})
 
 		// 测试配置错误的请求头处理

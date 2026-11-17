@@ -465,6 +465,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.
 		}
 		if fromThisPlugin {
 			ctx.SetContext(FROM_THIS_PLUGIN_KEY, true)
+			ctx.DontReadRequestBody()
 			return types.ActionContinue
 		}
 	} else {

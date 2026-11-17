@@ -142,7 +142,7 @@ func TestOnHttpRequestBody_MalformedJSON(t *testing.T) {
 			{":path", "/api/test"},
 			{":method", "POST"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		action = host.CallOnHttpRequestBody([]byte("not a json {{{"))
 		require.Equal(t, types.ActionPause, action)
@@ -203,7 +203,7 @@ func TestOnHttpRequestBodyTopLevelTypes(t *testing.T) {
 								{":path", "/api/test"},
 								{":method", "POST"},
 							})
-							require.Equal(t, types.ActionContinue, action)
+							require.Equal(t, types.HeaderStopIteration, action)
 							action = host.CallOnHttpRequestBody([]byte(bodyCase.body))
 
 							response := host.GetLocalResponse()
@@ -257,7 +257,7 @@ func TestOnHttpRequestBodyNumberBounds(t *testing.T) {
 					{":path", "/api/test"},
 					{":method", "POST"},
 				})
-				require.Equal(t, types.ActionContinue, action)
+				require.Equal(t, types.HeaderStopIteration, action)
 				action = host.CallOnHttpRequestBody([]byte(testCase.literal))
 
 				response := host.GetLocalResponse()
@@ -332,7 +332,7 @@ func TestOnHttpRequestBodyNumberNormalization(t *testing.T) {
 							{":path", "/api/test"},
 							{":method", "POST"},
 						})
-						require.Equal(t, types.ActionContinue, action)
+						require.Equal(t, types.HeaderStopIteration, action)
 						action = host.CallOnHttpRequestBody([]byte(`{"n":` + testCase.literal + `}`))
 
 						expectAccept := testCase.validNumber
@@ -368,7 +368,7 @@ func TestOnHttpRequestBody_CompileFailure_PassThrough(t *testing.T) {
 			{":path", "/api/test"},
 			{":method", "POST"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		action = host.CallOnHttpRequestBody([]byte(`{"name":"ok"}`))
 		require.Equal(t, types.ActionContinue, action)
@@ -411,7 +411,7 @@ func TestOnHttpRequestBody_AfterHeaderValidationPass_BodyValidates(t *testing.T)
 			{":method", "POST"},
 			{"content-type", "application/json"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 		require.Nil(t, host.GetLocalResponse())
 
 		// Body fails schema (missing required `id`).

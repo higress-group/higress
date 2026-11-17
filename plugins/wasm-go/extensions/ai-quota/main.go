@@ -157,6 +157,7 @@ func parseConfig(json gjson.Result, config *QuotaConfig) error {
 
 func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types.Action {
 	context.DisableReroute()
+	context.DontReadRequestBody()
 	log.Debugf("onHttpRequestHeaders()")
 	// get tokens
 	consumer, err := proxywasm.GetHttpRequestHeader("x-mse-consumer")
@@ -183,7 +184,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 			return queryQuota(context, config, consumer, path)
 		}
 		if adminMode == AdminModeRefresh || adminMode == AdminModeDelta {
-			context.BufferRequestBody()
+			context.RequireRequestBody()
 			return types.HeaderStopIteration
 		}
 		return types.ActionContinue

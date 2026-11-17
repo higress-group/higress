@@ -80,6 +80,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, c config.PluginConfig, log lo
 	contentType, _ := proxywasm.GetHttpRequestHeader("content-type")
 	// The request does not have a body.
 	if contentType == "" {
+		ctx.DontReadRequestBody()
 		return types.ActionContinue
 	}
 	if !strings.Contains(contentType, "application/json") {
