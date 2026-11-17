@@ -220,7 +220,7 @@ lb_config:
 | `cluster_header` | string | 选填 | `x-higress-target-cluster` | 通过取该header的值得知需要路由到哪个后端服务 |
 | `queue_size`      | int | 选填 | 100 | 根据最近的多少个请求进行观测指标的计算 |
 | `ewma_beta` | float | 选填 | 0.5 | `AdaptiveScore` 中历史 EWMA 值的权重，取值范围 0~1 |
-| `p2c_choices` | int | 选填 | 2 | `AdaptiveScore` 每次随机采样并比较的候选服务数，配置值不小于服务数时比较全部服务 |
+| `p2c_choices` | int | 选填 | 2 | `AdaptiveScore` 每次随机采样并比较的唯一候选服务数，配置值不小于唯一候选数时比较全部候选 |
 | `ttft_weight` | float | 选填 | 0.7 | `AdaptiveScore` 首包延迟权重 |
 | `total_latency_weight` | float | 选填 | 0.3 | `AdaptiveScore` 总响应延迟权重 |
 | `error_penalty` | float | 选填 | 3.0 | `AdaptiveScore` 对插件实例启动以来累计错误率的惩罚系数 |
@@ -243,6 +243,10 @@ lb_config:
 - `AdaptiveScore`: 综合 EWMA 首包延迟、EWMA 总延迟、当前并发数和累计失败率计算分数，选择分数最低的服务；适合 LLM 后端服务延迟和负载持续波动的场景
 
 `AdaptiveScore` 的失败率基于当前插件实例生命周期内累计的成功和失败次数计算，目前不使用时间窗口或衰减。
+
+`AdaptiveScore` 在请求占比和冷却过滤后，按服务名的精确字符串合并重复候选，再进行有界的不放回抽样。比较全部候选时保留首次出现的顺序，局部选择和全局 in-flight 使用相同规则。同名服务即使对应不同 cluster，也视为同一个候选；现有指标和计数同样以服务名为键。
+
+兼容性说明：`service_list` 的重复项过去可能形成未文档化的隐含权重或并列随机行为，本次去重会移除这些副作用。其他调度模式不受影响；需要显式权重的场景需另行提出 Proposal。
 
 `AdaptiveScore` 开启 `global_inflight_enabled` 后，会使用 Redis Lua 原子完成“按本地分数和全局 in-flight 修正后的分数选择服务，并将选中服务计数 +1”。请求结束时插件会将该服务计数 -1。Redis 初始化、请求或返回异常时会降级到本地 `AdaptiveScore`，不阻断请求。
 
