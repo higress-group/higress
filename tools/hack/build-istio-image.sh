@@ -32,12 +32,15 @@ ORIGINAL_HUB=${HUB}
 echo "IMG_URL=$IMG_URL"
 
 if [ -n "$IMG_URL" ]; then
-  TAG=${IMG_URL#*:}
-  HUB=${IMG_URL%:*}
-  HUB=${HUB%/*}
-  if [ "$TAG" == "${IMG_URL}" ]; then
+  IMG_NAME=${IMG_URL##*/}
+  if [[ "$IMG_NAME" == *:* ]]; then
+    TAG=${IMG_NAME##*:}
+    HUB=${IMG_URL%:*}
+  else
     TAG=latest
+    HUB=${IMG_URL}
   fi
+  HUB=${HUB%/*}
 fi
 
 echo "HUB=$HUB"
