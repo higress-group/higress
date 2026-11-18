@@ -279,6 +279,14 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body [
 		openaiRequest.Messages = append([]chatMessage{systemMsg}, openaiRequest.Messages...)
 	}
 
+	// Some clients (e.g. Claude Code) embed an extra system-role message inside the
+	// messages array in addition to Claude's top-level system field. After conversion
+	// this leaves more than one system message, and any system message that is not the
+	// first one makes strict OpenAI-compatible backends (such as vLLM) reject the request
+	// with "System message must be at the beginning.". Merge every system message into a
+	// single leading one so the output always has at most one system message at index 0.
+	openaiRequest.Messages = mergeSystemMessages(openaiRequest.Messages)
+
 	// Convert tools if present
 	for _, claudeTool := range claudeRequest.Tools {
 		openaiTool := tool{
@@ -355,6 +363,60 @@ func (c *ClaudeToOpenAIConverter) ConvertClaudeRequestToOpenAIWithOptions(body [
 
 	log.Debugf("[Claude->OpenAI] Converted OpenAI request body: %s", string(result))
 	return result, nil
+}
+
+// mergeSystemMessages collapses every system-role message into a single leading
+// system message. Strict OpenAI-compatible backends (e.g. vLLM) reject a request
+// when a system message appears anywhere other than the first position. This can
+// happen when the client embeds a system-role message inside the messages array
+// on top of Claude's top-level system field.
+//
+// - No system message: the messages are returned unchanged.
+// - Exactly one system message: its content is preserved as-is and it is moved to
+//   the front (a no-op when it already leads).
+// - Multiple system messages: their contents are concatenated into a single block
+//   array and emitted as one leading system message.
+func mergeSystemMessages(messages []chatMessage) []chatMessage {
+	var systemMessages []chatMessage
+	others := make([]chatMessage, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role == roleSystem {
+			systemMessages = append(systemMessages, msg)
+		} else {
+			others = append(others, msg)
+		}
+	}
+
+	switch len(systemMessages) {
+	case 0:
+		return messages
+	case 1:
+		return append([]chatMessage{systemMessages[0]}, others...)
+	default:
+		var mergedContent []chatMessageContent
+		for _, msg := range systemMessages {
+			mergedContent = append(mergedContent, systemContentBlocks(msg.Content)...)
+		}
+		merged := chatMessage{Role: roleSystem, Content: mergedContent}
+		return append([]chatMessage{merged}, others...)
+	}
+}
+
+// systemContentBlocks normalizes a system message's content into a list of content
+// blocks so multiple system messages can be concatenated. String content becomes a
+// single text block; an existing block array (preserving any cache_control) is kept.
+func systemContentBlocks(content any) []chatMessageContent {
+	switch v := content.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []chatMessageContent{{Type: contentTypeText, Text: v}}
+	case []chatMessageContent:
+		return v
+	default:
+		return nil
+	}
 }
 
 // computeClaudeInputTokens computes Claude-compatible input_tokens from OpenAI usage.
