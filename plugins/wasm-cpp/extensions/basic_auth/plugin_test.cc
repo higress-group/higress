@@ -533,6 +533,67 @@ TEST_F(BasicAuthTest, RuleAllow) {
             FilterHeadersStatus::Continue);
 }
 
+TEST_F(BasicAuthTest, DomainMatchAsciiCaseInsensitive) {
+  std::string configuration = R"(
+{
+  "_rules_": [
+    {
+      "_match_domain_": [
+        "EXACT.example", "lower.example", "MiXeD.example", "\u00c4xample.test"
+      ],
+      "credentials": ["admin:admin"]
+    },
+    {
+      "_match_domain_": ["*.SUFFIX.example"],
+      "credentials": ["admin:admin"]
+    },
+    {
+      "_match_domain_": ["PREFIX.*"],
+      "credentials": ["admin:admin"]
+    }
+  ]
+})";
+
+  BufferBase buffer;
+  buffer.set({configuration.data(), configuration.size()});
+
+  EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
+      .WillOnce([&buffer](WasmBufferType) { return &buffer; });
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  cred_ = "unknown:invalid";
+  authorization_header_ =
+      "Basic " + Base64::encode(cred_.data(), cred_.size());
+  auto expectUnauthorized = [this](const std::string& host) {
+    authority_ = host;
+    SCOPED_TRACE(host);
+    EXPECT_CALL(*mock_context_, sendLocalResponse(401, testing::_, testing::_,
+                                                  testing::_, testing::_));
+    EXPECT_EQ(context_->onRequestHeaders(0, false),
+              FilterHeadersStatus::StopIteration);
+  };
+  auto expectAllowed = [this](const std::string& host) {
+    authority_ = host;
+    SCOPED_TRACE(host);
+    EXPECT_EQ(context_->onRequestHeaders(0, false),
+              FilterHeadersStatus::Continue);
+  };
+
+  expectUnauthorized("exact.example");
+  expectUnauthorized("LOWER.EXAMPLE");
+  expectUnauthorized("mIxEd.ExAmPlE");
+  expectUnauthorized("exact.example:8443");
+  expectUnauthorized("www.suffix.EXAMPLE");
+  expectUnauthorized("WWW.SUFFIX.example");
+  expectUnauthorized("prefix.COM");
+  expectUnauthorized("PrEfIx.OrG");
+  expectUnauthorized("\xc3\x84xample.test");
+
+  expectAllowed("unrelated.example");
+  expectAllowed("exact.example.");
+  expectAllowed("\xc3\xa4xample.test");
+}
+
 TEST_F(BasicAuthTest, RuleWithConsumerAllow) {
   std::string configuration = R"(
 {
