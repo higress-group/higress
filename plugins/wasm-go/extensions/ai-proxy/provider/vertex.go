@@ -1535,7 +1535,13 @@ func createJWT(key *ServiceAccountKey) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	rsaKey := parsedKey.(*rsa.PrivateKey)
+	// ParsePKCS8PrivateKey accepts every PKCS#8 key algorithm, so a non-RSA key
+	// (ECDSA, Ed25519, ...) reaches this point and must be rejected like the
+	// other unusable keys instead of panicking on the type assertion.
+	rsaKey, ok := parsedKey.(*rsa.PrivateKey)
+	if !ok {
+		return "", fmt.Errorf("service account private key is not an RSA key: got %T", parsedKey)
+	}
 
 	// 构造 JWT Header
 	jwtHeader := map[string]string{
