@@ -38,6 +38,7 @@ func (m *openaiProviderInitializer) DefaultCapabilities() map[string]string {
 		string(ApiNameAudioTranslation):                     PathOpenAIAudioTranslations,
 		string(ApiNameRealtime):                             PathOpenAIRealtime,
 		string(ApiNameModels):                               PathOpenAIModels,
+		string(ApiNameRetrieveModel):                        PathOpenAIRetrieveModel,
 		string(ApiNameFiles):                                PathOpenAIFiles,
 		string(ApiNameRetrieveFile):                         PathOpenAIRetrieveFile,
 		string(ApiNameRetrieveFileContent):                  PathOpenAIRetrieveFileContent,
