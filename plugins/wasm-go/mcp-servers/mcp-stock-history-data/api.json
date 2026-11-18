@@ -1298,7 +1298,7 @@
             }
           },
           {
-            "description": "要查询的的开始时间",
+            "description": "要查询的开始时间",
             "example": "20200701",
             "in": "query",
             "name": "start",
