@@ -1841,9 +1841,10 @@ func RunBedrockOnHttpResponseBodyTests(t *testing.T) {
 			usageMap := usage.(map[string]interface{})
 			promptTokensDetails, hasPromptTokensDetails := usageMap["prompt_tokens_details"].(map[string]interface{})
 			require.True(t, hasPromptTokensDetails, "prompt_tokens_details should exist when cacheReadInputTokens is present")
-			require.Equal(t, float64(18), promptTokensDetails["cached_tokens"], "cached_tokens should sum cacheReadInputTokens and cacheWriteInputTokens")
-			_, hasCacheWriteTokens := promptTokensDetails["cache_write_tokens"]
-			require.False(t, hasCacheWriteTokens, "cache_write_tokens should not exist in OpenAI-compatible usage")
+			require.Equal(t, float64(6), promptTokensDetails["cached_tokens"], "cached_tokens should reflect cacheReadInputTokens only")
+			cacheWriteTokens, hasCacheWriteTokens := promptTokensDetails["cache_write_tokens"]
+			require.True(t, hasCacheWriteTokens, "cache_write_tokens should exist when cacheWriteInputTokens is present")
+			require.Equal(t, float64(12), cacheWriteTokens, "cache_write_tokens should reflect cacheWriteInputTokens")
 		})
 
 		t.Run("bedrock response body with zero cache read tokens should omit prompt_tokens_details", func(t *testing.T) {
@@ -1914,7 +1915,7 @@ func RunBedrockOnHttpResponseBodyTests(t *testing.T) {
 			require.False(t, hasPromptTokensDetails, "prompt_tokens_details should be omitted when cacheReadInputTokens is zero")
 		})
 
-		t.Run("bedrock response body with only cache write tokens should map to cached_tokens", func(t *testing.T) {
+		t.Run("bedrock response body with only cache write tokens should map to cache_write_tokens", func(t *testing.T) {
 			host, status := test.NewTestHost(bedrockApiTokenConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -1979,9 +1980,11 @@ func RunBedrockOnHttpResponseBodyTests(t *testing.T) {
 			usageMap := responseMap["usage"].(map[string]interface{})
 			promptTokensDetails, hasPromptTokensDetails := usageMap["prompt_tokens_details"].(map[string]interface{})
 			require.True(t, hasPromptTokensDetails, "prompt_tokens_details should exist when cacheWriteInputTokens is present")
-			require.Equal(t, float64(9), promptTokensDetails["cached_tokens"], "cached_tokens should map from cacheWriteInputTokens when cacheReadInputTokens is zero")
-			_, hasCacheWriteTokens := promptTokensDetails["cache_write_tokens"]
-			require.False(t, hasCacheWriteTokens, "cache_write_tokens should not exist in OpenAI-compatible usage")
+			cacheWriteTokens, hasCacheWriteTokens := promptTokensDetails["cache_write_tokens"]
+			require.True(t, hasCacheWriteTokens, "cache_write_tokens should exist when cacheWriteInputTokens is present")
+			require.Equal(t, float64(9), cacheWriteTokens, "cache_write_tokens should reflect cacheWriteInputTokens")
+			_, hasCachedTokens := promptTokensDetails["cached_tokens"]
+			require.False(t, hasCachedTokens, "cached_tokens should be omitted when cacheReadInputTokens is zero")
 		})
 
 		t.Run("bedrock anthropic messages response body should pass through", func(t *testing.T) {
@@ -2203,7 +2206,7 @@ func RunBedrockOnStreamingResponseBodyTests(t *testing.T) {
 			}
 		})
 
-		t.Run("bedrock streaming usage should map cached_tokens", func(t *testing.T) {
+		t.Run("bedrock streaming usage should preserve cache read/write categories", func(t *testing.T) {
 			host, status := test.NewTestHost(bedrockApiTokenConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -2266,9 +2269,10 @@ func RunBedrockOnStreamingResponseBodyTests(t *testing.T) {
 			require.NoError(t, err)
 			usageMap := responseMap["usage"].(map[string]interface{})
 			promptTokensDetails := usageMap["prompt_tokens_details"].(map[string]interface{})
-			require.Equal(t, float64(10), promptTokensDetails["cached_tokens"], "cached_tokens should sum cacheReadInputTokens and cacheWriteInputTokens in streaming usage event")
-			_, hasCacheWriteTokens := promptTokensDetails["cache_write_tokens"]
-			require.False(t, hasCacheWriteTokens, "cache_write_tokens should not exist in OpenAI-compatible streaming usage")
+			require.Equal(t, float64(7), promptTokensDetails["cached_tokens"], "cached_tokens should reflect cacheReadInputTokens only in streaming usage event")
+			cacheWriteTokens, hasCacheWriteTokens := promptTokensDetails["cache_write_tokens"]
+			require.True(t, hasCacheWriteTokens, "cache_write_tokens should exist when cacheWriteInputTokens is present in streaming usage")
+			require.Equal(t, float64(3), cacheWriteTokens, "cache_write_tokens should reflect cacheWriteInputTokens in streaming usage event")
 		})
 
 		t.Run("bedrock streaming text chunk then usage chunk format is stable", func(t *testing.T) {

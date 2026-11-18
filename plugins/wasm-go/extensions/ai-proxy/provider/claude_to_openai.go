@@ -402,6 +402,7 @@ func (c *ClaudeToOpenAIConverter) ConvertOpenAIResponseToClaude(ctx wrapper.Http
 		}
 		if openaiResponse.Usage.PromptTokensDetails != nil {
 			claudeResponse.Usage.CacheReadInputTokens = openaiResponse.Usage.PromptTokensDetails.CachedTokens
+			claudeResponse.Usage.CacheCreationInputTokens = openaiResponse.Usage.PromptTokensDetails.CacheWriteTokens
 		}
 	}
 
@@ -1016,6 +1017,7 @@ func (c *ClaudeToOpenAIConverter) buildClaudeStreamResponse(ctx wrapper.HttpCont
 		}
 		if openaiResponse.Usage.PromptTokensDetails != nil {
 			usage.CacheReadInputTokens = openaiResponse.Usage.PromptTokensDetails.CachedTokens
+			usage.CacheCreationInputTokens = openaiResponse.Usage.PromptTokensDetails.CacheWriteTokens
 		}
 
 		// Send message_delta with both stop_reason and usage (Claude protocol requirement)
