@@ -186,6 +186,10 @@ For Fireworks AI, the corresponding `type` is `fireworks`. It has no unique conf
 
 For Galadriel, the corresponding `type` is `galadriel`. It has no unique configuration fields.
 
+#### WebWright
+
+For WebWright, the corresponding `type` is `webwright`. It has no unique configuration fields.
+
 #### ERNIE Bot
 
 For ERNIE Bot, the corresponding `type` is `baidu`. It has no unique configuration fields.
