@@ -48,10 +48,11 @@ func GetPythonVersion() (string, error) {
 //	 0  if v1 == v2
 //	-1  if v1 < v2
 func CompareVersions(v1, v2 string) int {
-	// Extract numeric parts only (e.g. "3.12.0b1" → "3.12.0")
-	re := regexp.MustCompile(`\d+`)
-	nums1 := re.FindAllString(v1, -1)
-	nums2 := re.FindAllString(v2, -1)
+	// Take the leading dotted version only (e.g. "3.12.0b1" → "3.12.0"), so a
+	// pre-release suffix is not read as an extra, higher component.
+	re := regexp.MustCompile(`\d+(?:\.\d+)*`)
+	nums1 := splitVersionParts(re.FindString(v1))
+	nums2 := splitVersionParts(re.FindString(v2))
 
 	maxLen := len(nums1)
 	if len(nums2) > maxLen {
@@ -76,4 +77,13 @@ func CompareVersions(v1, v2 string) int {
 	}
 
 	return 0
+}
+
+// splitVersionParts turns "3.12.0" into its dotted parts; an input without any
+// digits yields no parts, which compares as zero everywhere.
+func splitVersionParts(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ".")
 }
