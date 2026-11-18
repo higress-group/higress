@@ -1,0 +1,61 @@
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  annotations:
+    higress.io/wasm-plugin-description: 用于修改请求域名（Host）以及请求路径（Path），通常用于后端服务的域名/路由与网关侧域名/路由不一致时的配置
+    higress.io/wasm-plugin-icon: https://img.alicdn.com/imgextra/i1/O1CN018iKKih1iVx287RltL_!!6000000004419-2-tps-42-42.png
+    higress.io/wasm-plugin-title: Rewrite
+  labels:
+    higress.io/resource-definer: higress
+    higress.io/wasm-plugin-built-in: "false"
+    higress.io/wasm-plugin-category: custom
+    higress.io/wasm-plugin-name: rewrite
+    higress.io/wasm-plugin-version: 1.0.0
+  name: rewrite-1.0.0
+  namespace: higress-system
+spec:
+  defaultConfig:
+    rewrite_rules:
+      - match_path_type: prefix
+        case_sensitive: false
+        match_hosts:
+          - foo.bar.com
+        match_paths:
+          - /v1/api/get
+        rewrite_host: prefix.example.com
+        rewrite_path: /get
+      - match_path_type: regex
+        case_sensitive: false
+        match_hosts:
+          - aa.bb.cc
+          - foo.bar.com
+        match_paths:
+          - /abc/(get)
+          - /(get)/.*\.html
+        rewrite_host: regex.example.com
+        rewrite_path: /$1
+      - match_path_type: exact
+        case_sensitive: false
+        match_hosts:
+          - "hello.world.com"
+          - "*.example.com"
+          - "aa.bb.*"
+        match_paths:
+          - /v1/get
+          - /abc/get/
+        rewrite_host: wildcard.example.com
+        rewrite_path: /get
+      - match_path_type: regex
+        case_sensitive: true
+        match_hosts:
+          - xx.yy.ZZ
+        match_paths:
+          - /API/(get)
+          - /test/(get)/.*\.HTML
+        rewrite_host: case-sensitive.example.com
+        rewrite_path: /$1
+  defaultConfigDisable: false
+
+  phase: UNSPECIFIED_PHASE
+  priority: 20
+  url: oci://docker.io/weixinx/rewrite:1.0.0
