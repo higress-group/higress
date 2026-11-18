@@ -329,6 +329,15 @@ func TestGaladriel(t *testing.T) {
 	test.RunGaladrielOnStreamingResponseBodyTests(t)
 }
 
+func TestDaoxe(t *testing.T) {
+	test.RunDaoxeParseConfigTests(t)
+	test.RunDaoxeOnHttpRequestHeadersTests(t)
+	test.RunDaoxeOnHttpRequestBodyTests(t)
+	test.RunDaoxeOnHttpResponseHeadersTests(t)
+	test.RunDaoxeOnHttpResponseBodyTests(t)
+	test.RunDaoxeOnStreamingResponseBodyTests(t)
+}
+
 func TestMinimax(t *testing.T) {
 	test.RunMinimaxBasePathHandlingTests(t)
 }
