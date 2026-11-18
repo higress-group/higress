@@ -757,3 +757,50 @@ func TestClaudeProvider_BuildClaudeTextGenRequest_ToolRoleConversion(t *testing.
 		assert.Equal(t, "tool_use", claudeReq.Messages[1].Content.ArrayValue[1].Type)
 	})
 }
+
+func TestClaudeProviderStreamSkipsContentBlockDeltaWithMissingDelta(t *testing.T) {
+	provider := &claudeProvider{}
+	ctx := newMockMultipartHttpContext()
+	index := 0
+
+	// A non-conformant upstream may emit content_block_delta without a delta
+	// field; the converter must skip the event instead of panicking.
+	response := provider.streamResponseClaude2OpenAI(ctx, &claudeTextGenStreamResponse{
+		Type:  "content_block_delta",
+		Index: &index,
+		Delta: nil,
+	})
+	assert.Nil(t, response)
+}
+
+func TestClaudeProviderStreamMessageDeltaWithMissingDeltaKeepsUsage(t *testing.T) {
+	provider := &claudeProvider{}
+	ctx := newMockMultipartHttpContext()
+
+	response := provider.streamResponseClaude2OpenAI(ctx, &claudeTextGenStreamResponse{
+		Type:  "message_delta",
+		Usage: &claudeTextGenUsage{OutputTokens: 7},
+		Delta: nil,
+	})
+	require.NotNil(t, response)
+	require.Len(t, response.Choices, 1)
+	assert.Empty(t, response.Choices[0].FinishReason)
+	assert.Equal(t, 7, provider.usage.CompletionTokens)
+	assert.Equal(t, 7, provider.usage.TotalTokens)
+}
+
+func TestClaudeProviderStreamingResponseBodyToleratesMissingDeltaOnWire(t *testing.T) {
+	provider := &claudeProvider{}
+	ctx := newMockMultipartHttpContext()
+
+	chunk := []byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0}\n\n" +
+		"data: {\"type\":\"message_delta\",\"index\":0,\"usage\":{\"output_tokens\":3}}\n\n")
+
+	out, err := provider.OnStreamingResponseBody(ctx, ApiNameChatCompletion, chunk, false)
+	require.NoError(t, err)
+	// The malformed events are skipped; the well-formed events before them are
+	// still converted and the stream is not aborted.
+	assert.NotEmpty(t, out)
+	assert.NotContains(t, string(out), "content_block_delta")
+}
