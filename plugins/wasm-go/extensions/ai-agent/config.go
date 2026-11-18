@@ -314,8 +314,8 @@ func initAPIs(gjson gjson.Result, c *PluginConfig) error {
 				if method == "get" {
 					param.Method = "GET"
 					paramName := make([]string, 0)
-					for _, parammeter := range submap.Parameters {
-						paramName = append(paramName, parammeter.Name)
+					for _, parameter := range submap.Parameters {
+						paramName = append(paramName, parameter.Name)
 					}
 					param.ParamName = paramName
 					out, _ := json.Marshal(submap.Parameters)
