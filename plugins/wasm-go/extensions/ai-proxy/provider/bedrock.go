@@ -850,8 +850,14 @@ func (b *bedrockProvider) buildBedrockImageGenerationRequest(origRequest *imageG
 	width, height := 1024, 1024
 	pairs := strings.Split(origRequest.Size, "x")
 	if len(pairs) == 2 {
-		width, _ = strconv.Atoi(pairs[0])
-		height, _ = strconv.Atoi(pairs[1])
+		// Atoi returns 0 on failure, which used to overwrite the 1024 default: a
+		// size like "1024xabc" was forwarded to Bedrock as Height 0.
+		if w, err := strconv.Atoi(pairs[0]); err == nil && w > 0 {
+			width = w
+		}
+		if h, err := strconv.Atoi(pairs[1]); err == nil && h > 0 {
+			height = h
+		}
 	}
 
 	request := &bedrockImageGenerationRequest{
