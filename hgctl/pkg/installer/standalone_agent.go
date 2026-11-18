@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/alibaba/higress/hgctl/pkg/helm"
 )
 
@@ -293,6 +294,24 @@ func (a *Agent) Version() (string, error) {
 		return version, nil
 	}
 	return string(content), nil
+}
+
+func (a *Agent) strictVersion() (string, error) {
+	content, err := os.ReadFile(a.versionPath)
+	if err != nil {
+		return "", fmt.Errorf("read installed Higress version: %w", err)
+	}
+
+	version := strings.TrimSpace(string(content))
+	if version == "" {
+		return "", errors.New("installed Higress version is empty")
+	}
+
+	normalized := strings.TrimPrefix(version, "v")
+	if _, err := semver.StrictNewVersion(normalized); err != nil {
+		return "", fmt.Errorf("invalid installed Higress version %q: %w", version, err)
+	}
+	return version, nil
 }
 
 func (a *Agent) promptSudo() bool {
