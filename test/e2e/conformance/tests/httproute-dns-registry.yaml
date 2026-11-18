@@ -30,7 +30,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
-    higress.io/destination: infra-backend-v1.dns
+    higress.io/destination: default-infra-backend-v1.dns
   name: httproute-infra-backend-v1-dns-ingress
   namespace: higress-system
 spec:
