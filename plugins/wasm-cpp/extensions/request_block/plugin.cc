@@ -16,6 +16,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
@@ -42,6 +43,47 @@ static RegisterContextFactory register_RequestBlock(
     CONTEXT_FACTORY(PluginContext), ROOT_FACTORY(PluginRootContext));
 
 static constexpr size_t MAX_BODY_SIZE = 32 * 1024 * 1024;
+
+// Decode once without allowing encoded '?' or '#' to change URL components.
+static std::optional<std::string> decodePathForMatch(std::string_view path) {
+  auto hex_value = [](char ch) -> int {
+    if (ch >= '0' && ch <= '9') {
+      return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+      return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+      return ch - 'A' + 10;
+    }
+    return -1;
+  };
+
+  std::string decoded;
+  decoded.reserve(path.size());
+  for (size_t i = 0; i < path.size(); ++i) {
+    if (path[i] != '%') {
+      decoded.push_back(path[i]);
+      continue;
+    }
+    if (i + 2 >= path.size()) {
+      return std::nullopt;
+    }
+    const auto hi = hex_value(path[i + 1]);
+    const auto lo = hex_value(path[i + 2]);
+    if (hi < 0 || lo < 0) {
+      return std::nullopt;
+    }
+    const auto decoded_char = static_cast<char>((hi << 4) | lo);
+    if (decoded_char == '?' || decoded_char == '#') {
+      decoded.append(path.data() + i, 3);
+    } else {
+      decoded.push_back(decoded_char);
+    }
+    i += 2;
+  }
+  return decoded;
+}
 
 bool PluginRootContext::parsePluginConfig(const json& configuration,
                                           RequestBlockConfigRule& rule) {
@@ -225,7 +267,8 @@ bool PluginRootContext::configure(size_t configuration_size) {
 
 bool PluginRootContext::checkHeader(const RequestBlockConfigRule& rule,
                                     bool& check_body) {
-  if (!rule.block_urls.empty()) {
+  if (!rule.block_urls.empty() || !rule.block_regexp_urls.empty() ||
+      !rule.block_exact_urls.empty()) {
     std::string urlstr;
     std::string_view url;
     GET_HEADER_VIEW(":path", request_url);
@@ -235,20 +278,34 @@ bool PluginRootContext::checkHeader(const RequestBlockConfigRule& rule,
       urlstr = absl::AsciiStrToLower(request_url);
       url = urlstr;
     }
+
+    const auto query_pos = request_url.find('?');
+    auto normalized_url = decodePathForMatch(request_url.substr(0, query_pos));
+    if (normalized_url && query_pos != std::string_view::npos) {
+      normalized_url->append(request_url.data() + query_pos,
+                             request_url.size() - query_pos);
+    }
+    if (normalized_url && !rule.case_sensitive) {
+      *normalized_url = absl::AsciiStrToLower(*normalized_url);
+    }
+
     for (const auto& block_url : rule.block_exact_urls) {
-      if (url == block_url) {
+      if (url == block_url ||
+          (normalized_url && *normalized_url == block_url)) {
         sendLocalResponse(rule.blocked_code, "", rule.blocked_message, {});
         return false;
       }
     }
     for (const auto& block_url : rule.block_regexp_urls) {
-      if (block_url->match(url)) {
+      if (block_url->match(url) ||
+          (normalized_url && block_url->match(*normalized_url))) {
         sendLocalResponse(rule.blocked_code, "", rule.blocked_message, {});
         return false;
       }
     }
     for (const auto& block_url : rule.block_urls) {
-      if (absl::StrContains(url, block_url)) {
+      if (absl::StrContains(url, block_url) ||
+          (normalized_url && absl::StrContains(*normalized_url, block_url))) {
         sendLocalResponse(rule.blocked_code, "", rule.blocked_message, {});
         return false;
       }

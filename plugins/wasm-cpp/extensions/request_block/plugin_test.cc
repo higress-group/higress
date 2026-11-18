@@ -325,6 +325,84 @@ TEST_F(RequestBlockTest, CaseInsensitive) {
             FilterDataStatus::StopIterationNoBuffer);
 }
 
+TEST_F(RequestBlockTest, exactBlock) {
+  std::string configuration = R"(
+{
+   "block_exact_urls": ["/exact/"]
+})";
+
+  config_.set({configuration.data(), configuration.size()});
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  path_ = "/exact/";
+  EXPECT_CALL(*mock_context_, sendLocalResponse(403, testing::_, testing::_,
+                                                testing::_, testing::_));
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::StopIteration);
+}
+
+TEST_F(RequestBlockTest, regexpBlock) {
+  std::string configuration = R"(
+{
+   "case_sensitive": false,
+   "blocked_code": 404,
+   "block_regexp_urls": [".*name=Alice.*"]
+})";
+
+  config_.set({configuration.data(), configuration.size()});
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  path_ = "/greet?name=Alice&age=30&city=BeiJing";
+  EXPECT_CALL(*mock_context_, sendLocalResponse(404, testing::_, testing::_,
+                                                testing::_, testing::_));
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::StopIteration);
+}
+
+TEST_F(RequestBlockTest, EncodedUrlMatching) {
+  std::string configuration = R"(
+{
+   "case_sensitive": false,
+   "block_urls": ["/ubuntu/", "/CASE/", "raw%2fmarker"],
+   "block_exact_urls": ["/exact/", "/hello.html?abc=123"],
+   "block_regexp_urls": ["^/anolis/$"]
+})";
+
+  config_.set({configuration.data(), configuration.size()});
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  auto expectBlocked = [this](const std::string& path) {
+    path_ = path;
+    SCOPED_TRACE(path);
+    EXPECT_CALL(*mock_context_, sendLocalResponse(403, testing::_, testing::_,
+                                                  testing::_, testing::_));
+    EXPECT_EQ(context_->onRequestHeaders(0, false),
+              FilterHeadersStatus::StopIteration);
+  };
+  auto expectAllowed = [this](const std::string& path) {
+    path_ = path;
+    SCOPED_TRACE(path);
+    EXPECT_EQ(context_->onRequestHeaders(0, false),
+              FilterHeadersStatus::Continue);
+  };
+
+  expectBlocked("/ubuntu%2f");
+  expectBlocked("/ubuntu%2F?x=1");
+  expectBlocked("/exact%2f");
+  expectBlocked("/anolis%2f");
+  expectBlocked("/%43%41%53%45/");
+  expectBlocked("/hello%2Ehtml?abc=123");
+  expectBlocked("/raw%2fmarker");
+
+  expectAllowed("/exact/?x=1");
+  expectAllowed("/anolis/8/");
+  expectAllowed("/anolis/?x=1");
+  expectAllowed("/hello.html%3Fabc=123");
+  expectAllowed("/ubuntu%2");
+  expectAllowed("/ubuntu%zz");
+  expectAllowed("/ubuntu%252f");
+}
+
 TEST_F(RequestBlockTest, Bodies) {
   std::string configuration = R"(
 {
