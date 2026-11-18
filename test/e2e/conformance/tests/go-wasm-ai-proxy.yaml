@@ -607,4 +607,113 @@ spec:
           type: openai
       ingress:
         - higress-conformance-ai-backend/wasmplugin-ai-proxy-openai
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          protocol: original
+          type: baidu
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-baidu-original
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          protocol: original
+          type: hunyuan
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-hunyuan-original
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          protocol: original
+          type: groq
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-groq-original
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          protocol: original
+          type: cohere
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-cohere-original
   url: file:///opt/plugins/wasm-go/extensions/ai-proxy/plugin.wasm
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-baidu-original
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "original.qianfan.baidubce.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-hunyuan-original
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "original.hunyuan-apigw.tencentcloudapi.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-groq-original
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "original.api.groq.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-cohere-original
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "original.api.cohere.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
