@@ -573,3 +573,30 @@ func TestCompleteFlow(t *testing.T) {
 		})
 	})
 }
+
+// extraceHttpFrame parses the LLM's output.text, so the frame content is
+// untrusted model output: a frame without a blank line used to panic on
+// frame[:pos] with pos == -1.
+func TestExtraceHttpFrame(t *testing.T) {
+	// Well-formed frame parses into headers and body.
+	headers, body, err := extraceHttpFrame("content-type: text/plain\nx-a: b\n\npayload")
+	require.NoError(t, err)
+	require.Equal(t, [][2]string{{"content-type", " text/plain"}, {"x-a", " b"}}, headers)
+	require.Equal(t, []byte("payload"), body)
+
+	// No blank line: previously panicked with slice bounds out of range.
+	require.NotPanics(t, func() {
+		_, _, err := extraceHttpFrame("model said something without a blank line")
+		require.Error(t, err)
+	})
+
+	// Empty string: previously panicked the same way.
+	require.NotPanics(t, func() {
+		_, _, err := extraceHttpFrame("")
+		require.Error(t, err)
+	})
+
+	// Header line without a colon is rejected, not panicked.
+	_, _, err = extraceHttpFrame("no-colon-header\n\nbody")
+	require.Error(t, err)
+}
