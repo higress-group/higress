@@ -58,11 +58,17 @@ func parseConfig(json gjson.Result, config *PluginConfig, log log.Log) error {
 	return nil
 }
 
+// oidcRecorderKey stores the per-request response recorder on the request's
+// own context so the response phase reads session cookies recorded for THIS
+// request, not whatever a concurrent request left on the shared handler.
+const oidcRecorderKey = "oidc-response-recorder"
+
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.Log) types.Action {
 	ctx.DisableReroute()
 	config.oidcHandler.SetContext(ctx)
 	req := getHttpRequest()
 	rw := util.NewRecorder()
+	ctx.SetContext(oidcRecorderKey, rw)
 	if options.IsAllowedByMode(req.URL.Host, req.URL.Path, config.options.MatchRules, config.options.ProxyPrefix) {
 		log.Infof("request is allowed by mode %s", config.options.MatchRules.Mode)
 		return types.ActionContinue
@@ -89,16 +95,26 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.Log) types.Action {
-	value := ctx.GetContext(oidc.SetCookieHeader)
-	if value != nil {
-		if cookies, ok := value.([]string); ok {
-			for _, c := range cookies {
-				proxywasm.AddHttpResponseHeader(oidc.SetCookieHeader, c)
-			}
-		}
+	for _, c := range sessionCookies(ctx.GetContext(oidcRecorderKey), ctx.GetContext(oidc.SetCookieHeader)) {
+		proxywasm.AddHttpResponseHeader(oidc.SetCookieHeader, c)
 	}
 	config.oidcHandler.SetContext(nil)
 	return types.ActionContinue
+}
+
+// sessionCookies returns the Set-Cookie values recorded for this request.
+// The per-request recorder is authoritative; the context copy written by the
+// shared handler is only a legacy fallback, because a concurrent request can
+// overwrite that shared handler context between this request's header and
+// response phases (oauth2-proxy OAuthProxy.ctx is a single field).
+func sessionCookies(recorder interface{}, legacy interface{}) []string {
+	if rw, ok := recorder.(*util.ResponseRecorder); ok && rw != nil {
+		return rw.Header()[oidc.SetCookieHeader]
+	}
+	if cookies, ok := legacy.([]string); ok {
+		return cookies
+	}
+	return nil
 }
 
 func getHttpRequest() *http.Request {
