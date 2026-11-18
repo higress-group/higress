@@ -361,12 +361,8 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 	}
 
 	queryValues, _ := url.ParseQuery(body)
-	values := make(map[string]string, len(queryValues))
-	for k, v := range queryValues {
-		values[k] = v[0]
-	}
-	queryConsumer := values["consumer"]
-	quota, err := strconv.Atoi(values["quota"])
+	queryConsumer := queryValues.Get("consumer")
+	quota, err := strconv.Atoi(queryValues.Get("quota"))
 	if queryConsumer == "" || err != nil {
 		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check. consumer can't be empty and quota must be integer.")
 		return types.ActionContinue
@@ -381,7 +377,7 @@ func refreshQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer str
 	})
 
 	if err2 != nil {
-		util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err))
+		util.SendResponse(http.StatusServiceUnavailable, "ai-quota.error", "text/plain", fmt.Sprintf("redis error:%v", err2))
 		return types.ActionContinue
 	}
 
@@ -396,15 +392,11 @@ func queryQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	}
 	// check url
 	queryValues := url.Query()
-	values := make(map[string]string, len(queryValues))
-	for k, v := range queryValues {
-		values[k] = v[0]
-	}
-	if values["consumer"] == "" {
+	queryConsumer := queryValues.Get("consumer")
+	if queryConsumer == "" {
 		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check. consumer can't be empty.")
 		return types.ActionContinue
 	}
-	queryConsumer := values["consumer"]
 	err := config.redisClient.Get(config.RedisKeyPrefix+queryConsumer, func(response resp.Value) {
 		quota := 0
 		if err := response.Error(); err != nil {
@@ -440,12 +432,8 @@ func deltaQuota(ctx wrapper.HttpContext, config QuotaConfig, adminConsumer strin
 	}
 
 	queryValues, _ := url.ParseQuery(body)
-	values := make(map[string]string, len(queryValues))
-	for k, v := range queryValues {
-		values[k] = v[0]
-	}
-	queryConsumer := values["consumer"]
-	value, err := strconv.Atoi(values["value"])
+	queryConsumer := queryValues.Get("consumer")
+	value, err := strconv.Atoi(queryValues.Get("value"))
 	if queryConsumer == "" || err != nil {
 		util.SendResponse(http.StatusForbidden, "ai-quota.unauthorized", "text/plain", "Request denied by ai quota check. consumer can't be empty and value must be integer.")
 		return types.ActionContinue
