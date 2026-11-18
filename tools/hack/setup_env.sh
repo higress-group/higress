@@ -156,8 +156,8 @@ if [[ "$1" =~ ([^:]*):(.*) ]]; then
     if [[ ! "$remainder" =~ ([^:]*):(.*) ]]; then
       if [[ -n "$remainder" ]]; then
         add_KUBECONFIG_if_exists "$remainder"
-        break
       fi
+      break
     fi
   done
 else
