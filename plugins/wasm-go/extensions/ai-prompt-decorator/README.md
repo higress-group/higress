@@ -155,7 +155,7 @@ curl http://localhost/test \
 
 geo-ip插件配置示例：
 ```yaml
-ipProtocal: "ipv4"
+ip_protocol: "ipv4"
 ```
 
 
