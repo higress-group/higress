@@ -154,10 +154,20 @@ func (m *openaiProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiNam
 		// If no apiToken is configured, try to extract from original request headers
 
 		// 2. If authHeaderKey is configured, use the specified header
+		// When authHeaderKey is "Authorization", only use Bearer scheme; Basic/Digest etc. pass through
 		if m.config.authHeaderKey != "" {
 			if apiKey, err := proxywasm.GetHttpRequestHeader(m.config.authHeaderKey); err == nil && apiKey != "" {
-				token = apiKey
-				log.Debugf("[openaiProvider.TransformRequestHeaders] Using token from configured header: %s", m.config.authHeaderKey)
+				if strings.EqualFold(m.config.authHeaderKey, "Authorization") {
+					if strings.HasPrefix(apiKey, "Bearer ") {
+						token = apiKey
+						log.Debugf("[openaiProvider.TransformRequestHeaders] Using token from configured header: %s (Bearer)", m.config.authHeaderKey)
+					} else {
+						log.Debugf("[openaiProvider.TransformRequestHeaders] Configured header %s is not Bearer, passing through unchanged", m.config.authHeaderKey)
+					}
+				} else {
+					token = apiKey
+					log.Debugf("[openaiProvider.TransformRequestHeaders] Using token from configured header: %s", m.config.authHeaderKey)
+				}
 			}
 		}
 
@@ -173,24 +183,22 @@ func (m *openaiProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiNam
 			}
 		}
 
-		// 4. Finally check Authorization header
+		// 4. Finally check Authorization header: only process Bearer scheme; Basic/Digest etc. are passed through unchanged
 		if token == "" {
-			if auth, err := proxywasm.GetHttpRequestHeader("Authorization"); err == nil && auth != "" {
-				// Extract token from "Bearer <token>" format
-				if strings.HasPrefix(auth, "Bearer ") {
-					token = strings.TrimPrefix(auth, "Bearer ")
+			if apiKey, err := proxywasm.GetHttpRequestHeader("Authorization"); err == nil && apiKey != "" {
+				if strings.HasPrefix(apiKey, "Bearer ") {
+					token = apiKey
 					log.Debugf("[openaiProvider.TransformRequestHeaders] Using token from Authorization header (Bearer format)")
 				} else {
-					token = auth
-					log.Debugf("[openaiProvider.TransformRequestHeaders] Using token from Authorization header (no Bearer prefix)")
+					// Non-Bearer (e.g. Basic, Digest): do not overwrite Authorization, pass through
+					log.Debugf("[openaiProvider.TransformRequestHeaders] Authorization is not Bearer, passing through unchanged")
 				}
 			}
 		}
 	}
 
-	// 5. Set Authorization header (avoid duplicate Bearer prefix)
+	// 5. Set Authorization header only when we have a Bearer token (avoid overwriting Basic/Digest etc.)
 	if token != "" {
-		// Check if token already contains Bearer prefix
 		if !strings.HasPrefix(token, "Bearer ") {
 			token = "Bearer " + token
 		}
