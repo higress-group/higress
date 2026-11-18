@@ -392,7 +392,7 @@ func TestHandleRequestHeaders_PathHandling(t *testing.T) {
 			basePathHandling: basePathHandlingPrepend,
 		}
 		currentPath := "/v1/chat"
-		// basePath preprend + providerBasePath (not set) = just basePath effect
+		// basePath prepend + providerBasePath (not set) = just basePath effect
 		// Note: applyProviderBasePath only handles providerBasePath, not basePath
 		// So this test just verifies that applyProviderBasePath doesn't modify path when providerBasePath is empty
 		expectedPath := "/v1/chat" // applyProviderBasePath doesn't change path without providerBasePath configured
