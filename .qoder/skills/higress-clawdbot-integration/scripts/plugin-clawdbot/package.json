@@ -1,0 +1,22 @@
+{
+  "name": "@higress/higress-ai-gateway",
+  "version": "1.0.0",
+  "description": "Higress AI Gateway model provider plugin for Clawdbot with auto-routing support",
+  "main": "index.ts",
+  "clawdbot": {
+    "extensions": ["./index.ts"]
+  },
+  "keywords": [
+    "clawdbot",
+    "higress",
+    "ai-gateway",
+    "model-router",
+    "auto-routing"
+  ],
+  "author": "Higress Team",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alibaba/higress"
+  }
+}
