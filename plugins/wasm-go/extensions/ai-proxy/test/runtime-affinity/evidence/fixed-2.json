@@ -1,0 +1,123 @@
+{
+  "wasm_sha256": "c505ad6c0f42975148932b904221929127b6c8508fbe7a14c353b52f668fe864",
+  "gateway_image": "higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway@sha256:5d0618399fa98b9f4ad3c34b58f084b51624e3cc4eccdde72554b636d16b5da4",
+  "expected_affinity": true,
+  "redis_delay_ms": 100,
+  "redis_image_id": "sha256:487efc0616382465781b8fdc3d6d1db449e6fd80ae23bf48432a2da6b6929908",
+  "mock_image_id": "sha256:78976a69c067520ef8be34cde307ef9f6fea6dcefa50edb57039773d241ca0db",
+  "envoy_image_id": "sha256:e56ff20e0dff76468342e2b994073d8a2c2d098335203cbdf78a7fe5819e6108",
+  "first_selected": "synthetic-A",
+  "first_binding": {
+    "tokenFingerprint": "b4698dbd327f6ffb328d6d6cf82c471e0b7051cb739d518d90cc70c640d8fa79",
+    "renewAfter": 1795242746
+  },
+  "stable_selected": [
+    "synthetic-A",
+    "synthetic-A",
+    "synthetic-A",
+    "synthetic-A",
+    "synthetic-A"
+  ],
+  "passed": true,
+  "stable_requests": 6,
+  "ttl": 604799,
+  "retry_attempts": [
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "56cfb795-a385-4222-8926-b0ed4eecffc8"
+    },
+    {
+      "key": "synthetic-C",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "56cfb795-a385-4222-8926-b0ed4eecffc8"
+    }
+  ],
+  "replacement_persisted": true,
+  "streaming": true,
+  "redis_degradation": true,
+  "upstream_events": [
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "7f95f71f-6d8a-470c-94e5-f9a2ae8fad78"
+    },
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "3aed2a6c-80d0-4ef6-b53c-bdf8ff88f535"
+    },
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "b0604061-1688-492d-bc11-a26580765cf1"
+    },
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "b5af683b-2ae3-44a3-97fe-eb081daebcc6"
+    },
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "65ce8e5f-8c72-4a7a-b29a-1a4ebc1d521d"
+    },
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "ec2cf029-97b9-4424-a5b9-0104fefc8aa4"
+    },
+    {
+      "key": "synthetic-A",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "56cfb795-a385-4222-8926-b0ed4eecffc8"
+    },
+    {
+      "key": "synthetic-C",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "56cfb795-a385-4222-8926-b0ed4eecffc8"
+    },
+    {
+      "key": "synthetic-C",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "16ad437f-eab8-4c0a-a7c4-823f71c8b947"
+    },
+    {
+      "key": "synthetic-C",
+      "sha256": "6b664408716ee525c50b517c1e15230066d02181e4dfdc160b2020faf86af9b6",
+      "size": 12414,
+      "path": "/v1/chat/completions",
+      "request_id": "1a50568b-ba06-4288-b777-5f74319c334f"
+    },
+    {
+      "key": "synthetic-B",
+      "sha256": "f99f22caefd72d6950b4c7a67724af9ae6f5cea69524f80fa53ca3dd29b14f24",
+      "size": 12375,
+      "path": "/v1/chat/completions",
+      "request_id": "03b3824b-1f2f-4dc6-860e-bbf93911cce5"
+    }
+  ],
+  "cleanup_remaining": ""
+}

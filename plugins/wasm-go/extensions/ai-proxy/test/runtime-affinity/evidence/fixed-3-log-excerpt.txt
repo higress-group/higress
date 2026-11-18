@@ -1,0 +1,8 @@
+[2026-11-15T06:33:03.297Z] "POST /v1/chat/completions HTTP/1.1" 200 - 12375 281 106 0 "-" "Python-urllib/3.12" "3be62009-8256-478b-a744-6f45bf308a96" "mock:8080" "[isolated-test-endpoint]"
+[2026-11-15 06:33:03.208][1][warning][wasm] [external/envoy/source/extensions/common/wasm/context.cc:1544] wasm log ai-proxy verification: failed to init redis: error status returned by host: bad argument, will retry later
+[2026-11-15 06:33:03.209][1][info][wasm] [external/envoy/source/extensions/common/wasm/context.cc:1541] wasm log ai-proxy verification: [ai-proxy] [nil] [nil] plugin start successfully
+[2026-11-15 06:33:03.276][1][warning][wasm] [external/envoy/source/extensions/common/wasm/context.cc:1544] wasm log ai-proxy verification: failed to init redis: error status returned by host: bad argument, will retry later
+[2026-11-15 06:33:03.276][1][info][wasm] [external/envoy/source/extensions/common/wasm/context.cc:1541] wasm log ai-proxy verification: [ai-proxy] [nil] [nil] plugin start successfully
+[2026-11-15 06:33:03.295][28][warning][wasm] [external/envoy/source/extensions/common/wasm/context.cc:1544] wasm log ai-proxy verification: failed to init redis: error status returned by host: bad argument, will retry later
+[2026-11-15 06:33:03.295][28][info][wasm] [external/envoy/source/extensions/common/wasm/context.cc:1541] wasm log ai-proxy verification: [ai-proxy] [nil] [nil] plugin start successfully
+[2026-11-15 06:33:03.298][28][info][wasm] [external/envoy/source/extensions/common/wasm/context.cc:1541] wasm log ai-proxy ai-proxy verification: redis re-authentication successful

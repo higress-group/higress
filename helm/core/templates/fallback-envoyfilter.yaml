@@ -20,6 +20,43 @@ spec:
           name: envoy.filters.http.custom_response
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.http.custom_response.v3.CustomResponse
+            custom_response_matcher:
+              matcher_list:
+                matchers:
+                  - predicate:
+                      # Require both internal markers so ordinary routes cannot be replayed by the header alone.
+                      and_matcher:
+                        predicate:
+                          - single_predicate:
+                              input:
+                                name: ai_proxy_api_key_retry_status
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.type.matcher.v3.HttpResponseStatusCodeMatchInput
+                              value_match:
+                                exact: "299"
+                          - single_predicate:
+                              input:
+                                name: ai_proxy_api_key_retry_header
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.type.matcher.v3.HttpResponseHeaderMatchInput
+                                  header_name: x-higress-ai-proxy-key-retry
+                              value_match:
+                                exact: "1"
+                    on_match:
+                      action:
+                        name: ai_proxy_api_key_retry
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.http.custom_response.redirect_policy.v3.RedirectPolicy
+                          use_original_request_uri: true
+                          use_original_request_body: true
+                          keep_original_response_code: false
+                          only_redirect_upstream_code: true
+                          max_internal_redirects: 10
+                          request_headers_to_add:
+                            - header:
+                                key: x-higress-fallback-from
+                                value: ai-proxy-key-affinity
+                              append_action: OVERWRITE_IF_EXISTS_OR_ADD
   workloadSelector:
     labels:
       {{- include "gateway.selectorLabels" . | nindent 6 }}
