@@ -203,11 +203,11 @@ template:
         - mountPath: /opt/plugins
           name: local-wasmplugins-volume
         {{- end }}
-        {{- if $o11y.enabled }}
+        {{- if or $o11y.enabled (dig "promtail" "enabled" false $o11y) }}
         - mountPath: /var/log/proxy
           name: log
         {{- end }}
-      {{- if $o11y.enabled }}
+      {{- if or $o11y.enabled (dig "promtail" "enabled" false $o11y) }}
         {{- $config := $o11y.promtail }}
       - name: promtail
         image: {{ $config.image.repository | default (printf "%s/higress/promtail" .Values.global.hub) }}:{{ $config.image.tag }}
@@ -295,7 +295,7 @@ template:
       emptyDir: {}
     - name: proxy-socket
       emptyDir: {}
-    {{- if $o11y.enabled }}
+    {{- if or $o11y.enabled (dig "promtail" "enabled" false $o11y) }}
     - name: log
       emptyDir: {}
     - name: tmp
