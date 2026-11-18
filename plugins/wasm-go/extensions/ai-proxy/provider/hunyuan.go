@@ -366,6 +366,11 @@ func (m *hunyuanProvider) convertChunkFromHunyuanToOpenAI(ctx wrapper.HttpContex
 	// tmpStr3, _ := json.Marshal(hunyuanFormattedChunk)
 	// log.Debugf("@@@ --- 源数据是：: %s", tmpStr3)
 
+	if len(hunyuanFormattedChunk.Choices) == 0 {
+		// Hunyuan sends a trailing chunk that only carries usage, with an empty
+		// choices list; indexing it here would panic the plugin mid-stream.
+		return []byte(""), nil
+	}
 	// 是否为最后一个chunk？
 	if hunyuanFormattedChunk.Choices[0].FinishReason == hunyuanStreamEndMark {
 		// log.Debugf("@@@ --- 最后chunk: ")
