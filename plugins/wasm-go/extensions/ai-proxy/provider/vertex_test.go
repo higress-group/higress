@@ -620,7 +620,7 @@ func TestVertexProviderPreservesFunctionCallThoughtSignature(t *testing.T) {
 	)
 }
 
-func TestVertexProviderStreamToolCallIncludesStableID(t *testing.T) {
+func TestVertexProviderStreamCompleteToolCallsHaveDistinctIDs(t *testing.T) {
 	v := &vertexProvider{}
 	ctx := newMockMultipartHttpContext()
 	ctx.SetContext(ctxKeyFinalRequestModel, "gemini-3.1-pro-preview")
@@ -659,7 +659,12 @@ func TestVertexProviderStreamToolCallIncludesStableID(t *testing.T) {
 	require.Len(t, second.Choices, 1)
 	require.NotNil(t, second.Choices[0].Delta)
 	require.Len(t, second.Choices[0].Delta.ToolCalls, 1)
-	assert.Equal(t, firstID, second.Choices[0].Delta.ToolCalls[0].Id)
+	// Each complete functionCall is a new call, even when a later event uses
+	// the same function name and arguments. Network fragments are reassembled
+	// before this conversion and do not allocate extra IDs.
+	assert.NotEqual(t, firstID, second.Choices[0].Delta.ToolCalls[0].Id)
+	assert.Equal(t, 0, first.Choices[0].Delta.ToolCalls[0].Index)
+	assert.Equal(t, 1, second.Choices[0].Delta.ToolCalls[0].Index)
 }
 
 func TestVertexProviderRestoresFunctionCallThoughtSignature(t *testing.T) {
@@ -889,7 +894,6 @@ func TestVertexProviderStreamThoughtAndText(t *testing.T) {
 		})
 		require.NotNil(t, resp1)
 		assert.Equal(t, reasoningStartTag+"thinking process", resp1.Choices[0].Delta.Content)
-		assert.Equal(t, true, ctx.GetContext("thinking_start"))
 
 		// 2. Thinking continue
 		resp2 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
@@ -912,7 +916,11 @@ func TestVertexProviderStreamThoughtAndText(t *testing.T) {
 
 	t.Run("thinking end and text continue", func(t *testing.T) {
 		ctx := newMockMultipartHttpContext()
-		ctx.SetContext("thinking_start", true)
+		v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
+			Candidates: []vertexChatCandidate{{
+				Content: vertexChatContent{Parts: []vertexPart{{Text: "thinking", Thounght: util.Ptr(true)}}},
+			}},
+		})
 
 		// 1. Thinking end
 		resp1 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
@@ -930,7 +938,6 @@ func TestVertexProviderStreamThoughtAndText(t *testing.T) {
 		})
 		require.NotNil(t, resp1)
 		assert.Equal(t, reasoningEndTag+"final answer", resp1.Choices[0].Delta.Content)
-		assert.Equal(t, true, ctx.GetContext("thinking_end"))
 
 		// 2. Text continue
 		resp2 := v.buildChatCompletionStreamResponse(ctx, &vertexChatResponse{
