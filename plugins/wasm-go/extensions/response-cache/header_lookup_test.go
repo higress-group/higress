@@ -194,6 +194,9 @@ func (h *headerLookupHost) call(ctx context.Context, mod api.Module, name string
 		require.NotContains(h.t, message, "panic")
 	case "proxy_redis_init", "proxy_set_effective_context":
 		// No network connection is needed by this focused ABI host.
+	case "proxy_call_foreign_function":
+		require.Equal(h.t, "get_log_level", read(p[0], p[1]))
+		write(string(make([]byte, 4)), p[4], p[5])
 	case "proxy_get_buffer_bytes":
 		var data []byte
 		switch p[0] {

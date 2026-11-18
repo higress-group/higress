@@ -630,6 +630,12 @@ func (f *fakeHTTPContext) GetUserAttributeMap() map[string]interface{}      { re
 func (f *fakeHTTPContext) WriteUserAttributeToLog() error                   { return nil }
 func (f *fakeHTTPContext) WriteUserAttributeToLogWithKey(key string) error  { return nil }
 func (f *fakeHTTPContext) WriteUserAttributeToTrace() error                 { return nil }
+func (f *fakeHTTPContext) RequireRequestBody()                              {}
+func (f *fakeHTTPContext) HasRequestBody() bool                             { return false }
+func (f *fakeHTTPContext) HasResponseBody() bool                            { return false }
+func (f *fakeHTTPContext) IsWebsocket() bool                                { return false }
+func (f *fakeHTTPContext) IsBinaryRequestBody() bool                        { return false }
+func (f *fakeHTTPContext) IsBinaryResponseBody() bool                       { return false }
 func (f *fakeHTTPContext) DontReadRequestBody()                             {}
 func (f *fakeHTTPContext) DontReadResponseBody()                            {}
 func (f *fakeHTTPContext) BufferRequestBody()                               {}

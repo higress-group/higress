@@ -210,6 +210,9 @@ func parseConfig(result gjson.Result, config *Config, log log.Log) error {
 }
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config Config, log log.Log) types.Action {
+	if !config.enableBodySchema {
+		ctx.DontReadRequestBody()
+	}
 	if !config.enableHeaderSchema {
 		return types.ActionContinue
 	}

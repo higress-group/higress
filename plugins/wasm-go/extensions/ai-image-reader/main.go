@@ -60,6 +60,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config Config) types.Action {
 	ctx.DisableReroute()
 	contentType, _ := proxywasm.GetHttpRequestHeader("content-type")
 	if contentType == "" {
+		ctx.DontReadRequestBody()
 		return types.ActionContinue
 	}
 	if !strings.Contains(contentType, "application/json") {

@@ -39,6 +39,7 @@ func (m *mockMultipartHttpContext) GetUserAttributeMap() map[string]interface{} 
 func (m *mockMultipartHttpContext) WriteUserAttributeToLog() error                    { return nil }
 func (m *mockMultipartHttpContext) WriteUserAttributeToLogWithKey(key string) error   { return nil }
 func (m *mockMultipartHttpContext) WriteUserAttributeToTrace() error                  { return nil }
+func (m *mockMultipartHttpContext) RequireRequestBody()                               {}
 func (m *mockMultipartHttpContext) DontReadRequestBody()                              {}
 func (m *mockMultipartHttpContext) DontReadResponseBody()                             {}
 func (m *mockMultipartHttpContext) BufferRequestBody()                                {}
