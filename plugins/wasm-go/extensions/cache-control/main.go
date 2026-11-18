@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -37,6 +38,22 @@ func parseConfig(json gjson.Result, config *CacheControlConfig, log log.Log) err
 	}
 
 	config.expires = json.Get("expires").String()
+	// The README marks expires as required and documents only three shapes:
+	// a number of seconds, "epoch" or "max".  Anything else used to fall through
+	// to the response path, where the ignored ParseInt error turned it into
+	// max-age=0 - silently making every response uncacheable.
+	if config.expires == "" {
+		return fmt.Errorf("expires is required")
+	}
+	if config.expires != "max" && config.expires != "epoch" {
+		maxAge, err := strconv.ParseInt(config.expires, 10, 64)
+		if err != nil {
+			return fmt.Errorf("expires must be a non-negative number of seconds, \"epoch\" or \"max\", got %q", config.expires)
+		}
+		if maxAge < 0 {
+			return fmt.Errorf("expires must not be negative, got %d", maxAge)
+		}
+	}
 
 	log.Infof("suffix: %q, expires: %s", config.suffix, config.expires)
 	return nil
