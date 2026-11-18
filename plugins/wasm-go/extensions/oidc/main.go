@@ -85,7 +85,15 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.
 	if code := rw.GetStatus(); code != 0 {
 		return types.ActionContinue
 	}
-	return types.ActionPause
+	// The handler went async (e.g. redeeming/refreshing a token via a callout).
+	// Hold the whole request, not just headers: this plugin registers no body
+	// callback, so with a plain ActionPause any request DATA frame makes the
+	// wrapper's OnHttpRequestBody return ActionContinue and the request flows
+	// upstream before the OAuth headers (e.g. X-Forwarded-Access-Token) are
+	// injected. HeaderStopAllIterationAndWatermark buffers the body until
+	// proxywasm.ResumeHttpRequest() runs in the callout callback, the same
+	// pattern used by ai-token-ratelimit.
+	return types.HeaderStopAllIterationAndWatermark
 }
 
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.Log) types.Action {
