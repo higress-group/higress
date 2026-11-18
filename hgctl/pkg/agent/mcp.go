@@ -226,7 +226,7 @@ func handleAddMCP(w io.Writer, arg MCPAddArg) error {
 
 	if !arg.noPublish && arg.asProduct {
 		if err := publishAPIToHimarket("mcp", arg.name, arg.HimarketAdminAuthArg); err != nil {
-			fmt.Println("failed to publish it to himarket, please do it mannually")
+			fmt.Println("failed to publish it to himarket, please do it manually")
 			return err
 		}
 	}
