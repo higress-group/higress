@@ -24,7 +24,7 @@ LLM 意图识别插件，能够智能判断用户请求与某个领域或agent�
 
 | 名称           |   数据类型        | 填写要求 | 默认值 | 描述                                                         |
 | -------------- | --------------- | -------- | ------ | ------------------------------------------------------------ |
-| `scene.category`         | string          | 必填     | -      | 预设场景类别，以`|`分割，如：`金融|电商|法律|Higress`|
+| `scene.category`         | string          | 必填     | -      | 预设场景类别，以`\|`分割，如：`金融\|电商\|法律\|Higress`|
 | `scene.prompt`         | string          | 非必填     | 你是一个智能类别识别助手，负责根据用户提出的问题和预设的类别，确定问题属于哪个预设的类别，并给出相应的类别。用户提出的问题为:%s,预设的类别为%s，直接返回一种具体类别，如果没有找到就返回'NotFound'。     | llm请求prompt模板 |
 | `llm.proxyServiceName`         | string          | 必填     | -      | 新建的higress服务，指向大模型 (取higress中的 FQDN 值)|
 | `llm.proxyUrl`         | string          | 必填     | -      | 大模型路由请求地址全路径，可以是网关自身的地址，也可以是其他大模型的地址（openai协议），例如：http://127.0.0.1:80/intent/compatible-mode/v1/chat/completions |
