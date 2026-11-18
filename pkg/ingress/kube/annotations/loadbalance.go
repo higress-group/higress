@@ -102,11 +102,11 @@ func (l loadBalance) Parse(annotations Annotations, config *Ingress, _ *GlobalCo
 		if path, err := annotations.ParseStringASAP(sessionCookiePath); err == nil {
 			loadBalanceConfig.cookie.path = path
 		}
-		if age, err := annotations.ParseIntASAP(sessionCookieMaxAge); err == nil {
+		if age, err := annotations.ParseIntASAP(sessionCookieMaxAge); err == nil && age >= 0 {
 			loadBalanceConfig.cookie.age = &duration.Duration{
 				Seconds: int64(age),
 			}
-		} else if age, err = annotations.ParseIntASAP(sessionCookieExpires); err == nil {
+		} else if age, err = annotations.ParseIntASAP(sessionCookieExpires); err == nil && age >= 0 {
 			loadBalanceConfig.cookie.age = &duration.Duration{
 				Seconds: int64(age),
 			}
