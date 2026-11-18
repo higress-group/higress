@@ -223,6 +223,49 @@ var percentageConditionConfig = func() json.RawMessage {
 	return data
 }()
 
+// 测试配置：Exists 条件配置
+var existsConditionConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"conditionGroups": []map[string]interface{}{
+			{
+				"headerName":  "X-Traffic-Tag",
+				"headerValue": "exists-match",
+				"logic":       "and",
+				"conditions": []map[string]interface{}{
+					{
+						"conditionType": "header",
+						"key":           "X-User-ID",
+						"operator":      "exists",
+						// exists 操作符不需要 value 字段
+					},
+				},
+			},
+		},
+	})
+	return data
+}()
+
+// 测试配置：NotExists 条件配置
+var notExistsConditionConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"conditionGroups": []map[string]interface{}{
+			{
+				"headerName":  "X-Traffic-Tag",
+				"headerValue": "not-exists-match",
+				"logic":       "and",
+				"conditions": []map[string]interface{}{
+					{
+						"conditionType": "header",
+						"key":           "X-Debug-Mode",
+						"operator":      "not_exists",
+					},
+				},
+			},
+		},
+	})
+	return data
+}()
+
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		// 测试基本条件组配置解析
@@ -308,6 +351,39 @@ func TestParseConfig(t *testing.T) {
 		// 测试百分比条件配置解析
 		t.Run("percentage condition config", func(t *testing.T) {
 			host, status := test.NewTestHost(percentageConditionConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+		})
+
+		// 测试存在/不存在配置解析
+		t.Run("percentage condition config", func(t *testing.T) {
+			host, status := test.NewTestHost(percentageConditionConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+		})
+
+		// 测试 Exists 条件配置解析
+		t.Run("exists condition config", func(t *testing.T) {
+			host, status := test.NewTestHost(existsConditionConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			config, err := host.GetMatchConfig()
+			require.NoError(t, err)
+			require.NotNil(t, config)
+		})
+
+		// 测试 NotExists 条件配置解析
+		t.Run("not_exists condition config", func(t *testing.T) {
+			host, status := test.NewTestHost(notExistsConditionConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
 
@@ -554,6 +630,56 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			}
 			require.True(t, tagHeaderFound, "Condition-based traffic tag header should be added")
 
+			host.CompleteHttp()
+		})
+		// 测试 Exists 条件匹配：当 Header 存在时 (期望匹配成功)
+		t.Run("exists condition match - header present", func(t *testing.T) {
+			host, status := test.NewTestHost(existsConditionConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "GET"},
+				{"X-User-ID", "user123"}, // 存在目标 Header
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+			requestHeaders := host.GetRequestHeaders()
+			tagHeaderFound := false
+			for _, header := range requestHeaders {
+				if header[0] == "x-traffic-tag" && header[1] == "exists-match" {
+					tagHeaderFound = true
+					break
+				}
+			}
+			require.True(t, tagHeaderFound, "Exists-based traffic tag header should be added")
+			host.CompleteHttp()
+		})
+
+		// 测试 NotExists 条件匹配：当 Header 不存在时 (期望匹配成功)
+		t.Run("not_exists condition match - header missing", func(t *testing.T) {
+			host, status := test.NewTestHost(notExistsConditionConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "GET"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+			requestHeaders := host.GetRequestHeaders()
+			tagHeaderFound := false
+			for _, header := range requestHeaders {
+				if header[0] == "x-traffic-tag" && header[1] == "not-exists-match" {
+					tagHeaderFound = true
+					break
+				}
+			}
+			require.True(t, tagHeaderFound, "Exists-based traffic tag header should be added")
 			host.CompleteHttp()
 		})
 	})
