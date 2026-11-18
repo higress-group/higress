@@ -1,0 +1,3 @@
+ok      github.com/alibaba/higress/v2/pkg/ingress/config    0.092s
+?       github.com/alibaba/higress/v2/pkg/ingress/translation   [no test files]
+ok      github.com/alibaba/higress/v2/pkg/ingress/mcp   0.040s
