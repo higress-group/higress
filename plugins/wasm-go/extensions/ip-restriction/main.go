@@ -30,6 +30,8 @@ type RestrictionConfig struct {
 	Deny         *iptree.IPTree `json:"deny"`           //拒绝的IP
 	Status       uint32         `json:"status"`         //被拒绝时返回的状态码
 	Message      string         `json:"message"`        //被拒绝时返回的消息
+	ResponseBody string         `json:"response_body"`  //自定义拒绝响应体，设置后覆盖默认JSON
+	ContentType  string         `json:"content_type"`   //自定义Content-Type，默认 text/html
 }
 
 func main() {}
@@ -74,6 +76,8 @@ func parseConfig(json gjson.Result, config *RestrictionConfig, log log.Log) erro
 	} else {
 		config.Message = DefaultDenyMessage
 	}
+	config.ResponseBody = json.Get("response_body").String()
+	config.ContentType = json.Get("content_type").String()
 	allowNets, err := parseIPNets(json.Get("allow").Array())
 	if err != nil {
 		log.Error(err.Error())
@@ -150,9 +154,20 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config RestrictionConfig,
 }
 
 func deniedUnauthorized(config RestrictionConfig, reason string) types.Action {
-	body, _ := json.Marshal(map[string]string{
-		"message": config.Message,
-	})
-	_ = proxywasm.SendHttpResponseWithDetail(config.Status, "key-auth."+reason, nil, body, -1)
+	var body []byte
+	var headers [][2]string
+	if config.ResponseBody != "" {
+		body = []byte(config.ResponseBody)
+		contentType := config.ContentType
+		if contentType == "" {
+			contentType = "text/html; charset=utf-8"
+		}
+		headers = [][2]string{{"content-type", contentType}}
+	} else {
+		body, _ = json.Marshal(map[string]string{
+			"message": config.Message,
+		})
+	}
+	_ = proxywasm.SendHttpResponseWithDetail(config.Status, "ip-restriction."+reason, headers, body, -1)
 	return types.ActionContinue
 }
