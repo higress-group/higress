@@ -1,0 +1,89 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-model-mapper
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "foo.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-model-mapper-custom-key
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "foo.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-model-mapper-custom-path
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "foo.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: model-mapper
+  namespace: higress-system
+spec:
+  defaultConfigDisable: true
+  phase: UNSPECIFIED_PHASE
+  priority: 100
+  matchRules:
+    - config:
+        modelMapping:
+          'gpt-4-*': "qwen-max"
+          'gpt-4o': "qwen-vl-plus"
+          'text-embedding-v1': ""
+          '*': "qwen-turbo"
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-model-mapper
+    - config:
+        modelKey: "engine"
+        modelMapping:
+          '*': "qwen-turbo"
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-model-mapper-custom-key
+    - config:
+        modelMapping:
+          'gpt-4o': "qwen-vl-plus"
+          '*': "qwen-turbo"
+        enableOnPathSuffix: ["/api/custom/endpoint"]
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-model-mapper-custom-path
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-mapper:1.0.0
