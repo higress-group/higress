@@ -1022,6 +1022,55 @@ func TestClaudeToOpenAIConverter_ConvertClaudeRequestToOpenAI(t *testing.T) {
 		assert.Equal(t, "toolu_search123", assistantMsg.ToolCalls[0].Id)
 		assert.Equal(t, "search_database", assistantMsg.ToolCalls[0].Function.Name)
 	})
+
+	t.Run("merge_inline_system_messages_with_top_level_system", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1000,
+			"system": "You are Claude Code.",
+			"messages": [
+				{"role": "user", "content": "hello"},
+				{"role": "system", "content": "Available agent types for the Agent tool: ..."}
+			]
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Len(t, openaiRequest.Messages, 2)
+		assert.Equal(t, roleSystem, openaiRequest.Messages[0].Role)
+		assert.Equal(t, "You are Claude Code.\n\nAvailable agent types for the Agent tool: ...", openaiRequest.Messages[0].Content)
+		assert.Equal(t, "user", openaiRequest.Messages[1].Role)
+		assert.Equal(t, "hello", openaiRequest.Messages[1].Content)
+	})
+
+	t.Run("inline_system_messages_only_no_top_level", func(t *testing.T) {
+		claudeRequest := `{
+			"model": "claude-sonnet-4",
+			"max_tokens": 1000,
+			"messages": [
+				{"role": "system", "content": "System instruction A."},
+				{"role": "user", "content": "hi"},
+				{"role": "system", "content": "System instruction B."}
+			]
+		}`
+
+		result, err := converter.ConvertClaudeRequestToOpenAI([]byte(claudeRequest))
+		require.NoError(t, err)
+
+		var openaiRequest chatCompletionRequest
+		err = json.Unmarshal(result, &openaiRequest)
+		require.NoError(t, err)
+
+		require.Len(t, openaiRequest.Messages, 2)
+		assert.Equal(t, roleSystem, openaiRequest.Messages[0].Role)
+		assert.Equal(t, "System instruction A.\n\nSystem instruction B.", openaiRequest.Messages[0].Content)
+		assert.Equal(t, "user", openaiRequest.Messages[1].Role)
+	})
 }
 
 func TestClaudeToOpenAIConverter_ConvertOpenAIResponseToClaude(t *testing.T) {
