@@ -321,38 +321,8 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) type
 		log.Errorf("not found user query in body:%s", body)
 		return types.ActionContinue
 	}
-	searchRewrite := config.searchRewrite
+	searchRewrite := searchRewriteForRequest(config.searchRewrite, webSearchOptions)
 	if searchRewrite != nil {
-		// Check if web_search_options.search_context_size exists and adjust maxCount accordingly
-		if webSearchOptions.Exists() {
-			searchContextSize := webSearchOptions.Get("search_context_size").String()
-			if searchContextSize != "" {
-				originalMaxCount := searchRewrite.maxCount
-				switch searchContextSize {
-				case "low":
-					searchRewrite.maxCount = 1
-					log.Debugf("Setting maxCount to 1 based on search_context_size=low")
-				case "medium":
-					searchRewrite.maxCount = 3
-					log.Debugf("Setting maxCount to 3 based on search_context_size=medium")
-				case "high":
-					searchRewrite.maxCount = 5
-					log.Debugf("Setting maxCount to 5 based on search_context_size=high")
-				default:
-					log.Warnf("Unknown search_context_size value: %s, using configured maxCount: %d",
-						searchContextSize, searchRewrite.maxCount)
-				}
-
-				// If maxCount changed, regenerate the prompt from the template
-				if originalMaxCount != searchRewrite.maxCount && searchRewrite.promptTemplate != "" {
-					searchRewrite.prompt = strings.Replace(
-						searchRewrite.promptTemplate,
-						"{max_count}",
-						fmt.Sprintf("%d", searchRewrite.maxCount),
-						-1)
-				}
-			}
-		}
 		startTime := time.Now()
 		rewritePrompt := strings.Replace(searchRewrite.prompt, "{question}", query, 1)
 		rewriteBody, _ := sjson.SetBytes([]byte(fmt.Sprintf(
@@ -573,6 +543,49 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config Config) types.Action 
 		ctx.SetResponseBodyBufferLimit(DEFAULT_MAX_BODY_BYTES)
 	}
 	return types.ActionContinue
+}
+
+// searchRewriteForRequest returns the rewrite settings to use for this request.
+// web_search_options only applies to the current request, so the plugin-level
+// configuration is copied before search_context_size adjusts maxCount and the
+// regenerated prompt; the shared config must survive the request unchanged.
+func searchRewriteForRequest(base *SearchRewrite, webSearchOptions gjson.Result) *SearchRewrite {
+	if base == nil {
+		return nil
+	}
+	shared := *base
+	searchRewrite := &shared
+	// Check if web_search_options.search_context_size exists and adjust maxCount accordingly
+	if webSearchOptions.Exists() {
+		searchContextSize := webSearchOptions.Get("search_context_size").String()
+		if searchContextSize != "" {
+			originalMaxCount := searchRewrite.maxCount
+			switch searchContextSize {
+			case "low":
+				searchRewrite.maxCount = 1
+				log.Debugf("Setting maxCount to 1 based on search_context_size=low")
+			case "medium":
+				searchRewrite.maxCount = 3
+				log.Debugf("Setting maxCount to 3 based on search_context_size=medium")
+			case "high":
+				searchRewrite.maxCount = 5
+				log.Debugf("Setting maxCount to 5 based on search_context_size=high")
+			default:
+				log.Warnf("Unknown search_context_size value: %s, using configured maxCount: %d",
+					searchContextSize, searchRewrite.maxCount)
+			}
+
+			// If maxCount changed, regenerate the prompt from the template
+			if originalMaxCount != searchRewrite.maxCount && searchRewrite.promptTemplate != "" {
+				searchRewrite.prompt = strings.Replace(
+					searchRewrite.promptTemplate,
+					"{max_count}",
+					fmt.Sprintf("%d", searchRewrite.maxCount),
+					-1)
+			}
+		}
+	}
+	return searchRewrite
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, config Config, body []byte) types.Action {
