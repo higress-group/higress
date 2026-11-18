@@ -1,0 +1,42 @@
+server:
+  name: ikoi-server
+  type: mcp-proxy
+  transport: http
+  mcpServerURL: "https://ikoi.ai/mcp"
+  protocolStrategy: auto
+  autoDetection:
+    probeTimeoutMs: 1000
+  version: "1.0.2"
+  defaultDownstreamSecurity:
+    id: ClientApiKey
+    passthrough: true
+  defaultUpstreamSecurity:
+    id: BackendApiKey
+  securitySchemes:
+    - id: ClientApiKey
+      type: apiKey
+      in: header
+      name: X-API-Key
+    - id: BackendApiKey
+      type: apiKey
+      in: header
+      name: X-API-Key
+allowTools:
+  - arrive_with_code
+  - come_home
+  - leave_now
+  - collect_homecoming
+  - my_home
+  - city_board_read
+  - city_board_post
+  - leave_keepsake
+  - extend_stay
+  - choose_activity
+  - corkboard_read
+  - corkboard_note
+  - diary_write
+  - diary_read
+  - choose_station
+  - invite_resident
+  - my_invitations
+  - answer_invitation
