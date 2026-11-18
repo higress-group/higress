@@ -716,7 +716,7 @@ func getArgsPositionFromToolMeta(toolMeta *provider.ToolsMeta) (map[string]strin
 			}
 			result = mergeMaps(result, template.ArgsPosition)
 		default:
-			return result, fmt.Errorf("unsupport tool meta type %v", kind)
+			return result, fmt.Errorf("unsupported tool meta type %v", kind)
 		}
 	}
 	return result, nil
@@ -740,7 +740,7 @@ func getRequestTemplateFromToolMeta(toolMeta *provider.ToolsMeta) (*provider.Req
 			}
 			return &template.RequestTemplate, nil
 		default:
-			return nil, fmt.Errorf("unsupport tool meta type")
+			return nil, fmt.Errorf("unsupported tool meta type")
 		}
 	}
 	return nil, nil
