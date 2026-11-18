@@ -374,8 +374,6 @@ func (w *watcher) generateServiceEntry(host string, services []model.SubscribeSe
 		protocol := common.HTTP
 		if service.Metadata != nil && service.Metadata["protocol"] != "" {
 			protocol = common.ParseProtocol(service.Metadata["protocol"])
-		} else {
-			service.Metadata = make(map[string]string)
 		}
 		port := &v1alpha3.ServicePort{
 			Name:     protocol.String(),
