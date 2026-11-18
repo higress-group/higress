@@ -2157,6 +2157,19 @@ func buildListener(
 			}
 		}
 	}
+	// Start - Updated by Higress
+	if rejected := listenerConditions[string(k8s.ListenerConditionAccepted)].error; rejected != nil {
+		programmed := listenerConditions[string(k8s.ListenerConditionProgrammed)]
+		// Keep a more specific TLS programming error when both validations fail.
+		if programmed.error == nil {
+			programmed.error = &ConfigError{
+				Reason:  string(k8s.ListenerReasonInvalid),
+				Message: rejected.Message,
+			}
+		}
+		ok = false
+	}
+	// End - Updated by Higress
 	server := &istio.Server{
 		Port: &istio.Port{
 			// Name is required. We only have one server per Gateway, so we can just name them all the same

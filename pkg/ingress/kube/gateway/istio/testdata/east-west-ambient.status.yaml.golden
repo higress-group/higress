@@ -77,9 +77,10 @@ status:
       status: "False"
       type: Conflicted
     - lastTransitionTime: fake
-      message: No errors found
-      reason: Programmed
-      status: "True"
+      message: Expected a single listener on port 15008 with protocol "HBONE" and
+        TLS.Mode == Terminate
+      reason: Invalid
+      status: "False"
       type: Programmed
     - lastTransitionTime: fake
       message: No errors found
