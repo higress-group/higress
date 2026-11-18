@@ -103,7 +103,7 @@ curl -X POST "http://localhost:8001/v1/chat/completions" \
 | 1005 | 响应不符合Json Schema定义|
 | 1006 | 重试次数超过最大限制|
 | 1007 | 无法获取响应内容，可能是上游服务配置错误或获取内容的ContentPath路径错误|
-| 1008 | serciveDomain为空, 请注意serviceDomian或serviceUrl不能同时为空|
+| 1008 | serviceDomain 为空，请注意 serviceDomain 或 serviceUrl 不能同时为空。|
 
 ## 服务配置说明
 本插件需要配置上游服务来支持出现异常时的自动重试机制, 支持的配置主要包括`支持openai接口的AI服务`或`本地网关服务`
