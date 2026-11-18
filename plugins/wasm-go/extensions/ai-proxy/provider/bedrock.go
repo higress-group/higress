@@ -921,7 +921,10 @@ func (b *bedrockProvider) buildBedrockTextGenerationRequest(origRequest *chatCom
 			if len(msg.ClaudeContentBlocks) > 0 {
 				toolResultContents = claudeContentBlocksToBedrockContents(msg.ClaudeContentBlocks)
 			}
-			if len(messages) > 0 && messages[len(messages)-1].Role == roleUser && messages[len(messages)-1].Content[0].ToolResult != nil {
+			// Content can be empty for a well-formed request (a tool message with an empty
+			// list), so the first element has to be checked before it is read.
+			if len(messages) > 0 && messages[len(messages)-1].Role == roleUser &&
+				len(messages[len(messages)-1].Content) > 0 && messages[len(messages)-1].Content[0].ToolResult != nil {
 				messages[len(messages)-1].Content = append(messages[len(messages)-1].Content, toolResultContents...)
 			} else {
 				messages = append(messages, bedrockMessage{
