@@ -206,7 +206,12 @@ func onHttpResponseBody(ctx wrapper.HttpContext, c config.PluginConfig, body []b
 		value = string(body)
 	}
 
-	cacheResponse(ctx, c, key.(string), value)
+	cacheKey, ok := key.(string)
+	if !ok {
+		log.Warnf("[onHttpResponseBody] cache key is not a string, skip cache")
+		return types.ActionContinue
+	}
+	cacheResponse(ctx, c, cacheKey, value)
 	return types.ActionContinue
 
 }
