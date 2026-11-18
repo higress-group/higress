@@ -1,0 +1,128 @@
+# Copyright 2026 alibaba
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-ai-token-ratelimit
+  namespace: higress-conformance-ai-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-ai-token-ratelimit
+  template:
+    metadata:
+      labels:
+        app: redis-ai-token-ratelimit
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-ai-token-ratelimit
+  namespace: higress-conformance-ai-backend
+spec:
+  ports:
+    - port: 6379
+      targetPort: 6379
+  selector:
+    app: redis-ai-token-ratelimit
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-token-ratelimit-param
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "ai-token-ratelimit.example.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-token-ratelimit-header
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "ai-token-ratelimit-header.example.com"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-token-ratelimit
+  namespace: higress-system
+spec:
+  priority: 600
+  matchRules:
+    # Parameter-based limits. The llm-mock backend reports a fixed usage of
+    # 10 tokens per response, so a token_per_minute of 5 is exhausted by a
+    # single request, while 50 and 1000 leave headroom for retries.
+    - config:
+        rule_name: aitrl_param_rule
+        rule_items:
+          - limit_by_param: apikey
+            limit_keys:
+              - key: key-warm
+                token_per_minute: 1000
+              - key: key-a
+                token_per_minute: 5
+              - key: key-b
+                token_per_minute: 50
+              - key: key-s
+                token_per_minute: 1000
+        redis:
+          service_name: redis-ai-token-ratelimit.higress-conformance-ai-backend.svc.cluster.local
+          service_port: 6379
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-token-ratelimit-param
+    # Header-based limits.
+    - config:
+        rule_name: aitrl_header_rule
+        rule_items:
+          - limit_by_header: x-api-key
+            limit_keys:
+              - key: key-h
+                token_per_minute: 5
+        redis:
+          service_name: redis-ai-token-ratelimit.higress-conformance-ai-backend.svc.cluster.local
+          service_port: 6379
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-token-ratelimit-header
+  url: file:///opt/plugins/wasm-go/extensions/ai-token-ratelimit/plugin.wasm
