@@ -391,6 +391,28 @@ func onHttpRequestBody(ctx wrapper.HttpContext, pluginConfig config.PluginConfig
 		return types.ActionPause
 	}
 
+	// Reject a body declaring "stream" more than once for the same reason: gjson
+	// reads the first occurrence while the upstream parsers keep the last one, so
+	// the streaming mode - and with it the stream_options.include_usage injection
+	// below, the Accept header and the first-byte timeout - would be decided for a
+	// different request than the one the upstream serves. A client could keep
+	// token usage out of the response this way and bypass token-based rate
+	// limiting.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "stream"); err != nil {
+		log.Debugf("[onHttpRequestBody] skip duplicate stream member check: %v", err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage("stream")
+		log.Warnf("[onHttpRequestBody] %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(
+			http.StatusBadRequest,
+			"duplicate_stream_member",
+			util.CreateHeaders(util.HeaderContentType, util.MimeTypeTextPlain),
+			[]byte(message),
+			-1,
+		)
+		return types.ActionPause
+	}
+
 	defer func() {
 		saveContextsToHeaders(ctx)
 	}()
