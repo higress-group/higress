@@ -222,7 +222,7 @@ lb_config:
 | `cluster_header` | string | optional | `x-higress-target-cluster` | By retrieving the value of this header, we can determine which backend service to route to |
 | `queue_size`      | int | optional | 100 | The metrics is calculated based on the number of most recent requests. |
 | `ewma_beta` | float | optional | 0.5 | Historical EWMA weight used by `AdaptiveScore`, value of 0~1 |
-| `p2c_choices` | int | optional | 2 | Number of sampled services compared by `AdaptiveScore`; compares all services when the value is not less than the service count |
+| `p2c_choices` | int | optional | 2 | Number of unique candidate services sampled by `AdaptiveScore`; compares all candidates when the value is not less than the unique candidate count |
 | `ttft_weight` | float | optional | 0.7 | First-token latency weight used by `AdaptiveScore` |
 | `total_latency_weight` | float | optional | 0.3 | Total response latency weight used by `AdaptiveScore` |
 | `error_penalty` | float | optional | 3.0 | Cumulative error-rate penalty since the plugin instance started, used by `AdaptiveScore` |
@@ -246,6 +246,10 @@ The meanings of the values ​​for `mode` are as follows:
 - `AdaptiveScore`: Combines EWMA first-token latency, EWMA total latency, current in-flight requests, and cumulative error rate into a score, then routes to the lowest-score service. It is designed for LLM backends whose latency and load fluctuate continuously.
 
 `AdaptiveScore` computes its error rate from cumulative success and failure counts over the lifetime of the current plugin instance; it does not currently use a time window or decay.
+
+After request-share and cooldown filtering, `AdaptiveScore` deduplicates candidates by the exact service-name string and samples without replacement in bounded steps. Comparing all candidates preserves their first-occurrence order. Local selection and global in-flight use the same rule. Identical service names remain one candidate even when they refer to different clusters, since existing metrics and counters are also keyed by service name.
+
+Compatibility note: repeated entries in `service_list` could previously produce undocumented implicit weighting or random tie behavior. Deduplication removes those side effects. Other scheduling modes are unchanged; explicit weighting requires a separate Proposal.
 
 When `global_inflight_enabled` is enabled, `AdaptiveScore` uses Redis Lua to atomically select the service with the lowest score after applying global in-flight pressure, then increments the selected service counter by 1. The counter is decremented when the request stream completes. If Redis initialization, dispatch, or response handling fails, the plugin falls back to local `AdaptiveScore` without blocking the request.
 

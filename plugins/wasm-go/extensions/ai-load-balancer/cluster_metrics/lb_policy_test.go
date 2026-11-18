@@ -1,6 +1,11 @@
 package cluster_metrics
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"reflect"
 	"testing"
 	"time"
 
@@ -12,6 +17,169 @@ import (
 
 func init() {
 	log.SetPluginLog(noopLog{})
+}
+
+// Keep a broken sampler inside a child process so regressions cannot hang the suite.
+func TestAdaptiveScoreDuplicateCandidatesReturn(t *testing.T) {
+	if child := os.Getenv("HIGRESS_ADAPTIVE_SAMPLING_CASE"); child != "" {
+		services := []string{"svc-a", "svc-a", "svc-a", "svc-b"}
+		config := map[string]interface{}{"mode": ModeAdaptiveScore, "service_list": services, "p2c_choices": 3}
+		if child == "local-identical" || child == "global-identical" {
+			services = []string{"svc-a", "svc-a", "svc-a"}
+			config["service_list"] = services
+			delete(config, "p2c_choices")
+		}
+		data, err := json.Marshal(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lb, err := NewClusterEndpointLoadBalancer(gjson.ParseBytes(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		original := append([]string(nil), lb.ServiceList...)
+		switch child {
+		case "local-duplicate", "local-identical":
+			if selected := lb.selectAdaptiveScore(1000); selected != "svc-a" && selected != "svc-b" {
+				t.Fatalf("unexpected selected service: %q", selected)
+			}
+		case "global-duplicate", "global-identical":
+			keys := lb.buildGlobalInflightLuaKeys(1000, "route-a")
+			want := []string{"svc-a", "svc-b"}
+			if len(services) == 3 {
+				want = want[:1]
+			}
+			if keys[2] != len(want) || len(keys) != 4+2*len(want) {
+				t.Fatalf("unexpected Lua candidate count: %v", keys)
+			}
+			for i, service := range want {
+				if keys[4+2*i] != service {
+					t.Fatalf("unexpected Lua service order: %v", keys)
+				}
+			}
+		default:
+			t.Fatalf("unknown child case: %s", child)
+		}
+		if !reflect.DeepEqual(lb.ServiceList, original) {
+			t.Fatalf("service_list changed: got %v, want %v", lb.ServiceList, original)
+		}
+		return
+	}
+	for _, name := range []string{"local-duplicate", "local-identical", "global-duplicate", "global-identical"} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAdaptiveScoreDuplicateCandidatesReturn$", "-test.timeout=1s")
+			cmd.Env = append(os.Environ(), "HIGRESS_ADAPTIVE_SAMPLING_CASE="+name)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("candidate selection did not complete successfully: %v (context: %v)\n%s", err, ctx.Err(), output)
+			}
+		})
+	}
+}
+
+func TestAdaptiveScoreSamplesUniqueServicesWithoutChangingConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		services []string
+		choices  int
+		want     []string
+		count    int
+	}{
+		{name: "unique subset", services: []string{"a", "b", "c", "d"}, choices: 2, count: 2},
+		{name: "unique all", services: []string{"a", "b", "c", "d"}, choices: 4, want: []string{"a", "b", "c", "d"}, count: 4},
+		{name: "duplicate subset", services: []string{"a", "a", "b", "c", "d"}, choices: 2, count: 2},
+		{name: "duplicate default", services: []string{"a", "a", "b", "b"}, want: []string{"a", "b"}, count: 2},
+		{name: "fewer unique than choices", services: []string{"a", "a", "a", "b"}, choices: 3, want: []string{"a", "b"}, count: 2},
+		{name: "identical default", services: []string{"a", "a", "a"}, want: []string{"a"}, count: 1},
+		{name: "identical explicit one", services: []string{"a", "a", "a"}, choices: 1, want: []string{"a"}, count: 1},
+		{name: "larger than list", services: []string{"a", "a", "b"}, choices: 7, want: []string{"a", "b"}, count: 2},
+		{name: "single service", services: []string{"a"}, choices: 3, want: []string{"a"}, count: 1},
+		{name: "exact string identity", services: []string{"a", "a", "A"}, choices: 3, want: []string{"a", "A"}, count: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := map[string]interface{}{"mode": ModeAdaptiveScore, "service_list": tt.services}
+			if tt.choices != 0 {
+				config["p2c_choices"] = tt.choices
+			}
+			data, err := json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lb, err := NewClusterEndpointLoadBalancer(gjson.ParseBytes(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := append([]string(nil), lb.ServiceList...)
+			for range 20 {
+				got := lb.sampleAdaptiveCandidates(1000)
+				if len(got) != tt.count {
+					t.Fatalf("got %v, want %d candidates", got, tt.count)
+				}
+				seen := make(map[string]bool)
+				for _, service := range got {
+					if seen[service] || !lb.hasService(service) {
+						t.Fatalf("duplicate or unknown candidate in %v", got)
+					}
+					seen[service] = true
+				}
+				if tt.want != nil && !reflect.DeepEqual(got, tt.want) {
+					t.Fatalf("all-candidate order changed: got %v, want %v", got, tt.want)
+				}
+				if !reflect.DeepEqual(lb.ServiceList, original) {
+					t.Fatalf("service_list changed: got %v, want %v", lb.ServiceList, original)
+				}
+			}
+		})
+	}
+}
+
+func TestAdaptiveScoreSamplingPreservesFilteringAndFallback(t *testing.T) {
+	for _, name := range []string{"rate and cooldown", "all rate limited", "all cooling", "filtered all cooling"} {
+		t.Run(name, func(t *testing.T) {
+			lb, err := NewClusterEndpointLoadBalancer(gjson.Parse(`{"mode":"AdaptiveScore","service_list":["a","b","c","d"],"p2c_choices":8,"rate_limit":0.5}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"a", "b", "c", "d"}
+			switch name {
+			case "rate and cooldown", "filtered all cooling":
+				lb.ServiceRequestCount["a"] = 7
+				lb.ServiceRequestCount["b"] = 1
+				lb.ServiceRequestCount["c"] = 1
+				lb.ServiceRequestCount["d"] = 1
+				lb.ServiceAdaptiveMetrics["b"].CooldownUntilUnixMs = 2000
+				want = []string{"c", "d"}
+				if name == "filtered all cooling" {
+					lb.ServiceAdaptiveMetrics["c"].CooldownUntilUnixMs = 2000
+					lb.ServiceAdaptiveMetrics["d"].CooldownUntilUnixMs = 2000
+					want = []string{"b", "c", "d"}
+				}
+			case "all rate limited":
+				lb.RateLimit = 0.2
+				for _, service := range lb.ServiceList {
+					lb.ServiceRequestCount[service] = 1
+				}
+			case "all cooling":
+				for _, service := range lb.ServiceList {
+					lb.ServiceAdaptiveMetrics[service].CooldownUntilUnixMs = 2000
+				}
+			}
+			if got := lb.sampleAdaptiveCandidates(1000); !reflect.DeepEqual(got, want) {
+				t.Fatalf("filtered candidates: got %v, want %v", got, want)
+			}
+			keys := lb.buildGlobalInflightLuaKeys(1000, "route-a")
+			if keys[2] != len(want) || len(keys) != 4+2*len(want) {
+				t.Fatalf("unexpected Lua candidate count: %v", keys)
+			}
+			for i, service := range want {
+				if keys[4+2*i] != service {
+					t.Fatalf("unexpected filtered Lua candidates: %v", keys)
+				}
+			}
+		})
+	}
 }
 
 func TestAdaptiveScoreConfigDefaults(t *testing.T) {
