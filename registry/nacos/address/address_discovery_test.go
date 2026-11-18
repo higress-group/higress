@@ -17,6 +17,7 @@ package address
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -31,10 +32,48 @@ func setUpServer(status int, body []byte) (string, func()) {
 	}
 }
 
-func setUpServerWithBodyPtr(status int, body *[]byte) (string, func()) {
+// mockBody is the response body of a mock server. The test goroutine
+// replaces it while the provider's discovery goroutine may be requesting
+// the server, so access is guarded by a mutex.
+type mockBody struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func newMockBody(data string) *mockBody {
+	return &mockBody{data: []byte(data)}
+}
+
+func (b *mockBody) set(data string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.data = []byte(data)
+}
+
+func (b *mockBody) get() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data
+}
+
+// nacosAddr and setNacosAddr access the provider's current address under
+// the same lock the provider's discovery goroutine uses.
+func nacosAddr(p *NacosAddressProvider) string {
+	p.cond.L.Lock()
+	defer p.cond.L.Unlock()
+	return p.nacosAddr
+}
+
+func setNacosAddr(p *NacosAddressProvider, addr string) {
+	p.cond.L.Lock()
+	defer p.cond.L.Unlock()
+	p.nacosAddr = addr
+}
+
+func setUpServerWithBody(status int, body *mockBody) (string, func()) {
 	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		rw.WriteHeader(status)
-		rw.Write(*body)
+		rw.Write(body.get())
 	}))
 	return server.URL, func() {
 		server.Close()
@@ -97,15 +136,15 @@ func TestGetNacosAddress(t *testing.T) {
 }
 
 func TestTrigger(t *testing.T) {
-	body := []byte("1.1.1.1 ")
-	url, tearDown := setUpServerWithBodyPtr(200, &body)
+	body := newMockBody("1.1.1.1 ")
+	url, tearDown := setUpServerWithBody(200, body)
 	defer tearDown()
 	provider := NewNacosAddressProvider(url, "xxxx")
 	address := <-provider.GetNacosAddress("")
 	if address != "1.1.1.1" {
 		t.Errorf("got %s, want %s", address, "1.1.1.1")
 	}
-	body = []byte(" 2.2.2.2 ")
+	body.set(" 2.2.2.2 ")
 	tests := []struct {
 		name    string
 		trigger bool
@@ -132,16 +171,16 @@ func TestTrigger(t *testing.T) {
 			case <-provider.GetNacosAddress("1.1.1.1"):
 			case <-timeout.C:
 			}
-			if provider.nacosAddr != tt.want {
-				t.Errorf("got %s, want %s", provider.nacosAddr, tt.want)
+			if got := nacosAddr(provider); got != tt.want {
+				t.Errorf("got %s, want %s", got, tt.want)
 			}
 		})
 	}
 }
 
 func TestBackup(t *testing.T) {
-	body := []byte("1.1.1.1 ")
-	url, tearDown := setUpServerWithBodyPtr(200, &body)
+	body := newMockBody("1.1.1.1 ")
+	url, tearDown := setUpServerWithBody(200, body)
 	defer tearDown()
 	provider := NewNacosAddressProvider(url, "xxxx")
 	address := <-provider.GetNacosAddress("")
@@ -186,8 +225,8 @@ func TestBackup(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			provider.nacosAddr = tt.oldaddr
-			body = []byte(tt.newaddr)
+			setNacosAddr(provider, tt.oldaddr)
+			body.set(tt.newaddr)
 			provider.addressDiscovery()
 			for i := 0; i < tt.triggerNum; i++ {
 				provider.Trigger()
@@ -205,9 +244,37 @@ func TestBackup(t *testing.T) {
 	}
 }
 
+func TestAbandonedGetNacosAddressDoesNotBlockProvider(t *testing.T) {
+	body := newMockBody("1.1.1.1")
+	url, tearDown := setUpServerWithBody(200, body)
+	defer tearDown()
+	provider := NewNacosAddressProvider(url, "xxxx")
+	if address := <-provider.GetNacosAddress(""); address != "1.1.1.1" {
+		t.Fatalf("got %s, want %s", address, "1.1.1.1")
+	}
+
+	// A caller that stops waiting, as updateNacosClient does on stop.
+	_ = provider.GetNacosAddress("1.1.1.1")
+	body.set("2.2.2.2")
+	provider.addressDiscovery()
+	// Let the abandoned goroutine wake up and deliver the new address.
+	time.Sleep(100 * time.Millisecond)
+
+	got := make(chan string, 1)
+	go func() { got <- nacosAddr(provider) }()
+	select {
+	case addr := <-got:
+		if addr != "2.2.2.2" {
+			t.Errorf("got %s, want %s", addr, "2.2.2.2")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider lock is held by an abandoned GetNacosAddress call")
+	}
+}
+
 func TestKeepIp(t *testing.T) {
-	body := []byte("1.1.1.1")
-	url, tearDown := setUpServerWithBodyPtr(200, &body)
+	body := newMockBody("1.1.1.1")
+	url, tearDown := setUpServerWithBody(200, body)
 	defer tearDown()
 	provider := NewNacosAddressProvider(url, "xxxx")
 	address := <-provider.GetNacosAddress("")
@@ -216,46 +283,46 @@ func TestKeepIp(t *testing.T) {
 	}
 	tests := []struct {
 		name    string
-		newAddr []byte
+		newAddr string
 		want    string
 	}{
 		{
 			"add ip",
-			[]byte("1.1.1.1\n 2.2.2.2"),
+			"1.1.1.1\n 2.2.2.2",
 			"1.1.1.1",
 		},
 		{
 			"remove ip",
-			[]byte("2.2.2.2"),
+			"2.2.2.2",
 			"2.2.2.2",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body = tt.newAddr
+			body.set(tt.newAddr)
 			provider.addressDiscovery()
 			timeout := time.NewTicker(1 * time.Second)
 			select {
 			case <-provider.GetNacosAddress("1.1.1.1"):
 			case <-timeout.C:
 			}
-			if provider.nacosAddr != tt.want {
-				t.Errorf("got %s, want %s", provider.nacosAddr, tt.want)
+			if got := nacosAddr(provider); got != tt.want {
+				t.Errorf("got %s, want %s", got, tt.want)
 			}
 		})
 	}
 }
 
 func TestMultiClient(t *testing.T) {
-	body := []byte("1.1.1.1")
-	url, tearDown := setUpServerWithBodyPtr(200, &body)
+	body := newMockBody("1.1.1.1")
+	url, tearDown := setUpServerWithBody(200, body)
 	defer tearDown()
 	provider := NewNacosAddressProvider(url, "xxxx")
 	address := <-provider.GetNacosAddress("")
 	if address != "1.1.1.1" {
 		t.Errorf("got %s, want %s", address, "1.1.1.1")
 	}
-	body = []byte("2.2.2.2")
+	body.set("2.2.2.2")
 	tests := []struct {
 		name     string
 		oldAddrs []string
