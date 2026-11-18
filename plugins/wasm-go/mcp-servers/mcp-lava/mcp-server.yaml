@@ -1,0 +1,832 @@
+server:
+  name: lava
+  config:
+    apiKey: ""
+  securitySchemes:
+    - id: apiKeyHeader
+      type: apiKey
+      in: header
+      name: X-API-Key
+    - id: bearerAuth
+      type: http
+      scheme: bearer
+tools:
+  - name: getAccount
+    description: 查余额和用量（不扣钱） - 返回余额、单价、预计还能调用几次、今天调用了几次。查这个不扣钱。
+    args: []
+    requestTemplate:
+      url: https://lava.ai-dolphin.com/subscribe/v1/account
+      method: GET
+      headers:
+        - key: X-API-Key
+          value: '{{.config.apiKey}}'
+    responseTemplate:
+      prependBody: |+
+        # API Response Information
+
+        Below is the response from an API call. To help you understand the data, I've provided:
+
+        1. A detailed description of all fields in the response structure
+        2. The complete API response
+
+        ## Response Structure
+
+        > Content-Type: application/json
+
+        - **code**: 成功为 OK，失败为错误码 (Type: string)
+        - **data**: 业务数据；失败时为 null
+        - **error**: 失败时的附加细节 (Type: object)
+        - **message**:  (Type: string)
+        - **meta**:  (Type: object)
+          - **meta.api_version**:  (Type: string)
+          - **meta.billing**:  (Type: object)
+            - **meta.billing.balance_yuan**:  (Type: string)
+            - **meta.billing.charged_yuan**:  (Type: string)
+          - **meta.request_id**:  (Type: string)
+          - **meta.server_time**:  (Type: string)
+        - **ok**:  (Type: boolean)
+
+        ## Original Response
+
+    outputSchema:
+      description: 成功
+      properties:
+        code:
+          description: 成功为 OK，失败为错误码
+          type: string
+        data:
+          description: 业务数据；失败时为 null
+          type: ""
+        error:
+          description: 失败时的附加细节
+          type: object
+        message:
+          type: string
+        meta:
+          properties:
+            api_version:
+              type: string
+            billing:
+              properties:
+                balance_yuan:
+                  type: string
+                charged_yuan:
+                  type: string
+              type: object
+            request_id:
+              type: string
+            server_time:
+              type: string
+          type: object
+        ok:
+          type: boolean
+      required:
+        - ok
+        - code
+        - message
+        - data
+        - meta
+      type: object
+  - name: getAgencyHistory
+    description: 单个匿名机构/大V的历史评分走势（PIT） - 按日期从早到晚，返回这个匿名机构/大V每个发布日的评分。
+    args:
+      - name: agency_id
+        description: 匿名机构/大V ID
+        type: string
+        required: true
+        position: path
+      - name: end_date
+        description: 结束日期
+        type: string
+        position: query
+      - name: limit
+        description: 返回条数，默认 250，最大 1000
+        type: integer
+        position: query
+      - name: start_date
+        description: 开始日期
+        type: string
+        position: query
+    requestTemplate:
+      url: https://lava.ai-dolphin.com/subscribe/v1/agencies/{agency_id}/history
+      method: GET
+      headers:
+        - key: X-API-Key
+          value: '{{.config.apiKey}}'
+    responseTemplate:
+      prependBody: |+
+        # API Response Information
+
+        Below is the response from an API call. To help you understand the data, I've provided:
+
+        1. A detailed description of all fields in the response structure
+        2. The complete API response
+
+        ## Response Structure
+
+        > Content-Type: application/json
+
+        - **code**: 成功为 OK，失败为错误码 (Type: string)
+        - **data**: 业务数据；失败时为 null
+        - **error**: 失败时的附加细节 (Type: object)
+        - **message**:  (Type: string)
+        - **meta**:  (Type: object)
+          - **meta.api_version**:  (Type: string)
+          - **meta.billing**:  (Type: object)
+            - **meta.billing.balance_yuan**:  (Type: string)
+            - **meta.billing.charged_yuan**:  (Type: string)
+          - **meta.request_id**:  (Type: string)
+          - **meta.server_time**:  (Type: string)
+        - **ok**:  (Type: boolean)
+
+        ## Original Response
+
+    outputSchema:
+      description: 成功
+      properties:
+        code:
+          description: 成功为 OK，失败为错误码
+          type: string
+        data:
+          description: 业务数据；失败时为 null
+          type: ""
+        error:
+          description: 失败时的附加细节
+          type: object
+        message:
+          type: string
+        meta:
+          properties:
+            api_version:
+              type: string
+            billing:
+              properties:
+                balance_yuan:
+                  type: string
+                charged_yuan:
+                  type: string
+              type: object
+            request_id:
+              type: string
+            server_time:
+              type: string
+          type: object
+        ok:
+          type: boolean
+      required:
+        - ok
+        - code
+        - message
+        - data
+        - meta
+      type: object
+  - name: listAgencyPit
+    description: 匿名机构/大V历史截面评分（PIT） - 查某一天当时的机构/大V分（PIT＝只用那天已经知道的数据计算，不会“偷看未来”），适合回测。返回不晚于 as_of_date 的最近一个已发布日期的数据。
+    args:
+      - name: agency_id
+        description: 只看某个匿名机构/大V
+        type: string
+        position: query
+      - name: as_of_date
+        description: 截面日期，默认最新面板日
+        type: string
+        position: query
+      - name: limit
+        description: 返回条数，默认 50，最大 500
+        type: integer
+        position: query
+      - name: min_score
+        description: 最低机构/大V分
+        type: number
+        position: query
+      - name: offset
+        description: 分页偏移
+        type: integer
+        position: query
+    requestTemplate:
+      url: https://lava.ai-dolphin.com/subscribe/v1/agencies/pit
+      method: GET
+      headers:
+        - key: X-API-Key
+          value: '{{.config.apiKey}}'
+    responseTemplate:
+      prependBody: |+
+        # API Response Information
+
+        Below is the response from an API call. To help you understand the data, I've provided:
+
+        1. A detailed description of all fields in the response structure
+        2. The complete API response
+
+        ## Response Structure
+
+        > Content-Type: application/json
+
+        - **code**: 成功为 OK，失败为错误码 (Type: string)
+        - **data**: 业务数据；失败时为 null
+        - **error**: 失败时的附加细节 (Type: object)
+        - **message**:  (Type: string)
+        - **meta**:  (Type: object)
+          - **meta.api_version**:  (Type: string)
+          - **meta.billing**:  (Type: object)
+            - **meta.billing.balance_yuan**:  (Type: string)
+            - **meta.billing.charged_yuan**:  (Type: string)
+          - **meta.request_id**:  (Type: string)
+          - **meta.server_time**:  (Type: string)
+        - **ok**:  (Type: boolean)
+
+        ## Original Response
+
+    outputSchema:
+      description: 成功
+      properties:
+        code:
+          description: 成功为 OK，失败为错误码
+          type: string
+        data:
+          description: 业务数据；失败时为 null
+          type: ""
+        error:
+          description: 失败时的附加细节
+          type: object
+        message:
+          type: string
+        meta:
+          properties:
+            api_version:
+              type: string
+            billing:
+              properties:
+                balance_yuan:
+                  type: string
+                charged_yuan:
+                  type: string
+              type: object
+            request_id:
+              type: string
+            server_time:
+              type: string
+          type: object
+        ok:
+          type: boolean
+      required:
+        - ok
+        - code
+        - message
+        - data
+        - meta
+      type: object
+  - name: listAgencyPitDates
+    description: 有历史评分（PIT）的日期列表 - 从新到旧列出已发布的评分日期，以及当天有多少机构/大V。
+    args:
+      - name: limit
+        description: 返回条数，默认 60，最大 500
+        type: integer
+        position: query
+    requestTemplate:
+      url: https://lava.ai-dolphin.com/subscribe/v1/agencies/dates
+      method: GET
+      headers:
+        - key: X-API-Key
+          value: '{{.config.apiKey}}'
+    responseTemplate:
+      prependBody: |+
+        # API Response Information
+
+        Below is the response from an API call. To help you understand the data, I've provided:
+
+        1. A detailed description of all fields in the response structure
+        2. The complete API response
+
+        ## Response Structure
+
+        > Content-Type: application/json
+
+        - **code**: 成功为 OK，失败为错误码 (Type: string)
+        - **data**: 业务数据；失败时为 null
+        - **error**: 失败时的附加细节 (Type: object)
+        - **message**:  (Type: string)
+        - **meta**:  (Type: object)
+          - **meta.api_version**:  (Type: string)
+          - **meta.billing**:  (Type: object)
+            - **meta.billing.balance_yuan**:  (Type: string)
+            - **meta.billing.charged_yuan**:  (Type: string)
+          - **meta.request_id**:  (Type: string)
+          - **meta.server_time**:  (Type: string)
+        - **ok**:  (Type: boolean)
+
+        ## Original Response
+
+    outputSchema:
+      description: 成功
+      properties:
+        code:
+          description: 成功为 OK，失败为错误码
+          type: string
+        data:
+          description: 业务数据；失败时为 null
+          type: ""
+        error:
+          description: 失败时的附加细节
+          type: object
+        message:
+          type: string
+        meta:
+          properties:
+            api_version:
+              type: string
+            billing:
+              properties:
+                balance_yuan:
+                  type: string
+                charged_yuan:
+                  type: string
+              type: object
+            request_id:
+              type: string
+            server_time:
+              type: string
+          type: object
+        ok:
+          type: boolean
+      required:
+        - ok
+        - code
+        - message
+        - data
+        - meta
+      type: object
+  - name: listAgencyRanking
+    description: 匿名机构/大V评分排行（当前） - 机构/大V用不变的匿名编号 agency_id 表示；返回机构/大V分（约 450~1500，1000 左右算中等）、有效样本数、胜率等。
+    args:
+      - name: limit
+        description: 返回条数，默认 50，最大 500
+        type: integer
+        position: query
+      - name: min_score
+        description: 最低机构/大V分
+        type: number
+        position: query
+      - name: offset
+        description: 分页偏移
+        type: integer
+        position: query
+      - name: order
+        description: 排序字段
+        type: string
+        enum:
+          - score
+          - n_eff
+          - win_rate
+          - updated
+        position: query
+    requestTemplate:
+      url: https://lava.ai-dolphin.com/subscribe/v1/agencies/ranking
+      method: GET
+      headers:
+        - key: X-API-Key
+          value: '{{.config.apiKey}}'
+    responseTemplate:
+      prependBody: |+
+        # API Response Information
+
+        Below is the response from an API call. To help you understand the data, I've provided:
+
+        1. A detailed description of all fields in the response structure
+        2. The complete API response
+
+        ## Response Structure
+
+        > Content-Type: application/json
+
+        - **code**: 成功为 OK，失败为错误码 (Type: string)
+        - **data**: 业务数据；失败时为 null
+        - **error**: 失败时的附加细节 (Type: object)
+        - **message**:  (Type: string)
+        - **meta**:  (Type: object)
+          - **meta.api_version**:  (Type: string)
+          - **meta.billing**:  (Type: object)
+            - **meta.billing.balance_yuan**:  (Type: string)
+            - **meta.billing.charged_yuan**:  (Type: string)
+          - **meta.request_id**:  (Type: string)
+          - **meta.server_time**:  (Type: string)
+        - **ok**:  (Type: boolean)
+
+        ## Original Response
+
+    outputSchema:
+      description: 成功
+      properties:
+        code:
+          description: 成功为 OK，失败为错误码
+          type: string
+        data:
+          description: 业务数据；失败时为 null
+          type: ""
+        error:
+          description: 失败时的附加细节
+          type: object
+        message:
+          type: string
+        meta:
+          properties:
+            api_version:
+              type: string
+            billing:
+              properties:
+                balance_yuan:
+                  type: string
+                charged_yuan:
+                  type: string
+              type: object
+            request_id:
+              type: string
+            server_time:
+              type: string
+          type: object
+        ok:
+          type: boolean
+      required:
+        - ok
+        - code
+        - message
+        - data
+        - meta
+      type: object
+  - name: listConceptStocks
+    description: 概念板块热度：某个概念里哪些股票被提到最多 - 统计最近一段时间，某个概念下每只股票被提到几次、有多少机构/大V提到（数据约 10 分钟更新一次）。
+    args:
+      - name: concept
+        description: 概念名，精确匹配，≤30 字符
+        type: string
+        required: true
+        position: query
+      - name: days
+        description: 回看天数
+        type: integer
+        position: query
+      - name: limit
+        description: 返回条数，默认 50，最大 100
+        type: integer
+        position: query
+    requestTemplate:
+      url: https://lava.ai-dolphin.com/subscribe/v1/concepts/stocks
+      method: GET
+      headers:
+        - key: X-API-Key
+          value: '{{.config.apiKey}}'
+    responseTemplate:
+      prependBody: |+
+        # API Response Information
+
+        Below is the response from an API call. To help you understand the data, I've provided:
+
+        1. A detailed description of all fields in the response structure
+        2. The complete API response
+
+        ## Response Structure
+
+        > Content-Type: application/json
+
+        - **code**: 成功为 OK，失败为错误码 (Type: string)
+        - **data**: 业务数据；失败时为 null
+        - **error**: 失败时的附加细节 (Type: object)
+        - **message**:  (Type: string)
+        - **meta**:  (Type: object)
+          - **meta.api_version**:  (Type: string)
+          - **meta.billing**:  (Type: object)
+            - **meta.billing.balance_yuan**:  (Type: string)
+            - **meta.billing.charged_yuan**:  (Type: string)
+          - **meta.request_id**:  (Type: string)
+          - **meta.server_time**:  (Type: string)
+        - **ok**:  (Type: boolean)
+
+        ## Original Response
+
+    outputSchema:
+      description: 成功
+      properties:
+        code:
+          description: 成功为 OK，失败为错误码
+          type: string
+        data:
+          description: 业务数据；失败时为 null
+          type: ""
+        error:
+          description: 失败时的附加细节
+          type: object
+        message:
+          type: string
+        meta:
+          properties:
+            api_version:
+              type: string
+            billing:
+              properties:
+                balance_yuan:
+                  type: string
+                charged_yuan:
+                  type: string
+              type: object
+            request_id:
+              type: string
+            server_time:
+              type: string
+          type: object
+        ok:
+          type: boolean
+      required:
+        - ok
+        - code
+        - message
+        - data
+        - meta
+      type: object
+  - name: listOpinionsByStock
+    description: 个股消息面热度：某只股票最近被提到的记录 - 按股票查最近一段时间的消息面记录：一句话摘要、要点、涉及的股票/概念、匿名机构/大V ID 和机构/大V分；同时给出被提到几次、有多少机构/大V提到等热度数字。不含多空观点、不含原文。
+    args:
+      - name: days
+        description: 回看天数（未给 start_date 时生效）
+        type: integer
+        position: query
+      - name: end_date
+        description: 结束日期 YYYY-MM-DD，默认今天；区间最长 92 天
+        type: string
+        position: query
+      - name: limit
+        description: 返回条数，默认 50，最大 200
+        type: integer
+        position: query
+      - name: only_this_stock
+        description: 1=只要仅涉及该股的记录；0=该股为第一提及股的记录
+        type: integer
+        enum:
+          - 0
+          - 1
+        position: query
+      - name: start_date
+        description: 开始日期 YYYY-MM-DD
+        type: string
+        position: query
+      - name: stock_name
+        description: 股票简称（与 ts_code 二选一）
+        type: string
+        position: query
+      - name: ts_code
+        description: 股票代码，如 300750.SZ（与 stock_name 二选一）
+        type: string
+        position: query
+    requestTemplate:
+      url: https://lava.ai-dolphin.com/subscribe/v1/opinions
+      method: GET
+      headers:
+        - key: X-API-Key
+          value: '{{.config.apiKey}}'
+    responseTemplate:
+      prependBody: |+
+        # API Response Information
+
+        Below is the response from an API call. To help you understand the data, I've provided:
+
+        1. A detailed description of all fields in the response structure
+        2. The complete API response
+
+        ## Response Structure
+
+        > Content-Type: application/json
+
+        - **code**: 成功为 OK，失败为错误码 (Type: string)
+        - **data**: 业务数据；失败时为 null
+        - **error**: 失败时的附加细节 (Type: object)
+        - **message**:  (Type: string)
+        - **meta**:  (Type: object)
+          - **meta.api_version**:  (Type: string)
+          - **meta.billing**:  (Type: object)
+            - **meta.billing.balance_yuan**:  (Type: string)
+            - **meta.billing.charged_yuan**:  (Type: string)
+          - **meta.request_id**:  (Type: string)
+          - **meta.server_time**:  (Type: string)
+        - **ok**:  (Type: boolean)
+
+        ## Original Response
+
+    outputSchema:
+      description: 成功
+      properties:
+        code:
+          description: 成功为 OK，失败为错误码
+          type: string
+        data:
+          description: 业务数据；失败时为 null
+          type: ""
+        error:
+          description: 失败时的附加细节
+          type: object
+        message:
+          type: string
+        meta:
+          properties:
+            api_version:
+              type: string
+            billing:
+              properties:
+                balance_yuan:
+                  type: string
+                charged_yuan:
+                  type: string
+              type: object
+            request_id:
+              type: string
+            server_time:
+              type: string
+          type: object
+        ok:
+          type: boolean
+      required:
+        - ok
+        - code
+        - message
+        - data
+        - meta
+      type: object
+  - name: listStockConcepts
+    description: 个股概念热度：某只股票关联哪些概念最热 - 统计最近一段时间，某只股票关联的各个概念被提到几次、第一次和最近一次被提到的时间、有多少机构/大V提到。
+    args:
+      - name: days
+        description: 回看天数
+        type: integer
+        position: query
+      - name: limit
+        description: 返回条数，默认 30，最大 200
+        type: integer
+        position: query
+      - name: stock_name
+        description: 股票简称（与 ts_code 二选一）
+        type: string
+        position: query
+      - name: ts_code
+        description: 股票代码，如 300750.SZ（与 stock_name 二选一）
+        type: string
+        position: query
+    requestTemplate:
+      url: https://lava.ai-dolphin.com/subscribe/v1/concepts/by-stock
+      method: GET
+      headers:
+        - key: X-API-Key
+          value: '{{.config.apiKey}}'
+    responseTemplate:
+      prependBody: |+
+        # API Response Information
+
+        Below is the response from an API call. To help you understand the data, I've provided:
+
+        1. A detailed description of all fields in the response structure
+        2. The complete API response
+
+        ## Response Structure
+
+        > Content-Type: application/json
+
+        - **code**: 成功为 OK，失败为错误码 (Type: string)
+        - **data**: 业务数据；失败时为 null
+        - **error**: 失败时的附加细节 (Type: object)
+        - **message**:  (Type: string)
+        - **meta**:  (Type: object)
+          - **meta.api_version**:  (Type: string)
+          - **meta.billing**:  (Type: object)
+            - **meta.billing.balance_yuan**:  (Type: string)
+            - **meta.billing.charged_yuan**:  (Type: string)
+          - **meta.request_id**:  (Type: string)
+          - **meta.server_time**:  (Type: string)
+        - **ok**:  (Type: boolean)
+
+        ## Original Response
+
+    outputSchema:
+      description: 成功
+      properties:
+        code:
+          description: 成功为 OK，失败为错误码
+          type: string
+        data:
+          description: 业务数据；失败时为 null
+          type: ""
+        error:
+          description: 失败时的附加细节
+          type: object
+        message:
+          type: string
+        meta:
+          properties:
+            api_version:
+              type: string
+            billing:
+              properties:
+                balance_yuan:
+                  type: string
+                charged_yuan:
+                  type: string
+              type: object
+            request_id:
+              type: string
+            server_time:
+              type: string
+          type: object
+        ok:
+          type: boolean
+      required:
+        - ok
+        - code
+        - message
+        - data
+        - meta
+      type: object
+  - name: searchOpinions
+    description: 按关键词搜消息面记录 - 在要点里搜关键词（最多 5 个词，用空格隔开，要全部包含），最新的排在前面。
+    args:
+      - name: keyword
+        description: 关键词，≤50 字符
+        type: string
+        required: true
+        position: query
+      - name: limit
+        description: 返回条数，默认 50，最大 200
+        type: integer
+        position: query
+      - name: since
+        description: 起始日期，默认 30 天前，最早 180 天前
+        type: string
+        position: query
+    requestTemplate:
+      url: https://lava.ai-dolphin.com/subscribe/v1/opinions/search
+      method: GET
+      headers:
+        - key: X-API-Key
+          value: '{{.config.apiKey}}'
+    responseTemplate:
+      prependBody: |+
+        # API Response Information
+
+        Below is the response from an API call. To help you understand the data, I've provided:
+
+        1. A detailed description of all fields in the response structure
+        2. The complete API response
+
+        ## Response Structure
+
+        > Content-Type: application/json
+
+        - **code**: 成功为 OK，失败为错误码 (Type: string)
+        - **data**: 业务数据；失败时为 null
+        - **error**: 失败时的附加细节 (Type: object)
+        - **message**:  (Type: string)
+        - **meta**:  (Type: object)
+          - **meta.api_version**:  (Type: string)
+          - **meta.billing**:  (Type: object)
+            - **meta.billing.balance_yuan**:  (Type: string)
+            - **meta.billing.charged_yuan**:  (Type: string)
+          - **meta.request_id**:  (Type: string)
+          - **meta.server_time**:  (Type: string)
+        - **ok**:  (Type: boolean)
+
+        ## Original Response
+
+    outputSchema:
+      description: 成功
+      properties:
+        code:
+          description: 成功为 OK，失败为错误码
+          type: string
+        data:
+          description: 业务数据；失败时为 null
+          type: ""
+        error:
+          description: 失败时的附加细节
+          type: object
+        message:
+          type: string
+        meta:
+          properties:
+            api_version:
+              type: string
+            billing:
+              properties:
+                balance_yuan:
+                  type: string
+                charged_yuan:
+                  type: string
+              type: object
+            request_id:
+              type: string
+            server_time:
+              type: string
+          type: object
+        ok:
+          type: boolean
+      required:
+        - ok
+        - code
+        - message
+        - data
+        - meta
+      type: object
