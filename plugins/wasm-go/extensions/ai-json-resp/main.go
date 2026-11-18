@@ -76,10 +76,10 @@ type PluginConfig struct {
 	serviceUrl string `required:"false" json:"serviceUrl" yaml:"serviceUrl"`
 	// @Title zh-CN API Key
 	// @Description zh-CN 若使用AI服务，需要填写请求服务的API Key
-	apiKey string `required:"false" json: "apiKey" yaml:"apiKey"`
+	apiKey string `required:"false" json:"apiKey" yaml:"apiKey"`
 	// @Title zh-CN 请求端点
 	// @Description zh-CN 用以请求服务的端点, 默认为"/v1/chat/completions"
-	servicePath string `required:"false" json: "servicePath" yaml:"servicePath"`
+	servicePath string `required:"false" json:"servicePath" yaml:"servicePath"`
 	// @Title zh-CN 服务超时时间
 	// @Description zh-CN 用以请求服务的超时时间
 	serviceTimeout int `required:"false" json:"serviceTimeout" yaml:"serviceTimeout"`
