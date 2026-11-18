@@ -147,7 +147,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, c config.PluginConfig) types
 
 	// 状态码判断
 	if !isCacheableResponseStatus(status, c.CacheResponseCode) {
-		log.Infof("[onHttpResponseBody] status not allow to cached: %s", status)
+		log.Infof("[onHttpResponseBody] status not allowed to be cached: %s", status)
 		proxywasm.AddHttpResponseHeader("x-cache-status", "skip")
 		ctx.DontReadResponseBody()
 		return types.ActionContinue
