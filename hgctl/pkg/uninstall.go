@@ -114,16 +114,18 @@ func promptUninstall(writer io.Writer) bool {
 	for {
 		fmt.Fprintf(writer, "All Higress resources will be uninstalled from the cluster. \nProceed? (y/N)")
 		fmt.Scanln(&answer)
-		if strings.TrimSpace(answer) == "y" {
+		val := strings.TrimSpace(answer)
+		if val == "y" || val == "Y" {
 			fmt.Fprintf(writer, "\n")
 			return true
 		}
-		if strings.TrimSpace(answer) == "N" {
+		if val == "" || val == "n" || val == "N" {
 			fmt.Fprintf(writer, "Cancelled.\n")
 			return false
 		}
 	}
 }
+
 
 func uninstallManifests(profile *helm.Profile, writer io.Writer, uiArgs *uninstallArgs) error {
 	installer, err := installer.NewInstaller(profile, writer, false, false, installer.UninstallInstallerMode)
