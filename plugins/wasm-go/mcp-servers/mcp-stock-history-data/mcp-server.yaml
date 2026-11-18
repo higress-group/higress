@@ -212,7 +212,7 @@ tools:
             - **showapi_res_body.dataList[].min**: 时间区间内最小的价格 (Type: string)
             - **showapi_res_body.dataList[].open**: 时间区间开始的价格 (Type: string)
             - **showapi_res_body.dataList[].time**: 时间点，5分|30分|60分k线时，此时间返回到分钟级别。day|week|month的k线时，时间返回到天级别。 (Type: string)
-            - **showapi_res_body.dataList[].volumn**: 时间区间成交手数总合 (Type: string)
+            - **showapi_res_body.dataList[].volumn**: 时间区间成交手数总和 (Type: string)
           - **showapi_res_body.market**: 市场代码 (Type: string)
           - **showapi_res_body.name**: 指数名称 (Type: string)
           - **showapi_res_body.ret_code**: 返回代码 (Type: integer)
