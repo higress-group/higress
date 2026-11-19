@@ -22,6 +22,7 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // headersToMap turns mock host headers (sorted [][2]string) into a name -> values map.
@@ -1080,5 +1081,110 @@ func TestParseConfig_InvalidRegexRejected(t *testing.T) {
 		}))
 		defer host.Reset()
 		require.Equal(t, types.OnPluginStartStatusFailed, status)
+	})
+}
+
+// --- rename semantics: same-name no-op (#5386) and numeric precision (#5381) ---
+
+func TestRequest_Headers_RenameSameKeyKeepsHeader(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(configJSON(map[string]any{
+			"reqRules": []map[string]any{
+				{"operate": "rename", "headers": []map[string]any{{"oldKey": "X-Client-Id", "newKey": "x-client-id"}}},
+			},
+		}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"}, {":path", "/p"}, {":method", "GET"},
+			{"X-Client-Id", "client-123"},
+		}))
+
+		got := headersToMap(host.GetRequestHeaders())
+		require.Equal(t, []string{"client-123"}, got["x-client-id"],
+			"a rename that only changes the case of a header name must keep the header")
+		host.CompleteHttp()
+	})
+}
+
+func TestRequest_BodyJson_RenameSameKeyIsNoOp(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(configJSON(map[string]any{
+			"reqRules": []map[string]any{
+				{"operate": "rename", "body": []map[string]any{{"oldKey": "label", "newKey": "label"}}},
+			},
+		}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
+		}))
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{"label":"keep","untouched":1}`)))
+
+		body := host.GetRequestBody()
+		require.Equal(t, `"keep"`, gjson.GetBytes(body, "label").Raw)
+		require.Equal(t, "1", gjson.GetBytes(body, "untouched").Raw)
+		host.CompleteHttp()
+	})
+}
+
+func TestRequest_BodyJson_RenamePreservesNumberPrecision(t *testing.T) {
+	// 9007199254740993 is 2^53+1, the smallest integer a float64 cannot represent.
+	const id = "9007199254740993"
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(configJSON(map[string]any{
+			"reqRules": []map[string]any{
+				{"operate": "rename", "body": []map[string]any{
+					{"oldKey": "identifier", "newKey": "renamed"},
+					{"oldKey": "nested", "newKey": "renamedNested"},
+					{"oldKey": "items", "newKey": "renamedItems"},
+					{"oldKey": "text", "newKey": "renamedText"},
+				}},
+			},
+		}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
+		}))
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(
+			`{"identifier":9007199254740993,"nested":{"id":9007199254740993},"items":[9007199254740993],"text":"v"}`)))
+
+		body := host.GetRequestBody()
+		require.Equal(t, id, gjson.GetBytes(body, "renamed").Raw)
+		require.Equal(t, id, gjson.GetBytes(body, "renamedNested.id").Raw)
+		require.Equal(t, id, gjson.GetBytes(body, "renamedItems.0").Raw)
+		require.Equal(t, `"v"`, gjson.GetBytes(body, "renamedText").Raw)
+		require.False(t, gjson.GetBytes(body, "identifier").Exists())
+		host.CompleteHttp()
+	})
+}
+
+func TestRequest_MapFromBody_PreservesNumberPrecision(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(configJSON(map[string]any{
+			"reqRules": []map[string]any{
+				{
+					"operate":   "map",
+					"mapSource": "body",
+					"body":      []map[string]any{{"fromKey": "identifier", "toKey": "copied"}},
+				},
+			},
+		}))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		require.Equal(t, types.HeaderStopIteration, host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "test.com"}, {":path", "/p"}, {"content-type", "application/json"},
+		}))
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(`{"identifier":9007199254740993}`)))
+
+		body := host.GetRequestBody()
+		require.Equal(t, "9007199254740993", gjson.GetBytes(body, "copied").Raw)
+		require.Equal(t, "9007199254740993", gjson.GetBytes(body, "identifier").Raw)
+		host.CompleteHttp()
 	})
 }
