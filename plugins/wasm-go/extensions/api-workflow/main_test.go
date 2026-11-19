@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -431,5 +432,109 @@ func TestOnHttpRequestBody(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 			host.CompleteHttp()
 		})
+	})
+}
+
+// joinWorkflowConfig returns a diamond workflow where D waits for A, B and C.
+// aToDFirst controls whether A->D precedes A->C in the edge list, which decides
+// whether completing A first reaches the join target before its sibling edge.
+func joinWorkflowConfig(aToDFirst bool) json.RawMessage {
+	edges := [][2]string{{"start", "A"}, {"start", "B"}}
+	if aToDFirst {
+		edges = append(edges, [2]string{"A", "D"}, [2]string{"A", "C"})
+	} else {
+		edges = append(edges, [2]string{"A", "C"}, [2]string{"A", "D"})
+	}
+	edges = append(edges, [2]string{"B", "D"}, [2]string{"C", "D"}, [2]string{"D", "end"})
+
+	var edgeConfigs []map[string]interface{}
+	for _, e := range edges {
+		edgeConfigs = append(edgeConfigs, map[string]interface{}{"source": e[0], "target": e[1]})
+	}
+	var nodes []map[string]interface{}
+	for _, n := range []string{"A", "B", "C", "D"} {
+		nodes = append(nodes, map[string]interface{}{
+			"name":           n,
+			"service_name":   n + ".static",
+			"service_path":   "/" + n,
+			"service_method": "POST",
+		})
+	}
+	data, _ := json.Marshal(map[string]interface{}{
+		"env": map[string]interface{}{
+			"timeout":   5000,
+			"max_depth": 100,
+		},
+		"workflow": map[string]interface{}{
+			"edges": edgeConfigs,
+			"nodes": nodes,
+		},
+	})
+	return data
+}
+
+// TestJoinWaitDoesNotSkipSiblingBranch pins the DAG behavior from #5189: while a
+// join target is still waiting for other predecessors, the remaining outgoing
+// edges of the completed node must still be considered.
+func TestJoinWaitDoesNotSkipSiblingBranch(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, aToDFirst := range []bool{true, false} {
+			t.Run(fmt.Sprintf("a_to_d_first=%v", aToDFirst), func(t *testing.T) {
+				host, status := test.NewTestHost(joinWorkflowConfig(aToDFirst))
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				pendingPaths := func() []string {
+					var paths []string
+					for _, c := range host.GetHttpCalloutAttributes() {
+						for _, h := range c.Headers {
+							if h[0] == ":path" {
+								paths = append(paths, h[1])
+							}
+						}
+					}
+					return paths
+				}
+				complete := func(path string) {
+					for _, c := range host.GetHttpCalloutAttributes() {
+						for _, h := range c.Headers {
+							if h[0] == ":path" && h[1] == path {
+								host.CallOnHttpCallResponse(c.CalloutID,
+									[][2]string{{":status", "200"}}, nil, []byte(`{}`))
+								return
+							}
+						}
+					}
+					t.Fatalf("no pending callout for %s (pending: %v)", path, pendingPaths())
+				}
+
+				host.InitHttp()
+				host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"}, {":path", "/workflow"}, {":method", "POST"},
+				})
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(`{}`)))
+				require.ElementsMatch(t, []string{"/A", "/B"}, pendingPaths())
+
+				// A completes first. D still waits for B and C, so A->D must be
+				// deferred without dropping A->C.
+				complete("/A")
+				require.ElementsMatch(t, []string{"/B", "/C"}, pendingPaths(),
+					"completing A must dispatch sibling C even while join D waits")
+
+				// B completes: D still waits for C, so nothing new is dispatched.
+				complete("/B")
+				require.ElementsMatch(t, []string{"/C"}, pendingPaths())
+
+				// C releases the join: D is dispatched.
+				complete("/C")
+				require.ElementsMatch(t, []string{"/D"}, pendingPaths())
+
+				complete("/D")
+				localResponse := host.GetLocalResponse()
+				require.NotNil(t, localResponse)
+				require.Equal(t, uint32(200), localResponse.StatusCode)
+				host.CompleteHttp()
+			})
+		}
 	})
 }
