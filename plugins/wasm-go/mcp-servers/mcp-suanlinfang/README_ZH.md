@@ -1,19 +1,18 @@
 # 算邻坊 AI 能力 MCP Server
 
-算邻坊（SuanLinFang）是闲置 GPU 算力共享平台。本 MCP Server 封装其 REST API，提供语音识别、语音合成、文字识别与智能决策能力。
+算邻坊（SuanLinFang）是闲置 GPU 算力共享平台。本 MCP Server 封装其 REST API，提供文生图、语音识别与语音合成能力。
 
 ## 工具列表
 
 | 工具 | 说明 |
 |---|---|
+| list_image_models | 列出文生图当前在线模型与实时牌价（按张计价） |
+| submit_image_task | 文生图任务提交（1024×1024 PNG，按张计费，失败不计费）。提交后立即返回 taskNo；model 留空默认 flux2-klein |
+| get_image_task | 查询生图任务状态：queued/running 进行中；success 返回现签下载链接（1 小时内有效）；failed 不扣费 |
 | transcribe_audio | 语音识别（STT）单笔：公网音频 URL 转文字（≤3 分钟 / ≤20MB），支持热词纠错专有名词 |
-| recognize_image_url | 文字识别（OCR）单图：公网图片 URL，standard/accurate 双档位，高精度档可自定义 prompt |
-| recognize_image_base64 | 文字识别（OCR）单图：base64 直传识别 |
 | synthesize_speech | 语音合成（TTS）单笔：≤1000 汉字，返回现签音频下载链接 |
 | submit_speech_task / get_speech_task | 长文本语音合成异步任务（≤20 万字符）+ 轮询查询 |
 | list_tts_voices | 列出全部可用音色（21 个） |
-| estimate_tts_cost | 语音合成计费预估（不实际合成、不计费） |
-| decide | 智能决策：类型化问题（单选/判断/等级打分）返回校准概率，不生成文本 |
 
 官网：[https://suanlinfang.cn](https://suanlinfang.cn)
 
@@ -40,12 +39,6 @@
 }
 ```
 
-### decide 的 questions 示例
+### 生图任务示例
 
-```json
-{
-  "team": {"type": "choice", "criteria": {"refund": "退款", "logistics": "物流"}},
-  "urgent": {"type": "noul"},
-  "severity": {"type": "score", "criteria": ["轻微", "一般", "严重"]}
-}
-```
+用一段 prompt（如「黄昏湖畔小镇的水彩画」）调用 `submit_image_task`，再用 `get_image_task` 每 5~10 秒轮询，`status` 变为 `success` 后在 1 小时内下载 `resultUrl`。
