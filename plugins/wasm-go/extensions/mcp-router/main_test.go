@@ -147,6 +147,13 @@ func TestRouterRewritesOnlyValidatedModernToolIdentity(t *testing.T) {
 					if response == nil || response.StatusCode != 400 || gjson.GetBytes(response.Data, "error.code").Int() != tc.wantError {
 						t.Fatalf("want HTTP 400/RPC %d, got %+v", tc.wantError, response)
 					}
+					wantID := "9007199254740993"
+					if tc.duplicateHeader {
+						wantID = "null"
+					}
+					if got := gjson.GetBytes(response.Data, "id").Raw; got != wantID {
+						t.Fatalf("error ID = %s, want %s", got, wantID)
+					}
 					if authority != domain || path != "/virtual" || string(host.GetRequestBody()) != body {
 						t.Fatal("invalid client identity changed the route or body")
 					}

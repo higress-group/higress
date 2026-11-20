@@ -177,6 +177,11 @@ func PrepareModernToolCall(transport Transport, body []byte) (*RequestContext, *
 	if era == EraLegacy {
 		return nil, nil
 	}
+	// A transport rejection has no accepted request ID, just as it does at
+	// the receiving mcp-server's header boundary.
+	if protocolError := ValidateModernTransport(transport); protocolError != nil {
+		return nil, protocolError
+	}
 	return PrepareRequest(transport, body, func(method string) bool {
 		return method == "tools/call"
 	})
