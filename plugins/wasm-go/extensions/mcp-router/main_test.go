@@ -97,13 +97,19 @@ func TestRouterRewritesOnlyValidatedModernToolIdentity(t *testing.T) {
 		meta, extra                     string
 		wantError                       int64
 		duplicateHeader                 bool
+		unsupportedVersion              bool
+		omitVersion, omitMethod         bool
+		wantNullID                      bool
 	}{
 		{label: "modern", name: "source___echo", header: "source___echo", wantHeader: "echo", meta: meta},
 		{label: "unicode", name: "source___回声", header: encoded("source___回声"), wantHeader: encoded("回声"), meta: meta},
 		{label: "whitespace", name: "source___ echo", header: "source___ echo", wantHeader: encoded(" echo"), meta: meta},
 		{label: "legacy", name: "source___echo"},
 		{label: "mismatch before rewrite", name: "source___echo", header: "echo", meta: meta, wantError: protocol.CodeHeaderMismatch},
-		{label: "duplicate header", name: "source___echo", header: "source___echo", meta: meta, wantError: protocol.CodeHeaderMismatch, duplicateHeader: true},
+		{label: "duplicate header", name: "source___echo", header: "source___echo", meta: meta, wantError: protocol.CodeHeaderMismatch, duplicateHeader: true, wantNullID: true},
+		{label: "unsupported version", name: "source___echo", header: "source___echo", meta: meta, wantError: protocol.CodeUnsupportedVersion, unsupportedVersion: true, wantNullID: true},
+		{label: "missing version", name: "source___echo", header: "source___echo", meta: meta, wantError: protocol.CodeHeaderMismatch, omitVersion: true, wantNullID: true},
+		{label: "missing method", name: "source___echo", header: "source___echo", meta: meta, wantError: protocol.CodeHeaderMismatch, omitMethod: true, wantNullID: true},
 		{label: "duplicate body name", name: "source___echo", header: "source___echo", meta: meta, extra: `"name":"second",`, wantError: protocol.CodeParseError},
 		{label: "metadata without headers", name: "source___echo", meta: meta, wantError: protocol.CodeHeaderMismatch},
 		{label: "empty target tool", name: "source___", header: "source___", meta: meta, wantError: protocol.CodeInvalidParams},
@@ -115,11 +121,17 @@ func TestRouterRewritesOnlyValidatedModernToolIdentity(t *testing.T) {
 				host := routerHost(t, domain)
 				headers := routerRequestHeaders(domain)
 				if tc.header != "" {
-					headers = append(headers,
-						[2]string{protocol.HeaderProtocolVersion, string(protocol.Version20260728)},
-						[2]string{protocol.HeaderMethod, "tools/call"},
-						[2]string{protocol.HeaderName, tc.header},
-					)
+					version := string(protocol.Version20260728)
+					if tc.unsupportedVersion {
+						version = "1900-01-01"
+					}
+					if !tc.omitVersion {
+						headers = append(headers, [2]string{protocol.HeaderProtocolVersion, version})
+					}
+					if !tc.omitMethod {
+						headers = append(headers, [2]string{protocol.HeaderMethod, "tools/call"})
+					}
+					headers = append(headers, [2]string{protocol.HeaderName, tc.header})
 					if tc.duplicateHeader {
 						headers = append(headers, [2]string{"mcp-name", tc.header})
 					}
@@ -148,7 +160,7 @@ func TestRouterRewritesOnlyValidatedModernToolIdentity(t *testing.T) {
 						t.Fatalf("want HTTP 400/RPC %d, got %+v", tc.wantError, response)
 					}
 					wantID := "9007199254740993"
-					if tc.duplicateHeader {
+					if tc.wantNullID {
 						wantID = "null"
 					}
 					if got := gjson.GetBytes(response.Data, "id").Raw; got != wantID {
