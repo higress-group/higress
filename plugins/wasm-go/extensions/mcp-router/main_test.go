@@ -80,8 +80,12 @@ func TestRouterToolDispatchSignalFollowsEnabledRule(t *testing.T) {
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				host := routerHost(t, tc.domain, tc.config)
+				warnings := len(host.GetWarnLogs())
 				host.CallOnHttpRequestHeaders(routerRequestHeaders(tc.domain))
 				host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":` + strconv.Quote(tc.method) + `,"params":{}}`))
+				if got := host.GetWarnLogs()[warnings:]; len(got) != 0 {
+					t.Fatalf("unexpected warnings: %q", got)
+				}
 				raw, err := host.GetProperty([]string{consts.MCPRouterToolDispatchEnabled})
 				if tc.want {
 					if err != nil || string(raw) != "true" {
@@ -93,6 +97,34 @@ func TestRouterToolDispatchSignalFollowsEnabledRule(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestRouterWarnsWhenToolDispatchFlagWriteFails(t *testing.T) {
+	const domain = "virtual.example.test"
+	host := routerHost(t, domain, routerTestConfig)
+	warnings := len(host.GetWarnLogs())
+	writes := 0
+	rejectProperty := func(path []string, value []byte) error {
+		writes++
+		if len(path) != 1 || path[0] != consts.MCPRouterToolDispatchEnabled || string(value) != "true" {
+			t.Fatalf("unexpected property write: %q = %q", path, value)
+		}
+		return types.ErrorInternalFailure
+	}
+	action := markToolDispatchEnabled(McpRouterConfig{enable: true}, "server/discover", rejectProperty)
+	if action != types.ActionContinue || writes != 1 {
+		t.Fatalf("want one attempt and ActionContinue, got %d attempts and action %v", writes, action)
+	}
+	raw, err := host.GetProperty([]string{consts.MCPRouterToolDispatchEnabled})
+	if len(raw) != 0 || !errors.Is(err, types.ErrorStatusNotFound) {
+		t.Fatalf("failed write left property %q, error = %v", raw, err)
+	}
+	got := host.GetWarnLogs()[warnings:]
+	if len(got) != 1 || !strings.Contains(got[0], "Failed to set mcp-router tool dispatch flag") ||
+		!strings.Contains(got[0], types.ErrorInternalFailure.Error()) {
+		t.Fatalf("want one dispatch write warning with the host error, got %q", got)
+	}
+	t.Logf("ActionContinue, no dispatch flag, warning: %s", got[0])
 }
 
 func TestRouterStopsRewritingOnHeaderFailure(t *testing.T) {

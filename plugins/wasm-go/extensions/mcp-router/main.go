@@ -37,7 +37,9 @@ func init() {
 	mcp.LoadMCPFilter(
 		mcp.FilterName("mcp-router"),
 		mcp.SetConfigOverrideParser(ParseGlobalConfig, ParseOverrideConfig),
-		mcp.SetJsonRpcRequestFilter(markToolDispatchEnabled),
+		mcp.SetJsonRpcRequestFilter(func(_ wrapper.HttpContext, config any, _ utils.JsonRpcID, method string, _ gjson.Result, _ []byte) types.Action {
+			return markToolDispatchEnabled(config, method, proxywasm.SetProperty)
+		}),
 		mcp.SetToolCallRequestFilter(ProcessRequest),
 	)
 	mcp.InitMCPFilter()
@@ -96,11 +98,13 @@ func ParseOverrideConfig(configBytes []byte, globalConfig any, ruleConfig *any) 
 
 // markToolDispatchEnabled tells the following mcp-server filter that the
 // matched rule enables tool dispatch on this discovery request.
-func markToolDispatchEnabled(_ wrapper.HttpContext, config any, _ utils.JsonRpcID, method string, _ gjson.Result, _ []byte) types.Action {
+func markToolDispatchEnabled(config any, method string, setProperty func([]string, []byte) error) types.Action {
 	routerConfig, ok := config.(McpRouterConfig)
 	if method == "server/discover" && ok && routerConfig.enable {
 		// If the host cannot set the flag, discovery treats dispatch as absent.
-		_ = proxywasm.SetProperty([]string{consts.MCPRouterToolDispatchEnabled}, []byte("true"))
+		if err := setProperty([]string{consts.MCPRouterToolDispatchEnabled}, []byte("true")); err != nil {
+			log.Warnf("Failed to set mcp-router tool dispatch flag: %v", err)
+		}
 	}
 	return types.ActionContinue
 }
