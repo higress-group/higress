@@ -184,7 +184,7 @@ func ProcessRequest(context wrapper.HttpContext, config any, toolName string, _ 
 	}
 	log.Infof("Routing to server '%s': domain=[%s], path=[%s]", serverName, targetServer.Domain, targetServer.Path)
 
-	if err := forwardToolCall(targetServer, nameHeader, modifiedBody); err != nil {
+	if err := forwardToolCall(targetServer, nameHeader, modifiedBody, proxywasm.ReplaceHttpRequestHeader); err != nil {
 		log.Errorf("Failed to route MCP tool call: %v", err)
 		if request != nil {
 			// A partially rewritten Modern request must never reach a source.
@@ -202,20 +202,20 @@ func ProcessRequest(context wrapper.HttpContext, config any, toolName string, _ 
 
 // forwardToolCall applies the prepared route and name; Legacy calls have no
 // replacement Mcp-Name header.
-func forwardToolCall(target *ServerConfig, nameHeader string, body []byte) error {
+func forwardToolCall(target *ServerConfig, nameHeader string, body []byte, replaceHeader func(string, string) error) error {
 	if target.Domain != "" {
-		if err := proxywasm.ReplaceHttpRequestHeader(":authority", target.Domain); err != nil {
+		if err := replaceHeader(":authority", target.Domain); err != nil {
 			return fmt.Errorf("set authority: %w", err)
 		}
 	}
-	if err := proxywasm.ReplaceHttpRequestHeader("x-envoy-internal-route", "true"); err != nil {
+	if err := replaceHeader("x-envoy-internal-route", "true"); err != nil {
 		return fmt.Errorf("set internal route marker: %w", err)
 	}
-	if err := proxywasm.ReplaceHttpRequestHeader(":path", target.Path); err != nil {
+	if err := replaceHeader(":path", target.Path); err != nil {
 		return fmt.Errorf("set path: %w", err)
 	}
 	if nameHeader != "" {
-		if err := proxywasm.ReplaceHttpRequestHeader(protocol.HeaderName, nameHeader); err != nil {
+		if err := replaceHeader(protocol.HeaderName, nameHeader); err != nil {
 			return fmt.Errorf("set Mcp-Name: %w", err)
 		}
 	}

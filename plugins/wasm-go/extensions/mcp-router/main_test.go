@@ -17,6 +17,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -83,6 +84,30 @@ func TestRouterDiscoverySourcesFollowEnabledRule(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestRouterStopsRewritingOnHeaderFailure(t *testing.T) {
+	target := &ServerConfig{Domain: "source.example.test", Path: "/source"}
+	headers := []string{":authority", "x-envoy-internal-route", ":path", protocol.HeaderName}
+	rejected := errors.New("test host rejected the header mutation")
+	for failAt, header := range headers {
+		t.Run(header, func(t *testing.T) {
+			written := 0
+			err := forwardToolCall(target, "echo", nil, func(key, _ string) error {
+				if key != headers[written] {
+					t.Fatalf("header %d = %q, want %q", written, key, headers[written])
+				}
+				written++
+				if key == header {
+					return rejected
+				}
+				return nil
+			})
+			if !errors.Is(err, rejected) || written != failAt+1 {
+				t.Fatalf("header mutation progressed after failure: written = %d, error = %v", written, err)
+			}
+		})
+	}
 }
 
 func TestRouterRewritesOnlyValidatedModernToolIdentity(t *testing.T) {
