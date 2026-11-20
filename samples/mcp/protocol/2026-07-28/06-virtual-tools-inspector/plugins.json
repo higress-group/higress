@@ -1,0 +1,70 @@
+{
+  "mcp-router": {
+    "servers": [
+      {"name": "legacy", "path": "/route/legacy"},
+      {"name": "modern", "path": "/route/modern"}
+    ],
+    "_rules_": [
+      {"_match_route_": ["entry-virtual", "entry-empty"], "enable": true},
+      {"_match_route_": ["entry-disabled"], "enable": false}
+    ]
+  },
+  "mcp-server": {
+    "toolSet": {"name": "default", "serverTools": []},
+    "_rules_": [
+      {
+        "_match_route_": ["entry-virtual", "entry-disabled", "entry-unmatched"],
+        "toolSet": {
+          "name": "virtual-echo",
+          "serverTools": [
+            {"serverName": "legacy", "tools": ["echo"]},
+            {"serverName": "modern", "tools": ["echo"]}
+          ]
+        }
+      },
+      {"_match_route_": ["entry-empty"], "toolSet": {"name": "empty-echo", "serverTools": []}},
+      {
+        "_match_route_": ["source-legacy"],
+        "server": {
+          "name": "legacy",
+          "type": "mcp-proxy",
+          "transport": "http",
+          "protocolStrategy": "legacy",
+          "mcpServerURL": "http://legacy.echo.test/echo/legacy"
+        },
+        "tools": [
+          {
+            "name": "echo",
+            "description": "Echo a message from the Legacy MCP server",
+            "inputSchema": {
+              "type": "object",
+              "properties": {"message": {"type": "string"}},
+              "required": ["message"]
+            }
+          }
+        ]
+      },
+      {
+        "_match_route_": ["source-modern"],
+        "server": {
+          "name": "modern",
+          "type": "mcp-proxy",
+          "transport": "http",
+          "protocolStrategy": "modern",
+          "mcpServerURL": "http://modern.echo.test/echo/modern"
+        },
+        "tools": [
+          {
+            "name": "echo",
+            "description": "Echo a message from the Modern MCP server",
+            "inputSchema": {
+              "type": "object",
+              "properties": {"message": {"type": "string"}},
+              "required": ["message"]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

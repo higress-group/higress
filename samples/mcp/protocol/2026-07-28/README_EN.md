@@ -2,11 +2,11 @@
 
 [中文](./README.md) | [Back to MCP Demo](../../README_EN.md)
 
-This directory contains runnable Higress demos for implemented MCP `2026-07-28` features. The version directory builds the `mcp-server` plugin from a pinned Higress commit, while each feature README provides an independent step-by-step lab.
+This directory contains runnable Higress demos for implemented MCP `2026-07-28` features. Each feature README provides an independent step-by-step lab.
 
 ## Prepare the environment and plugin
 
-From the Higress repository root, run:
+Demos 01–05 share the Kind environment and use a pinned `mcp-server` build. From the Higress repository root, run the following commands.
 
 ```bash
 cd samples/mcp
@@ -27,7 +27,7 @@ The build writes:
 .runtime/plugins/mcp-server/2026-07-28/plugin.wasm
 ```
 
-The shared environment exposes this file to the Kind node and Higress Gateway. Every demo references:
+The shared environment exposes this file to the Kind node and Higress Gateway. The Wasm plugins in demos 01–05 reference the following path.
 
 ```text
 file:///opt/plugins/mcp-server/2026-07-28/plugin.wasm
@@ -42,8 +42,11 @@ file:///opt/plugins/mcp-server/2026-07-28/plugin.wasm
 | [03 Modern-to-Legacy](./03-modern-to-legacy/README_EN.md) | Request-scoped legacy handshakes, result adaptation, and header isolation |
 | [04 Request Validation](./04-request-validation/README_EN.md) | Argument, Origin, and header/body validation with zero backend calls |
 | [05 Instructions](./05-instructions-passthrough/README_EN.md) | Native Go SDK direct/on/off/changed-instructions verification |
+| [06 Virtual Tools with Inspector](./06-virtual-tools-inspector/README_EN.md) | Discover a composed endpoint, list an empty catalog, and call Legacy and Modern sources |
 
 Each demo can be run independently. Enter any demo directory and follow its README to deploy resources, send requests, inspect evidence, and clean up.
+
+Demo 06 runs a standalone Docker gateway and builds `mcp-router` and `mcp-server` from the current checkout.
 
 ## Use another source revision
 
