@@ -709,8 +709,11 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		}
 		toolsAvailable := modernMethodPolicy(*config, "tools/list").Available &&
 			modernMethodPolicy(*config, "tools/call").Available
-		if composed, ok := config.server.(*ComposedMCPServer); toolsAvailable && ok {
-			toolsAvailable = composed.hasRoutedTool()
+		if config.isComposed {
+			// The matched router rule defines the capability. tools/list
+			// returns the current directory, which can be empty.
+			dispatchEnabled, err := proxywasm.GetProperty([]string{consts.MCPRouterToolDispatchEnabled})
+			toolsAvailable = err == nil && string(dispatchEnabled) == "true"
 		}
 		result := ShapeResult(request, currentServerNameForHandlers, DiscoveryResult(toolsAvailable))
 		if currentServerInstructionsForHandlers != "" {

@@ -22,7 +22,7 @@ const (
 	CtxProtocolTransport = "mcp.protocol.transport"
 	CtxProtocolRequest   = "mcp.protocol.request"
 
-	// MCPRouterDiscoverySources is request filter state shared by mcp-router
-	// and mcp-server. Its value is a JSON map from source name to routability.
-	MCPRouterDiscoverySources = "mcp_router_discovery_sources"
+	// MCPRouterToolDispatchEnabled is a request-scoped flag shared by
+	// mcp-router and mcp-server during discovery.
+	MCPRouterToolDispatchEnabled = "mcp_router_tool_dispatch_enabled"
 )

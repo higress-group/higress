@@ -37,7 +37,7 @@ func init() {
 	mcp.LoadMCPFilter(
 		mcp.FilterName("mcp-router"),
 		mcp.SetConfigOverrideParser(ParseGlobalConfig, ParseOverrideConfig),
-		mcp.SetJsonRpcRequestFilter(markDiscoverySources),
+		mcp.SetJsonRpcRequestFilter(markToolDispatchEnabled),
 		mcp.SetToolCallRequestFilter(ProcessRequest),
 	)
 	mcp.InitMCPFilter()
@@ -53,8 +53,6 @@ type ServerConfig struct {
 // McpRouterGlobalConfig represents the global configuration for the mcp-router filter
 type McpRouterGlobalConfig struct {
 	Servers []ServerConfig `json:"servers"`
-
-	discoverySources []byte
 }
 
 type McpRouterConfig struct {
@@ -69,18 +67,8 @@ func ParseGlobalConfig(configBytes []byte, globalConfig *any) error {
 	}
 
 	log.Infof("Parsed mcp-router config with %d servers", len(config.Servers))
-	sources := make(map[string]bool, len(config.Servers))
 	for _, server := range config.Servers {
 		log.Debugf("Server: %s -> %s%s", server.Name, server.Domain, server.Path)
-		// Routing selects the first configured entry for each server name.
-		if _, seen := sources[server.Name]; !seen {
-			sources[server.Name] = server.Path != ""
-		}
-	}
-	var err error
-	config.discoverySources, err = json.Marshal(sources)
-	if err != nil {
-		return fmt.Errorf("failed to encode mcp-router discovery sources: %w", err)
 	}
 
 	*globalConfig = config
@@ -106,14 +94,13 @@ func ParseOverrideConfig(configBytes []byte, globalConfig any, ruleConfig *any) 
 	return nil
 }
 
-// markDiscoverySources tells the following mcp-server filter which sources
-// this route can delegate to. Filter state is scoped to the current request.
-func markDiscoverySources(_ wrapper.HttpContext, config any, _ utils.JsonRpcID, method string, _ gjson.Result, _ []byte) types.Action {
+// markToolDispatchEnabled tells the following mcp-server filter that the
+// matched rule enables tool dispatch on this discovery request.
+func markToolDispatchEnabled(_ wrapper.HttpContext, config any, _ utils.JsonRpcID, method string, _ gjson.Result, _ []byte) types.Action {
 	routerConfig, ok := config.(McpRouterConfig)
 	if method == "server/discover" && ok && routerConfig.enable {
-		if err := proxywasm.SetProperty([]string{consts.MCPRouterDiscoverySources}, routerConfig.global.discoverySources); err != nil {
-			log.Warnf("Failed to publish mcp-router discovery sources: %v", err)
-		}
+		// If the host cannot set the flag, discovery treats dispatch as absent.
+		_ = proxywasm.SetProperty([]string{consts.MCPRouterToolDispatchEnabled}, []byte("true"))
 	}
 	return types.ActionContinue
 }

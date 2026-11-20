@@ -42,9 +42,9 @@ const routerTestConfig = `{
 	]
 }`
 
-func routerHost(t *testing.T, domain string) wasmtest.TestHost {
+func routerHost(t *testing.T, domain, config string) wasmtest.TestHost {
 	t.Helper()
-	host, status := wasmtest.NewTestHost(json.RawMessage(routerTestConfig))
+	host, status := wasmtest.NewTestHost(json.RawMessage(config))
 	t.Cleanup(host.Reset)
 	if status != types.OnPluginStartStatusOK {
 		t.Fatalf("plugin start status = %v", status)
@@ -64,22 +64,31 @@ func routerRequestHeaders(domain string) [][2]string {
 	}
 }
 
-func TestRouterDiscoverySourcesFollowEnabledRule(t *testing.T) {
+func TestRouterToolDispatchSignalFollowsEnabledRule(t *testing.T) {
+	const enabled = "virtual.example.test"
+	const emptyRoutes = `{"servers":[],"_rules_":[{"_match_domain_":["virtual.example.test"],"enable":true}]}`
+	tests := []struct {
+		name, domain, config, method string
+		want                         bool
+	}{
+		{name: "enabled", domain: enabled, config: routerTestConfig, method: "server/discover", want: true},
+		{name: "enabled with no sources", domain: enabled, config: emptyRoutes, method: "server/discover", want: true},
+		{name: "disabled", domain: "disabled.example.test", config: routerTestConfig, method: "server/discover"},
+		{name: "other method", domain: enabled, config: routerTestConfig, method: "tools/list"},
+	}
 	wasmtest.RunTest(t, func(t *testing.T) {
-		for _, domain := range []string{"virtual.example.test", "disabled.example.test"} {
-			t.Run(domain, func(t *testing.T) {
-				host := routerHost(t, domain)
-				host.CallOnHttpRequestHeaders(routerRequestHeaders(domain))
-				host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}`))
-				raw, err := host.GetProperty([]string{consts.MCPRouterDiscoverySources})
-				if domain == "disabled.example.test" {
-					if len(raw) != 0 {
-						t.Fatalf("disabled route reported sources %s", raw)
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				host := routerHost(t, tc.domain, tc.config)
+				host.CallOnHttpRequestHeaders(routerRequestHeaders(tc.domain))
+				host.CallOnHttpRequestBody([]byte(`{"jsonrpc":"2.0","id":1,"method":` + strconv.Quote(tc.method) + `,"params":{}}`))
+				raw, err := host.GetProperty([]string{consts.MCPRouterToolDispatchEnabled})
+				if tc.want {
+					if err != nil || string(raw) != "true" {
+						t.Fatalf("dispatch state = %q, error = %v", raw, err)
 					}
-					return
-				}
-				if err != nil || string(raw) != `{"empty":false,"source":true}` {
-					t.Fatalf("sources = %s, error = %v", raw, err)
+				} else if len(raw) != 0 {
+					t.Fatalf("unexpected dispatch state %q", raw)
 				}
 			})
 		}
@@ -143,7 +152,7 @@ func TestRouterRewritesOnlyValidatedModernToolIdentity(t *testing.T) {
 		for _, tc := range tests {
 			t.Run(tc.label, func(t *testing.T) {
 				const domain = "virtual.example.test"
-				host := routerHost(t, domain)
+				host := routerHost(t, domain, routerTestConfig)
 				headers := routerRequestHeaders(domain)
 				if tc.header != "" {
 					version := string(protocol.Version20260728)
