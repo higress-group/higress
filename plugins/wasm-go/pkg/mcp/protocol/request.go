@@ -170,6 +170,32 @@ func PrepareRequest(transport Transport, body []byte, methodAvailable func(strin
 	})
 }
 
+// PrepareModernToolCall validates the original identity before a router
+// changes a tool name. Legacy requests keep their existing routing path.
+func PrepareModernToolCall(transport Transport, body []byte) (*RequestContext, *Error) {
+	era, _ := classify(transport, body)
+	if era == EraLegacy {
+		return nil, nil
+	}
+	// Match the receiving mcp-server's header boundary. An invalid transport
+	// or incomplete header identity has no accepted request ID.
+	if HasModernIdentityHeaders(transport) {
+		version := Version(transport.ProtocolVersion)
+		if version != "" && !IsLegacyVersion(version) && !IsModernVersion(version) {
+			return nil, UnsupportedVersion(version, SupportedVersions())
+		}
+		if protocolError := ValidateModernTransport(transport); protocolError != nil {
+			return nil, protocolError
+		}
+		if !IsModernVersion(version) || transport.MCPMethod == "" {
+			return nil, HeaderMismatch()
+		}
+	}
+	return PrepareRequest(transport, body, func(method string) bool {
+		return method == "tools/call"
+	})
+}
+
 func PrepareRequestWithPolicy(transport Transport, body []byte, policyLookup MethodPolicyLookup) (*RequestContext, *Error) {
 	if len(body) > int(MaxBodyBytes) {
 		return nil, RequestTooLarge()
@@ -286,6 +312,18 @@ const (
 	nameHeaderPrefix = "=?base64?"
 	nameHeaderSuffix = "?="
 )
+
+// EncodeNameHeader renders a nonempty UTF-8 tool name for the Mcp-Name header.
+// An empty return means the name cannot be represented as a tool identity.
+func EncodeNameHeader(name string) string {
+	if name == "" || !utf8.ValidString(name) {
+		return ""
+	}
+	if decoded, ok := decodeNameHeader(name, true); ok && decoded == name {
+		return name
+	}
+	return nameHeaderPrefix + base64.StdEncoding.EncodeToString([]byte(name)) + nameHeaderSuffix
+}
 
 func validateNameHeader(transport Transport, envelope Envelope) *Error {
 	hasNameHeader := transport.HasMCPName || transport.MCPName != ""
