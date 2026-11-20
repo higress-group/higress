@@ -3,8 +3,9 @@
 # 参考样本：mcp-bravesearch（headers 注入）、mcp-chatppt（argsToFormBody）、
 # mcp-github（body 模板 + toJson 管道）、mcp-blockscout（responseTemplate {{ . }} 透传）
 # 鉴权：买家在 mcp.higress.ai 页面填 nk- key → {{.config.apiKey}} 注入 X-SLF-Api-Key，
-# 计费入买家账户。未纳入：STT/OCR 长文件异步三步流（网关形态表达不了），与 AIGW 同款取舍。
-# 与 AIGW YAML（deploy/aigw-http2mcp/suanlinfang.yaml）同面 9 工具。
+# 计费入买家账户。未纳入：STT/OCR 长文件异步三步流、图生图参考图三步直传
+# （网关形态表达不了），与 AIGW 同款取舍。
+# 与 AIGW YAML（mcp-plugins/aigw-http2mcp/suanlinfang.yaml）同面 8 工具。
 
 server:
   name: suanlinfang-server
@@ -12,6 +13,61 @@ server:
     apiKey: ""
 
 tools:
+- name: list_image_models
+  description: "列出文生图当前在线模型与实时牌价（按张计价），供 submit_image_task 选择 model。"
+  args: []
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/image/models"
+    method: GET
+    headers:
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+  responseTemplate:
+    body: |
+      {{ . }}
+
+- name: submit_image_task
+  description: "文生图任务提交（1024×1024 PNG，按张计费，失败不计费）。提交后立即返回 taskNo，用 get_image_task 轮询出图（快档数十秒，慢档可能数分钟）。model 留空默认 flux2-klein（快而省），更高画质传 z-image-turbo；在线模型与实时牌价先查 list_image_models。图生图（参考图编辑）需完整客户端（MCP/SDK），网关形态不支持。"
+  args:
+  - name: prompt
+    description: "生成指令文本"
+    type: string
+    required: true
+  - name: model
+    description: "模型名（可选，留空默认 flux2-klein；可选值调 list_image_models 查看）"
+    type: string
+    required: false
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/image/tasks"
+    method: POST
+    headers:
+    - key: Content-Type
+      value: "application/json"
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+    body: |
+      {"model":{{if .args.model}}{{.args.model | toJson}}{{else}}"flux2-klein"{{end}},"prompt":{{.args.prompt | toJson}}}
+  responseTemplate:
+    body: |
+      {{ . }}
+
+- name: get_image_task
+  description: "查询生图任务状态。status 为 queued/running（进行中）、success（resultUrl 为图片现签下载链接，1 小时内有效，过期重查即换新链）、failed（errorMsg 为失败原因，不扣费）。建议每 5~10 秒查询一次。"
+  args:
+  - name: taskNo
+    description: "任务 ID（submit_image_task 返回的 taskId）"
+    type: string
+    required: true
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/image/tasks/{{.args.taskNo}}"
+    method: GET
+    headers:
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+  responseTemplate:
+    body: |
+      {{ . }}
+
 - name: list_tts_voices
   description: "列出语音合成（TTS）全部可用音色（代码/名称/性别/风格），共 21 个，供 synthesize_speech 选择 speaker。"
   args: []
@@ -26,7 +82,7 @@ tools:
       {{ . }}
 
 - name: synthesize_speech
-  description: "语音合成（TTS）单笔。文本转语音，同步返回现签音频下载链接（1 小时内有效，请及时转存）。限 3000 UTF-8 字节（约 1000 汉字），更长文本请改用 submit_speech_task。speaker 音色代码先用 list_tts_voices 查询。计费约 2 元/万字符，失败不计费。"
+  description: "语音合成（TTS）单笔。文本转语音，同步返回现签音频下载链接（1 小时内有效，请及时转存）。限 1000 字符，更长文本请改用 submit_speech_task。speaker 音色代码先用 list_tts_voices 查询。计费约 2 元/万字符，失败不计费。"
   args:
   - name: text
     description: "待合成文本"
@@ -54,32 +110,11 @@ tools:
     body: |
       {{ . }}
 
-- name: estimate_tts_cost
-  description: "语音合成计费预估。返回待合成文本的字符数与预估费用，不实际合成、不计费。"
-  args:
-  - name: text
-    description: "待预估文本"
-    type: string
-    required: true
-  requestTemplate:
-    url: "https://suanlinfang.cn/v1/tts/estimate"
-    method: POST
-    headers:
-    - key: Content-Type
-      value: "application/json"
-    - key: X-SLF-Api-Key
-      value: "{{.config.apiKey}}"
-    body: |
-      {"reqParams":{"text":{{.args.text | toJson}}}}
-  responseTemplate:
-    body: |
-      {{ . }}
-
 - name: submit_speech_task
-  description: "语音合成长文本异步任务。最长 20 万字符，平台按 500 字切块合成并拼接为完整音频。提交后返回 taskId，用 get_speech_task 轮询结果。计费约 2 元/万字符。"
+  description: "长文本语音合成任务（≤20 万字，按 500 字切块合成拼接完整音频）。提交后返回 taskNo，用 get_speech_task 轮询。计费约 2 元/万字符，失败不计费。"
   args:
   - name: text
-    description: "待合成长文本"
+    description: "待合成文本（≤20 万字）"
     type: string
     required: true
   - name: speaker
@@ -122,7 +157,7 @@ tools:
       {{ . }}
 
 - name: transcribe_audio
-  description: "语音识别（STT）单笔。公网音频 URL 转文字，同步返回。限 3 分钟 / 20MB（wav/mp3/flac/m4a 等），更长音频暂不支持。支持热词纠错（context 参数，如人名/品牌名）。计费约 0.5 元/小时，失败不计费。"
+  description: "语音识别（STT）单笔。公网音频 URL 转文字，同步返回。限 3 分钟 / 20MB（wav/mp3/flac/m4a 等），更长音频暂不支持。支持热词纠错（hotwords 参数，如人名/品牌名）。计费约 0.5 元/小时，失败不计费。"
   args:
   - name: url
     description: "音频公网 URL（wav/mp3/flac/m4a/ogg/aac）"
@@ -132,7 +167,7 @@ tools:
     description: "语种代码（缺省自动识别，支持普通话、英语及 22 种中文方言，如 zh、en）"
     type: string
     required: false
-  - name: context
+  - name: hotwords
     description: "热词/上下文提示（纠正专有名词，如人名、品牌名）"
     type: string
     required: false
@@ -143,83 +178,6 @@ tools:
     headers:
     - key: X-SLF-Api-Key
       value: "{{.config.apiKey}}"
-  responseTemplate:
-    body: |
-      {{ . }}
-
-- name: recognize_image_url
-  description: "文字识别（OCR）单图。公网图片 URL 识别文字，同步返回逐行文本。png/jpg/webp/bmp 不超过 20MB。tier 选 standard（快速档，清晰打印件/截图）或 accurate（高精度档，表格、多栏、倾斜拍摄）。prompt 仅高精度档生效（自定义识别指令，如只提取表格金额列）。计费约 0.5~1.5 分/页。"
-  args:
-  - name: url
-    description: "图片公网 URL（png/jpg/webp/bmp）"
-    type: string
-    required: true
-  - name: tier
-    description: "识别档位（standard / accurate）"
-    type: string
-    required: true
-  - name: prompt
-    description: "自定义识别提示（仅 accurate 档生效，不超过 2000 字符）"
-    type: string
-    required: false
-  requestTemplate:
-    url: "https://suanlinfang.cn/v1/ocr/url"
-    method: POST
-    argsToFormBody: true
-    headers:
-    - key: X-SLF-Api-Key
-      value: "{{.config.apiKey}}"
-  responseTemplate:
-    body: |
-      {{ . }}
-
-- name: recognize_image_base64
-  description: "文字识别（OCR）单图。base64 图片直传识别，同步返回逐行文本。计费约 0.5~1.5 分/页。"
-  args:
-  - name: image
-    description: "图片 base64 编码字符串（不带 data URI 前缀）"
-    type: string
-    required: true
-  - name: tier
-    description: "识别档位（standard / accurate）"
-    type: string
-    required: true
-  - name: prompt
-    description: "自定义识别提示（仅 accurate 档生效）"
-    type: string
-    required: false
-  requestTemplate:
-    url: "https://suanlinfang.cn/v1/ocr/base64"
-    method: POST
-    argsToFormBody: true
-    headers:
-    - key: X-SLF-Api-Key
-      value: "{{.config.apiKey}}"
-  responseTemplate:
-    body: |
-      {{ . }}
-
-- name: decide
-  description: "智能决策（System One 类型化判断）。输入业务状态与若干类型化问题，返回每题的校准概率，不生成文本。适用工单分类、风控判定、质检评估等结构化判断场景。计费按输入 token（约 2 元/百万），失败不计费。state_json 与 questions_json 均为 JSON 字符串。questions 为 {题目id:{type,criteria}} 映射（1-32 题），type 三种。choice 多选一，criteria 为 {选项值:描述}；noul 是否判断，criteria 可选 {true:描述,false:描述}；score 有序等级打分，criteria 为 [等级描述...]。示例见 README。"
-  args:
-  - name: state_json
-    description: "决策状态 JSON 字符串（自由对象，描述当前业务情境）"
-    type: string
-    required: true
-  - name: questions_json
-    description: "类型化问题集 JSON 字符串（{题目id:{type,criteria}} 结构，1-32 题）"
-    type: string
-    required: true
-  requestTemplate:
-    url: "https://suanlinfang.cn/v1/systemone"
-    method: POST
-    headers:
-    - key: Content-Type
-      value: "application/json"
-    - key: X-SLF-Api-Key
-      value: "{{.config.apiKey}}"
-    body: |
-      {"state": {{.args.state_json}}, "questions": {{.args.questions_json}}}
   responseTemplate:
     body: |
       {{ . }}
