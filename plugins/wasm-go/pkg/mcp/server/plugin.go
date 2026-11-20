@@ -707,8 +707,11 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			utils.OnMCPResponseError(ctx, errors.New("method not found:server/discover"), utils.ErrMethodNotFound, fmt.Sprintf("mcp:%s:server/discover:legacy", currentServerNameForHandlers))
 			return nil
 		}
-		toolsAvailable := !config.isComposed && modernMethodPolicy(*config, "tools/list").Available &&
+		toolsAvailable := modernMethodPolicy(*config, "tools/list").Available &&
 			modernMethodPolicy(*config, "tools/call").Available
+		if composed, ok := config.server.(*ComposedMCPServer); toolsAvailable && ok {
+			toolsAvailable = composed.hasRoutedTool()
+		}
 		result := ShapeResult(request, currentServerNameForHandlers, DiscoveryResult(toolsAvailable))
 		if currentServerInstructionsForHandlers != "" {
 			result["instructions"] = currentServerInstructionsForHandlers

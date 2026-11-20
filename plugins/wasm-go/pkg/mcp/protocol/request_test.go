@@ -36,6 +36,36 @@ func modernTransport(method, name string) Transport {
 	}
 }
 
+func TestEncodeNameHeaderRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		wantPlain bool
+	}{
+		{"echo-tool", true},
+		{"internal space", true},
+		{"回声", false},
+		{" leading", false},
+		{"trailing\t", false},
+		{"=?base64?ZWNo bw==?=", false},
+		{"name?=", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			header := EncodeNameHeader(tc.name)
+			if (header == tc.name) != tc.wantPlain {
+				t.Fatalf("encoded %q as %q", tc.name, header)
+			}
+			if decoded, ok := decodeNameHeader(header, true); !ok || decoded != tc.name {
+				t.Fatalf("decoded %q as %q (valid=%t)", header, decoded, ok)
+			}
+		})
+	}
+	for _, invalid := range []string{"", string([]byte{0xff})} {
+		if header := EncodeNameHeader(invalid); header != "" {
+			t.Fatalf("encoded invalid name %q as %q", invalid, header)
+		}
+	}
+}
+
 func modernTransportFromHeaders(method, name string) Transport {
 	return NewTransport("POST", "mcp.example.com", [][2]string{
 		{"Content-Type", "application/json; charset=utf-8"},

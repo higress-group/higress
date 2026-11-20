@@ -21,4 +21,8 @@ const (
 	// only typed protocol data and never runtime session identifiers.
 	CtxProtocolTransport = "mcp.protocol.transport"
 	CtxProtocolRequest   = "mcp.protocol.request"
+
+	// MCPRouterDiscoverySources is request filter state shared by mcp-router
+	// and mcp-server. Its value is a JSON map from source name to routability.
+	MCPRouterDiscoverySources = "mcp_router_discovery_sources"
 )

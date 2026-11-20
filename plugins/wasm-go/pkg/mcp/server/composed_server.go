@@ -1,9 +1,11 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/wasm-go/pkg/log"
 )
 
@@ -59,6 +61,31 @@ func (cs *ComposedMCPServer) GetMCPTools() map[string]Tool {
 		}
 	}
 	return composedTools
+}
+
+// hasRoutedTool requires both a published descriptor in this configuration
+// generation and a source route advertised by mcp-router on this request.
+// A standalone toolSet can list descriptors but has no call dispatcher.
+func (cs *ComposedMCPServer) hasRoutedTool() bool {
+	raw, err := proxywasm.GetProperty([]string{consts.MCPRouterDiscoverySources})
+	if err != nil {
+		return false
+	}
+	var sources map[string]bool
+	if err := json.Unmarshal(raw, &sources); err != nil {
+		return false
+	}
+	for _, source := range cs.serverTools {
+		if !sources[source.ServerName] {
+			continue
+		}
+		for _, name := range source.Tools {
+			if tool, found := cs.registry.GetToolInfo(source.ServerName, name); found && tool.inputSchemaSerializable {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // SetConfig sets the configuration for the composed server itself.

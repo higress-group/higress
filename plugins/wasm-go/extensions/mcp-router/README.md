@@ -1,7 +1,7 @@
 # MCP Router Plugin
 
 ## Feature Description
-The `mcp-router` plugin provides a routing capability for MCP (Model Context Protocol) `tools/call` requests. It inspects the tool name in the request payload, and if the name is prefixed with a server identifier (e.g., `server-name/tool-name`), it dynamically reroutes the request to the appropriate backend MCP server.
+The `mcp-router` plugin provides a routing capability for MCP (Model Context Protocol) `tools/call` requests. It inspects the tool name in the request payload, and if the name is prefixed with a server identifier (e.g., `server-name___tool-name`), it dynamically reroutes the request to the appropriate backend MCP server.
 
 This enables the creation of a unified MCP endpoint that can aggregate tools from multiple, distinct MCP servers. A client can make a `tools/call` request to a single endpoint, and the `mcp-router` will ensure it reaches the correct underlying server where the tool is actually hosted.
 
@@ -19,15 +19,19 @@ This enables the creation of a unified MCP endpoint that can aggregate tools fro
 When a `tools/call` request is processed by a route with the `mcp-router` plugin enabled, the following occurs:
 
 1.  **Tool Name Parsing**: The plugin inspects the `name` parameter within the `params` object of the JSON-RPC request.
-2.  **Prefix Matching**: It checks if the tool name follows the `server-name/tool-name` format.
+2.  **Prefix Matching**: It checks if the tool name follows the `server-name___tool-name` format.
     - If it does not match this format, the plugin takes no action, and the request proceeds normally.
     - If it matches, the plugin extracts the `server-name` and the actual `tool-name`.
 3.  **Route Lookup**: The extracted `server-name` is used to look up the corresponding routing configuration (domain and path) from the `servers` list in the plugin's configuration.
 4.  **Header Modification**:
     - The `:authority` request header is replaced with the `domain` from the matched server configuration.
     - The `:path` request header is replaced with the `path` from the matched server configuration.
-5.  **Request Body Modification**: The `name` parameter in the JSON-RPC request body is updated to be just the `tool-name` (the `server-name/` prefix is removed).
+5.  **Request Body Modification**: The `name` parameter in the JSON-RPC request body is updated to be just the `tool-name` (the `server-name___` prefix is removed).
 6.  **Rerouting**: After the headers are modified, the gateway's routing engine processes the request again with the new destination information, sending it to the correct backend MCP server.
+
+### MCP 2026-07-28
+
+For MCP `2026-07-28`, run `mcp-router` before `mcp-server` on the virtual route. A `toolSet` advertises `capabilities.tools` when it contains a registered tool with a source route configured in the enabled router. For calls, send the virtual name in both `params.name` and `Mcp-Name`, using the protocol's Base64 header encoding when needed. The router validates the original identity, then forwards the source tool name in both fields. Legacy requests continue using the name in the JSON-RPC body.
 
 ### Example Configuration
 
@@ -54,7 +58,7 @@ Consider a `tools/call` request sent to an endpoint where the `mcp-router` is ac
   "id": 2,
   "method": "tools/call",
   "params": {
-    "name": "rest-amap-server/get-weather",
+    "name": "rest-amap-server___get-weather",
     "arguments": {
       "location": "New York"
     }
@@ -64,7 +68,7 @@ Consider a `tools/call` request sent to an endpoint where the `mcp-router` is ac
 
 **Plugin Actions:**
 
-1.  The plugin identifies the tool name as `rest-amap-server/get-weather`.
+1.  The plugin identifies the tool name as `rest-amap-server___get-weather`.
 2.  It extracts `server-name` as `rest-amap-server` and `tool-name` as `get-weather`.
 3.  It finds the matching configuration: `domain: mcp.example.com`, `path: /mcp-servers/mcp-rest-amap-server`.
 4.  It modifies the request headers to:
