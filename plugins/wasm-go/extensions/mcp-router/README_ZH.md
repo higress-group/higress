@@ -1,7 +1,7 @@
 # MCP Router 插件
 
 ## 功能说明
-`mcp-router` 插件为 MCP (Model Context Protocol) 的 `tools/call` 请求提供了路由能力。它会检查请求负载中的工具名称，如果名称带有服务器标识符前缀（例如 `server-name___tool-name`），它会动态地将请求重新路由到相应的后端 MCP 服务器。
+`mcp-router` 插件为 MCP (Model Context Protocol) 的 `tools/call` 请求提供了路由能力。它会检查请求负载中的工具名称，如果名称带有服务器标识符前缀（例如 `server-name/tool-name`），它会动态地将请求重新路由到相应的后端 MCP 服务器。
 
 这使得创建一个统一的 MCP 端点成为可能，该端点可以聚合来自多个不同 MCP 服务器的工具。客户端可以向单个端点发出 `tools/call` 请求，`mcp-router` 将确保请求到达托管该工具的正确底层服务器。
 
@@ -19,19 +19,15 @@
 当一个启用了 `mcp-router` 插件的路由处理 `tools/call` 请求时，会发生以下情况：
 
 1.  **工具名称解析**：插件检查 JSON-RPC 请求中 `params` 对象的 `name` 参数。
-2.  **前缀匹配**：它检查工具名称是否遵循 `server-name___tool-name` 格式。
+2.  **前缀匹配**：它检查工具名称是否遵循 `server-name/tool-name` 格式。
     - 如果不匹配此格式，插件不执行任何操作，请求将正常继续。
     - 如果匹配，插件将提取 `server-name` 和实际的 `tool-name`。
 3.  **路由查找**：提取的 `server-name` 用于从插件配置的 `servers` 列表中查找相应的路由配置（domain 和 path）。
 4.  **Header 修改**：
     - `:authority` 请求头被替换为匹配的服务器配置中的 `domain`。
     - `:path` 请求头被替换为匹配的服务器配置中的 `path`。
-5.  **请求体修改**：JSON-RPC 请求体中的 `name` 参数被更新为仅包含 `tool-name`（移除了 `server-name___` 前缀）。
+5.  **请求体修改**：JSON-RPC 请求体中的 `name` 参数被更新为仅包含 `tool-name`（移除了 `server-name/` 前缀）。
 6.  **重新路由**：在 Header 修改后，网关的路由引擎会使用新的目标信息再次处理请求，将其发送到正确的后端 MCP 服务器。
-
-### MCP 2026-07-28
-
-使用 MCP `2026-07-28` 时，虚拟路由上的 `mcp-router` 应先于 `mcp-server` 执行。启用的路由器配置了来源路由且 `toolSet` 引用了该来源的已注册工具时，`server/discover` 返回 `capabilities.tools`。调用时在 `params.name` 和 `Mcp-Name` 中发送相同的虚拟工具名，需要时使用协议规定的 Base64 头编码。路由器校验原始身份后将两处同时改为来源工具名。Legacy 请求继续使用 JSON-RPC 正文中的工具名。
 
 ### 配置示例
 
@@ -58,7 +54,7 @@ servers:
   "id": 2,
   "method": "tools/call",
   "params": {
-    "name": "rest-amap-server___get-weather",
+    "name": "rest-amap-server/get-weather",
     "arguments": {
       "location": "New York"
     }
@@ -68,7 +64,7 @@ servers:
 
 **插件行为:**
 
-1.  插件识别出工具名称为 `rest-amap-server___get-weather`。
+1.  插件识别出工具名称为 `rest-amap-server/get-weather`。
 2.  它提取出 `server-name` 为 `rest-amap-server`，`tool-name` 为 `get-weather`。
 3.  它找到匹配的配置：`domain: mcp.example.com`, `path: /mcp-servers/mcp-rest-amap-server`。
 4.  它将请求头修改为：
