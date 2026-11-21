@@ -1,0 +1,199 @@
+# Higress MCP 市场上架配置 —— 算邻坊 REST API → MCP 工具
+# 提交方式：PR 到 alibaba/higress plugins/wasm-go/mcp-servers/mcp-suanlinfang/
+# 参考样本：mcp-bravesearch（headers 注入）、mcp-chatppt（argsToFormBody）、
+# mcp-github（body 模板 + toJson 管道）、mcp-blockscout（responseTemplate {{ . }} 透传）
+# 鉴权：买家在 mcp.higress.ai 页面填 nk- key → {{.config.apiKey}} 注入 X-SLF-Api-Key，
+# 计费入买家账户。未纳入：STT/OCR 长文件异步三步流、图生图参考图三步直传
+# （网关形态表达不了），与 AIGW 同款取舍。
+# 与 AIGW YAML（mcp-plugins/aigw-http2mcp/suanlinfang.yaml）同面 8 工具。
+
+server:
+  name: suanlinfang-server
+  config:
+    apiKey: ""
+
+tools:
+- name: list_image_models
+  description: "列出文生图当前在线模型与实时牌价（按张计价），供 submit_image_task 选择 model。"
+  args: []
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/image/models"
+    method: GET
+    headers:
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
+  responseTemplate:
+    body: |
+      {{ . }}
+
+- name: submit_image_task
+  description: "文生图任务提交（1024×1024 PNG，按张计费，失败不计费）。提交后立即返回 taskNo，用 get_image_task 轮询出图（快档数十秒，慢档可能数分钟）。model 留空默认 flux2-klein（快而省），更高画质传 z-image-turbo；在线模型与实时牌价先查 list_image_models。图生图（参考图编辑）需完整客户端（MCP/SDK），网关形态不支持。"
+  args:
+  - name: prompt
+    description: "生成指令文本"
+    type: string
+    required: true
+  - name: model
+    description: "模型名（可选，留空默认 flux2-klein；可选值调 list_image_models 查看）"
+    type: string
+    required: false
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/image/tasks"
+    method: POST
+    headers:
+    - key: Content-Type
+      value: "application/json"
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
+    body: |
+      {"model":{{if .args.model}}{{.args.model | toJson}}{{else}}"flux2-klein"{{end}},"prompt":{{.args.prompt | toJson}}}
+  responseTemplate:
+    body: |
+      {{ . }}
+
+- name: get_image_task
+  description: "查询生图任务状态。status 为 queued/running（进行中）、success（resultUrl 为图片现签下载链接，1 小时内有效，过期重查即换新链）、failed（errorMsg 为失败原因，不扣费）。建议每 5~10 秒查询一次。"
+  args:
+  - name: taskNo
+    description: "任务 ID（submit_image_task 返回的 taskId）"
+    type: string
+    required: true
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/image/tasks/{{.args.taskNo}}"
+    method: GET
+    headers:
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
+  responseTemplate:
+    body: |
+      {{ . }}
+
+- name: list_tts_voices
+  description: "列出语音合成（TTS）全部可用音色（代码/名称/性别/风格），共 21 个，供 synthesize_speech 选择 speaker。"
+  args: []
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/tts/voices"
+    method: GET
+    headers:
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
+  responseTemplate:
+    body: |
+      {{ . }}
+
+- name: synthesize_speech
+  description: "语音合成（TTS）单笔。文本转语音，同步返回现签音频下载链接（1 小时内有效，请及时转存）。限 1000 字符，更长文本请改用 submit_speech_task。speaker 音色代码先用 list_tts_voices 查询。计费约 2 元/万字符，失败不计费。"
+  args:
+  - name: text
+    description: "待合成文本"
+    type: string
+    required: true
+  - name: speaker
+    description: "音色代码（可选值调 list_tts_voices 查看）"
+    type: string
+    required: true
+  - name: format
+    description: "音频格式（wav 默认 / mp3）"
+    type: string
+    required: false
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/tts"
+    method: POST
+    headers:
+    - key: Content-Type
+      value: "application/json"
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
+    body: |
+      {"reqParams":{"text":{{.args.text | toJson}},"speaker":{{.args.speaker | toJson}}},"audioParams":{{if .args.format}}{"format":{{.args.format | toJson}}}{{else}}{}{{end}}}
+  responseTemplate:
+    body: |
+      {{ . }}
+
+- name: submit_speech_task
+  description: "长文本语音合成任务（≤20 万字，按 500 字切块合成拼接完整音频）。提交后返回 taskNo，用 get_speech_task 轮询。计费约 2 元/万字符，失败不计费。"
+  args:
+  - name: text
+    description: "待合成文本（≤20 万字）"
+    type: string
+    required: true
+  - name: speaker
+    description: "音色代码（可选值调 list_tts_voices 查看）"
+    type: string
+    required: true
+  - name: format
+    description: "音频格式（wav 默认 / mp3）"
+    type: string
+    required: false
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/tts/tasks"
+    method: POST
+    headers:
+    - key: Content-Type
+      value: "application/json"
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
+    body: |
+      {"reqParams":{"text":{{.args.text | toJson}},"speaker":{{.args.speaker | toJson}}},"audioParams":{{if .args.format}}{"format":{{.args.format | toJson}}}{{else}}{}{{end}}}
+  responseTemplate:
+    body: |
+      {{ . }}
+
+- name: get_speech_task
+  description: "查询语音合成任务进度与结果。status 为 queued/running（看 doneUnits/totalUnits 进度）、success（resultUrl 为完整音频下载链接，1 小时内有效）、failed（errorMsg 为失败原因）。任务终态保留 72 小时。"
+  args:
+  - name: taskNo
+    description: "任务 ID（submit_speech_task 返回的 taskId）"
+    type: string
+    required: true
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/tts/tasks/{{.args.taskNo}}"
+    method: GET
+    headers:
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
+  responseTemplate:
+    body: |
+      {{ . }}
+
+- name: transcribe_audio
+  description: "语音识别（STT）单笔。公网音频 URL 转文字，同步返回。限 3 分钟 / 20MB（wav/mp3/flac/m4a 等），更长音频暂不支持。支持热词纠错（hotwords 参数，如人名/品牌名）。计费约 0.5 元/小时，失败不计费。"
+  args:
+  - name: url
+    description: "音频公网 URL（wav/mp3/flac/m4a/ogg/aac）"
+    type: string
+    required: true
+  - name: language
+    description: "语种代码（缺省自动识别，支持普通话、英语及 22 种中文方言，如 zh、en）"
+    type: string
+    required: false
+  - name: hotwords
+    description: "热词/上下文提示（纠正专有名词，如人名、品牌名）"
+    type: string
+    required: false
+  requestTemplate:
+    url: "https://suanlinfang.cn/v1/stt/url"
+    method: POST
+    argsToFormBody: true
+    headers:
+    - key: X-SLF-Api-Key
+      value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
+  responseTemplate:
+    body: |
+      {{ . }}
