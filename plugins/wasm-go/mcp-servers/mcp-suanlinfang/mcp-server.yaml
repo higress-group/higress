@@ -22,6 +22,8 @@ tools:
     headers:
     - key: X-SLF-Api-Key
       value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
   responseTemplate:
     body: |
       {{ . }}
@@ -45,6 +47,8 @@ tools:
       value: "application/json"
     - key: X-SLF-Api-Key
       value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
     body: |
       {"model":{{if .args.model}}{{.args.model | toJson}}{{else}}"flux2-klein"{{end}},"prompt":{{.args.prompt | toJson}}}
   responseTemplate:
@@ -64,6 +68,8 @@ tools:
     headers:
     - key: X-SLF-Api-Key
       value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
   responseTemplate:
     body: |
       {{ . }}
@@ -77,6 +83,8 @@ tools:
     headers:
     - key: X-SLF-Api-Key
       value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
   responseTemplate:
     body: |
       {{ . }}
@@ -104,6 +112,8 @@ tools:
       value: "application/json"
     - key: X-SLF-Api-Key
       value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
     body: |
       {"reqParams":{"text":{{.args.text | toJson}},"speaker":{{.args.speaker | toJson}}},"audioParams":{{if .args.format}}{"format":{{.args.format | toJson}}}{{else}}{}{{end}}}
   responseTemplate:
@@ -133,6 +143,8 @@ tools:
       value: "application/json"
     - key: X-SLF-Api-Key
       value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
     body: |
       {"reqParams":{"text":{{.args.text | toJson}},"speaker":{{.args.speaker | toJson}}},"audioParams":{{if .args.format}}{"format":{{.args.format | toJson}}}{{else}}{}{{end}}}
   responseTemplate:
@@ -152,6 +164,8 @@ tools:
     headers:
     - key: X-SLF-Api-Key
       value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
   responseTemplate:
     body: |
       {{ . }}
@@ -178,6 +192,8 @@ tools:
     headers:
     - key: X-SLF-Api-Key
       value: "{{.config.apiKey}}"
+    - key: X-SLF-Client
+      value: mcp-higress
   responseTemplate:
     body: |
       {{ . }}
