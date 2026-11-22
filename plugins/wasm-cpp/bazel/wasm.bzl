@@ -56,6 +56,7 @@ def wasm_libraries():
 
     http_archive(
         name = "boringssl",
+        sha256 = "579cb415458e9f3642da0a39a72f79fdfe6dc9c1713b3a823f1e276681b9703e",
         urls = ["https://github.com/google/boringssl/archive/648cbaf033401b7fe7acdce02f275b06a88aab5c.tar.gz"],
         strip_prefix = "boringssl-648cbaf033401b7fe7acdce02f275b06a88aab5c",
         patch_args = ["-p1"],
@@ -67,12 +68,6 @@ def wasm_libraries():
         actual = "@boringssl//:ssl",
     )
 
-    http_archive(
-        name = "com_google_protobuf",
-        urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v{version}/protobuf-all-3.18.0.tar.gz"],
-        strip_prefix = "protobuf-3.18.0",
-    )
-
     native.bind(
         name = "protobuf",
         actual = "@com_google_protobuf//:protobuf",
@@ -80,6 +75,7 @@ def wasm_libraries():
 
     http_archive(
         name = "com_googlesource_code_re2",
+        sha256 = "2e9489a31ae007c81e90e8ec8a15d62d58a9c18d4fd1603f6441ef248556b41f",
         urls = ["https://github.com/google/re2/archive/2020-07-06.tar.gz"],
         strip_prefix = "re2-2020-07-06",
         patch_args = ["-p1"],
@@ -108,8 +104,9 @@ def wasm_libraries():
 
     http_archive(
         name = "com_github_google_jwt_verify",
+        sha256 = "8964c2b3a833dc5fc2600b2768ea1e73a0fcf8a1ed9d2cbc5fa3387c4cdd5caa",
         urls = ["https://github.com/google/jwt_verify_lib/archive/26c22c0ce1bc607eec8fa5dd26b707378adc7a88.tar.gz"],
-        strip_prefix = "jwt_verify_lib-26c22c0ce1bc607eec8fa5dd26b707378adc7a88"
+        strip_prefix = "jwt_verify_lib-26c22c0ce1bc607eec8fa5dd26b707378adc7a88",
     )
 
     http_archive(

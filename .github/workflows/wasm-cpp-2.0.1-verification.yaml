@@ -21,6 +21,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  contracts:
+    name: Static and negative hotfix contracts
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      EVIDENCE_DIR: ${{ github.workspace }}/out/cpp201-contracts
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run positive and negative contracts
+        run: tools/hack/cpp201-run-contracts.sh
+      - name: Upload contract evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-contracts-${{ github.event.pull_request.head.sha }}
+          path: out/cpp201-contracts
+          if-no-files-found: error
+          retention-days: 14
+
   build-native:
     name: ${{ matrix.source }} native and Wasm
     runs-on: ubuntu-22.04
@@ -228,6 +253,39 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  oauth-load:
+    name: Real proxy-Wasm oauth load smoke
+    needs: build-native
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      OAUTH_ARTIFACT: ${{ github.workspace }}/downloaded/oauth
+      EVIDENCE_DIR: ${{ github.workspace }}/out/cpp201-oauth-load-evidence
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download final oauth bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-oauth-${{ github.event.pull_request.head.sha }}
+          path: downloaded/oauth
+      - name: Run real Envoy load smoke
+        run: tools/hack/cpp201-run-oauth-load.sh
+      - name: Upload oauth load evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-oauth-load-${{ github.event.pull_request.head.sha }}
+          path: out/cpp201-oauth-load-evidence
+          if-no-files-found: error
+          retention-days: 14
+
   build-evidence:
     name: Verify nine non-OCI build evidence sets
     needs: build-native
@@ -275,7 +333,7 @@ jobs:
 
   evidence:
     name: Final C++ hotfix verification evidence
-    needs: [build-evidence, cpp-e2e, basic-proxy-wasm-ab]
+    needs: [contracts, build-evidence, cpp-e2e, basic-proxy-wasm-ab, oauth-load]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     env:
@@ -286,6 +344,11 @@ jobs:
         with:
           name: cpp201-build-index-${{ github.event.pull_request.head.sha }}
           path: evidence/build-index
+      - name: Download contract evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-contracts-${{ github.event.pull_request.head.sha }}
+          path: evidence/contracts
       - name: Download e2e evidence
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
         with:
@@ -296,6 +359,11 @@ jobs:
         with:
           name: cpp201-basic-ab-${{ github.event.pull_request.head.sha }}
           path: evidence/basic-ab
+      - name: Download oauth load evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-oauth-load-${{ github.event.pull_request.head.sha }}
+          path: evidence/oauth-load
       - name: Verify final evidence contract
         run: |
           set -euo pipefail
@@ -307,7 +375,10 @@ jobs:
             test "$(cat "evidence/e2e/$test_name.exit")" -eq 0
           done
           test "$(grep -c $'\t2\t' evidence/basic-ab/summary.tsv)" -eq 14
-          sha256sum evidence/build-index/* evidence/e2e/* evidence/basic-ab/* > final-evidence-sha256.txt
+          grep -Fx 'proxy-wasm-load-smoke=passed' evidence/oauth-load/coverage.txt
+          grep -Fx 'runtime-e2e=not-run' evidence/oauth-load/coverage.txt
+          grep -Fx 'valid=passed' evidence/contracts/summary.txt
+          find evidence/contracts evidence/build-index evidence/e2e evidence/basic-ab evidence/oauth-load -type f -print0 | sort -z | xargs -0 sha256sum > final-evidence-sha256.txt
           printf '%s\n' 'All artifacts are non-OCI CI evidence. OCI candidate/provenance/pull/promotion and public release are not-run.' > release-boundary.txt
       - name: Upload final evidence index
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
