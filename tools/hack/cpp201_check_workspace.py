@@ -65,7 +65,7 @@ def main():
             block = match.group(1)
             name_match = re.search(r'name = "([^"]+)"', block)
             require(name_match is not None, f"unnamed archive in {workspace_file}")
-            require('sha256 = "' in block, f"archive {name_match.group(1)} has no SHA-256")
+            require(re.search(r'sha256\s*=\s*(?:"|[A-Z][A-Z0-9_]*\s*,)', block) is not None, f"archive {name_match.group(1)} has no SHA-256")
             require("latest" not in block, f"archive {name_match.group(1)} uses latest")
             archive_count += 1
     require(archive_count >= 12, f"incomplete archive scan: {archive_count}")
