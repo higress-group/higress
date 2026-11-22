@@ -1361,6 +1361,14 @@ func TestPromotionDryRunResolvesCandidateProvenanceWithoutMutation(t *testing.T)
 		t.Fatal("promotion must verify exact provenance before reaching its dry-run boundary")
 	}
 	verify := workflow[verifyStart:dryRunBoundary]
+	if !strings.Contains(verify, "source tools/plugin-release/promotion-verify.sh") || !strings.Contains(verify, "build_promotion_verify_args") {
+		t.Fatal("promotion dry run does not invoke the shared verification argument builder")
+	}
+	builder, err := os.ReadFile("promotion-verify.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify += string(builder)
 	for _, required := range []string{
 		`--plan "../../$plan"`, `--committed-source "$SOURCE_COMMIT"`,
 		`--resolve --oci-source candidate`, `args+=(--previous "../../$previous_path")`,

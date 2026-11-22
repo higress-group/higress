@@ -13,14 +13,15 @@
 # limitations under the License.
 
 build_promotion_verify_args() {
-    local release_id previous previous_path
+    local release_id plan previous previous_path
     release_id=$(jq -er .gatewayVersion "$SNAPSHOT_PATH")
     if [ "${RELEASE_MODE:-standard}" = cpp-hotfix ]; then
         test "$SNAPSHOT_PATH" = plugins/release/snapshots/cpp-hotfix-2.0.1.json
         release_id=cpp-hotfix-2.0.1
     fi
-    test -f "plugins/release/plans/$release_id.json"
-    args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../plugins/release/plans/$release_id.json" --committed-source "$SOURCE_COMMIT" --resolve --oci-source candidate)
+    plan="plugins/release/plans/$release_id.json"
+    test -f "$plan"
+    args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan" --committed-source "$SOURCE_COMMIT" --resolve --oci-source candidate)
     if [ "${RELEASE_MODE:-standard}" = cpp-hotfix ]; then
         args+=(--mode=cpp-hotfix)
     elif [ -z "$(jq -r '.bootstrapEvidence.path // empty' "$SNAPSHOT_PATH")" ]; then
