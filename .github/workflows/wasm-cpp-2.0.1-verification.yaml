@@ -170,13 +170,14 @@ jobs:
 
   cpp-e2e:
     name: Three final-byte CPP e2e targets
-    needs: build-native
+    needs: [build-native, build-evidence]
     if: always()
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     env:
       EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
       ARTIFACT_DIR: ${{ github.workspace }}/downloaded
+      NATIVE_RESULTS: ${{ github.workspace }}/downloaded/build-index/native-results.txt
       EVIDENCE_DIR: ${{ github.workspace }}/out/cpp201-e2e
     steps:
       - name: Checkout exact PR head
@@ -204,6 +205,11 @@ jobs:
         with:
           name: cpp201-request_block-${{ github.event.pull_request.head.sha }}
           path: downloaded/cpp201-request_block-${{ github.event.pull_request.head.sha }}
+      - name: Download exact-run native outcomes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-build-index-${{ github.event.pull_request.head.sha }}
+          path: downloaded/build-index
       - name: Run three targets without rebuilding Wasm
         run: tools/hack/cpp201-run-e2e.sh
       - name: Upload e2e evidence

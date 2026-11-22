@@ -19,6 +19,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 EXPECTED_HEAD="${EXPECTED_HEAD:?exact PR head is required}"
 ARTIFACT_DIR="${ARTIFACT_DIR:?artifact directory is required}"
+NATIVE_RESULTS="${NATIVE_RESULTS:?exact-run native outcome index is required}"
 EVIDENCE_DIR="${EVIDENCE_DIR:?evidence directory is required}"
 KIND_NODE_TAG='v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a'
 KIND_BIN="$ROOT/tools/bin/kind-gateway-api"
@@ -154,7 +155,5 @@ done
 
 cat "$EVIDENCE_DIR"/CPPWasmPlugins*.log > "$EVIDENCE_DIR/all-e2e.log"
 test "$(grep -c -- 'Running Conformance Test: CPPWasmPlugins' "$EVIDENCE_DIR/all-e2e.log")" -eq 3
-printf 'basic_auth,key_auth,request_block: runtime-e2e=passed\n' > "$EVIDENCE_DIR/runtime-coverage.txt"
-for source in bot_detect custom_response hmac_auth jwt_auth key_rate_limit oauth; do
-  printf '%s: accepted-minimum build/native/shared-matcher; runtime-e2e=not-run; coverage-gap=accepted\n' "$source" >> "$EVIDENCE_DIR/runtime-coverage.txt"
-done
+bash tools/hack/cpp201-write-runtime-coverage.sh "$NATIVE_RESULTS" "$EVIDENCE_DIR/runtime-coverage.txt"
+cp "$NATIVE_RESULTS" "$EVIDENCE_DIR/native-results.txt"

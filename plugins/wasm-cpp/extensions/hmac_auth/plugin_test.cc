@@ -581,6 +581,9 @@ TEST_F(HmacAuthTest, TimestampCheck) {
   current_time_ = (uint64_t)1525869027 * 1000 * 1000 * 1000;
   EXPECT_EQ(context_->onRequestBody(0, true),
             FilterDataStatus::StopIterationNoBuffer);
+  current_time_ = (uint64_t)1525869029 * 1000 * 1000 * 1000;
+  EXPECT_EQ(context_->onRequestBody(0, true),
+            FilterDataStatus::StopIterationNoBuffer);
   current_time_ = (uint64_t)1525869030 * 1000 * 1000 * 1000;
   EXPECT_EQ(context_->onRequestBody(0, true), FilterDataStatus::Continue);
 }
