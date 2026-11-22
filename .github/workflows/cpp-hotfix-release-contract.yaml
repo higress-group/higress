@@ -20,6 +20,7 @@ on:
       - .github/workflows/cpp-hotfix-release-contract.yaml
       - .github/workflows/prepare-plugin-release.yaml
       - .github/workflows/promote-plugin-release.yaml
+      - .github/workflows/validate-plugin-preparation-pr.yaml
       - plugins/release/catalog.json
       - tools/plugin-release/**
   workflow_dispatch:

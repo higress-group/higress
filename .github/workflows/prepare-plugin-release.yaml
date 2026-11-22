@@ -590,6 +590,7 @@ jobs:
           RELEASE_MODE: ${{ inputs.release_mode }}
         run: |
           set -euo pipefail
+          RELEASE_MODE="${RELEASE_MODE:-standard}"
           # The generated PR must fork the exact main/code-freeze commit. If
           # main moved while candidates built, reprepare from the new freeze.
           gh auth setup-git
@@ -604,6 +605,7 @@ jobs:
           git commit -s -m "chore: prepare plugin snapshot $GATEWAY_VERSION" || true
           git push --force-with-lease origin "$branch"
           # BEGIN preparation-pr-contract
+          release_id="${release_id:-$GATEWAY_VERSION}"
           title="chore: prepare plugin snapshot $release_id"
           body="Immutable candidate snapshot; review VERSION edits and digest provenance."
           # The merged, labeled preparation PR is the human approval that
@@ -612,7 +614,11 @@ jobs:
           if [ "$(jq -er '[.entries[] | select(.state == "blocked")] | length' /tmp/migration-report.json)" -gt 0 ]; then
             body="$body"$'\n\n'"$(cat /tmp/migration-report.md)"
           fi
-          label="release/$release_id"
+          if [ "$release_id" = "$GATEWAY_VERSION" ]; then
+            label="release/$GATEWAY_VERSION"
+          else
+            label="release/$release_id"
+          fi
           # promote verifies this exact label on the merged PR and fails closed
           # without it, so the label must exist before the PR is opened. Label
           # management requires the release App installation to hold label write

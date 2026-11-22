@@ -39,6 +39,12 @@ func TestCPPHotfixPrepareUsesStableInterfaceAndSeparateReleaseID(t *testing.T) {
 	if strings.Contains(prepare, "plugins/model-") || strings.Contains(prepare, "sni_misdirect") {
 		t.Fatal("prepare workflow contains an out-of-scope C++ plugin")
 	}
+	validate := mustWorkflow(t, "validate-plugin-preparation-pr.yaml")
+	for _, required := range []string{"cpp-hotfix-2.0.1", "args+=(--mode=cpp-hotfix)", `bazel test --test_output=errors "//extensions/$build_name:${build_name}_test"`} {
+		if !strings.Contains(validate, required) {
+			t.Fatalf("preparation validation workflow lacks %q", required)
+		}
+	}
 }
 
 func TestCPPHotfixPromotionIsApprovedVersionOnlyAndHashesRawBytes(t *testing.T) {
