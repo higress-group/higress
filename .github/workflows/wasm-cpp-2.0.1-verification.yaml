@@ -1,0 +1,154 @@
+name: Wasm C++ 2.0.1 Hotfix Verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/wasm-cpp-2.0.1-verification.yaml'
+      - 'plugins/wasm-cpp/**'
+      - 'test/e2e/conformance/tests/cpp-wasm-basic-auth.*'
+      - 'test/e2e/conformance/tests/cpp-wasm-key-auth.*'
+      - 'test/e2e/conformance/tests/cpp-wasm-request-block.*'
+      - 'docs/developers/wasm-runtime-verification/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp201-verification-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  build-native:
+    name: ${{ matrix.source }} native and Wasm
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        source:
+          - basic_auth
+          - bot_detect
+          - custom_response
+          - hmac_auth
+          - jwt_auth
+          - key_auth
+          - key_rate_limit
+          - oauth
+          - request_block
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      SOURCE: ${{ matrix.source }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source contract
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(cat "plugins/wasm-cpp/extensions/$SOURCE/VERSION")" = '2.0.1'
+          test "$(cat plugins/wasm-cpp/.bazelversion)" = '6.0.0'
+          git diff --exit-code 392b64e8cce43e63d3207f00ba5c8fe2ff8921d9 -- plugins/wasm-cpp/common/route_rule_matcher.h
+          mkdir -p "plugins/wasm-cpp/out/$SOURCE"
+          printf '%s\n' "$EXPECTED_HEAD" | tee "plugins/wasm-cpp/out/$SOURCE/source-head.txt"
+          printf 'native_target=//extensions/%s:%s_test\nwasm_target=//extensions/%s:%s.wasm\n' "$SOURCE" "$SOURCE" "$SOURCE" "$SOURCE" | tee "plugins/wasm-cpp/out/$SOURCE/targets.txt"
+      - name: Pull pinned builder
+        id: builder
+        working-directory: plugins/wasm-cpp
+        run: |
+          set -euo pipefail
+          BUILDER="$(sed -n 's/^ARG BUILDER=//p' Dockerfile)"
+          case "$BUILDER" in
+            *@sha256:*) ;;
+            *) echo 'Builder must be pinned by digest' >&2; exit 1 ;;
+          esac
+          docker pull "$BUILDER"
+          RESOLVED="$(docker image inspect --format '{{index .RepoDigests 0}}' "$BUILDER")"
+          case "$RESOLVED" in
+            *@sha256:*) ;;
+            *) echo 'Resolved builder digest is missing' >&2; exit 1 ;;
+          esac
+          printf 'builder=%s\nresolved=%s\n' "$BUILDER" "$RESOLVED" | tee "out/$SOURCE/toolchain.txt"
+          echo "ref=$BUILDER" >> "$GITHUB_OUTPUT"
+      - name: Run native target
+        working-directory: plugins/wasm-cpp
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/plugins/wasm-cpp:/workspace" \
+            -w /workspace \
+            "${{ steps.builder.outputs.ref }}" \
+            bash -euo pipefail -c '
+              bazel --version | tee "out/$1/bazel-version.txt"
+              bazel test --test_output=errors "//extensions/$1:$1_test" 2>&1 | tee "out/$1/native.log"
+            ' -- "$SOURCE"
+      - name: Build final Wasm
+        working-directory: plugins/wasm-cpp
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/plugins/wasm-cpp:/workspace" \
+            -w /workspace \
+            "${{ steps.builder.outputs.ref }}" \
+            bash -euo pipefail -c '
+              bazel build "//extensions/$1:$1.wasm" 2>&1 | tee "out/$1/build.log"
+              cp "bazel-bin/extensions/$1/$1.wasm" "out/$1/plugin.wasm"
+            ' -- "$SOURCE"
+          test -s "out/$SOURCE/plugin.wasm"
+          (cd "out/$SOURCE" && sha256sum plugin.wasm source-head.txt targets.txt toolchain.txt native.log build.log bazel-version.txt) | tee "out/$SOURCE/SHA256SUMS"
+      - name: Upload non-OCI build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-${{ matrix.source }}-${{ github.event.pull_request.head.sha }}
+          path: plugins/wasm-cpp/out/${{ matrix.source }}
+          if-no-files-found: error
+          retention-days: 14
+
+  build-evidence:
+    name: Verify nine non-OCI build evidence sets
+    needs: build-native
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Download exact-head build evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          pattern: cpp201-*-${{ github.event.pull_request.head.sha }}
+          path: evidence
+      - name: Enforce nine complete evidence sets
+        run: |
+          set -euo pipefail
+          expected='basic_auth bot_detect custom_response hmac_auth jwt_auth key_auth key_rate_limit oauth request_block'
+          mapfile -t wasm_files < <(find evidence -mindepth 2 -maxdepth 2 -name plugin.wasm -printf '%f %h\n' | sort)
+          test "${#wasm_files[@]}" -eq 9
+          for source in $expected; do
+            directory="evidence/cpp201-$source-$EXPECTED_HEAD"
+            test -s "$directory/plugin.wasm"
+            test "$(cat "$directory/source-head.txt")" = "$EXPECTED_HEAD"
+            (cd "$directory" && sha256sum -c SHA256SUMS)
+          done
+          find evidence -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort > actual.txt
+          for source in $expected; do printf 'cpp201-%s-%s\n' "$source" "$EXPECTED_HEAD"; done | sort > expected.txt
+          diff -u expected.txt actual.txt
+          sha256sum evidence/*/* > build-evidence-sha256.txt
+          printf '%s\n' 'OCI candidate/provenance/pull gate: not-run; these are non-OCI GitHub Actions artifacts only.' > coverage.txt
+          for source in bot_detect custom_response hmac_auth jwt_auth key_rate_limit oauth; do
+            printf '%s: accepted-minimum build/native/shared-matcher; runtime-e2e=not-run; coverage-gap=accepted\n' "$source" >> coverage.txt
+          done
+      - name: Upload aggregate build evidence index
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-build-index-${{ github.event.pull_request.head.sha }}
+          path: |
+            actual.txt
+            expected.txt
+            build-evidence-sha256.txt
+            coverage.txt
+          if-no-files-found: error
+          retention-days: 14
