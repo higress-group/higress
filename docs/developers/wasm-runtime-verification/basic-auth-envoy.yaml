@@ -55,7 +55,7 @@ static_resources:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
                       config:
                         name: local-verification-plugin
-                        root_id: local-verification-plugin
+                        root_id: ""
                         configuration:
                           "@type": type.googleapis.com/google.protobuf.StringValue
                           value: '{"_rules_":[{"_match_domain_":["EXACT.example","lower.example","*.SUFFIX.example","PREFIX.*"],"credentials":["admin:123456"]}]}'
