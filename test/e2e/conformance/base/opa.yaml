@@ -57,7 +57,7 @@ metadata:
 spec:
   containers:
     - name: opa-test
-      image: curlimages/curl:latest
+      image: docker.io/curlimages/curl:cpp201-pinned
       imagePullPolicy: IfNotPresent
       command:
         - sh

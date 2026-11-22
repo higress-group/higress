@@ -29,7 +29,7 @@ metadata:
 spec:
   containers:
     - name: llm-mock
-      image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/llm-mock-server:latest
+      image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/llm-mock-server:cpp201-pinned
       ports:
         - containerPort: 3000
 ---

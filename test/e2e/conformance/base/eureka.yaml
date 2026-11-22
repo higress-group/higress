@@ -65,7 +65,7 @@ spec:
     spec:
       containers:
         - name: eureka
-          image: bitinit/eureka
+          image: docker.io/bitinit/eureka:cpp201-pinned
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8761
