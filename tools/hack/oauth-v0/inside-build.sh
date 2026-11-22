@@ -14,8 +14,14 @@
 # limitations under the License.
 
 set -uo pipefail
-OUT=/repo/out/oauth-v0
-mkdir -p "$OUT/native" "$OUT/hmac" "$OUT/default_disabled" "$OUT/candidate_eh"
+OAUTH_PROBE_VERSION="${OAUTH_PROBE_VERSION:-v0}"
+case "$OAUTH_PROBE_VERSION" in
+  v0) variants=(default_disabled candidate_eh) ;;
+  v1) variants=(candidate_eh candidate_eh_nodiag) ;;
+  *) exit 1 ;;
+esac
+OUT="/repo/out/oauth-$OAUTH_PROBE_VERSION"
+mkdir -p "$OUT/native" "$OUT/hmac"
 bazel --version > "$OUT/bazel-version.txt"
 bazel build --subcommands --verbose_failures //tests/oauth_parse_probe:native_probe 2>&1 | tee "$OUT/native/build.log"
 printf '%s\n' "${PIPESTATUS[0]}" > "$OUT/native/build.exit"
@@ -23,9 +29,12 @@ if [[ "$(cat "$OUT/native/build.exit")" -eq 0 ]]; then
   bazel-bin/tests/oauth_parse_probe/native_probe "$OUT/fixtures/cases.tsv" 2>&1 | tee "$OUT/native/results.tsv"
   printf '%s\n' "${PIPESTATUS[0]}" > "$OUT/native/run.exit"
 fi
-bazel test --test_output=all //extensions/hmac_auth:hmac_auth_test 2>&1 | tee "$OUT/hmac/native.log"
-printf '%s\n' "${PIPESTATUS[0]}" > "$OUT/hmac/native.exit"
-for variant in default_disabled candidate_eh; do
+if [[ "$OAUTH_PROBE_VERSION" = v0 ]]; then
+  bazel test --test_output=all //extensions/hmac_auth:hmac_auth_test 2>&1 | tee "$OUT/hmac/native.log"
+  printf '%s\n' "${PIPESTATUS[0]}" > "$OUT/hmac/native.exit"
+fi
+for variant in "${variants[@]}"; do
+  mkdir -p "$OUT/$variant"
   bazel build --subcommands --verbose_failures --materialize_param_files \
     --execution_log_json_file="$OUT/$variant/execution.json" \
     "//tests/oauth_parse_probe:$variant.wasm" 2>&1 | tee "$OUT/$variant/build.log"
@@ -50,5 +59,11 @@ cp "$base/external/com_github_thalhammer_jwt_cpp/include/jwt-cpp/base.h" "$OUT/a
 find -L "$base/external" -path '*/emscripten/emcc.py' -type f -print > "$OUT/emcc-paths.txt"
 while IFS= read -r compiler; do
   python3 "$compiler" --version >> "$OUT/emscripten-version.txt" 2>&1
+  printf '%s\n' "$?" >> "$OUT/emscripten-version-command.exit"
+  emscripten_root="$(dirname "$compiler")"
+  cp "$emscripten_root/emscripten-version.txt" "$OUT/actual-sources/emscripten-version.txt"
+  cp "$emscripten_root/src/settings.js" "$OUT/actual-sources/emscripten-settings.js"
+  cp "$emscripten_root/tools/link.py" "$OUT/actual-sources/emscripten-link.py"
+  cp "$emscripten_root/tools/system_libs.py" "$OUT/actual-sources/emscripten-system-libs.py"
 done < "$OUT/emcc-paths.txt"
 exit 0

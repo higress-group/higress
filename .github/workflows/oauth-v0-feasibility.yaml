@@ -1,4 +1,4 @@
-name: Test-only OAuth V0 Wasm EH Feasibility
+name: Test-only OAuth V1 Paired Diagnostic Contrast
 
 on:
   pull_request:
@@ -6,25 +6,23 @@ on:
     paths:
       - '.github/workflows/oauth-v0-feasibility.yaml'
       - 'plugins/wasm-cpp/tests/oauth_parse_probe/**'
-      - 'plugins/wasm-cpp/extensions/hmac_auth/plugin_test.cc'
       - 'tools/hack/oauth-v0/**'
-      - 'tools/hack/cpp201-write-runtime-coverage.sh'
-      - 'tools/hack/cpp201-run-e2e.sh'
 
 permissions:
   contents: read
 
 concurrency:
-  group: oauth-v0-probe-${{ github.event.pull_request.number }}
+  group: oauth-v1-probe-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   probe:
-    name: Pinned default versus native-Wasm-EH test probe
+    name: Pinned diagnostic-on versus diagnostic-off native-Wasm-EH probe
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:
       EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      OAUTH_PROBE_VERSION: v1
     steps:
       - name: Checkout exact PR head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -32,51 +30,34 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Build isolated variants and native probes
+      - name: Build the unchanged EH control, paired candidate and native reference
         id: build
         continue-on-error: true
         run: bash tools/hack/oauth-v0/build.sh
-      - name: Exercise pinned real Envoy and capture feasibility verdict
+      - name: Exercise pinned real Envoy and enforce the V1 diagnostic contract
         if: always()
-        run: python3 tools/hack/oauth-v0/runtime.py
-      - name: Verify native-outcome coverage small fix
-        if: always()
-        run: |
-          set -euo pipefail
-          mkdir -p out/oauth-v0/coverage
-          for source in basic_auth bot_detect custom_response hmac_auth jwt_auth key_auth key_rate_limit oauth request_block; do
-            printf '%s\tsuccess\n' "$source"
-          done > out/oauth-v0/coverage/success.tsv
-          bash tools/hack/cpp201-write-runtime-coverage.sh out/oauth-v0/coverage/success.tsv out/oauth-v0/coverage/success.txt
-          sed 's/oauth\tsuccess/oauth\tfailure/' out/oauth-v0/coverage/success.tsv > out/oauth-v0/coverage/failure.tsv
-          bash tools/hack/cpp201-write-runtime-coverage.sh out/oauth-v0/coverage/failure.tsv out/oauth-v0/coverage/failure.txt
-          grep -F 'oauth: accepted-minimum' out/oauth-v0/coverage/success.txt
-          grep -F 'oauth: build=passed; native=failed; runtime-e2e=not-run; coverage-gap=native-failed' out/oauth-v0/coverage/failure.txt
-          ! grep -E '^oauth:.*accepted' out/oauth-v0/coverage/failure.txt
-          head -8 out/oauth-v0/coverage/success.tsv > out/oauth-v0/coverage/missing.tsv
-          if bash tools/hack/cpp201-write-runtime-coverage.sh out/oauth-v0/coverage/missing.tsv out/oauth-v0/coverage/missing.txt; then
-            exit 1
-          fi
-          printf 'success-outcome=passed\nfailed-outcome=not-accepted\nmissing-outcome=failed-closed\n' > out/oauth-v0/coverage/summary.txt
+        run: python3 tools/hack/oauth-v0/runtime_v1.py
       - name: Seal actual evidence hashes
         if: always()
         run: |
           set -euo pipefail
-          printf 'run=%s\nattempt=%s\nhead=%s\nrunner=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_HEAD" "$RUNNER_NAME" > out/oauth-v0/run-identity.txt
-          printf 'Only test-only V0 feasibility; production mechanism and QUESTION remain blocked. Non-OCI evidence; no public release.\n' > out/oauth-v0/scope.txt
-          find out/oauth-v0 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > out/oauth-v0/SHA256SUMS
+          mkdir -p out/oauth-v1
+          printf 'run=%s\njob=%s\nattempt=%s\nhead=%s\nrunner=%s\n' "$GITHUB_RUN_ID" "$GITHUB_JOB" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_HEAD" "$RUNNER_NAME" > out/oauth-v1/run-identity.txt
+          printf 'Only test-only V1 paired diagnostic contrast; production mechanism and QUESTION remain blocked. Assertions/debug checks/exception stack diagnostics lost. Non-OCI evidence; no public release.\n' > out/oauth-v1/scope.txt
+          find out/oauth-v1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > out/oauth-v1/SHA256SUMS
       - name: Upload non-OCI probe evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: oauth-v0-${{ github.event.pull_request.head.sha }}
-          path: out/oauth-v0
+          name: oauth-v1-${{ github.event.pull_request.head.sha }}
+          path: out/oauth-v1
           if-no-files-found: error
           retention-days: 14
-      - name: Enforce probe proof without waiving production native gate
+      - name: Enforce complete V1 proof without waiving any production gate
         if: always()
         run: |
           set -euo pipefail
-          test "$(cat out/oauth-v0/hmac/native.exit)" -eq 0
-          test "$(cat out/oauth-v0/native/run.exit)" -eq 0
-          python3 -c 'import json; from pathlib import Path; result=json.loads(Path("out/oauth-v0/verdict.json").read_text()); print(result["verdict"]); assert result["verdict"] == "VALIDATED"'
+          test "${{ steps.build.outcome }}" = success
+          test "$(cat out/oauth-v1/builder.exit)" -eq 0
+          test "$(cat out/oauth-v1/native/run.exit)" -eq 0
+          python3 -c 'import json; from pathlib import Path; result=json.loads(Path("out/oauth-v1/verdict.json").read_text()); print(result["verdict"]); assert result["verdict"] == "VALIDATED" and result["proof"] and all(result["proof"].values())'

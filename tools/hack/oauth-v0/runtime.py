@@ -26,14 +26,18 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT = ROOT / "out/oauth-v0"
+OUT = ROOT / ("out/oauth-" + os.environ.get("OAUTH_PROBE_VERSION", "v0"))
 GATEWAY = "higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway@sha256:5d0618399fa98b9f4ad3c34b58f084b51624e3cc4eccdde72554b636d16b5da4"
 HTTPBIN = "docker.io/mccutchen/go-httpbin@sha256:d13433bdac3654c43ff1bef441f38973bfe13513a6f9fbe843a2a49c1787d41e"
 
 
 def execute(arguments, output, environment=None):
     with output.open("wb") as stream:
-        result = subprocess.run(arguments, stdout=stream, stderr=subprocess.STDOUT, env=environment, timeout=180)
+        try:
+            result = subprocess.run(arguments, stdout=stream, stderr=subprocess.STDOUT, env=environment, timeout=180)
+        except (subprocess.TimeoutExpired, OSError) as error:
+            stream.write((str(error) + "\n").encode())
+            return 124 if isinstance(error, subprocess.TimeoutExpired) else 127
     return result.returncode
 
 
@@ -52,8 +56,10 @@ def request(path, token=None, case_name=None):
         return {"status": response.status, "headers": dict(response.headers.items()), "body": response.read(), "error": None}
 
 
-def upstream_count():
+def upstream_count(directory=None, name=None):
     response = request("/stats?filter=cluster.httpbin.upstream_rq_total&format=json")
+    if directory is not None:
+        record_response(directory, name, response)
     if response["status"] != 200:
         raise RuntimeError("upstream counter unavailable: " + str(response))
     stats = json.loads(response["body"])["stats"]
@@ -71,7 +77,7 @@ def run_variant(variant, cases):
     directory = OUT / "runtime" / variant
     directory.mkdir(parents=True, exist_ok=True)
     module = OUT / variant / "plugin.wasm"
-    result = {"variant": variant, "module_present": module.is_file(), "loaded": False, "rows": [], "errors": [], "cleanup": False}
+    result = {"variant": variant, "module_present": module.is_file(), "loaded": False, "rows": [], "ready_after": [], "errors": [], "cleanup": False}
     if not module.is_file():
         result["errors"].append("module not produced; runtime not-run")
         return result
@@ -82,15 +88,26 @@ def run_variant(variant, cases):
     (harness / "compose.yaml").write_text(compose_text)
     shutil.copyfile(ROOT / "docs/developers/wasm-runtime-verification/envoy.yaml", harness / "envoy.yaml")
     environment = dict(os.environ, HIGRESS_GATEWAY_IMAGE=GATEWAY, HTTPBIN_IMAGE=HTTPBIN, WASM_PATH="./plugin.wasm", ENVOY_PORT="10000", ENVOY_ADMIN_PORT="9901")
-    project = "oauth-v0-" + os.environ["GITHUB_RUN_ID"] + "-" + variant.replace("_", "-")
+    project = "oauth-" + os.environ.get("OAUTH_PROBE_VERSION", "v0") + "-" + os.environ["GITHUB_RUN_ID"] + "-" + variant.replace("_", "-")
     compose = ["docker", "compose", "--project-name", project, "--file", str(harness / "compose.yaml")]
     result["module_sha256"] = hashlib.sha256(module.read_bytes()).hexdigest()
+    result["host_sha256"] = hashlib.sha256((harness / "plugin.wasm").read_bytes()).hexdigest()
+    result["config_sha256"] = hashlib.sha256((harness / "envoy.yaml").read_bytes()).hexdigest()
+    result["fixture_sha256"] = hashlib.sha256((OUT / "fixtures/cases.json").read_bytes()).hexdigest()
     result["project"] = project
     try:
         if execute(compose + ["config"], directory / "compose-config.yaml", environment) != 0:
             raise RuntimeError("compose config failed")
         if execute(compose + ["up", "--detach"], directory / "up.log", environment) != 0:
             raise RuntimeError("compose up failed")
+        copy_status = execute(compose + ["cp", "envoy:/etc/envoy/main.wasm", str(directory / "container-plugin.wasm")], directory / "container-copy.log", environment)
+        result["container_copy_exit"] = copy_status
+        if copy_status != 0:
+            raise RuntimeError("container module bytes unavailable")
+        result["container_sha256"] = hashlib.sha256((directory / "container-plugin.wasm").read_bytes()).hexdigest()
+        result["artifact_host_container_equal"] = result["module_sha256"] == result["host_sha256"] == result["container_sha256"]
+        if not result["artifact_host_container_equal"]:
+            raise RuntimeError("artifact/host/container bytes differ")
         for _ in range(45):
             ready = request("/ready")
             if ready["status"] == 200:
@@ -108,43 +125,57 @@ def run_variant(variant, cases):
         for repeat in (1, 2):
             for case in cases:
                 name = str(repeat) + "-" + case["name"]
-                before = upstream_count()
+                before = upstream_count(directory, name + "-counter-before")
                 response = request("/anything/" + name, case["token"], name)
                 record_response(directory, name, response)
-                after = upstream_count()
+                after = upstream_count(directory, name + "-counter-after")
                 expected_valid = case["expected"] == "valid"
                 marker = {key.lower(): value for key, value in response["headers"].items()}.get("x-oauth-probe-result")
                 passed = response["status"] == (200 if expected_valid else 401) and after - before == (1 if expected_valid else 0)
                 if not expected_valid:
                     passed = passed and marker == case["expected"] and response["body"].startswith(("probe:" + case["expected"] + ":").encode())
-                row = {"name": case["name"], "repeat": repeat, "expected": case["expected"], "status": response["status"], "marker": marker, "upstream_before": before, "upstream_after": after, "passed": passed}
+                row = {"name": case["name"], "repeat": repeat, "case_id": name, "request_path": "/anything/" + name, "expected": case["expected"], "status": response["status"], "marker": marker, "upstream_before": before, "upstream_after": after, "passed": passed}
                 result["rows"].append(row)
                 if not expected_valid:
                     followup = request("/anything/" + name + "-valid-after", control["token"], name + "-valid-after")
                     record_response(directory, name + "-valid-after", followup)
-                    recovered = upstream_count()
+                    recovered = upstream_count(directory, name + "-counter-valid-after")
                     row["following_valid_status"] = followup["status"]
                     row["following_valid_upstream_after"] = recovered
                     row["following_valid_passed"] = followup["status"] == 200 and recovered - after == 1
-            record_response(directory, str(repeat) + "-ready-after", request("/ready"))
+            ready_after = request("/ready")
+            record_response(directory, str(repeat) + "-ready-after", ready_after)
+            result["ready_after"].append(ready_after["status"])
         stats = request("/stats?usedonly")
         (directory / "stats.txt").write_bytes(stats["body"])
     except Exception as error:
         result["errors"].append(str(error))
     finally:
         time.sleep(1)
-        execute(compose + ["logs", "--no-color", "envoy", "httpbin"], directory / "envoy-upstream.log", environment)
-        execute(compose + ["ps", "--all"], directory / "containers-before-cleanup.txt", environment)
-        down_status = execute(compose + ["down", "--volumes", "--remove-orphans"], directory / "cleanup.log", environment)
-        execute(compose + ["ps", "--all", "--quiet"], directory / "containers-after-cleanup.txt", environment)
-        network_status = execute(["docker", "network", "ls", "--quiet", "--filter", "label=com.docker.compose.project=" + project], directory / "networks-after-cleanup.txt")
-        volume_status = execute(["docker", "volume", "ls", "--quiet", "--filter", "label=com.docker.compose.project=" + project], directory / "volumes-after-cleanup.txt")
-        ports_closed = request("/ready")["status"] == 0 and request("/anything/cleanup", "cleanup", "cleanup")["status"] == 0
-        result["cleanup"] = down_status == 0 and network_status == 0 and volume_status == 0 and all(not (directory / name).read_text().strip() for name in ("containers-after-cleanup.txt", "networks-after-cleanup.txt", "volumes-after-cleanup.txt")) and ports_closed
+        cleanup_exits = {}
+        cleanup_exits["logs"] = execute(compose + ["logs", "--no-color", "envoy", "httpbin"], directory / "envoy-upstream.log", environment)
+        cleanup_exits["ps_before"] = execute(compose + ["ps", "--all"], directory / "containers-before-cleanup.txt", environment)
+        cleanup_exits["down"] = execute(compose + ["down", "--volumes", "--remove-orphans"], directory / "cleanup.log", environment)
+        cleanup_exits["compose_ps_after"] = execute(compose + ["ps", "--all", "--quiet"], directory / "containers-after-cleanup.txt", environment)
+        cleanup_exits["docker_ps_after"] = execute(["docker", "ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project=" + project], directory / "project-containers-after-cleanup.txt")
+        cleanup_exits["networks_after"] = execute(["docker", "network", "ls", "--quiet", "--filter", "label=com.docker.compose.project=" + project], directory / "networks-after-cleanup.txt")
+        cleanup_exits["volumes_after"] = execute(["docker", "volume", "ls", "--quiet", "--filter", "label=com.docker.compose.project=" + project], directory / "volumes-after-cleanup.txt")
+        admin_closed = request("/ready")
+        listener_closed = request("/anything/cleanup", "cleanup", "cleanup")
+        record_response(directory, "cleanup-admin", admin_closed)
+        record_response(directory, "cleanup-listener", listener_closed)
+        result["ports_closed"] = admin_closed["status"] == 0 and listener_closed["status"] == 0
+        result["cleanup_command_exits"] = cleanup_exits
+        (directory / "cleanup-command-exits.json").write_text(json.dumps(cleanup_exits, indent=2) + "\n")
+        result["cleanup"] = all(status == 0 for status in cleanup_exits.values()) and all(not (directory / name).read_text().strip() for name in ("containers-after-cleanup.txt", "project-containers-after-cleanup.txt", "networks-after-cleanup.txt", "volumes-after-cleanup.txt")) and result["ports_closed"]
         log = (directory / "envoy-upstream.log").read_text(errors="replace")
         result["trap_or_vm_failure"] = bool(re.search(r"wasm trap|wasm vm failed|wasm vm now failed|unreachable|Function:.*failed", log, re.IGNORECASE))
         result["catch_log_count"] = len(re.findall(r"OAUTH_V0 case=.*outcome=caught", log))
         result["rejected_log_count"] = len(re.findall(r"OAUTH_V0 case=.*outcome=rejected", log))
+        for row in result["rows"]:
+            row["probe_log_observed"] = "OAUTH_V0 case=" + row["case_id"] + " outcome=" + row["expected"] + " detail=" in log
+            if row["expected"] != "valid":
+                row["following_valid_log_observed"] = "OAUTH_V0 case=" + row["case_id"] + "-valid-after outcome=valid detail=" in log
     return result
 
 

@@ -28,3 +28,29 @@ It records actual compile/link commands, parameter files, execution logs,
 module features/imports, response bytes, upstream counters and project cleanup.
 Unsupported results are reported, not repaired by changing the engine/parser.
 The production OAuth source/target and the blocking QUESTION stay unchanged.
+
+## V1 diagnostic-settings contrast
+
+Design section 16 and TASK-5403004 authorize one additional test-only contrast:
+https://github.com/higress-group/higress/issues/5403#issuecomment-7082036311
+
+`candidate_eh.wasm` stays unchanged as the diagnostic-on control.
+`candidate_eh_nodiag.wasm` differs only by its target name and paired local
+linkopts `-sASSERTIONS=0 -sEXCEPTION_STACK_TRACES=0`. Both retain the SDK feature,
+compile/link native EH flags and existing `-O0` linking. Disabling assertions
+also loses other target assertion/default debug checks and exception stack
+diagnostics: it is not a zero-cost removal of one import.
+
+The dedicated workflow at `oauth-v0-feasibility.yaml` now runs the V1 pair on
+one exact head/runner with the same native reference, 23 fixtures, configuration
+and pinned images. It uses a separate `runtime_v1.py` proof gate, not a weakened
+V0 verdict. The original V0 runtime entry point and historical evidence retain
+their original meaning. The original diagnostic-on load failure remains a
+failure in V1 evidence, never a successful runtime control. V1 requires actual
+expanded compile/link actions, both module identities, unchanged control bytes,
+two complete nodiag corpus rounds with immediate valid-after controls, per-case
+probe logs, no traps, final artifact/host/container byte equality and checked
+cleanup command outcomes. Import disappearance or readiness alone cannot pass.
+
+No production mechanism, cross-library unwinding, arbitrary runtime version,
+nine-plugin acceptance or release is authorized by a successful V1 probe.

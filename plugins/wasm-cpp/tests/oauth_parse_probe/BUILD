@@ -46,3 +46,20 @@ proxy_wasm_cc_binary(
     ],
     tags = ["oauth-v0-test-only"],
 )
+
+proxy_wasm_cc_binary(
+    name = "candidate_eh_nodiag.wasm",
+    srcs = ["probe.cc", "parse.h"],
+    features = ["exceptions"],
+    copts = ["-fwasm-exceptions"],
+    linkopts = [
+        "-fwasm-exceptions",
+        "-sASSERTIONS=0",
+        "-sEXCEPTION_STACK_TRACES=0",
+    ],
+    deps = [
+        "@com_github_thalhammer_jwt_cpp//:lib",
+        "@boringssl//:ssl",
+    ],
+    tags = ["oauth-v0-test-only"],
+)
