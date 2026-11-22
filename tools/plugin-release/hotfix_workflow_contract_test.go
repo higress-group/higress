@@ -15,6 +15,8 @@
 package main
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -47,12 +49,12 @@ func TestCPPHotfixPrepareUsesStableInterfaceAndSeparateReleaseID(t *testing.T) {
 	}
 }
 
-func TestCPPHotfixPromotionIsApprovedVersionOnlyAndHashesRawBytes(t *testing.T) {
+func TestCPPHotfixPromotionIsDryRunOnlyAndHashesRawBytes(t *testing.T) {
 	promote := mustWorkflow(t, "promote-plugin-release.yaml")
 	for _, required := range []string{
-		"environment: plugin-release-cpp-hotfix-version",
+		"needs: input-guard",
 		"test \"$SNAPSHOT_PATH\" = plugins/release/snapshots/cpp-hotfix-2.0.1.json",
-		"args+=(--mode=cpp-hotfix)",
+		"build_promotion_verify_args",
 		"if: ${{ inputs.release_mode != 'cpp-hotfix' && !inputs.dry_run }}",
 		`test "$(sha256sum "$SNAPSHOT_PATH" | awk '{print $1}')" = "$SNAPSHOT_SHA256"`,
 		`git merge-base --is-ancestor "$SOURCE_COMMIT" refs/remotes/origin/main`,
@@ -63,6 +65,12 @@ func TestCPPHotfixPromotionIsApprovedVersionOnlyAndHashesRawBytes(t *testing.T) 
 		}
 	}
 	latestJob := workflowJobSection(t, promote, "latest")
+	if strings.Contains(promote, "hotfix-version-approval") || strings.Contains(promote, "plugin-release-cpp-hotfix-version") {
+		t.Fatal("dry-run-only hotfix must not instantiate an approval environment")
+	}
+	if strings.Count(promote, "build_promotion_verify_args\n") != 2 {
+		t.Fatal("both verification steps must use the same argument builder")
+	}
 	if !strings.Contains(latestJob, "inputs.release_mode != 'cpp-hotfix'") {
 		t.Fatal("hotfix can enter the latest job")
 	}
@@ -72,7 +80,7 @@ func TestCPPHotfixContractCIIsReadOnlyAndRunsRealTests(t *testing.T) {
 	workflow := mustWorkflow(t, "cpp-hotfix-release-contract.yaml")
 	for _, required := range []string{
 		"runs-on: ubuntu-22.04",
-		"GOMAXPROCS=1 go test -p 1 -count=1 ./...",
+		"GOMAXPROCS=1 go test -v -p 1 -count=1 ./...",
 		"go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json",
 		"python3 -m unittest -v test_pull_plugins.py",
 		"contents: read",
@@ -87,4 +95,75 @@ func TestCPPHotfixContractCIIsReadOnlyAndRunsRealTests(t *testing.T) {
 			t.Fatalf("contract CI contains forbidden production or local-cluster operation %q", forbidden)
 		}
 	}
+}
+
+func TestCPPHotfixContractCIBindsTwoFullSHAsOnlyOnDispatch(t *testing.T) {
+	workflow := mustWorkflow(t, "cpp-hotfix-release-contract.yaml")
+	for _, required := range []string{
+		`[[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]`,
+		`[[ "$PLUGIN_SERVER_REF" =~ ^[0-9a-f]{40}$ ]]`,
+		`test "$(git rev-parse HEAD)" = "$PLUGIN_SERVER_REF"`,
+		"Higress release contract only",
+		"Two-SHA release and history contract",
+		"Higress-only contract: plugin-server history tests did not run",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("two-SHA contract lacks %q", required)
+		}
+	}
+	if strings.Contains(workflow, "default: main") || strings.Count(workflow, "if: ${{ github.event_name == 'workflow_dispatch' }}") != 2 {
+		t.Fatal("plugin-server checkout and tests must require explicit dispatch SHAs")
+	}
+}
+
+func TestCPPHotfixTemporaryDeliveryIsNotTracked(t *testing.T) {
+	paths, err := runGit("../..", "ls-files", "delivery")
+	if err != nil || paths != "" {
+		t.Fatalf("temporary delivery files remain tracked: %s (%v)", paths, err)
+	}
+	if _, err := os.Stat("promotion-verify.sh"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCPPHotfixContractCIRejectsFloatingRepositoryRefs(t *testing.T) {
+	body := workflowRunBody(t, mustWorkflow(t, "cpp-hotfix-release-contract.yaml"), "Validate immutable source inputs")
+	for _, fixture := range []struct {
+		name       string
+		higress    string
+		server     string
+		event      string
+		shouldPass bool
+	}{
+		{"two-full-shas", strings.Repeat("a", 40), strings.Repeat("b", 40), "workflow_dispatch", true},
+		{"server-main-rejected", strings.Repeat("a", 40), "main", "workflow_dispatch", false},
+		{"server-missing-rejected", strings.Repeat("a", 40), "", "workflow_dispatch", false},
+		{"higress-branch-rejected", "task/branch", strings.Repeat("b", 40), "workflow_dispatch", false},
+		{"higress-only-pr", strings.Repeat("a", 40), "", "pull_request", true},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", body)
+			cmd.Env = append(os.Environ(), "EXPECTED_HEAD="+fixture.higress, "PLUGIN_SERVER_REF="+fixture.server, "EVENT_NAME="+fixture.event)
+			output, err := cmd.CombinedOutput()
+			if (err == nil) != fixture.shouldPass {
+				t.Fatalf("input gate pass=%t expected=%t: %s (%v)", err == nil, fixture.shouldPass, output, err)
+			}
+		})
+	}
+}
+
+func TestCPPHotfixReworkBaselineFindingsAreReproduced(t *testing.T) {
+	previous, err := runGit("../..", "show", hotfixReworkBaseline+":.github/workflows/promote-plugin-release.yaml")
+	if err != nil || !strings.Contains(previous, "environment: plugin-release-cpp-hotfix-version") || strings.Contains(previous, "  input-guard:\n") {
+		t.Fatalf("H01 baseline evidence changed: %v", err)
+	}
+	previousCI, err := runGit("../..", "show", hotfixReworkBaseline+":.github/workflows/cpp-hotfix-release-contract.yaml")
+	if err != nil || !strings.Contains(previousCI, "default: main") {
+		t.Fatalf("H03 baseline no longer accepts floating server main: %v", err)
+	}
+	previousDelivery, err := runGit("../..", "ls-tree", "-r", "--name-only", hotfixReworkBaseline, "--", "delivery")
+	if err != nil || len(strings.Split(previousDelivery, "\n")) != 3 {
+		t.Fatalf("H04 baseline does not reproduce three tracked temporary files: %s (%v)", previousDelivery, err)
+	}
+	t.Log("H01/H03/H04 RED baseline evidence reproduced; current guards, exact-SHA gates, and untracked delivery are checked independently")
 }

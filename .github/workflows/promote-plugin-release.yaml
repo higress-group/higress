@@ -45,17 +45,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  hotfix-version-approval:
-    if: ${{ inputs.release_mode == 'cpp-hotfix' && !inputs.dry_run }}
+  input-guard:
     runs-on: ubuntu-22.04
-    environment: plugin-release-cpp-hotfix-version
     steps:
-      - name: Record independent hotfix version-only approval
-        run: echo "Protected approval limits this run to nine immutable 2.0.1 version tags; latest remains forbidden."
+      - name: Reject disabled hotfix public promotion
+        env:
+          RELEASE_MODE: ${{ inputs.release_mode }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_MODE" = cpp-hotfix ] && [ "$DRY_RUN" != true ]; then
+            echo "cpp-hotfix is dry-run-only; public promotion is pending separate authorization" >&2
+            exit 1
+          fi
 
   verify-and-promote:
-    needs: hotfix-version-approval
-    if: ${{ always() && (needs.hotfix-version-approval.result == 'success' || needs.hotfix-version-approval.result == 'skipped') }}
+    needs: input-guard
     runs-on: ubuntu-latest
     # No environment gate: the human approval for this phase is the merged
     # preparation PR labeled release/<gateway_version>, verified by the first
@@ -161,20 +166,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
           test "$(sha256sum "$SNAPSHOT_PATH" | awk '{print $1}')" = "$SNAPSHOT_SHA256"
           gateway=$(jq -r .gatewayVersion "$SNAPSHOT_PATH")
-          release_id="$gateway"
-          if [ "$RELEASE_MODE" = cpp-hotfix ]; then release_id=cpp-hotfix-2.0.1; fi
-          plan="plugins/release/plans/$release_id.json"
-          test -f "$plan"
-          args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan" --committed-source "$SOURCE_COMMIT" --resolve --oci-source candidate)
-          if [ "$RELEASE_MODE" = cpp-hotfix ]; then
-            args+=(--mode=cpp-hotfix)
-          elif [ -z "$(jq -r '.bootstrapEvidence.path // empty' "$SNAPSHOT_PATH")" ]; then
-            previous=$(jq -r '.previousRelease // empty' "$SNAPSHOT_PATH")
-            [[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-            previous_path="plugins/release/snapshots/$previous.json"
-            test -f "$previous_path"
-            args+=(--previous "../../$previous_path")
-          fi
+          source tools/plugin-release/promotion-verify.sh
+          build_promotion_verify_args
           (cd tools/plugin-release && go run . "${args[@]}")
       - name: Confirm dry-run boundary
         if: ${{ inputs.dry_run }}
@@ -192,22 +185,18 @@ jobs:
           SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
           SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
+          RELEASE_MODE: ${{ inputs.release_mode }}
         run: |
           set -euo pipefail
           source tools/hack/oras-retry.sh
+          source tools/plugin-release/promotion-verify.sh
+          build_promotion_verify_args
+          (cd tools/plugin-release && go run . "${args[@]}")
           test -n "$REGISTRY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
           test -n "$CANDIDATE_REGISTRY"; test -n "$CANDIDATE_USERNAME"; test -n "$CANDIDATE_PASSWORD"
-          echo "$REGISTRY_PASSWORD" | oras login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
-          echo "$CANDIDATE_PASSWORD" | oras login "$CANDIDATE_REGISTRY" -u "$CANDIDATE_USERNAME" --password-stdin
           # Resolve every candidate and inspect every existing public tag before
           # the first write. A transient registry failure is never interpreted
           # as an absent immutable tag.
-          gateway=$(jq -r .gatewayVersion "$SNAPSHOT_PATH")
-          args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../plugins/release/plans/$gateway.json" --committed-source "$SOURCE_COMMIT" --resolve --oci-source candidate)
-          if [ -z "$(jq -r '.bootstrapEvidence.path // empty' "$SNAPSHOT_PATH")" ]; then
-            args+=(--previous "../../plugins/release/snapshots/$(jq -r .previousRelease "$SNAPSHOT_PATH").json")
-          fi
-          (cd tools/plugin-release && go run . "${args[@]}")
           # BEGIN promotion-descriptor-contract
           descriptor_or_absent() {
             local ref=$1 out err auth_error
@@ -231,6 +220,7 @@ jobs:
           }
           # END promotion-descriptor-contract
           # BEGIN promotion-version-contract
+          if [ "${RELEASE_MODE:-standard}" != cpp-hotfix ]; then
           marker="$REGISTRY/candidates/plugin-release-batches:$SNAPSHOT_SHA256"
           # A completion marker makes a retry read-only. Its layer is the
           # authoritative journal, and every mutable latest tag is rechecked
@@ -249,6 +239,7 @@ jobs:
           else
             status=$?
             test "$status" = 1 || exit "$status"
+          fi
           fi
           jq -n --arg sha "$SNAPSHOT_SHA256" '{snapshotSha256:$sha,phase:"version-preflight",entries:[]}' > "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json"
           # A prepare-time migration exclusion keeps its plugin out of this
@@ -281,6 +272,8 @@ jobs:
             fi
             jq --arg ref "$ref" --arg digest "$digest" --arg candidate "$candidate" --arg provenance "$provenance" --arg state "$state" '.entries += [{ref:$ref,digest:$digest,candidateRef:$candidate,provenanceMode:$provenance,preflight:$state}]' "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json" > /tmp/journal.next && mv /tmp/journal.next "/tmp/plugin-release-version-$SNAPSHOT_SHA256.json"
           done < <(jq -c '.plugins[]' "$SNAPSHOT_PATH")
+          echo "$REGISTRY_PASSWORD" | oras login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+          echo "$CANDIDATE_PASSWORD" | oras login "$CANDIDATE_REGISTRY" -u "$CANDIDATE_USERNAME" --password-stdin
           # Only preflight-approved absent tags are copied; every version tag
           # this batch publishes is then re-resolved before this phase is
           # considered complete. Migration-excluded entries publish nothing, so
