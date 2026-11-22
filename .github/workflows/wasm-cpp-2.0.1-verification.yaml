@@ -129,7 +129,8 @@ jobs:
             ' -- "$SOURCE"
           test -s "out/$SOURCE/plugin.wasm"
           python3 "$GITHUB_WORKSPACE/tools/hack/cpp201_wasm_imports.py" "out/$SOURCE/plugin.wasm" --output "out/$SOURCE/imports.json"
-          (cd "out/$SOURCE" && sha256sum plugin.wasm source-head.txt targets.txt toolchain.txt native.log build.log bazel-version.txt imports.json) | tee "out/$SOURCE/SHA256SUMS"
+          printf '%s\n' '${{ steps.native.outcome }}' > "out/$SOURCE/native-result.txt"
+          (cd "out/$SOURCE" && sha256sum plugin.wasm source-head.txt targets.txt toolchain.txt native.log native-result.txt build.log bazel-version.txt imports.json) | tee "out/$SOURCE/SHA256SUMS"
       - name: Upload non-OCI build evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -289,6 +290,7 @@ jobs:
   build-evidence:
     name: Verify nine non-OCI build evidence sets
     needs: build-native
+    if: always()
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     env:
@@ -304,11 +306,18 @@ jobs:
           set -euo pipefail
           expected='basic_auth bot_detect custom_response hmac_auth jwt_auth key_auth key_rate_limit oauth request_block'
           : > actual.txt
+          : > native-results.txt
           for source in $expected; do
             directory="evidence/cpp201-$source-$EXPECTED_HEAD"
             test -s "$directory/plugin.wasm"
             test "$(cat "$directory/source-head.txt")" = "$EXPECTED_HEAD"
             (cd "$directory" && sha256sum -c SHA256SUMS)
+            native_result="$(cat "$directory/native-result.txt")"
+            case "$native_result" in
+              success|failure) ;;
+              *) echo "Invalid native outcome for $source: $native_result" >&2; exit 1 ;;
+            esac
+            printf '%s\t%s\n' "$source" "$native_result" >> native-results.txt
             basename "$directory" >> actual.txt
           done
           sort -o actual.txt actual.txt
@@ -317,19 +326,34 @@ jobs:
           sha256sum evidence/*/* > build-evidence-sha256.txt
           printf '%s\n' 'OCI candidate/provenance/pull gate: not-run; these are non-OCI GitHub Actions artifacts only.' > coverage.txt
           for source in bot_detect custom_response hmac_auth jwt_auth key_rate_limit oauth; do
-            printf '%s: accepted-minimum build/native/shared-matcher; runtime-e2e=not-run; coverage-gap=accepted\n' "$source" >> coverage.txt
+            native_result="$(sed -n "s/^$source\t//p" native-results.txt)"
+            if [[ "$native_result" == success ]]; then
+              printf '%s: accepted-minimum build/native/shared-matcher; runtime-e2e=not-run; coverage-gap=accepted\n' "$source" >> coverage.txt
+            else
+              printf '%s: build=passed; native=failed; shared-matcher=passed; runtime-e2e=not-run; coverage-gap=native-failed\n' "$source" >> coverage.txt
+            fi
           done
       - name: Upload aggregate build evidence index
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cpp201-build-index-${{ github.event.pull_request.head.sha }}
           path: |
             actual.txt
             expected.txt
+            native-results.txt
             build-evidence-sha256.txt
             coverage.txt
           if-no-files-found: error
           retention-days: 14
+      - name: Enforce aggregate native outcomes
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(wc -l < native-results.txt)" -eq 9
+          if grep $'\tfailure$' native-results.txt; then
+            exit 1
+          fi
 
   evidence:
     name: Final C++ hotfix verification evidence
