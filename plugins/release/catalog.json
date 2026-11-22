@@ -50,6 +50,16 @@
     }
   },
   "sharedInputGroups": {
+    "cpp-workspace": [
+      "plugins/wasm-cpp/.bazelrc",
+      "plugins/wasm-cpp/.bazelversion",
+      "plugins/wasm-cpp/BUILD",
+      "plugins/wasm-cpp/Dockerfile",
+      "plugins/wasm-cpp/Makefile",
+      "plugins/wasm-cpp/WORKSPACE",
+      "plugins/wasm-cpp/bazel/**",
+      "plugins/wasm-cpp/common/**"
+    ],
     "go-builder": [
       "plugins/wasm-go/Dockerfile",
       "plugins/wasm-go/DockerfileBuilder",
@@ -222,6 +232,15 @@
     { "logicalId": "traffic-editor", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/traffic-editor", "image": "plugins/traffic-editor", "releaseEligible": false, "unmanagedReason": "Experimental extension is not in either reviewed production inventory", "artifactInputs": ["plugins/wasm-go/extensions/traffic-editor/**"] },
     { "logicalId": "traffic-tag", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/traffic-tag", "image": "plugins/traffic-tag", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/traffic-tag/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "traffic-tag", "resourceDir": "traffic-tag", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "traffic-tag", "httpPath": "traffic-tag" } } },
     { "logicalId": "transformer", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/transformer", "image": "plugins/transformer", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/transformer/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "transformer", "resourceDir": "transformer", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "transformer", "httpPath": "transformer" } } },
-    { "logicalId": "waf", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/waf", "image": "plugins/waf", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/waf/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "waf", "resourceDir": "waf", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "waf", "httpPath": "waf" } } }
+    { "logicalId": "waf", "implementation": "go", "sourceDir": "plugins/wasm-go/extensions/waf", "image": "plugins/waf", "releaseEligible": true, "artifactInputs": ["plugins/wasm-go/extensions/waf/**"], "sharedInputGroups": ["go-builder"], "consumers": { "console": { "propertyKey": "waf", "resourceDir": "waf", "urlForm": "oci" }, "pluginServer": { "inventoryKey": "waf", "httpPath": "waf" } } },
+    { "logicalId": "basic-auth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/basic_auth", "image": "plugins/basic-auth", "releaseEligible": false, "unmanagedReason": "C++ hotfix-only artifact; excluded from ordinary Go/Rust planning", "artifactInputs": ["plugins/wasm-cpp/extensions/basic_auth/**"], "sharedInputGroups": ["cpp-workspace"] },
+    { "logicalId": "bot-detect", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/bot_detect", "image": "plugins/bot-detect", "releaseEligible": false, "unmanagedReason": "C++ hotfix-only artifact; excluded from ordinary Go/Rust planning", "artifactInputs": ["plugins/wasm-cpp/extensions/bot_detect/**"], "sharedInputGroups": ["cpp-workspace"] },
+    { "logicalId": "custom-response", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/custom_response", "image": "plugins/custom-response", "releaseEligible": false, "unmanagedReason": "C++ hotfix-only artifact; excluded from ordinary Go/Rust planning", "artifactInputs": ["plugins/wasm-cpp/extensions/custom_response/**"], "sharedInputGroups": ["cpp-workspace"] },
+    { "logicalId": "hmac-auth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/hmac_auth", "image": "plugins/hmac-auth", "releaseEligible": false, "unmanagedReason": "C++ hotfix-only artifact; excluded from ordinary Go/Rust planning", "artifactInputs": ["plugins/wasm-cpp/extensions/hmac_auth/**"], "sharedInputGroups": ["cpp-workspace"] },
+    { "logicalId": "jwt-auth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/jwt_auth", "image": "plugins/jwt-auth", "releaseEligible": false, "unmanagedReason": "C++ hotfix-only artifact; excluded from ordinary Go/Rust planning", "artifactInputs": ["plugins/wasm-cpp/extensions/jwt_auth/**"], "sharedInputGroups": ["cpp-workspace"] },
+    { "logicalId": "key-auth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/key_auth", "image": "plugins/key-auth", "releaseEligible": false, "unmanagedReason": "C++ hotfix-only artifact; excluded from ordinary Go/Rust planning", "artifactInputs": ["plugins/wasm-cpp/extensions/key_auth/**"], "sharedInputGroups": ["cpp-workspace"] },
+    { "logicalId": "key-rate-limit", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/key_rate_limit", "image": "plugins/key-rate-limit", "releaseEligible": false, "unmanagedReason": "C++ hotfix-only artifact; excluded from ordinary Go/Rust planning", "artifactInputs": ["plugins/wasm-cpp/extensions/key_rate_limit/**"], "sharedInputGroups": ["cpp-workspace"] },
+    { "logicalId": "oauth", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/oauth", "image": "plugins/oauth", "releaseEligible": false, "unmanagedReason": "C++ hotfix-only artifact; excluded from ordinary Go/Rust planning", "artifactInputs": ["plugins/wasm-cpp/extensions/oauth/**"], "sharedInputGroups": ["cpp-workspace"] },
+    { "logicalId": "request-block", "implementation": "cpp", "sourceDir": "plugins/wasm-cpp/extensions/request_block", "image": "plugins/request-block", "releaseEligible": false, "unmanagedReason": "C++ hotfix-only artifact; excluded from ordinary Go/Rust planning", "artifactInputs": ["plugins/wasm-cpp/extensions/request_block/**"], "sharedInputGroups": ["cpp-workspace"] }
   ]
 }

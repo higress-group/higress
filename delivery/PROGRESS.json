@@ -1,0 +1,33 @@
+{
+  "change": "cpp-default-plugins-2-0-1",
+  "task": "TASK-5398002",
+  "status": "implementation-ready-for-github-ci",
+  "higress": {
+    "base": "392b64e8cce43e63d3207f00ba5c8fe2ff8921d9",
+    "branch": "task/cpp201-release-adapter",
+    "head": null,
+    "pr": null,
+    "ciRuns": []
+  },
+  "pluginServer": {
+    "base": "e56a5556341e9d446233ae642f05abfe4e8c4a9b",
+    "branch": "task/cpp201-release-adapter",
+    "head": null,
+    "pr": null
+  },
+  "implemented": {
+    "restrictedHotfixMode": true,
+    "workflowVersionOnlyBoundary": true,
+    "unmanagedHistoryMaterializer": true,
+    "localCompileOrTest": false,
+    "publicPromotion": false
+  },
+  "pending": [
+    "Push exact heads and create associated pull requests",
+    "Run GitHub-hosted Go, validator, and plugin-server Python contracts",
+    "Integrate TASK1 exact head with nine VERSION=2.0.1 files",
+    "Create and verify a real non-production OCI candidate, or retain the candidate/provenance gap",
+    "Run real plugin-server HTTP 18/18 verification",
+    "Update Console, recovery, and all-in-one production pins only after real candidate/public and image identities exist"
+  ]
+}
