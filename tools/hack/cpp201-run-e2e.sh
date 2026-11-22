@@ -53,6 +53,25 @@ cleanup() {
 trap cleanup EXIT
 
 test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+module_specs=(
+  'envoy/go-control-plane:go-control-plane:4f11f65d9bc54bb8b18f1cc7c25460d3f8afef75'
+  'istio/api:api:efc0fe428cccecc0285dbf51e2023f8e0422597c'
+  'istio/client-go:client-go:09ed8dc4e7484d303c931fa42df7f7c728296923'
+  'istio/istio:istio:383f79d0ccdba5d856a7f765b97cacba7c209dca'
+  'istio/pkg:pkg:15c662994e6515201dc106a2ec3de85ed50e8078'
+)
+mkdir -p external
+: > "$EVIDENCE_DIR/e2e-module-revisions.txt"
+for module_spec in "${module_specs[@]}"; do
+  IFS=: read -r module_path external_name expected_revision <<< "$module_spec"
+  git submodule update --init --depth 1 -- "$module_path"
+  actual_revision="$(git -C "$module_path" rev-parse HEAD)"
+  test "$actual_revision" = "$expected_revision"
+  test -f "$module_path/go.mod"
+  ln -s "../$module_path" "external/$external_name"
+  printf '%s\t%s\t%s\texternal/%s\n' "$module_path" "$expected_revision" "$actual_revision" "$external_name" >> "$EVIDENCE_DIR/e2e-module-revisions.txt"
+done
+test "$(wc -l < "$EVIDENCE_DIR/e2e-module-revisions.txt")" -eq 5
 sed -i 's|image: bitinit/eureka|image: docker.io/bitinit/eureka:cpp201-pinned|' test/e2e/conformance/base/eureka.yaml
 sed -i 's|llm-mock-server:latest|llm-mock-server:cpp201-pinned|' test/e2e/conformance/base/llm-mock.yaml
 sed -i 's|curlimages/curl:latest|docker.io/curlimages/curl:cpp201-pinned|' test/e2e/conformance/base/opa.yaml
