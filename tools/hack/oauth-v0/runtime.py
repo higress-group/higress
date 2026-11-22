@@ -137,8 +137,10 @@ def run_variant(variant, cases):
         execute(compose + ["ps", "--all"], directory / "containers-before-cleanup.txt", environment)
         down_status = execute(compose + ["down", "--volumes", "--remove-orphans"], directory / "cleanup.log", environment)
         execute(compose + ["ps", "--all", "--quiet"], directory / "containers-after-cleanup.txt", environment)
+        network_status = execute(["docker", "network", "ls", "--quiet", "--filter", "label=com.docker.compose.project=" + project], directory / "networks-after-cleanup.txt")
+        volume_status = execute(["docker", "volume", "ls", "--quiet", "--filter", "label=com.docker.compose.project=" + project], directory / "volumes-after-cleanup.txt")
         ports_closed = request("/ready")["status"] == 0 and request("/anything/cleanup", "cleanup", "cleanup")["status"] == 0
-        result["cleanup"] = down_status == 0 and not (directory / "containers-after-cleanup.txt").read_text().strip() and ports_closed
+        result["cleanup"] = down_status == 0 and network_status == 0 and volume_status == 0 and all(not (directory / name).read_text().strip() for name in ("containers-after-cleanup.txt", "networks-after-cleanup.txt", "volumes-after-cleanup.txt")) and ports_closed
         log = (directory / "envoy-upstream.log").read_text(errors="replace")
         result["trap_or_vm_failure"] = bool(re.search(r"wasm trap|wasm vm failed|wasm vm now failed|unreachable|Function:.*failed", log, re.IGNORECASE))
         result["catch_log_count"] = len(re.findall(r"OAUTH_V0 case=.*outcome=caught", log))

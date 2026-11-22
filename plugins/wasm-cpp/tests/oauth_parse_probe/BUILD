@@ -37,6 +37,7 @@ proxy_wasm_cc_binary(
 proxy_wasm_cc_binary(
     name = "candidate_eh.wasm",
     srcs = ["probe.cc", "parse.h"],
+    features = ["exceptions"],
     copts = ["-fwasm-exceptions"],
     linkopts = ["-fwasm-exceptions"],
     deps = [

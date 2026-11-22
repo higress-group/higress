@@ -29,7 +29,9 @@ struct Result {
 };
 
 inline Result evaluate(const std::string& encoded) {
+#ifdef __cpp_exceptions
   try {
+#endif
     auto token = jwt::decode(encoded);
     for (const auto& field : {"client_id", "iss", "sub", "aud"}) {
       if (token.get_payload_claim(field).get_type() != jwt::json::type::string) {
@@ -58,11 +60,13 @@ inline Result evaluate(const std::string& encoded) {
       return {false, "rejected", "audience"};
     }
     return {true, "valid", "signed-control"};
+#ifdef __cpp_exceptions
   } catch (const std::exception& error) {
     return {false, "caught", error.what()};
   } catch (...) {
     return {false, "caught", "non-std-exception"};
   }
+#endif
 }
 
 }

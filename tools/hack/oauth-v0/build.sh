@@ -32,6 +32,7 @@ printf '%s\n' "$builder" > "$OUT/builder.txt"
 docker pull "$builder"
 docker image inspect "$builder" > "$OUT/builder-inspect.json"
 docker run --rm -v "$ROOT:/repo" -w /repo/plugins/wasm-cpp "$builder" bash /repo/tools/hack/oauth-v0/inside-build.sh
+sudo chown -R "$(id -u):$(id -g)" "$OUT"
 for variant in default_disabled candidate_eh; do
   if [[ -s "$OUT/$variant/plugin.wasm" ]]; then
     python3 tools/hack/oauth-v0/module_info.py "$OUT/$variant/plugin.wasm" "$OUT/$variant/module-info.json"

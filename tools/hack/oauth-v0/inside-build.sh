@@ -34,6 +34,8 @@ for variant in default_disabled candidate_eh; do
   if [[ "$build_status" -eq 0 ]]; then
     cp "bazel-bin/tests/oauth_parse_probe/$variant.wasm" "$OUT/$variant/plugin.wasm"
   fi
+  mkdir -p "$OUT/params"
+  find -L bazel-out -name '*.params' -path '*oauth_parse_probe*' -type f -exec cp --parents '{}' "$OUT/params/" ';'
   bazel aquery --output=jsonproto --include_commandline --include_param_files \
     "mnemonic('CppCompile|CppLink', deps(//tests/oauth_parse_probe:$variant.wasm))" \
     > "$OUT/$variant/actions.json" 2> "$OUT/$variant/aquery.log"
@@ -45,9 +47,8 @@ cp "$base/external/proxy_wasm_cpp_sdk/bazel/defs.bzl" "$OUT/actual-sources/sdk-d
 cp "$base/external/proxy_wasm_cpp_sdk/bazel/repositories.bzl" "$OUT/actual-sources/sdk-repositories.bzl"
 cp "$base/external/com_github_thalhammer_jwt_cpp/include/jwt-cpp/jwt.h" "$OUT/actual-sources/jwt.h"
 cp "$base/external/com_github_thalhammer_jwt_cpp/include/jwt-cpp/base.h" "$OUT/actual-sources/base.h"
-find "$base/external" -path '*/emscripten/emcc.py' -type f -print > "$OUT/emcc-paths.txt"
+find -L "$base/external" -path '*/emscripten/emcc.py' -type f -print > "$OUT/emcc-paths.txt"
 while IFS= read -r compiler; do
   python3 "$compiler" --version >> "$OUT/emscripten-version.txt" 2>&1
 done < "$OUT/emcc-paths.txt"
-find bazel-out -name '*.params' -path '*oauth_parse_probe*' -type f -exec cp --parents '{}' "$OUT/" ';'
 exit 0

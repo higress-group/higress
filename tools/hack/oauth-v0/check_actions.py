@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -22,18 +23,47 @@ def main():
     directory = Path(sys.argv[1])
     graph = json.loads((directory / "actions.json").read_text())
     targets = {str(target["id"]): target["label"] for target in graph["targets"]}
+
+    def expand(arguments):
+        expanded = []
+        for argument in arguments:
+            if argument.startswith("@"):
+                parameter = directory.parent / "params" / argument[1:]
+                if parameter.is_file():
+                    expanded.extend(shlex.split(parameter.read_text()))
+                else:
+                    expanded.append(argument)
+            else:
+                expanded.append(argument)
+        return expanded
+
     selected = []
     for action in graph["actions"]:
         label = targets.get(str(action.get("targetId")), "")
-        arguments = list(action.get("arguments", []))
+        arguments = expand(action.get("arguments", []))
         for parameter in action.get("paramFiles", []):
             arguments.extend(parameter.get("arguments", []))
         if label.endswith(":proxy_wasm_candidate_eh") and action["mnemonic"] in {"CppCompile", "CppLink"}:
             selected.append({"label": label, "mnemonic": action["mnemonic"], "arguments": arguments, "wasm_exceptions": "-fwasm-exceptions" in arguments})
     compile_actions = [action for action in selected if action["mnemonic"] == "CppCompile" and any("oauth_parse_probe/probe.cc" in argument for argument in action["arguments"])]
     link_actions = [action for action in selected if action["mnemonic"] == "CppLink"]
-    passed = bool(compile_actions and link_actions) and all(action["wasm_exceptions"] for action in compile_actions + link_actions)
-    (directory / "flags-summary.json").write_text(json.dumps({"passed": passed, "required_compile_actions": len(compile_actions), "link_actions": len(link_actions), "actions": selected, "boundary": "Parser and local catch are inline in probe.cc; no arbitrary cross-library C++ unwinding claim."}, indent=2) + "\n")
+    executed = []
+    decoder = json.JSONDecoder()
+    text = (directory / "execution.json").read_text()
+    cursor = 0
+    while cursor < len(text):
+        while cursor < len(text) and text[cursor].isspace():
+            cursor += 1
+        if cursor == len(text):
+            break
+        record, cursor = decoder.raw_decode(text, cursor)
+        arguments = expand(record.get("commandArgs", []))
+        if any("oauth_parse_probe" in argument and "candidate_eh" in argument for argument in record.get("commandArgs", [])):
+            executed.append({"mnemonic": record.get("mnemonic"), "exitCode": record.get("exitCode", 0), "arguments": arguments, "wasm_exceptions": "-fwasm-exceptions" in arguments, "no_exceptions": "-fno-exceptions" in arguments})
+    executed_compile = [action for action in executed if action["mnemonic"] == "CppCompile"]
+    executed_link = [action for action in executed if action["mnemonic"] == "CppLink"]
+    passed = bool(compile_actions and link_actions and executed_compile and executed_link) and all(action["wasm_exceptions"] for action in compile_actions + link_actions) and all(action["exitCode"] == 0 and action["wasm_exceptions"] and not action["no_exceptions"] for action in executed_compile + executed_link)
+    (directory / "flags-summary.json").write_text(json.dumps({"passed": passed, "required_compile_actions": len(compile_actions), "link_actions": len(link_actions), "actions": selected, "executed_actions": executed, "boundary": "Parser and local catch are inline in probe.cc; no arbitrary cross-library C++ unwinding claim."}, indent=2) + "\n")
     if not passed:
         raise SystemExit("Required actual probe compile/link actions lack -fwasm-exceptions")
 
