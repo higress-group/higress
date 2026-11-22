@@ -26,6 +26,7 @@ PROJECT='cpp201-oauth-load'
 
 mkdir -p "$EVIDENCE_DIR" "$HARNESS"
 cp docs/developers/wasm-runtime-verification/compose.yaml "$HARNESS/compose.yaml"
+sed -i 's/internal: true/internal: false/' "$HARNESS/compose.yaml"
 OAUTH_CONFIG='{"consumers":[{"name":"consumer1","client_id":"client","client_secret":"secret"}]}'
 sed "s|value: \"{}\"|value: '$OAUTH_CONFIG'|" docs/developers/wasm-runtime-verification/envoy.yaml > "$HARNESS/envoy.yaml"
 grep -F 'client_secret' "$HARNESS/envoy.yaml"

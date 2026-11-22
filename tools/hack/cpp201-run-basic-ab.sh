@@ -31,6 +31,7 @@ CURRENT_OUTPUT=''
 mkdir -p "$EVIDENCE_DIR" "$HARNESS"
 cp docs/developers/wasm-runtime-verification/compose.yaml "$HARNESS/compose.yaml"
 cp docs/developers/wasm-runtime-verification/basic-auth-envoy.yaml "$HARNESS/envoy.yaml"
+sed -i 's/internal: true/internal: false/' "$HARNESS/compose.yaml"
 GATEWAY_IMAGE="$(awk -F'|' '$1 ~ /\/gateway:2\.2\.6$/ {print $2}' "$PINS")"
 HTTPBIN_IMAGE="$(awk -F'|' '$1 ~ /go-httpbin:v2\.17\.0$/ {print $2}' "$PINS")"
 test -n "$GATEWAY_IMAGE"
