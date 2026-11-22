@@ -21,23 +21,32 @@ EXPECTED_HEAD="${EXPECTED_HEAD:?exact PR head is required}"
 ARTIFACT_DIR="${ARTIFACT_DIR:?artifact directory is required}"
 EVIDENCE_DIR="${EVIDENCE_DIR:?evidence directory is required}"
 KIND_NODE_TAG='v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a'
+KIND_BIN="$ROOT/tools/bin/kind-gateway-api"
 SOURCES=(basic_auth key_auth request_block)
 TESTS=(CPPWasmPluginsBasicAuth CPPWasmPluginsKeyAuth CPPWasmPluginsRequestBlock)
 
 mkdir -p "$EVIDENCE_DIR"
 cleanup() {
-  trap - EXIT
   status=$?
+  trap - EXIT
   set +e
+  cleanup_ok=true
   kubectl get pods -A -o wide > "$EVIDENCE_DIR/cleanup-pods.txt" 2>&1
   kubectl get events -A --sort-by=.lastTimestamp > "$EVIDENCE_DIR/cleanup-events.txt" 2>&1
   kubectl logs -n higress-system deployment/higress-controller --all-containers --prefix > "$EVIDENCE_DIR/controller.log" 2>&1
   kubectl logs -n higress-system deployment/higress-gateway --all-containers --prefix > "$EVIDENCE_DIR/gateway.log" 2>&1
-  if [[ -x "$ROOT/tools/bin/kind" ]]; then
-    "$ROOT/tools/bin/kind" export logs "$EVIDENCE_DIR/kind" --name higress
-    "$ROOT/tools/bin/kind" delete cluster --name higress
-    ! "$ROOT/tools/bin/kind" get clusters | grep -qx higress
-    printf 'kind_cluster_deleted=true\n' > "$EVIDENCE_DIR/cleanup.txt"
+  if [[ -x "$KIND_BIN" ]]; then
+    "$KIND_BIN" export logs "$EVIDENCE_DIR/kind" --name higress
+    if ! "$KIND_BIN" delete cluster --name higress; then
+      cleanup_ok=false
+    fi
+    if "$KIND_BIN" get clusters | grep -qx higress; then
+      cleanup_ok=false
+    fi
+    printf 'kind_cluster_deleted=%s\n' "$cleanup_ok" > "$EVIDENCE_DIR/cleanup.txt"
+  fi
+  if [[ "$cleanup_ok" != true && "$status" -eq 0 ]]; then
+    status=1
   fi
   exit "$status"
 }
@@ -46,12 +55,12 @@ trap cleanup EXIT
 test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
 ! grep -R -n -E 'image:.*(:latest|bitinit/eureka["[:space:]]*$)' test/e2e/conformance/base --include='*.yaml'
 printf '%s\n' "$EXPECTED_HEAD" > "$EVIDENCE_DIR/source-head.txt"
-make create-cluster KIND_NODE_TAG="$KIND_NODE_TAG" 2>&1 | tee "$EVIDENCE_DIR/create-cluster.log"
-"$ROOT/tools/bin/kind" version | tee "$EVIDENCE_DIR/kind-version.txt"
+make create-gateway-api-cluster GATEWAY_API_KIND_NODE_TAG="$KIND_NODE_TAG" 2>&1 | tee "$EVIDENCE_DIR/create-cluster.log"
+"$KIND_BIN" version | tee "$EVIDENCE_DIR/kind-version.txt"
 kubectl version --client=true -o yaml > "$EVIDENCE_DIR/kubectl-version.yaml"
 helm version > "$EVIDENCE_DIR/helm-version.txt"
 go version > "$EVIDENCE_DIR/go-version.txt"
-KIND="$ROOT/tools/bin/kind" tools/hack/cpp201-load-runtime-images.sh "$EVIDENCE_DIR" 2>&1 | tee "$EVIDENCE_DIR/load-images.log"
+KIND="$KIND_BIN" tools/hack/cpp201-load-runtime-images.sh "$EVIDENCE_DIR" 2>&1 | tee "$EVIDENCE_DIR/load-images.log"
 make pre-install
 helm install higress helm/core -n higress-system --create-namespace \
   --set 'controller.tag=2.2.6' \

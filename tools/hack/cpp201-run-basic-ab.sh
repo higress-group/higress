@@ -35,15 +35,18 @@ GATEWAY_IMAGE="$(awk -F'|' '$1 ~ /\/gateway:2\.2\.6$/ {print $2}' "$PINS")"
 HTTPBIN_IMAGE="$(awk -F'|' '$1 ~ /go-httpbin:v2\.17\.0$/ {print $2}' "$PINS")"
 test -n "$GATEWAY_IMAGE"
 test -n "$HTTPBIN_IMAGE"
-export HIGRESS_GATEWAY_IMAGE HTTPBIN_IMAGE
+export HIGRESS_GATEWAY_IMAGE="$GATEWAY_IMAGE"
+export HTTPBIN_IMAGE="$HTTPBIN_IMAGE"
 
 cleanup() {
-  trap - EXIT
   status=$?
+  trap - EXIT
   set +e
   if [[ -n "$CURRENT_PROJECT" ]]; then
     docker compose --project-name "$CURRENT_PROJECT" --file "$HARNESS/compose.yaml" logs --no-color envoy httpbin > "$CURRENT_OUTPUT/cleanup-logs.txt" 2>&1
-    docker compose --project-name "$CURRENT_PROJECT" --file "$HARNESS/compose.yaml" down --volumes --remove-orphans > "$CURRENT_OUTPUT/cleanup.txt" 2>&1
+    if ! docker compose --project-name "$CURRENT_PROJECT" --file "$HARNESS/compose.yaml" down --volumes --remove-orphans > "$CURRENT_OUTPUT/cleanup.txt" 2>&1; then
+      status=1
+    fi
   fi
   exit "$status"
 }

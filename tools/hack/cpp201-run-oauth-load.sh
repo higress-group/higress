@@ -40,19 +40,21 @@ export ENVOY_PORT=10000
 export ENVOY_ADMIN_PORT=9901
 
 cleanup() {
-  trap - EXIT
   status=$?
+  trap - EXIT
   set +e
   if [[ -n "${CURRENT_OUTPUT:-}" ]]; then
     (
       cd "$HARNESS"
       docker compose --project-name "$PROJECT" logs --no-color envoy httpbin
     ) > "$CURRENT_OUTPUT/cleanup-logs.txt" 2>&1
-    (
+    if ! (
       cd "$HARNESS"
       docker compose --project-name "$PROJECT" down --volumes --remove-orphans
       docker compose --project-name "$PROJECT" ps --all
-    ) > "$CURRENT_OUTPUT/cleanup.txt" 2>&1
+    ) > "$CURRENT_OUTPUT/cleanup.txt" 2>&1; then
+      status=1
+    fi
   fi
   exit "$status"
 }
