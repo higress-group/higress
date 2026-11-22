@@ -32,6 +32,7 @@ cp -a plugins/wasm-cpp "$FIXTURE/plugins/wasm-cpp"
 cp -a test/e2e/conformance/base "$FIXTURE/test/e2e/conformance/base"
 cp test/e2e/conformance/tests/cpp-wasm-basic-auth.yaml "$FIXTURE/test/e2e/conformance/tests/cpp-wasm-basic-auth.yaml"
 cp tools/hack/cpp201-runtime-images.pins "$FIXTURE/tools/hack/cpp201-runtime-images.pins"
+cp tools/hack/cpp201-run-e2e.sh "$FIXTURE/tools/hack/cpp201-run-e2e.sh"
 cp .github/workflows/wasm-cpp-2.0.1-verification.yaml "$FIXTURE/.github/workflows/wasm-cpp-2.0.1-verification.yaml"
 
 expect_failure() {

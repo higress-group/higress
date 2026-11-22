@@ -53,6 +53,13 @@ cleanup() {
 trap cleanup EXIT
 
 test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+sed -i 's|image: bitinit/eureka|image: docker.io/bitinit/eureka:cpp201-pinned|' test/e2e/conformance/base/eureka.yaml
+sed -i 's|llm-mock-server:latest|llm-mock-server:cpp201-pinned|' test/e2e/conformance/base/llm-mock.yaml
+sed -i 's|curlimages/curl:latest|docker.io/curlimages/curl:cpp201-pinned|' test/e2e/conformance/base/opa.yaml
+git diff -- test/e2e/conformance/base > "$EVIDENCE_DIR/fixture-overrides.diff"
+grep -F 'docker.io/bitinit/eureka:cpp201-pinned' "$EVIDENCE_DIR/fixture-overrides.diff"
+grep -F 'llm-mock-server:cpp201-pinned' "$EVIDENCE_DIR/fixture-overrides.diff"
+grep -F 'docker.io/curlimages/curl:cpp201-pinned' "$EVIDENCE_DIR/fixture-overrides.diff"
 ! grep -R -n -E 'image:.*(:latest|bitinit/eureka["[:space:]]*$)' test/e2e/conformance/base --include='*.yaml'
 printf '%s\n' "$EXPECTED_HEAD" > "$EVIDENCE_DIR/source-head.txt"
 make create-gateway-api-cluster GATEWAY_API_KIND_NODE_TAG="$KIND_NODE_TAG" 2>&1 | tee "$EVIDENCE_DIR/create-cluster.log"

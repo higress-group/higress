@@ -86,11 +86,14 @@ def main():
         total_count += 1
     require(total_count == 16 and kind_count == 15, "runtime image inventory mismatch")
 
-    for manifest in (root / "test/e2e/conformance/base").glob("*.yaml"):
-        for line in manifest.read_text().splitlines():
-            if "image:" in line:
-                require("latest" not in line, f"mutable fixture image in {manifest}: {line}")
-                require(not re.search(r"image:\s*[\"']?bitinit/eureka[\"']?\s*$", line), f"untagged fixture in {manifest}")
+    runtime_script = (root / "tools/hack/cpp201-run-e2e.sh").read_text()
+    for pinned_image in (
+        "docker.io/bitinit/eureka:cpp201-pinned",
+        "llm-mock-server:cpp201-pinned",
+        "docker.io/curlimages/curl:cpp201-pinned",
+    ):
+        require(pinned_image in runtime_script, f"missing runtime fixture override: {pinned_image}")
+    require("fixture-overrides.diff" in runtime_script, "runtime fixture overrides are not recorded")
     basic_manifest = (root / "test/e2e/conformance/tests/cpp-wasm-basic-auth.yaml").read_text()
     require("file:///opt/plugins/wasm-cpp/extensions/basic_auth/plugin.wasm" in basic_manifest, "basic_auth staging path mismatch")
 
