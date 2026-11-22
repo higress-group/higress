@@ -77,9 +77,9 @@ jobs:
           ADOPT_UNANNOTATED_LATEST: ${{ inputs.adopt_unannotated_latest }}
         run: |
           set -euo pipefail
+          # BEGIN promotion-authorization-contract
           RELEASE_MODE="${RELEASE_MODE:-standard}"
           ADOPT_UNANNOTATED_LATEST="${ADOPT_UNANNOTATED_LATEST:-false}"
-          # BEGIN promotion-authorization-contract
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           if [ "$RELEASE_MODE" = cpp-hotfix ]; then
             test "$SNAPSHOT_PATH" = plugins/release/snapshots/cpp-hotfix-2.0.1.json
