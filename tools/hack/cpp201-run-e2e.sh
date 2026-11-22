@@ -144,6 +144,12 @@ for test_name in "${TESTS[@]}"; do
   test "$run_count" -eq 1
   ! grep -E -- "--- (SKIP|FAIL): TestHigressConformanceTests/$test_name([ /]|$)" "$EVIDENCE_DIR/$test_name.log"
   assert_wasm_hashes
+  conformance_namespaces="$(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep '^higress-conformance' || true)"
+  printf '%s\n' "$conformance_namespaces" > "$EVIDENCE_DIR/$test_name.namespace-cleanup.txt"
+  for namespace in $conformance_namespaces; do
+    kubectl wait --for=delete "namespace/$namespace" --timeout=180s 2>&1 | tee -a "$EVIDENCE_DIR/$test_name.namespace-cleanup.txt"
+  done
+  printf 'namespace_cleanup=passed\n' >> "$EVIDENCE_DIR/$test_name.namespace-cleanup.txt"
 done
 
 cat "$EVIDENCE_DIR"/CPPWasmPlugins*.log > "$EVIDENCE_DIR/all-e2e.log"
