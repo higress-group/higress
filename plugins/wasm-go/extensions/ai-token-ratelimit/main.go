@@ -413,7 +413,12 @@ func hitRateRuleItem(ctx wrapper.HttpContext, rule config.LimitRuleItem) (string
 		}
 		query, err := url.ParseQuery(parse.RawQuery)
 		if err != nil {
-			return logDebugAndReturnEmpty("failed to parse query params: %v", err)
+			// url.ParseQuery 在遇到第一个非法转义时返回 error，但已经解出的键值对
+			// 仍然可用（它会跳过坏对继续解析）。若在这里直接丢弃整个 map，调用方只要
+			// 在合法请求后追加一个 "&x=%zz"，就能让该规则彻底失效；因此保留可解码
+			// 的键值对，只有键或值本身非法的那个参数不参与匹配。
+			log.Debugf("ai-token-ratelimit: query for param %q contains malformed escapes (%v); keeping %d decodable pair(s)",
+				rule.Key, err, len(query))
 		}
 		val, ok := query[rule.Key]
 		if !ok {
