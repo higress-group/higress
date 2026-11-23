@@ -218,7 +218,7 @@ def run_variant(variant, cases):
         result["rejected_log_count"] = len(re.findall(r"OAUTH_V0 case=.*outcome=rejected", log))
         for row in result["rows"]:
             if production:
-                row["local_details_observed"] = row["expected"] == "valid" or any("PATH=" + row["request_path"] + " CODE=" + str(row["status"]) + " " in line and "DETAILS=oauth_access_denied " in line for line in log.splitlines())
+                row["local_details_observed"] = row["expected"] == "valid" or any("PATH=" + row["request_path"] + " CODE=" + str(row["status"]) + " " in line and "DETAILS=via_wasm::local-verification-plugin::oauth_access_denied " in line for line in log.splitlines())
             row["probe_log_observed"] = "OAUTH_V0 case=" + row["case_id"] + " outcome=" + row["expected"] + " detail=" in log
             if row["expected"] != "valid":
                 row["following_valid_log_observed"] = "OAUTH_V0 case=" + row["case_id"] + "-valid-after outcome=valid detail=" in log
