@@ -12,6 +12,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from typed_canonical import DESCRIPTOR_MISMATCH_EXIT, canonical_json_sha256, loads_typed
+
 
 EVIDENCE = Path(os.environ.get("RUNTIME_EVIDENCE", "/evidence"))
 RESULTS = []
@@ -19,6 +21,14 @@ EXCHANGES = []
 CURRENT_CASE = None
 MODERN = "2026-07-28"
 LEGACY = ("2024-11-05", "2025-03-26", "2025-06-18")
+GATEWAY_HOST = os.environ.get("RUNTIME_GATEWAY_HOST", "gateway")
+GENERATION_TRANSITION = os.environ.get("RUNTIME_GENERATION_TRANSITION", "") == "1"
+COMPATIBILITY_ORACLE = os.environ.get("RUNTIME_ORACLE", "") == "1"
+CORPUS_REVISION = os.environ.get("RUNTIME_CORPUS_REVISION", "")
+DESCRIPTOR_SELF_TEST = os.environ.get("RUNTIME_DESCRIPTOR_SELF_TEST", "") == "1"
+LAST_TYPED_RESPONSE = None
+CORPUS_PARTIAL_RECORDS = None
+CORPUS_CURRENT_RECORD = None
 
 
 def check(condition, message):
@@ -26,7 +36,17 @@ def check(condition, message):
         raise AssertionError(message)
 
 
+class DescriptorMismatchError(Exception):
+    pass
+
+
+def check_descriptor_hash(observed, expected, message):
+    if observed != expected:
+        raise DescriptorMismatchError(f"{message}: expected {expected}, got {observed}")
+
+
 def exchange(url, body=None, headers=None, method="POST"):
+    global LAST_TYPED_RESPONSE
     data = None if body is None else json.dumps(body, separators=(",", ":")).encode()
     request = urllib.request.Request(url, data=data, method=method)
     for name, value in (headers or {}).items():
@@ -42,6 +62,10 @@ def exchange(url, body=None, headers=None, method="POST"):
         parsed = json.loads(raw) if raw else None
     except json.JSONDecodeError:
         parsed = {"raw": raw.decode("utf-8", "replace")[:500]}
+    try:
+        LAST_TYPED_RESPONSE = loads_typed(raw) if raw else None
+    except (json.JSONDecodeError, ValueError):
+        LAST_TYPED_RESPONSE = None
     request_headers = {name.lower(): value for name, value in (headers or {}).items()}
     access_request_id = request_headers.get("x-request-id")
     if access_request_id:
@@ -73,6 +97,7 @@ def exchange(url, body=None, headers=None, method="POST"):
                 "sessionPresent": "mcp-session-id" in request_headers,
                 "lastEventIDPresent": "last-event-id" in request_headers,
                 "futureParamPresent": "mcp-param-future" in request_headers,
+                **({"instructionsMode": request_headers["x-instructions-mode"]} if "x-instructions-mode" in request_headers else {}),
             },
             "response": {
                 "status": status,
@@ -105,7 +130,8 @@ def modern_meta():
     }
 
 
-def modern_rpc(port, rpc_method, rpc_id, name=None, arguments=None, extra_headers=None, origin="http://mcp.runtime.test"):
+def modern_rpc(port, rpc_method, rpc_id, name=None, arguments=None, extra_headers=None,
+               origin="http://mcp.runtime.test", host="mcp.runtime.test"):
     params = {"_meta": modern_meta()}
     if name is not None:
         params["name"] = name
@@ -113,7 +139,7 @@ def modern_rpc(port, rpc_method, rpc_id, name=None, arguments=None, extra_header
         params["arguments"] = arguments
     body = {"jsonrpc": "2.0", "id": rpc_id, "method": rpc_method, "params": params}
     headers = {
-        "Host": "mcp.runtime.test", "Origin": origin,
+        "Host": host, "Origin": origin,
         "Content-Type": "application/json", "Accept": "application/json, text/event-stream",
         "MCP-Protocol-Version": MODERN, "Mcp-Method": rpc_method,
         "X-Request-ID": f"rv-{port}-{rpc_id}",
@@ -121,18 +147,142 @@ def modern_rpc(port, rpc_method, rpc_id, name=None, arguments=None, extra_header
     if name is not None:
         headers["Mcp-Name"] = name
     headers.update(extra_headers or {})
-    return exchange(f"http://gateway:{port}/mcp", body, headers)
+    return exchange(f"http://{GATEWAY_HOST}:{port}/mcp", body, headers)
 
 
-def legacy_rpc(port, body, session=None, version=None, request_id=None):
-    headers = {"Host": "mcp.runtime.test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+def legacy_rpc(port, body, session=None, version=None, request_id=None, host="mcp.runtime.test"):
+    headers = {"Host": host, "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     stable_id = request_id or body.get("id") or body.get("method", "request").replace("/", "-")
     headers["X-Request-ID"] = f"rv-{port}-{stable_id}"
     if session:
         headers["Mcp-Session-Id"] = session
     if version:
         headers["MCP-Protocol-Version"] = version
-    return exchange(f"http://gateway:{port}/mcp", body, headers)
+    return exchange(f"http://{GATEWAY_HOST}:{port}/mcp", body, headers)
+
+
+def wait_lds_version(phase, admin_port=9921):
+    deadline = time.time() + 45
+    expected = f'"version_info":"{phase}"'
+    while time.time() < deadline:
+        try:
+            status, _, dump = exchange(f"http://{GATEWAY_HOST}:{admin_port}/config_dump", method="GET")
+            if status == 200 and expected in json.dumps(dump, separators=(",", ":")):
+                return
+        except (OSError, urllib.error.URLError, socket.timeout):
+            pass
+        time.sleep(0.25)
+    raise RuntimeError(f"Envoy did not publish LDS generation {phase}")
+
+
+def apply_lds_generation(phase):
+    source = EVIDENCE / f"lds-generation-{phase}.yaml"
+    current = EVIDENCE / "lds-generation-current.yaml"
+    temporary = EVIDENCE / f".lds-generation-{phase}.tmp"
+    temporary.write_bytes(source.read_bytes())
+    os.replace(temporary, current)
+    wait_lds_version(phase)
+
+
+def read_lds_rejected_count(admin_port=9981):
+    status, _, stats = exchange(
+        f"http://{GATEWAY_HOST}:{admin_port}/stats?filter=listener_manager.lds.update_rejected&format=json",
+        method="GET",
+    )
+    check(status == 200 and isinstance(stats, dict), f"LDS rejection stats unavailable: {status} {stats}")
+    for stat in stats.get("stats", []):
+        if stat.get("name") == "listener_manager.lds.update_rejected":
+            return int(stat.get("value", 0))
+    return 0
+
+
+def wait_lds_rejected_count(admin_port=9981, greater_than=None, timeout=45):
+    deadline = time.time() + timeout
+    successful_polls = 0
+    last_error = None
+    while time.time() < deadline:
+        try:
+            count = read_lds_rejected_count(admin_port)
+            successful_polls += 1
+            if greater_than is None or count > greater_than:
+                return count
+        except (OSError, urllib.error.URLError, socket.timeout, AssertionError) as exc:
+            last_error = exc
+        time.sleep(0.25)
+    if successful_polls == 0:
+        raise RuntimeError(f"LDS rejection checker remained unavailable: {last_error}")
+    raise RuntimeError(f"Envoy did not report an LDS rejection above {greater_than}")
+
+
+def apply_corpus_fixture(revision, fixture, expected_acceptance):
+    source = EVIDENCE / f"lds-corpus-{revision}-{fixture}.yaml"
+    current = EVIDENCE / f"lds-corpus-{revision}-current.yaml"
+    temporary = EVIDENCE / f".lds-corpus-{revision}-{fixture}.tmp"
+    rejected_before = wait_lds_rejected_count()
+    temporary.write_bytes(source.read_bytes())
+    os.replace(temporary, current)
+    version = f"{revision}-{fixture}"
+    if expected_acceptance:
+        wait_lds_version(version, 9981)
+        return True
+    wait_lds_rejected_count(greater_than=rejected_before)
+    return False
+
+
+def generation_transition():
+    wait_http("http://backend-primary:8080/healthz")
+    wait_http(f"http://{GATEWAY_HOST}:9921/ready")
+    affected = "getTransactionRecordListV2"
+    records = []
+    for phase in ("valid-before", "validation-unavailable", "valid-after"):
+        if phase == "valid-before":
+            wait_lds_version(phase)
+        else:
+            apply_lds_generation(phase)
+        backend_reset()
+        exchange_start = len(EXCHANGES)
+        status, _, listed = modern_rpc(12008, "tools/list", f"generation-list-{phase}")
+        check(status == 200, f"generation list failed: {status} {listed}")
+        tools = result_contract(listed, ttl=True).get("tools") or []
+        by_name = {tool.get("name"): tool for tool in tools}
+        check(set(by_name) == {affected, "compat_health"}, f"generation tools changed: {tools}")
+        business = by_name[affected]["inputSchema"]["properties"]["businessType"]
+        arguments = {"transactionId": "transition", "businessType": ["SALE"]}
+        status, _, called = modern_rpc(12008, "tools/call", f"generation-call-{phase}", affected, arguments)
+        check(status == 200, f"generation call failed: {status} {called}")
+        events = backend_state()["events"]
+        if phase == "validation-unavailable":
+            check(business.get("enum") == ["SALE", "REFUND"], f"degraded descriptor changed: {business}")
+            check(called == {
+                "jsonrpc": "2.0", "id": f"generation-call-{phase}",
+                "error": {"code": -32603, "message": "tool input schema validation is unavailable",
+                          "data": {"reason": "schema_validation_unavailable"}},
+            }, f"degraded generation did not block exactly: {called}")
+            check(events == [], f"degraded generation reached backend: {events}")
+            state = "validation-unavailable"
+        else:
+            check("enum" not in business, f"valid descriptor unexpectedly degraded: {business}")
+            result_contract(called)
+            check(len(events) == 1 and events[0]["path"] == "/compat/transition", f"valid generation did not invoke exactly once: {events}")
+            state = "validated"
+        records.append({
+            "phase": phase,
+            "schemaState": state,
+            "descriptor": by_name[affected],
+            "response": called,
+            "backendEvents": {"backend-primary": events},
+            "clientExchanges": EXCHANGES[exchange_start:],
+        })
+        print(f"PASS generation-{phase} state={state} backend_calls={len(events)}", flush=True)
+    detail = {"ldsVersions": [record["phase"] for record in records], "generations": records}
+    (EVIDENCE / "generation-transition.json").write_text(json.dumps(detail, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+def downstream_versions():
+    # Keep historical binaries' declarations separate from the current candidate.
+    historical = COMPATIBILITY_ORACLE or CORPUS_REVISION in ("affected", "oracle") or os.environ.get("RUNTIME_COMPAT_MECHANISM_BASELINE") == "1" or os.environ.get("RUNTIME_INSTRUCTIONS_VARIANT") == "baseline" or os.environ.get("RUNTIME_AUTO_EXPLICIT_BASELINE") == "1"
+    return list(LEGACY) + ([] if historical else ["2025-11-25"]) + [MODERN]
 
 
 def result_contract(response, ttl=False):
@@ -144,7 +294,7 @@ def result_contract(response, ttl=False):
     if ttl:
         check(result.get("ttlMs") == 0 and result.get("cacheScope") == "private", f"bad cache wire fields: {result}")
     forbidden = json.dumps(result)
-    for token in ("2025-11-25", "listChanged", "subscriptions", "requestState", "multi-round"):
+    for token in (("2025-11-25",) if "2025-11-25" not in downstream_versions() else ()) + ("listChanged", "subscriptions", "requestState", "multi-round"):
         check(token not in forbidden, f"forbidden advertised capability {token}: {result}")
     return result
 
@@ -157,6 +307,23 @@ def evidence_snapshot():
         except Exception as exc:
             snapshots[host] = {"snapshotError": str(exc)}
     return snapshots
+
+
+def write_corpus_partial():
+    if CORPUS_PARTIAL_RECORDS is None or not CORPUS_REVISION:
+        return
+    result = {"revision": CORPUS_REVISION, "fixtures": CORPUS_PARTIAL_RECORDS}
+    (EVIDENCE / f"corpus-{CORPUS_REVISION}.json").write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def record_corpus_failure(exc):
+    if CORPUS_CURRENT_RECORD is None:
+        return
+    CORPUS_CURRENT_RECORD["diagnosticError"] = str(exc)
+    CORPUS_CURRENT_RECORD["backendEvents"] = evidence_snapshot()
+    write_corpus_partial()
 
 
 def record(name, callback):
@@ -193,7 +360,7 @@ def direct_mode(port, tool_name, arguments, expected_path):
         check(status == 200, f"discover status {status}: {discover}")
         discovered = result_contract(discover, ttl=True)
         check(discovered.get("capabilities") == {"tools": {}}, f"capabilities are not tools-only: {discovered}")
-        check(discovered.get("supportedVersions") == ["2024-11-05", "2025-03-26", "2025-06-18", "2026-07-28"], f"supportedVersions are not exact: {discovered}")
+        check(discovered.get("supportedVersions") == downstream_versions(), f"supportedVersions are not exact: {discovered}")
         status, _, listed = modern_rpc(port, "tools/list", f"list-{port}")
         check(status == 200, f"list status {status}: {listed}")
         tools = result_contract(listed, ttl=True).get("tools") or []
@@ -253,46 +420,369 @@ def legacy_direct_versions():
     return {"versions": list(LEGACY), "flow": "initialize/initialized/list/call", "backendCalls": 3, "backendEvents": {"backend-primary": events}}
 
 
+def schema_compatibility():
+    backend_reset()
+    affected = "getTransactionRecordListV2"
+    valid = "compat_health"
+
+    status, _, listed = modern_rpc(10008, "tools/list", "compat-modern-list")
+    check(status == 200, f"modern compatibility list failed: {status} {listed}")
+    tools = result_contract(listed, ttl=True).get("tools") or []
+    by_name = {tool.get("name"): tool for tool in tools}
+    check(set(by_name) == {affected, valid}, f"compatibility tools are not exact: {tools}")
+    business = by_name[affected]["inputSchema"]["properties"]["businessType"]
+    check(business == {"description": "Business types", "enum": ["SALE", "REFUND"], "items": {"type": "string"}, "type": "array"},
+          f"affected descriptor changed: {business}")
+
+    def call_valid(rpc_id):
+        status, _, response = modern_rpc(10008, "tools/call", rpc_id, valid, {})
+        check(status == 200, f"valid compatibility tool failed: {status} {response}")
+        result_contract(response)
+
+    call_valid("compat-valid-before")
+    status, _, blocked = modern_rpc(10008, "tools/call", "compat-blocked", affected, {"businessType": ["SALE"]})
+    check(status == 200, f"degraded modern call status is not 200: {status} {blocked}")
+    check(blocked == {
+        "jsonrpc": "2.0", "id": "compat-blocked",
+        "error": {"code": -32603, "message": "tool input schema validation is unavailable",
+                  "data": {"reason": "schema_validation_unavailable"}},
+    }, f"degraded modern error envelope changed: {blocked}")
+    events_after_block = backend_state()["events"]
+    check(len(events_after_block) == 1 and events_after_block[0]["path"] == "/compat/health",
+          f"degraded modern call reached backend: {events_after_block}")
+    call_valid("compat-valid-after")
+
+    expected_arguments = {
+        "transactionId": "tx-42", "page": "7", "X-Compat-Flag": "true",
+        "businessType": ["SALE", "REFUND"], "payload": {"amount": 12},
+    }
+    for index, version in enumerate(LEGACY):
+        status, _, legacy_list = legacy_rpc(
+            10008, {"jsonrpc": "2.0", "id": f"compat-list-{index}", "method": "tools/list", "params": {}},
+            version=version,
+        )
+        check(status == 200, f"legacy compatibility list failed for {version}: {status} {legacy_list}")
+        legacy_tools = {tool.get("name"): tool for tool in legacy_list.get("result", {}).get("tools", [])}
+        check(set(legacy_tools) == {affected, valid}, f"legacy compatibility descriptors absent for {version}: {legacy_tools}")
+        check(legacy_tools[affected]["inputSchema"]["properties"]["businessType"]["enum"] == ["SALE", "REFUND"],
+              f"legacy compatibility enum changed for {version}: {legacy_tools[affected]}")
+        status, _, called = legacy_rpc(
+            10008,
+            {"jsonrpc": "2.0", "id": f"compat-call-{index}", "method": "tools/call",
+             "params": {"name": affected, "arguments": expected_arguments}},
+            version=version,
+        )
+        check(status == 200 and "result" in called, f"legacy compatibility call failed for {version}: {status} {called}")
+
+    events = backend_state()["events"]
+    valid_events = [event for event in events if event["path"] == "/compat/health"]
+    legacy_events = [event for event in events if event["path"] == "/compat/tx-42"]
+    check(len(valid_events) == 2 and len(legacy_events) == len(LEGACY), f"compatibility backend counts changed: {events}")
+    for event in legacy_events:
+        observed = event.get("compatibilityRequest") or {}
+        check(event["httpMethod"] == "POST", f"legacy method changed: {event}")
+        check(observed.get("query") == {"fixed": ["yes"], "page": ["7"]}, f"legacy query changed: {event}")
+        check(observed.get("flag") == "true", f"legacy header conversion changed: {event}")
+        check(observed.get("jsonBody") == {"businessType": ["SALE", "REFUND"], "payload": {"amount": 12}},
+              f"legacy JSON body changed: {event}")
+    return {
+        "modernDescriptorPreserved": True,
+        "modernBlockedError": "schema_validation_unavailable",
+        "modernBlockedBackendCalls": 0,
+        "validCallsBeforeAndAfter": 2,
+        "legacyVersions": list(LEGACY),
+        "legacyBackendCalls": len(legacy_events),
+        "backendEvents": {"backend-primary": events},
+    }
+
+
+def compatibility_oracle():
+    wait_http("http://backend-primary:8080/healthz")
+    wait_http(f"http://{GATEWAY_HOST}:9941/ready")
+    backend_reset()
+    affected = "getTransactionRecordListV2"
+    version = LEGACY[-1]
+    status, _, listed = legacy_rpc(
+        13018,
+        {"jsonrpc": "2.0", "id": "oracle-list", "method": "tools/list", "params": {}},
+        version=version,
+    )
+    check(status == 200, f"v2.0.0 oracle list failed: {status} {listed}")
+    tools = {tool.get("name"): tool for tool in listed.get("result", {}).get("tools", [])}
+    check(set(tools) == {affected, "compat_health"}, f"v2.0.0 oracle tools changed: {tools}")
+    check(tools[affected]["inputSchema"]["properties"]["businessType"]["enum"] == ["SALE", "REFUND"],
+          f"v2.0.0 oracle descriptor changed: {tools[affected]}")
+    arguments = {
+        "transactionId": "tx-42", "page": "7", "X-Compat-Flag": "true",
+        "businessType": ["SALE", "REFUND"], "payload": {"amount": 12},
+    }
+    status, _, called = legacy_rpc(
+        13018,
+        {"jsonrpc": "2.0", "id": "oracle-call", "method": "tools/call",
+         "params": {"name": affected, "arguments": arguments}},
+        version=version,
+    )
+    check(status == 200 and "result" in called, f"v2.0.0 oracle call failed: {status} {called}")
+    events = backend_state()["events"]
+    check(len(events) == 1 and events[0]["path"] == "/compat/tx-42", f"v2.0.0 oracle backend count changed: {events}")
+    observed = events[0].get("compatibilityRequest") or {}
+    check(events[0]["httpMethod"] == "POST", f"v2.0.0 oracle method changed: {events[0]}")
+    check(observed.get("query") == {"fixed": ["yes"], "page": ["7"]}, f"v2.0.0 oracle query changed: {events[0]}")
+    check(observed.get("flag") == "true", f"v2.0.0 oracle header conversion changed: {events[0]}")
+    check(observed.get("jsonBody") == {"businessType": ["SALE", "REFUND"], "payload": {"amount": 12}},
+          f"v2.0.0 oracle JSON body changed: {events[0]}")
+    result = {
+        "configurationAccepted": True,
+        "descriptorPreserved": True,
+        "legacyVersion": version,
+        "legacyRESTMapping": True,
+        "backendEvents": {"backend-primary": events},
+        "clientExchanges": EXCHANGES,
+    }
+    (EVIDENCE / "oracle-verification.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    (EVIDENCE / "backend-oracle-state.json").write_text(json.dumps({"events": events}, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+def corpus_verification():
+    global CORPUS_PARTIAL_RECORDS, CORPUS_CURRENT_RECORD
+    records = []
+    CORPUS_PARTIAL_RECORDS = records
+    write_corpus_partial()
+    wait_http("http://backend-primary:8080/healthz")
+    wait_http(f"http://{GATEWAY_HOST}:9981/ready")
+    manifest = json.loads((EVIDENCE / "corpus-manifest.json").read_text())
+    for fixture in manifest["fixtures"]:
+        slug = fixture["fixture"]
+        expected = fixture["expectedAcceptance"][CORPUS_REVISION]
+        record = {
+            "fixture": slug,
+            "expectedAcceptance": expected,
+            "actualAcceptance": None,
+            "tool": fixture["tool"],
+            "legacyMappingExpected": fixture["legacyMapping"],
+            "modernList": False,
+            "modernDescriptorSha256": None,
+            "modernCallBlocked": False,
+            "legacyList": False,
+            "legacyDescriptorSha256": None,
+            "legacyRESTMapping": False,
+            "validSiblingCallable": False,
+            "validSiblingResultContract": False,
+            "validSiblingBackendEvents": [],
+            "globalList": False,
+            "backendEvents": {"backend-primary": []},
+        }
+        CORPUS_CURRENT_RECORD = record
+        records.append(record)
+        write_corpus_partial()
+        actual = apply_corpus_fixture(CORPUS_REVISION, slug, expected)
+        record["actualAcceptance"] = actual
+        write_corpus_partial()
+        check(actual == expected, f"{CORPUS_REVISION}/{slug} acceptance mismatch")
+        if not actual:
+            CORPUS_CURRENT_RECORD = None
+            continue
+
+        backend_reset()
+        port = fixture["port"]
+        tool_name = fixture["tool"]
+        if CORPUS_REVISION == "candidate":
+            status, _, listed = modern_rpc(port, "tools/list", f"corpus-{slug}-modern-list")
+            check(status == 200, f"candidate modern list failed for {slug}: {status} {listed}")
+            tools = result_contract(listed, ttl=True).get("tools") or []
+            typed_tools = (LAST_TYPED_RESPONSE.get("result") or {}).get("tools") or []
+            tools_by_name = {tool.get("name"): tool for tool in tools}
+            typed_tools_by_name = {tool.get("name"): tool for tool in typed_tools}
+            check(tool_name in tools_by_name, f"candidate descriptor missing for {slug}: {tools}")
+            check(tool_name in typed_tools_by_name, f"candidate typed descriptor missing for {slug}")
+            modern_descriptor_hash = canonical_json_sha256(typed_tools_by_name[tool_name].get("inputSchema"))
+            check_descriptor_hash(
+                modern_descriptor_hash, fixture["expectedInputSchemaSha256"],
+                f"candidate modern descriptor changed for {slug}",
+            )
+            record["modernDescriptorSha256"] = modern_descriptor_hash
+            if slug == "mixed-valid-invalid":
+                check("valid_sibling" in {tool.get("name") for tool in tools}, f"valid sibling missing for {slug}: {tools}")
+                status, _, valid_called = modern_rpc(port, "tools/call", f"corpus-{slug}-valid", "valid_sibling", {})
+                check(status == 200, f"valid sibling call failed for {slug}: {status} {valid_called}")
+                valid_result = result_contract(valid_called)
+                check(valid_result.get("isError") is False,
+                      f"valid sibling returned an MCP error result for {slug}: {valid_result}")
+                content = valid_result.get("content")
+                check(isinstance(content, list) and len(content) > 0,
+                      f"valid sibling returned no successful content for {slug}: {valid_result}")
+                sibling_events = backend_state()["events"]
+                check(
+                    len(sibling_events) == 1
+                    and sibling_events[0]["httpMethod"] == "GET"
+                    and sibling_events[0]["path"] == "/corpus/valid",
+                    f"valid sibling did not make exactly one successful backend call for {slug}: {sibling_events}",
+                )
+                record["validSiblingCallable"] = True
+                record["validSiblingResultContract"] = True
+                record["validSiblingBackendEvents"] = sibling_events
+                write_corpus_partial()
+                backend_reset()
+            record["modernList"] = True
+            write_corpus_partial()
+            status, _, blocked = modern_rpc(
+                port, "tools/call", f"corpus-{slug}-modern-call", tool_name,
+                {"recordId": "record-42", "page": 7, "X-Corpus-Flag": True, "payload": {"amount": 12}},
+            )
+            check(status == 200 and (blocked.get("error") or {}).get("code") == -32603,
+                  f"candidate modern call was not blocked for {slug}: {status} {blocked}")
+            check((blocked.get("error") or {}).get("data", {}).get("reason") == "schema_validation_unavailable",
+                  f"candidate modern reason changed for {slug}: {blocked}")
+            check(backend_state()["events"] == [], f"candidate modern blocked call reached upstream for {slug}")
+            record["modernCallBlocked"] = True
+            write_corpus_partial()
+
+        status, _, listed = legacy_rpc(
+            port, {"jsonrpc": "2.0", "id": f"corpus-{slug}-legacy-list", "method": "tools/list", "params": {}},
+            version=LEGACY[-1],
+        )
+        check(status == 200, f"{CORPUS_REVISION} legacy list failed for {slug}: {status} {listed}")
+        legacy_tools = {tool.get("name"): tool for tool in listed.get("result", {}).get("tools", [])}
+        typed_legacy_tools = {
+            tool.get("name"): tool for tool in LAST_TYPED_RESPONSE.get("result", {}).get("tools", [])
+        }
+        check(tool_name in legacy_tools, f"{CORPUS_REVISION} legacy descriptor missing for {slug}: {listed}")
+        check(tool_name in typed_legacy_tools, f"{CORPUS_REVISION} typed legacy descriptor missing for {slug}")
+        legacy_descriptor_hash = canonical_json_sha256(typed_legacy_tools[tool_name].get("inputSchema"))
+        check_descriptor_hash(
+            legacy_descriptor_hash, fixture["expectedInputSchemaSha256"],
+            f"{CORPUS_REVISION} legacy descriptor changed for {slug}",
+        )
+        record["legacyDescriptorSha256"] = legacy_descriptor_hash
+        record["legacyList"] = True
+        write_corpus_partial()
+
+        if slug == "rule-level":
+            if CORPUS_REVISION == "candidate":
+                status, _, global_listed = modern_rpc(
+                    port, "tools/list", f"corpus-{slug}-global-modern-list",
+                    origin="http://global.runtime.test", host="global.runtime.test",
+                )
+                check(status == 200, f"candidate global rule list failed: {status} {global_listed}")
+                global_tools = result_contract(global_listed, ttl=True).get("tools") or []
+            else:
+                status, _, global_listed = legacy_rpc(
+                    port,
+                    {"jsonrpc": "2.0", "id": f"corpus-{slug}-global-legacy-list", "method": "tools/list", "params": {}},
+                    version=LEGACY[-1], host="global.runtime.test",
+                )
+                global_tools = global_listed.get("result", {}).get("tools", [])
+            check(status == 200 and {tool.get("name") for tool in global_tools} == {"global_valid"},
+                  f"{CORPUS_REVISION} global rule fallback changed: {status} {global_listed}")
+            record["globalList"] = True
+            write_corpus_partial()
+
+        if fixture["legacyMapping"]:
+            arguments = {
+                "recordId": "record-42", "page": 7, "X-Corpus-Flag": True,
+                "payload": {"amount": 12},
+            }
+            status, _, called = legacy_rpc(
+                port,
+                {"jsonrpc": "2.0", "id": f"corpus-{slug}-legacy-call", "method": "tools/call",
+                 "params": {"name": tool_name, "arguments": arguments}},
+                version=LEGACY[-1],
+            )
+            check(status == 200 and "result" in called,
+                  f"{CORPUS_REVISION} legacy call failed for {slug}: {status} {called}")
+            events = backend_state()["events"]
+            check(len(events) == 1 and events[0]["path"] == f"/corpus/{slug}/record-42",
+                  f"{CORPUS_REVISION} legacy path/count changed for {slug}: {events}")
+            observed = events[0].get("compatibilityRequest") or {}
+            check(events[0]["httpMethod"] == "POST", f"legacy method changed for {slug}: {events[0]}")
+            check(observed.get("query") == {"fixed": ["yes"], "page": ["7"]},
+                  f"legacy query changed for {slug}: {events[0]}")
+            check(observed.get("flag") == "true", f"legacy header changed for {slug}: {events[0]}")
+            check(observed.get("jsonBody") == {"payload": {"amount": 12}},
+                  f"legacy body changed for {slug}: {events[0]}")
+            record["legacyRESTMapping"] = True
+            record["backendEvents"] = {"backend-primary": events}
+        CORPUS_CURRENT_RECORD = None
+        write_corpus_partial()
+    CORPUS_CURRENT_RECORD = None
+    write_corpus_partial()
+    return 0
+
+
+def descriptor_self_test():
+    manifest = json.loads((EVIDENCE / "corpus-manifest.json").read_text())
+    fixture_name = os.environ["RUNTIME_DESCRIPTOR_FIXTURE"]
+    actual_path = Path(os.environ["RUNTIME_DESCRIPTOR_ACTUAL"])
+    actual = loads_typed(actual_path.read_bytes())
+    fixture = next(item for item in manifest["fixtures"] if item["fixture"] == fixture_name)
+    observed = canonical_json_sha256(actual)
+    check_descriptor_hash(
+        observed, fixture["expectedInputSchemaSha256"], f"descriptor self-test mismatch for {fixture_name}",
+    )
+    return 0
+
+
+def check_modern_proxy_events(events):
+    check([event["rpcMethod"] for event in events] == ["tools/list", "tools/call"], f"modern proxy probed/retried: {events}")
+    for event in events:
+        check(event["protocolVersion"] == MODERN and event["mcpMethod"] == event["rpcMethod"], f"modern metadata absent: {event}")
+        check(event["cookiePresent"] and event["unrelatedCredentialPresent"], f"ordinary proxy header lost: {event}")
+        check(not any(event[key] for key in ("sessionPresent", "lastEventIDPresent", "internalRoutePresent", "authorizationPresent")), f"controlled header leaked: {event}")
+    check(events[0]["futureParam"] is None and events[1]["futureParam"] == "opaque-current-call", f"Mcp-Param scope wrong: {events}")
+
+
 def modern_proxy():
     backend_reset()
-    sensitive = {
+    fixture_headers = {
         "Cookie": "downstream-cookie", "Mcp-Session-Id": "downstream-session",
         "Last-Event-ID": "downstream-event",
         "x-unrelated-credential": "unrelated", "Authorization": "Bearer downstream-not-policy",
         "x-envoy-allow-mcp-tools": "proxy_echo",
     }
-    status, _, listed = modern_rpc(10003, "tools/list", "proxy-modern-list", extra_headers=sensitive)
+    status, _, listed = modern_rpc(10003, "tools/list", "proxy-modern-list", extra_headers=fixture_headers)
     check(status == 200, f"modern proxy list failed: {status} {listed}")
     result_contract(listed, ttl=True)
-    call_headers = dict(sensitive)
+    call_headers = dict(fixture_headers)
     call_headers["Mcp-Param-Future"] = "opaque-current-call"
     status, _, called = modern_rpc(10003, "tools/call", "proxy-modern-call", "proxy_echo", {"value": "modern"}, call_headers)
     check(status == 200, f"modern proxy call failed: {status} {called}")
     result_contract(called)
     events = backend_state()["events"]
-    check([event["rpcMethod"] for event in events] == ["tools/list", "tools/call"], f"modern proxy probed/retried: {events}")
-    for event in events:
-        check(event["protocolVersion"] == MODERN and event["mcpMethod"] == event["rpcMethod"], f"modern metadata absent: {event}")
-        check(not any(event[key] for key in ("cookiePresent", "sessionPresent", "lastEventIDPresent", "internalRoutePresent", "unrelatedCredentialPresent", "authorizationPresent")), f"sensitive header leaked: {event}")
-    check(events[0]["futureParam"] is None and events[1]["futureParam"] == "opaque-current-call", f"Mcp-Param scope wrong: {events}")
+    check_modern_proxy_events(events)
     return {"upstreamSequence": [event["rpcMethod"] for event in events], "singleStatelessRPC": True, "backendEvents": {"backend-primary": events}}
+
+
+
+def check_modern_to_legacy_events(events):
+    methods = [event["rpcMethod"] for event in events]
+    check(methods == ["initialize", "notifications/initialized", "tools/list", "initialize", "notifications/initialized", "tools/call"], f"legacy exchange not isolated: {events}")
+    for event in events:
+        check(event["cookiePresent"] and event["unrelatedCredentialPresent"], f"ordinary legacy header lost: {event}")
+        check(event["futureParam"] is None, f"modern Mcp-Param crossed legacy boundary: {event}")
+        check(not any(event[key] for key in ("lastEventIDPresent", "internalRoutePresent", "authorizationPresent")), f"controlled legacy header leaked: {event}")
+    sessions = [False, True, True, False, True, True]
+    check([event["sessionPresent"] for event in events] == sessions and
+          [event["fixtureSessionPresent"] for event in events] == sessions,
+          f"legacy handshake did not replace the downstream session: {events}")
 
 
 def modern_to_legacy():
     backend_reset()
+    fixture_headers = {"Cookie": "ordinary-cookie", "x-unrelated-credential": "ordinary-business",
+                       "Authorization": "Bearer downstream-not-policy", "Mcp-Session-Id": "downstream-session",
+                       "Last-Event-ID": "downstream-event", "x-envoy-allow-mcp-tools": "proxy_echo",
+                       "Mcp-Param-Future": "must-not-cross-era"}
     for rpc_method, rpc_id, name, arguments in (
         ("tools/list", "bridge-list", None, None),
         ("tools/call", "bridge-call", "proxy_echo", {"value": "bridge"}),
     ):
-        status, _, response = modern_rpc(10004, rpc_method, rpc_id, name, arguments, {"Mcp-Param-Future": "must-not-cross-era"})
+        status, _, response = modern_rpc(10004, rpc_method, rpc_id, name, arguments, fixture_headers)
         check(status == 200, f"modern-to-legacy failed: {status} {response}")
         result_contract(response, ttl=rpc_method == "tools/list")
     events = backend_state()["events"]
     methods = [event["rpcMethod"] for event in events]
-    check(methods == ["initialize", "notifications/initialized", "tools/list", "initialize", "notifications/initialized", "tools/call"], f"legacy exchange not isolated: {events}")
-    for event in events:
-        check(event["futureParam"] is None, f"modern Mcp-Param crossed legacy boundary: {event}")
-        check(not any(event[key] for key in ("cookiePresent", "lastEventIDPresent", "internalRoutePresent", "unrelatedCredentialPresent", "authorizationPresent")), f"sensitive header leaked: {event}")
+    check_modern_to_legacy_events(events)
     return {"upstreamSequence": methods, "isolatedHandshakes": 2, "backendEvents": {"backend-primary": events}}
 
 
@@ -354,21 +844,259 @@ def auth_and_isolation():
     return {"explicitAuth": True, "preservedStatuses": [401, 403], "postFailureOrigin": "secondary", "backendEvents": {"backend-primary": backend_state()["events"], "backend-secondary": secondary}}
 
 
-def main():
+
+
+def check_instructions_failure(status, body, mode):
+    if mode in ("http401", "http403"):
+        check(status == int(mode[4:]), f"auth status changed: {status} {body}")
+    else:
+        check(status != 200 or "error" in body, f"failure became local success: {status} {body}")
+    if mode == "rpc-error":
+        check(isinstance(body, dict) and "error" in body and "result" not in body,
+              f"RPC error must exclude result: {body}")
+    check(not isinstance(body, dict) or body.get("result", {}).get("instructions") != "must not extract",
+          "error instructions leaked")
+
+
+def instructions_disconnect_request():
+    # The raw socket bypasses urllib's header construction. Keep the same
+    # modern media negotiation as modern_rpc before observing cancellation.
+    body = json.dumps({"jsonrpc": "2.0", "id": "disconnect", "method": "server/discover", "params": {"_meta": modern_meta()}}).encode()
+    return (b"POST /mcp HTTP/1.1\r\nHost: mcp.runtime.test\r\nOrigin: http://mcp.runtime.test\r\n"
+            b"Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n"
+            b"MCP-Protocol-Version: 2026-07-28\r\nMcp-Method: server/discover\r\n"
+            b"X-Instructions-Mode: slow\r\nX-Request-ID: rv-instructions-disconnect\r\nContent-Length: "
+            + str(len(body)).encode() + b"\r\n\r\n" + body)
+
+
+def check_instructions_default_response(observed, baseline):
+    # The pinned instructions baseline predates downstream November support.
+    # Permit only that exact declaration addition and its derived body hash;
+    # compare every remaining recorded response field against the old binary.
+    result = baseline["body"]["result"]
+    versions = list(LEGACY) + [MODERN]
+    check(result["supportedVersions"] == versions, "pinned default/off versions differ")
+    baseline_body = json.dumps(baseline["body"], sort_keys=True, separators=(",", ":")).encode()
+    check(baseline["bodySha256"] == hashlib.sha256(baseline_body).hexdigest(), "pinned default/off body hash differs")
+    expected = {**baseline, "body": {**baseline["body"], "result": {
+        **result, "supportedVersions": versions[:-1] + ["2025-11-25", MODERN]}}}
+    expected_body = json.dumps(expected["body"], sort_keys=True, separators=(",", ":")).encode()
+    expected["bodySha256"] = hashlib.sha256(expected_body).hexdigest()
+    check(observed == expected, "default/off differs from pinned baseline beyond November version declaration")
+
+
+def instructions_verification():
+    # This mode is deliberately separate evidence from the historical full matrix.
+    from concurrent.futures import ThreadPoolExecutor
+    variant = os.environ["RUNTIME_INSTRUCTIONS_VARIANT"]
     wait_http("http://backend-primary:8080/healthz")
-    wait_http("http://gateway:9901/ready")
+    wait_http(f"http://{GATEWAY_HOST}:9901/ready")
+    defaults = {}
+
+    def discover(port=14000, mode="normal", headers=None, rpc_id=None):
+        rpc_id = rpc_id or f"instructions-{mode}-{port}"
+        return modern_rpc(port, "server/discover", rpc_id,
+                          extra_headers={"X-Instructions-Mode": mode, **(headers or {})})
+
+    def local(response, expected, rpc_id, port=14000):
+        status, headers, body = response
+        check(status == 200 and body.get("id") == rpc_id and "error" not in body,
+              f"not a successful discover: {status} {body}")
+        result = body["result"]
+        check(result.get("resultType") == "complete" and result.get("ttlMs") == 0
+              and result.get("cacheScope") == "private", f"gateway field ownership: {result}")
+        check(result.get("supportedVersions") != ["upstream-only"] and
+              result.get("serverInfo", {}).get("name") != "upstream-only" and
+              "resources" not in result.get("capabilities", {}) and
+              result.get("_meta", {}).get("io.modelcontextprotocol/serverInfo") ==
+              {"name": f"instructions-{port}", "version": "1.0.0"},
+              f"upstream fields merged: {result}")
+        check(result.get("instructions") == expected if expected is not None else "instructions" not in result,
+              f"instructions mismatch: {result}")
+        check(not any(name.lower() == "mcp-session-id" for name in headers), "upstream session leaked")
+        return result
+
+    def disabled(port):
+        def case():
+            backend_reset()
+            rpc_id = f"default-{port}"
+            response = discover(port, rpc_id=rpc_id)
+            local(response, None, rpc_id, port)
+            check(not backend_state()["events"], "default-off called upstream")
+            defaults[str(port)] = EXCHANGES[-1]["response"]
+            if variant == "candidate":
+                baseline = json.loads((EVIDENCE / "instructions-baseline.json").read_text())["defaults"][str(port)]
+                check_instructions_default_response(defaults[str(port)], baseline)
+                return {"backendAttempts": 0, "baselineEqualExceptVersionDeclaration": True}
+            return {"backendAttempts": 0, "baselineEqual": False}
+        return case
+
+    def success(mode, expected):
+        def case():
+            backend_reset()
+            rpc_id = f"instructions-{mode}-14000"
+            local(discover(mode=mode, headers={"X-Tenant": "tenant-a", "Cookie": "fixture=cookie"}), expected, rpc_id)
+            events = backend_state()["events"]
+            check(len(events) == 1, f"expected one main-route attempt: {events}")
+            event = events[0]
+            request = event["instructionsRequest"]
+            check(event["rpcId"] == rpc_id and event["rpcMethod"] == "server/discover"
+                  and event["mcpMethod"] == "server/discover" and event["protocolVersion"] == MODERN,
+                  f"request identity/protocol changed: {event}")
+            upstream_meta = {**modern_meta(), "io.modelcontextprotocol/clientInfo": {"name": "Higress-mcp-proxy", "version": "1.0.0"}}
+            check(request["meta"] == upstream_meta and request["tenant"] == "tenant-a" and event["cookiePresent"],
+                  f"metadata/ordinary headers changed: {event}")
+            check(not any(event[key] for key in ("sessionPresent", "lastEventIDPresent", "internalRoutePresent", "futureParam")),
+                  f"reserved header leaked: {event}")
+            return {"pluginSubmissions": 1, "backendAttempts": 1, "backendEvents": events}
+        return case
+
+    def auth(port, predicate):
+        def case():
+            backend_reset()
+            rpc_id = f"instructions-auth-{port}"
+            headers = {"Authorization": "Bearer instructions-client"} if port == 14005 else {}
+            local(discover(port, headers=headers, rpc_id=rpc_id), "Use the weather tool. 天气", rpc_id, port)
+            events = backend_state()["events"]
+            check(len(events) == 1 and predicate(events[0]), f"auth policy changed: {events}")
+            return {"backendEvents": events}
+        return case
+
+    def failure(mode):
+        def case():
+            backend_reset()
+            status, _, body = discover(mode=mode)
+            check_instructions_failure(status, body, mode)
+            check(len(backend_state()["events"]) == 1, "failure path submitted more than once")
+            return {"backendEvents": backend_state()["events"]}
+        return case
+
+    def incomplete():
+        backend_reset()
+        status, _, body = discover(mode="incomplete")
+        check(status == 200 and body["result"]["resultType"] == "input_required" and
+              body["result"]["instructions"] == "upstream incomplete" and
+              body["result"]["serverInfo"]["name"] == "upstream-only", "incomplete result replaced by local success")
+        return {"backendEvents": backend_state()["events"]}
+
+    def retry():
+        backend_reset()
+        local(discover(14007, "retry"), "Use the weather tool. 天气", "instructions-retry-14007", 14007)
+        events = backend_state()["events"]
+        check(len(events) == 2 and events[0]["rpcId"] == events[1]["rpcId"], f"route retry not preserved: {events}")
+        return {"pluginSubmissions": 1, "configuredRouteRetries": 1, "backendAttempts": 2, "backendEvents": events}
+
+    def timeout():
+        backend_reset()
+        started = time.monotonic()
+        status, _, body = discover(14008, "slow")
+        elapsed = time.monotonic() - started
+        check((status != 200 or "error" in body) and 0.15 <= elapsed < 0.9,
+              f"existing route deadline not observed: {status} {elapsed:.3f}s {body}")
+        time.sleep(1.1)
+        check(len(backend_state()["events"]) == 1, "timeout caused extra submission")
+        return {"elapsedSeconds": elapsed, "backendEvents": backend_state()["events"]}
+
+    def later_filter():
+        backend_reset()
+        status, _, body = discover(14009, headers={"X-Instructions-Deny": "yes"})
+        check(status == 403 and not backend_state()["events"], f"later filter bypassed: {status} {body}")
+        return {"backendAttempts": 0}
+
+    def current_request():
+        backend_reset()
+        first = discover(mode="fresh")[2]["result"]["instructions"]
+        second = discover(mode="fresh", rpc_id="fresh-second")[2]["result"]["instructions"]
+        check(first != second, "instructions cached")
+        def tenant(value):
+            rpc_id = f"tenant-{value}"
+            return local(discover(mode="identity", rpc_id=rpc_id, headers={"X-Tenant": value}), "tenant:" + value, rpc_id)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(tenant, ("a", "b")))
+        check(len(backend_state()["events"]) == 4, "request isolation caused extra/missing attempts")
+        return {"backendEvents": backend_state()["events"]}
+
+    def disconnect():
+        backend_reset()
+        request = instructions_disconnect_request()
+        with socket.create_connection((GATEWAY_HOST, 14000), timeout=5) as connection:
+            connection.sendall(request)
+            deadline = time.monotonic() + 5
+            while not backend_state()["events"] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            check(len(backend_state()["events"]) == 1, "disconnect request did not reach main route")
+        EXCHANGES.append({"case": CURRENT_CASE, "accessRequestId": "rv-instructions-disconnect",
+                          "transport": "raw-disconnect", "rawRequest": request.decode("utf-8"),
+                          "rawRequestSha256": hashlib.sha256(request).hexdigest(),
+                          "request": {"listenerPort": 14000, "httpMethod": "POST", "path": "/mcp",
+                                      "rpcMethod": "server/discover", "rpcId": "disconnect", "mcpMethod": "server/discover",
+                                      "protocolVersion": MODERN, "instructionsMode": "slow"},
+                          "response": {"status": "client_disconnected"}})
+        time.sleep(1.1)
+        local(discover(rpc_id="after-disconnect"), "Use the weather tool. 天气", "after-disconnect")
+        check(len(backend_state()["events"]) == 2, "late callback affected subsequent request")
+        return {"backendEvents": backend_state()["events"], "scope": "existing cancellation path; no active reset guarantee"}
+
+    cases = [(f"default-off-{port}", disabled(port)) for port in (14001, 14002)]
+    if variant == "candidate":
+        values = {"normal": "Use the weather tool. 天气", "sse": "Use the weather tool. 天气", "whitespace": " \n\t ",
+                  "limit": "界" * 10922 + "ab", "missing": None, "empty": None, "number": None,
+                  "object": None, "null": None, "oversize": None}
+        cases += [("field-" + mode, success(mode, value)) for mode, value in values.items()]
+        cases += [("failure-" + mode, failure(mode)) for mode in ("http401", "http403", "http429", "http500", "rpc-error", "invalid")]
+        cases += [
+            ("auth-anonymous", auth(14000, lambda e: not e["authorizationPresent"])),
+            ("auth-fixed-header", auth(14003, lambda e: e["authorizationMatchesExplicitPolicy"])),
+            ("auth-query", auth(14004, lambda e: e["instructionsRequest"]["queryCredentialMatches"])),
+            ("auth-passthrough", auth(14005, lambda e: e["instructionsRequest"]["passthroughMatches"])),
+            ("auth-public-discover-protected-tools", auth(14006, lambda e: not e["authorizationPresent"])),
+            ("incomplete-preserves-existing-path", incomplete), ("main-route-retry", retry),
+            ("main-route-timeout", timeout), ("later-filter-denial", later_filter),
+            ("current-request-no-cache-isolation", current_request), ("disconnect-late-callback", disconnect),
+        ]
+    for name, callback in cases:
+        record(name, callback)
+    snapshot = {"mode": "instructions-focused", "variant": variant, "expectedCases": [name for name, _ in cases],
+                "defaults": defaults, "cases": RESULTS, "exchanges": EXCHANGES, "backendFinal": backend_state()}
+    (EVIDENCE / f"instructions-{variant}.json").write_text(json.dumps(snapshot, indent=2, sort_keys=True))
+    return 1 if any(result["status"] != "PASS" for result in RESULTS) else 0
+
+
+def main():
+    if os.environ.get("RUNTIME_VERIFY_INSTRUCTIONS") == "1":
+        return instructions_verification()
+    if DESCRIPTOR_SELF_TEST:
+        return descriptor_self_test()
+    if GENERATION_TRANSITION:
+        return generation_transition()
+    if COMPATIBILITY_ORACLE:
+        return compatibility_oracle()
+    if CORPUS_REVISION:
+        return corpus_verification()
+    wait_http("http://backend-primary:8080/healthz")
+    wait_http(f"http://{GATEWAY_HOST}:9901/ready")
     cases = [
         ("registered-modern-discover-list-call", direct_mode(10000, "maps_weather", {"city": "Hangzhou"}, "/v3/weather/weatherInfo")),
         ("rest-modern-discover-list-call", direct_mode(10001, "get_weather", {"city": "Hangzhou"}, "/rest/weather")),
         ("rest-invalid-args-and-hostile-origin", rest_rejections),
         ("composed-list-and-router-call-boundary", composed_boundary),
         ("rest-three-legacy-versions", legacy_direct_versions),
+        ("rest-schema-compatibility-modern-block-and-legacy-pass-through", schema_compatibility),
         ("proxy-modern-stateless-and-header-isolation", modern_proxy),
         ("proxy-modern-to-legacy-isolated-handshakes", modern_to_legacy),
         ("proxy-default-is-legacy-for-three-versions", default_legacy_proxy),
         ("proxy-legacy-to-modern-is-explicitly-unsupported", unsupported_legacy_to_modern),
         ("proxy-auth-errors-and-cross-origin-isolation", auth_and_isolation),
     ]
+    if os.environ.get("RUNTIME_AUTO_EXPLICIT_BASELINE") == "1":
+        cases = [(name, callback) for name, callback in cases if name.startswith("proxy-")]
+        for name, callback in cases:
+            record(name, callback)
+        (EVIDENCE / "auto-explicit-baseline.json").write_text(json.dumps({"cases": RESULTS, "exchanges": EXCHANGES}, indent=2, sort_keys=True))
+        return 1 if any(result["status"] != "PASS" for result in RESULTS) else 0
+    import verify_auto
+    cases += verify_auto.cases(sys.modules[__name__])
+    (EVIDENCE / "expected-main-cases.json").write_text(json.dumps([name for name, _ in cases]))
     for name, callback in cases:
         record(name, callback)
     primary = backend_state()
@@ -383,4 +1111,12 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except DescriptorMismatchError as exc:
+        record_corpus_failure(exc)
+        print(f"descriptor mismatch: {exc}", file=sys.stderr)
+        sys.exit(DESCRIPTOR_MISMATCH_EXIT)
+    except Exception as exc:
+        record_corpus_failure(exc)
+        raise

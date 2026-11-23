@@ -21,7 +21,10 @@ import (
 )
 
 const (
-	pluginName = "ai-quota"
+	pluginName           = "ai-quota"
+	ctxKeyQuotaDeducted  = "quotaDeducted"
+	ctxKeySseFramer      = "sseFramer"
+	streamingContentType = "text/event-stream"
 )
 
 type ChatMode string
@@ -49,7 +52,9 @@ func init() {
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
+		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingResponseBody),
+		wrapper.ProcessResponseBody(onHttpResponseBody),
 	)
 }
 
@@ -152,6 +157,7 @@ func parseConfig(json gjson.Result, config *QuotaConfig) error {
 
 func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types.Action {
 	context.DisableReroute()
+	context.DontReadRequestBody()
 	log.Debugf("onHttpRequestHeaders()")
 	// get tokens
 	consumer, err := proxywasm.GetHttpRequestHeader("x-mse-consumer")
@@ -178,7 +184,7 @@ func onHttpRequestHeaders(context wrapper.HttpContext, config QuotaConfig) types
 			return queryQuota(context, config, consumer, path)
 		}
 		if adminMode == AdminModeRefresh || adminMode == AdminModeDelta {
-			context.BufferRequestBody()
+			context.RequireRequestBody()
 			return types.HeaderStopIteration
 		}
 		return types.ActionContinue
@@ -236,44 +242,86 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config QuotaConfig, body []byte)
 	return types.ActionContinue
 }
 
-func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, data []byte, endOfStream bool) []byte {
+func onHttpResponseHeaders(ctx wrapper.HttpContext, _ QuotaConfig) types.Action {
 	chatMode, ok := ctx.GetContext("chatMode").(ChatMode)
-	if !ok {
-		return data
+	if !ok || chatMode != ChatModeCompletion {
+		ctx.DontReadResponseBody()
+		return types.ActionContinue
 	}
-	if chatMode == ChatModeNone || chatMode == ChatModeAdmin {
-		return data
+
+	contentType, _ := proxywasm.GetHttpResponseHeader("content-type")
+	if !strings.Contains(strings.ToLower(contentType), streamingContentType) {
+		ctx.BufferResponseBody()
 	}
-	if usage := tokenusage.GetTokenUsage(ctx, data); usage.TotalToken > 0 {
-		ctx.SetContext(tokenusage.CtxKeyInputToken, usage.InputToken)
-		ctx.SetContext(tokenusage.CtxKeyOutputToken, usage.OutputToken)
+	return types.ActionContinue
+}
+
+func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config QuotaConfig, data []byte, endOfStream bool) []byte {
+	processResponseUsage(ctx, config, data, endOfStream)
+	return data
+}
+
+func onHttpResponseBody(ctx wrapper.HttpContext, config QuotaConfig, data []byte) types.Action {
+	processResponseUsage(ctx, config, data, true)
+	return types.ActionContinue
+}
+
+func processResponseUsage(ctx wrapper.HttpContext, config QuotaConfig, data []byte, endOfStream bool) {
+	if deducted, _ := ctx.GetContext(ctxKeyQuotaDeducted).(bool); deducted {
+		return
+	}
+
+	chatMode, ok := ctx.GetContext("chatMode").(ChatMode)
+	if !ok || chatMode != ChatModeCompletion {
+		return
+	}
+
+	// Reassemble SSE events before GetTokenUsage so a usage field split across
+	// streaming callbacks is recovered (same approach as ai-statistics).
+	framer, ok := ctx.GetContext(ctxKeySseFramer).(*sseFramer)
+	if !ok || framer == nil {
+		framer = &sseFramer{}
+		ctx.SetContext(ctxKeySseFramer, framer)
+	}
+	recordUsage := func(chunk []byte) {
+		if usage := tokenusage.GetTokenUsage(ctx, chunk); usage.TotalToken > 0 {
+			ctx.SetContext(tokenusage.CtxKeyInputToken, usage.InputToken)
+			ctx.SetContext(tokenusage.CtxKeyOutputToken, usage.OutputToken)
+		}
+	}
+	for _, event := range framer.frameCallback(data) {
+		recordUsage(event)
 	}
 
 	// chat completion mode
 	if !endOfStream {
-		return data
+		return
 	}
 
-	if ctx.GetContext(tokenusage.CtxKeyInputToken) == nil || ctx.GetContext(tokenusage.CtxKeyOutputToken) == nil || ctx.GetContext("consumer") == nil {
-		return data
+	if tail := framer.incompleteEvent(); len(tail) > 0 {
+		recordUsage(wrapper.UnifySSEChunk(tail))
+	}
+	if overflowCount := framer.drain(); overflowCount > 0 {
+		log.Debugf("ai-quota: sse framer discarded %d oversized incomplete event(s)", overflowCount)
 	}
 
-	inputToken, ok := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
-	if !ok {
-		return data
+	inputToken, inputTokenOK := ctx.GetContext(tokenusage.CtxKeyInputToken).(int64)
+	outputToken, outputTokenOK := ctx.GetContext(tokenusage.CtxKeyOutputToken).(int64)
+	consumer, consumerOK := ctx.GetContext("consumer").(string)
+	if !inputTokenOK || !outputTokenOK || !consumerOK || consumer == "" {
+		return
 	}
-	outputToken, ok := ctx.GetContext(tokenusage.CtxKeyOutputToken).(int64)
-	if !ok {
-		return data
-	}
-	consumer, ok := ctx.GetContext("consumer").(string)
-	if !ok {
-		return data
-	}
+
 	totalToken := int(inputToken + outputToken)
 	log.Debugf("update consumer:%s, totalToken:%d", consumer, totalToken)
-	config.redisClient.DecrBy(config.RedisKeyPrefix+consumer, totalToken, nil)
-	return data
+
+	// Mark the request before dispatching so repeated end-of-stream callbacks cannot
+	// issue duplicate decrements. A synchronous dispatch failure is safe to retry.
+	ctx.SetContext(ctxKeyQuotaDeducted, true)
+	if err := config.redisClient.DecrBy(config.RedisKeyPrefix+consumer, totalToken, nil); err != nil {
+		ctx.SetContext(ctxKeyQuotaDeducted, false)
+		log.Errorf("failed to update consumer:%s quota: %v", consumer, err)
+	}
 }
 
 func deniedNoKeyAuthData() types.Action {

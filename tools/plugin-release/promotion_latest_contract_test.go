@@ -24,6 +24,15 @@ type latestContractPlugin struct {
 	EvidenceVersion string
 	EvidenceDigest  string
 	EvidenceRef     string
+	// Blocked declares a prepare-time migration exclusion: the planned version
+	// tag is occupied by BlockedExistingDigest, so this batch publishes neither
+	// the version tag nor the latest alias for the plugin.
+	Blocked               bool
+	BlockedExistingDigest string
+	PullManifestMode      string
+	// Provenance sets the snapshot entry's provenanceMode; empty leaves the
+	// entry without the field, which the workflow resolves to candidate.
+	Provenance string
 }
 
 type latestContractResult struct {
@@ -31,6 +40,33 @@ type latestContractResult struct {
 	output  string
 	log     string
 	journal map[string]any
+}
+
+func TestPromotionLatestBuildsToolFromDispatchCommitBeforePinningSource(t *testing.T) {
+	promote := mustWorkflow(t, "promote-plugin-release.yaml")
+	for _, required := range []string{
+		"ref: ${{ github.sha }}",
+		`test "$WORKFLOW_REF" = refs/heads/main`,
+		`git merge-base --is-ancestor "$SOURCE_COMMIT" "$WORKFLOW_SHA"`,
+		"go build -p 1 -o /tmp/plugin-release .",
+		`git checkout -q "$SOURCE_COMMIT"`,
+	} {
+		if !strings.Contains(promote, required) {
+			t.Fatalf("promote workflow latest job lacks %q", required)
+		}
+	}
+	buildTool := strings.Index(promote, "go build -p 1 -o /tmp/plugin-release .")
+	pinSource := strings.Index(promote, `git checkout -q "$SOURCE_COMMIT"`)
+	if buildTool < 0 || pinSource < 0 || buildTool > pinSource {
+		t.Fatal("the latest job must build the release tool from the dispatch commit before pinning the tree to source_commit")
+	}
+	// The workflow file comes from the dispatch commit, so a contract-local
+	// build would compile preparation-time tool code and reintroduce the
+	// workflow/tool version skew this layout prevents.
+	latestContract := workflowShellContract(t, "promote-plugin-release.yaml", "promotion-latest-contract")
+	if strings.Contains(latestContract, "go build") {
+		t.Fatal("the latest contract must not build its own tool: the contract runs with the tree already pinned to source_commit")
+	}
 }
 
 func TestPromotionLatestContractAllowsOnlyEvidenceBoundBootstrapReplacement(t *testing.T) {
@@ -170,6 +206,40 @@ func TestPromotionLatestContractKeepsAnnotatedMonotonicityAndConflicts(t *testin
 	}
 }
 
+func TestPromotionLatestContractRepairsStaleSameVersionPublicLatest(t *testing.T) {
+	// A public entry's digest was recorded from the live version tag at
+	// prepare time; an out-of-band push can leave the latest alias on an
+	// earlier manifest of the same version and identical content. The
+	// promotion replaces the alias with the snapshot digest and journals
+	// the displaced version and digest instead of failing closed.
+	stale := testDigest("stale-latest-manifest")
+	result := runPromotionLatestContract(t, false, []latestContractPlugin{
+		{ID: "public", Version: "1.0.0", Digest: testDigest("desired"),
+			CurrentDigest: stale, CurrentVersion: "1.0.0", Provenance: "public"},
+		{ID: "candidate", Version: "1.0.0", Digest: testDigest("candidate-desired"),
+			CurrentDigest: testDigest("candidate-current"), CurrentVersion: "1.0.0"},
+	})
+	if result.err == nil || !strings.Contains(result.output, "latest alias conflict") {
+		t.Fatalf("candidate same-version conflict stopped failing: err=%v\n%s", result.err, result.output)
+	}
+	assertNoLatestMutation(t, result.log)
+
+	result = runPromotionLatestContract(t, false, []latestContractPlugin{
+		{ID: "public", Version: "1.0.0", Digest: testDigest("desired"),
+			CurrentDigest: stale, CurrentVersion: "1.0.0", Provenance: "public"},
+	})
+	if result.err != nil {
+		t.Fatalf("stale same-version public latest was not repaired: %v\n%s", result.err, result.output)
+	}
+	if !strings.Contains(result.log, "cp registry.example.invalid/plugins/public@") {
+		t.Fatalf("repaired public latest was not copied:\n%s", result.log)
+	}
+	entry := latestJournalEntries(t, result.journal)[0]
+	if entry["preflight"] != "replace-public" || entry["oldVersion"] != "1.0.0" || entry["oldDigest"] != stale {
+		t.Fatalf("public repair did not journal the displaced alias: %#v", entry)
+	}
+}
+
 func TestPromotionLatestContractCreatesAbsentAndSkipsIdentical(t *testing.T) {
 	desired := testDigest("desired")
 	result := runPromotionLatestContract(t, false, []latestContractPlugin{
@@ -197,6 +267,43 @@ func TestPromotionLatestContractDoesNotMutateBeforeCompletePreflight(t *testing.
 		t.Fatalf("incomplete preflight unexpectedly succeeded: err=%v\n%s", result.err, result.output)
 	}
 	assertNoLatestMutation(t, result.log)
+}
+
+func TestPromotionLatestPullGateJournalsFailureAndProcessesPassingPlugins(t *testing.T) {
+	result := runPromotionLatestContract(t, false, []latestContractPlugin{
+		{ID: "bad", Version: "1.0.0", Digest: testDigest("bad-manifest"), PullManifestMode: "incomplete"},
+		{ID: "good", Version: "2.0.0", Digest: testDigest("good-manifest")},
+	})
+	if result.err == nil || !strings.Contains(result.output, "public artifact pull gate(s) failed") {
+		t.Fatalf("partial pull gate did not fail visibly: err=%v\n%s", result.err, result.output)
+	}
+	if strings.Contains(result.log, "cp registry.example.invalid/plugins/bad@") || strings.Contains(result.log, "plugins/bad:latest") {
+		t.Fatalf("failed plugin's latest alias was copied:\n%s", result.log)
+	}
+	if !strings.Contains(result.log, "cp registry.example.invalid/plugins/good@") || !strings.Contains(result.log, "plugins/good:latest") {
+		t.Fatalf("passing plugin's latest alias was not processed:\n%s", result.log)
+	}
+	lastPull := strings.LastIndex(result.log, "pull registry.example.invalid/")
+	firstCopy := strings.Index(result.log, "cp registry.example.invalid/")
+	if lastPull < 0 || firstCopy < 0 || lastPull > firstCopy {
+		t.Fatalf("every remote public pull must finish before the first latest copy:\n%s", result.log)
+	}
+	if strings.Contains(result.log, "pull file://") {
+		t.Fatalf("pull gate used a local file reference:\n%s", result.log)
+	}
+	if result.journal["phase"] != "latest-partial" || result.journal["pullGateFailures"] != float64(1) {
+		t.Fatalf("failed pull gate did not produce a partial journal: %#v", result.journal)
+	}
+	entries := result.journal["entries"].([]any)
+	failed := entries[0].(map[string]any)
+	pullGate := failed["pullGate"].(map[string]any)
+	failedDigest, _ := failed["digest"].(string)
+	if failed["preflight"] != "pull-gate-failed" || !digestPattern.MatchString(failedDigest) || pullGate["status"] != "failed" || pullGate["digestRef"] != "registry.example.invalid/plugins/bad@"+failedDigest || !strings.Contains(pullGate["reason"].(string), "exactly two layers") {
+		t.Fatalf("failed digest/reason is not auditable: %#v", failed)
+	}
+	if strings.Contains(result.log, "push ") {
+		t.Fatalf("partial pull failure published a completion marker:\n%s", result.log)
+	}
 }
 
 func runPromotionLatestContract(t *testing.T, bootstrap bool, plugins []latestContractPlugin) latestContractResult {
@@ -228,13 +335,75 @@ func runPromotionLatestContractFixture(t *testing.T, bootstrap, corruptEvidenceS
 	snapshot := map[string]any{"gatewayVersion": gateway, "plugins": []any{}}
 	registry := map[string]any{}
 	evidencePlugins := map[string]any{}
+	configBytes := []byte(`{}`)
+	wasmBytes := proxyWasmFixture()
+	configDigest := digestBytes(configBytes)
+	manifestDir := filepath.Join(root, "pulled-manifests")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, plugin := range plugins {
 		ref := "registry.example.invalid/plugins/" + plugin.ID + ":" + plugin.Version
 		latest := "registry.example.invalid/plugins/" + plugin.ID + ":latest"
-		snapshot["plugins"] = append(snapshot["plugins"].([]any), map[string]any{
+		sourceCommit := strings.Repeat("a", 40)
+		sourceCreated := "2026-01-02T03:04:05Z"
+		inputHash := testDigest("input-" + plugin.ID)
+		originalDigest := plugin.Digest
+		manifest := map[string]any{
+			"schemaVersion": 2,
+			"mediaType":     ociImageManifestMediaType,
+			"config": map[string]any{
+				"mediaType": "application/vnd.unknown.config.v1+json",
+				"digest":    configDigest,
+				"size":      len(configBytes),
+			},
+			"layers": []any{
+				pulledLayer(wasmConfigMediaType, "config.json", configBytes),
+				pulledLayer(wasmContentMediaType, "plugin.wasm", wasmBytes),
+			},
+			"annotations": map[string]any{
+				"org.opencontainers.image.created":  sourceCreated,
+				"org.opencontainers.image.revision": sourceCommit,
+				"org.opencontainers.image.version":  plugin.Version,
+				"io.higress.plugin.input-hash":      inputHash,
+			},
+		}
+		if plugin.PullManifestMode == "incomplete" {
+			manifest["layers"] = manifest["layers"].([]any)[:1]
+		}
+		manifestBytes := marshalLatestFixture(t, manifest)
+		plugin.Digest = digestBytes(manifestBytes)
+		if plugin.CurrentDigest == originalDigest {
+			plugin.CurrentDigest = plugin.Digest
+		}
+		manifestPath := filepath.Join(manifestDir, plugin.ID+".json")
+		if err := os.WriteFile(manifestPath, manifestBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		digestRef := "registry.example.invalid/plugins/" + plugin.ID + "@" + plugin.Digest
+		snapshotEntry := map[string]any{
 			"logicalId": plugin.ID, "ociRef": ref, "digest": plugin.Digest, "version": plugin.Version,
-		})
-		registry[ref] = map[string]any{"digest": plugin.Digest, "version": plugin.Version}
+			"sourceCommit": sourceCommit, "inputHash": inputHash,
+		}
+		if plugin.Provenance != "" {
+			snapshotEntry["provenanceMode"] = plugin.Provenance
+		}
+		if plugin.Blocked {
+			snapshotEntry["migration"] = map[string]any{
+				"state": "blocked", "existingDigest": plugin.BlockedExistingDigest, "plannedDigest": plugin.Digest,
+				"sourceComparison": "unannotated", "recommendation": "delete-legacy",
+			}
+			// The planned version tag is occupied by the legacy artifact this
+			// exclusion records; the batch never publishes it.
+			registry[ref] = map[string]any{"digest": plugin.BlockedExistingDigest, "version": ""}
+		} else {
+			registry[ref] = map[string]any{"digest": plugin.Digest, "version": plugin.Version}
+			registry[digestRef] = map[string]any{
+				"digest": plugin.Digest, "version": plugin.Version, "sourceCommit": sourceCommit,
+				"inputHash": inputHash, "manifestPath": manifestPath,
+			}
+		}
+		snapshot["plugins"] = append(snapshot["plugins"].([]any), snapshotEntry)
 		if plugin.CurrentDigest != "" {
 			registry[latest] = map[string]any{"digest": plugin.CurrentDigest, "version": plugin.CurrentVersion}
 		}
@@ -278,6 +447,23 @@ func runPromotionLatestContractFixture(t *testing.T, bootstrap, corruptEvidenceS
 	if err := os.WriteFile(statePath, marshalLatestFixture(t, registry), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	pulledConfig := filepath.Join(root, "pulled-config.json")
+	pulledWasm := filepath.Join(root, "pulled-plugin.wasm")
+	if err := os.WriteFile(pulledConfig, configBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pulledWasm, wasmBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summaryPath := filepath.Join(root, "step-summary.md")
+	writeExecutableFixture(t, filepath.Join(bin, "git"), `#!/bin/sh
+set -eu
+test "$1" = show
+test "$2" = -s
+test "$3" = --format=%cI
+test "$4" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+printf '%s\n' "$SOURCE_CREATED"
+`)
 	writeExecutableFixture(t, filepath.Join(bin, "oras"), `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$ORAS_LOG"
@@ -291,10 +477,30 @@ if [ "$1 $2" = "manifest fetch" ]; then
     jq -cn --arg digest "$(jq -er .digest <<<"$record")" '{digest:$digest}'
     exit 0
   fi
-  if [ "${4:-}" = "--format" ]; then
+  if [ "${4:-}" = "" ]; then
+    # A bare manifest fetch prints the manifest itself, whose top-level
+    # annotations the latest-alias check reads.
     jq -cn --arg version "$(jq -r '.version // empty' <<<"$record")" '{annotations:{"org.opencontainers.image.version":$version}}'
     exit 0
   fi
+  if [ "${4:-}" = "--output" ]; then
+    output=$5
+    mkdir -p "$(dirname "$output")"
+    cp "$(jq -er .manifestPath <<<"$record")" "$output"
+    exit 0
+  fi
+fi
+if [ "$1" = pull ]; then
+  ref=$2
+  if ! jq -e --arg ref "$ref" '.[$ref]' "$ORAS_STATE" >/dev/null; then
+    echo "response status code 404: Not Found" >&2
+    exit 1
+  fi
+  test "${3:-}" = "--output"
+  mkdir -p "$4"
+  cp "$PULLED_CONFIG" "$4/config.json"
+  cp "$PULLED_WASM" "$4/plugin.wasm"
+  exit 0
 fi
 if [ "$1" = cp ]; then
   source=$2
@@ -313,6 +519,14 @@ exit 2
 		t.Fatalf("promotion workflow has %d descriptor contracts, want 2", len(descriptorContracts))
 	}
 	latestContract := workflowShellContract(t, "promote-plugin-release.yaml", "promotion-latest-contract")
+	// The workflow builds the release tool from its dispatch commit before
+	// the contract runs; the contract consumes /tmp/plugin-release without
+	// building it, so mirror that prelude build here.
+	build := exec.Command("go", "build", "-o", "/tmp/plugin-release", ".")
+	build.Dir = toolDir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build plugin-release tool: %v\n%s", err, out)
+	}
 	script := "set -euo pipefail\n" + descriptorContracts[1] + "\n" + latestContract
 	snapshotSHA := sha256.Sum256([]byte(root))
 	snapshotSHAHex := hex.EncodeToString(snapshotSHA[:])
@@ -327,6 +541,10 @@ exit 2
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"ORAS_LOG="+logPath,
 		"ORAS_STATE="+statePath,
+		"PULLED_CONFIG="+pulledConfig,
+		"PULLED_WASM="+pulledWasm,
+		"SOURCE_CREATED=2026-01-02T03:04:05Z",
+		"GITHUB_STEP_SUMMARY="+summaryPath,
 		"SNAPSHOT_PATH=plugins/release/snapshots/"+gateway+".json",
 		"SNAPSHOT_SHA256="+snapshotSHAHex,
 	)

@@ -308,8 +308,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"x-mse-consumer", "consumer1"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -329,8 +329,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"x-mse-consumer", "consumer2"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -349,8 +349,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"x-request-id", "req-789"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -439,6 +439,36 @@ func TestOnHttpRequestBody(t *testing.T) {
 
 			// 应该返回 ActionContinue
 			require.Equal(t, types.ActionContinue, action)
+
+			host.CompleteHttp()
+		})
+
+		// 测试 Gemini 流式 path（带 ?alt=sse query）也能从 path 正确提取模型名。
+		// 回归：正则末尾的 $ 锚点曾因 query 后缀失配，导致模型名为 UNKNOWN。
+		t.Run("gemini streaming path with query extracts model", func(t *testing.T) {
+			host, status := test.NewTestHost(requestBodyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// path 带 ?alt=sse，且 body 中没有 model 字段（Gemini 原生协议模型名在 path 里）
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1beta/models/gemini-3.1-flash-image-preview:streamGenerateContent?alt=sse"},
+				{":method", "POST"},
+			})
+
+			requestBody := []byte(`{
+				"contents": [
+					{"role": "user", "parts": [{"text": "generate an image"}]}
+				]
+			}`)
+			action := host.CallOnHttpRequestBody(requestBody)
+			require.Equal(t, types.ActionContinue, action)
+
+			// span 里的 gen_ai.request.model 应为真实模型名，而不是 UNKNOWN
+			model, ok := getSpanValue(host, ArmsRequestModel)
+			require.True(t, ok, "request model span attribute should be set")
+			require.Equal(t, "gemini-3.1-flash-image-preview", model)
 
 			host.CompleteHttp()
 		})
@@ -564,7 +594,7 @@ func TestOnHttpStreamingBody(t *testing.T) {
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			action = host.CallOnHttpResponseHeaders([][2]string{
 				{":status", "200"},
@@ -596,7 +626,7 @@ func TestOnHttpStreamingBody(t *testing.T) {
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			action = host.CallOnHttpResponseHeaders([][2]string{
 				{":status", "200"},
@@ -928,8 +958,8 @@ func TestCompleteFlow(t *testing.T) {
 				{"x-mse-consumer", "consumer1"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			// 2. 处理请求体
 			requestBody := []byte(`{
@@ -1019,8 +1049,8 @@ func TestCompleteFlow(t *testing.T) {
 				{"x-mse-consumer", "consumer2"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			// 2. 处理请求体
 			requestBody := []byte(`{
@@ -1519,7 +1549,7 @@ func TestSessionIdExtraction(t *testing.T) {
 				{":method", "POST"},
 				{"x-custom-session", "sess_custom_123"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -1539,7 +1569,7 @@ func TestSessionIdExtraction(t *testing.T) {
 				{"x-clawdbot-session-key", "sess_clawdbot_789"},
 				{"x-openclaw-session-key", "sess_openclaw_123"}, // 最高优先级
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -1557,7 +1587,7 @@ func TestSessionIdExtraction(t *testing.T) {
 				{":method", "POST"},
 				{"x-agent-session", "sess_agent_only"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -1825,7 +1855,7 @@ func TestTokenDetails(t *testing.T) {
 			{":path", "/v1/chat/completions"},
 			{":method", "POST"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		// 2. 处理请求体
 		requestBody := []byte(`{
@@ -1961,7 +1991,7 @@ func TestSetSpanAttributeAndLoggingEdgeCases(t *testing.T) {
 				{":authority", "example.com"},
 				{":path", "/api/chat"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 			host.CompleteHttp()
 		})
 	})
@@ -2428,7 +2458,7 @@ func setupStreamingHost(t *testing.T, config json.RawMessage) test.TestHost {
 		{":method", "POST"},
 		{"x-mse-consumer", "user1"},
 	})
-	require.Equal(t, types.ActionContinue, action)
+	require.Equal(t, types.HeaderStopIteration, action)
 
 	action = host.CallOnHttpRequestBody([]byte(`{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}`))
 	require.Equal(t, types.ActionContinue, action)

@@ -667,7 +667,7 @@ tools:
         type: string
         position: query
       - name: start
-        description: 要查询的的开始时间
+        description: 要查询的开始时间
         type: string
         position: query
     requestTemplate:

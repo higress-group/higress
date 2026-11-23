@@ -195,8 +195,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"x-user-id", "user123"},
 			})
 
-			// 应该返回ActionContinue，因为从header提取key后继续处理
-			require.Equal(t, types.ActionContinue, action)
+			// 等待异步缓存查询完成后，再由回调返回缓存或恢复请求。
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
 		})
 
 		// 测试header key为空

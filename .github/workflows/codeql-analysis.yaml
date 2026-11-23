@@ -43,7 +43,8 @@ jobs:
       - name: "Setup Go"
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Keep analysis on the pinned release toolchain, not the module baseline.
+          go-version: '1.26.10'
 
       # step 2: Initializes the CodeQL tools for scanning.
       - name: "Initialize CodeQL"

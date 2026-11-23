@@ -50,6 +50,7 @@ import (
 	"istio.io/istio/pilot/pkg/serviceregistry/kube"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/constants"
+	gatewaykube "istio.io/istio/pkg/config/gateway/kube"
 	"istio.io/istio/pkg/config/host"
 	"istio.io/istio/pkg/config/protocol"
 	"istio.io/istio/pkg/config/schema/collections"
@@ -1053,6 +1054,7 @@ func buildGRPCDestination(
 
 type inferencePoolConfig struct {
 	enableExtProc             bool
+	mode                      gatewaykube.InferencePoolEndpointPickerMode
 	endpointPickerDst         string
 	endpointPickerPort        string
 	endpointPickerFailureMode string
@@ -1148,8 +1150,11 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 			return &istio.Destination{}, nil, invalidBackendErr
 		}
 
-		ipCfg := &inferencePoolConfig{
-			enableExtProc: true,
+		ipCfg := &inferencePoolConfig{}
+		if mode := svc.Attributes.Labels[constants.InferencePoolEndpointPickerModeLabel]; mode == string(gatewaykube.InferencePoolEndpointPickerModeBuiltin) {
+			ipCfg.mode = gatewaykube.InferencePoolEndpointPickerModeBuiltin
+		} else {
+			ipCfg.enableExtProc = true
 		}
 		if dst, ok := svc.Attributes.Labels[InferencePoolExtensionRefSvc]; ok {
 			ipCfg.endpointPickerDst = fmt.Sprintf("%s.%s.svc.%s", dst, infPool.Namespace, ctx.DomainSuffix)
@@ -1160,7 +1165,7 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 		if fm, ok := svc.Attributes.Labels[InferencePoolExtensionRefFailureMode]; ok {
 			ipCfg.endpointPickerFailureMode = fm
 		}
-		if ipCfg.endpointPickerDst == "" || ipCfg.endpointPickerPort == "" || ipCfg.endpointPickerFailureMode == "" {
+		if ipCfg.enableExtProc && (ipCfg.endpointPickerDst == "" || ipCfg.endpointPickerPort == "" || ipCfg.endpointPickerFailureMode == "") {
 			invalidBackendErr = &ConfigError{Reason: InvalidDestination, Message: "InferencePool service invalid, extensionRef labels not found"}
 		}
 
@@ -1176,14 +1181,8 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 			Host: hostname,
 			Port: &istio.PortSelector{Number: destPort},
 		}, ipCfg, invalidBackendErr
-	default:
-		return &istio.Destination{}, nil, &ConfigError{
-			Reason:  InvalidDestinationKind,
-			Message: fmt.Sprintf("referencing unsupported backendRef: group %q kind %q", ptr.OrEmpty(to.Group), ptr.OrEmpty(to.Kind)),
-		}
-	}
 	// Start - Added by Higress
-	if equal((*string)(to.Group), "networking.higress.io") && nilOrEqual((*string)(to.Kind), "Service") {
+	case config.GroupVersionKind{Group: "networking.higress.io", Kind: "Service"}:
 		var port *istio.PortSelector
 		if to.Port != nil {
 			port = &istio.PortSelector{Number: uint32(*to.Port)}
@@ -1192,8 +1191,13 @@ func buildDestination(ctx RouteContext, to k8s.BackendRef, ns string,
 			Host: string(to.Name),
 			Port: port,
 		}, nil, nil
-	}
 	// End - Added by Higress
+	default:
+		return &istio.Destination{}, nil, &ConfigError{
+			Reason:  InvalidDestinationKind,
+			Message: fmt.Sprintf("referencing unsupported backendRef: group %q kind %q", ptr.OrEmpty(to.Group), ptr.OrEmpty(to.Kind)),
+		}
+	}
 
 	// All types currently require a Port, so we do this for everything; consider making this per-type if we have future types
 	// that do not require port.
@@ -2734,14 +2738,6 @@ func isCatchAllMatch(m *istio.HTTPMatchRequest) bool {
 		m.Port == 0 &&
 		m.Authority == nil &&
 		m.SourceNamespace == ""
-}
-
-func equal(have *string, expected string) bool {
-	return have != nil && *have == expected
-}
-
-func nilOrEqual(have *string, expected string) bool {
-	return have == nil || *have == expected
 }
 
 func generateRouteName(obj config.Namer, routeType string) string {

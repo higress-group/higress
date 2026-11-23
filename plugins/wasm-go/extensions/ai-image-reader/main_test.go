@@ -139,8 +139,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"content-type", "application/json"},
 			})
 
-			// 应该返回ActionContinue，因为禁用了重路由但允许继续处理
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取并处理请求体，因此暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 		})
 
 		// 测试非JSON内容类型的请求头处理

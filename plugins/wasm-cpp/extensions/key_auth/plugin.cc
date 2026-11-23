@@ -329,6 +329,8 @@ bool PluginRootContext::checkPlugin(
     const KeyAuthConfigRule& rule,
     const std::optional<std::unordered_set<std::string>>& allow_set) {
   // LOG_DEBUG(rule.debugString("check phase"));
+  // Drop any client-supplied value so only this gateway's assertion survives.
+  removeRequestHeader("X-Mse-Consumer");
   if (rule.consumers.empty()) {
     for (const auto& key : rule.keys) {
       auto credential = extractCredential(rule.in_header, rule.in_query, key);

@@ -1,13 +1,5 @@
 package dashscope
 
-var MessageStore ChatMessages
-
-func init() {
-	MessageStore = make(ChatMessages, 0)
-	MessageStore.Clear() //清理和初始化
-
-}
-
 type ChatMessages []Message
 
 // 枚举出角色

@@ -298,9 +298,43 @@ func TestMcpProxyTool_InputSchema_NoArgs(t *testing.T) {
 	props, ok := schema["properties"].(map[string]any)
 	require.True(t, ok)
 	assert.Empty(t, props)
-	required, ok := schema["required"].([]string)
-	require.True(t, ok)
-	assert.Empty(t, required)
+	assert.NotContains(t, schema, "required")
+}
+
+func TestMcpProxyServer_AddProxyTool_InputSchema(t *testing.T) {
+	t.Run("empty required is omitted", func(t *testing.T) {
+		server := NewMcpProxyServer("proxy")
+		require.NoError(t, server.AddProxyTool(McpProxyToolConfig{
+			Name:        "optional",
+			InputSchema: []byte(`{"type":"object","required":[],"additionalProperties":false}`),
+		}))
+		schema := server.GetMCPTools()["optional"].InputSchema()
+		assert.Equal(t, map[string]any{"type": "object", "additionalProperties": false}, schema)
+	})
+
+	for _, tc := range []struct {
+		name   string
+		schema string
+		error  string
+	}{
+		{"null schema", `null`, "inputSchema must be a JSON object"},
+		{"array schema", `[]`, "invalid inputSchema"},
+		{"missing type", `{}`, "inputSchema must be a JSON object"},
+		{"wrong type", `{"type":["object"]}`, "inputSchema must be a JSON object"},
+		{"non-object properties", `{"type":"object","properties":[]}`, "inputSchema.properties"},
+		{"null required", `{"type":"object","required":null}`, "inputSchema.required"},
+		{"non-array required", `{"type":"object","required":"name"}`, "inputSchema.required"},
+		{"non-string required item", `{"type":"object","required":[null]}`, "inputSchema.required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewMcpProxyServer("proxy")
+			err := server.AddProxyTool(McpProxyToolConfig{Name: "bad", InputSchema: []byte(tc.schema)})
+			require.ErrorContains(t, err, tc.error)
+			assert.NotContains(t, server.GetMCPTools(), "bad")
+			_, exists := server.GetToolConfig("bad")
+			assert.False(t, exists)
+		})
+	}
 }
 
 func TestMcpProxyTool_Create_NewInstanceWithBoundArgs(t *testing.T) {

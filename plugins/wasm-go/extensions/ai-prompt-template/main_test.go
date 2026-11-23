@@ -165,8 +165,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"content-length", "100"},
 			})
 
-			// 应该返回ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取并处理请求体，因此暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 		})
 
 		// 测试禁用模板的情况
@@ -202,8 +202,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"content-length", "100"},
 			})
 
-			// 应该返回ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 默认启用模板，需要读取并处理请求体
+			require.Equal(t, types.HeaderStopIteration, action)
 		})
 	})
 }

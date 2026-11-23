@@ -20,7 +20,9 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -38,10 +40,13 @@ const (
 	DefaultMaxBodyBytes   = protocol.LegacyMaxBodyBytes
 	GlobalToolRegistryKey = "GlobalToolRegistry"
 	DefaultServerVersion  = "1.0.0"
+	// Keep unknown initialize-body versions on the established compatibility
+	// fallback, independently of additions to the accepted handshake versions.
+	initializeFallbackVersion = "2025-06-18"
 )
 
-// SupportedMCPVersions contains all supported MCP protocol versions
-var SupportedMCPVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+// SupportedMCPVersions contains the accepted downstream initialize versions.
+var SupportedMCPVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
 
 // validateURL validates that the given string is a valid URL
 func validateURL(urlStr string) error {
@@ -94,13 +99,24 @@ func setupMcpProxyServer(serverName string, serverJson gjson.Result, serverConfi
 		strategyStr = string(ProtocolStrategyLegacy)
 	}
 	strategy := ProtocolStrategy(strategyStr)
-	if strategy != ProtocolStrategyLegacy && strategy != ProtocolStrategyModern {
-		return nil, fmt.Errorf("invalid protocolStrategy value: %s, must be 'modern' or 'legacy'", strategyStr)
+	if strategy != ProtocolStrategyLegacy && strategy != ProtocolStrategyModern && strategy != ProtocolStrategyAuto {
+		return nil, fmt.Errorf("invalid protocolStrategy value: %s, must be 'modern', 'legacy' or 'auto'", strategyStr)
 	}
 	if strategy == ProtocolStrategyModern && transport != TransportHTTP {
 		return nil, errors.New("protocolStrategy 'modern' requires transport 'http'")
 	}
 	proxyServer.SetProtocolStrategy(strategy)
+	if strategy == ProtocolStrategyAuto && transport == TransportHTTP {
+		config := AutoDetectionConfig{ProbeTimeoutMs: 1000}
+		if value := serverJson.Get("autoDetection.probeTimeoutMs"); value.Exists() {
+			timeout, err := strconv.ParseUint(value.Raw, 10, 32)
+			if value.Type != gjson.Number || err != nil || timeout == 0 {
+				return nil, errors.New("autoDetection.probeTimeoutMs must be a positive integer representable as uint32")
+			}
+			config.ProbeTimeoutMs = uint32(timeout)
+		}
+		proxyServer.autoDetection = config
+	}
 
 	// Parse and validate mcpServerURL (required for mcp-proxy)
 	mcpServerURL := serverJson.Get("mcpServerURL").String()
@@ -121,6 +137,7 @@ func setupMcpProxyServer(serverName string, serverJson gjson.Result, serverConfi
 	// Parse passthroughAuthHeader (optional, defaults to false)
 	passthroughAuthHeader := serverJson.Get("passthroughAuthHeader").Bool()
 	proxyServer.SetPassthroughAuthHeader(passthroughAuthHeader)
+	proxyServer.passthroughInstructions = serverJson.Get("passthroughInstructions").Bool()
 
 	// Parse security schemes
 	securitySchemesJson := serverJson.Get("securitySchemes")
@@ -171,56 +188,98 @@ var globalContext Context
 
 // ToolInfo stores information about a tool for the global registry.
 type ToolInfo struct {
-	Name         string
-	Description  string
-	InputSchema  map[string]any
-	OutputSchema map[string]any // New field for MCP Protocol Version 2025-06-18
-	LegacyOnly   bool           // Explicitly unavailable to modern direct-tool profiles
-	ServerName   string         // Original server name
-	Tool         Tool           // The actual tool instance for cloning
+	Name                    string
+	Description             string
+	InputSchema             map[string]any
+	inputSchemaSerializable bool
+	OutputSchema            map[string]any // New field for MCP Protocol Version 2025-06-18
+	LegacyOnly              bool           // Deprecated: accepted for source compatibility; ignored at runtime
+	ServerName              string         // Original server name
+	Tool                    Tool           // The actual tool instance for cloning
 }
 
 // GlobalToolRegistry holds all tools from all servers.
 type GlobalToolRegistry struct {
+	mu sync.RWMutex
 	// serverName -> toolName -> toolInfo
 	serverTools map[string]map[string]ToolInfo
 }
 
 // Initialize initializes the GlobalToolRegistry
 func (r *GlobalToolRegistry) Initialize() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.serverTools = make(map[string]map[string]ToolInfo)
 }
 
 // RegisterTool registers a tool into the global registry.
 func (r *GlobalToolRegistry) RegisterTool(serverName string, toolName string, tool Tool) {
-	if _, ok := r.serverTools[serverName]; !ok {
-		r.serverTools[serverName] = make(map[string]ToolInfo)
-	}
+	inputSchema, inputSchemaSerializable := cloneRegistrySchema(tool.InputSchema())
 	toolInfo := ToolInfo{
-		Name:        toolName,
-		Description: tool.Description(),
-		InputSchema: tool.InputSchema(),
-		ServerName:  serverName,
-		Tool:        tool,
+		Name:                    toolName,
+		Description:             tool.Description(),
+		InputSchema:             inputSchema,
+		inputSchemaSerializable: inputSchemaSerializable,
+		ServerName:              serverName,
+		Tool:                    tool,
 	}
 	// Check if tool implements OutputSchema (MCP Protocol Version 2025-06-18)
 	if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
-		toolInfo.OutputSchema = toolWithSchema.OutputSchema()
+		toolInfo.OutputSchema, _ = cloneRegistrySchema(toolWithSchema.OutputSchema())
 	}
-	if compatibility, ok := tool.(legacySchemaCompatibleTool); ok {
-		toolInfo.LegacyOnly = compatibility.legacyOnlyInputSchema()
+
+	r.registerToolInfo(toolInfo)
+}
+
+// registerCapturedTool publishes the descriptor already captured for the
+// direct generation. It must not call descriptor getters again: they may be
+// stateful and their returned maps remain caller-owned.
+func (r *GlobalToolRegistry) registerCapturedTool(serverName string, entry directToolEntry) {
+	inputSchema := entry.inputSchema
+	inputSchemaSerializable := entry.serializable
+	if inputSchemaSerializable {
+		inputSchema, inputSchemaSerializable = cloneRegistrySchema(inputSchema)
 	}
-	r.serverTools[serverName][toolName] = toolInfo
-	log.Debugf("Registered tool %s/%s", serverName, toolName)
+	toolInfo := ToolInfo{
+		Name:                    entry.name,
+		Description:             entry.description,
+		InputSchema:             inputSchema,
+		inputSchemaSerializable: inputSchemaSerializable,
+		ServerName:              serverName,
+		Tool:                    entry.tool,
+	}
+	toolInfo.OutputSchema, _ = cloneRegistrySchema(entry.outputSchema)
+	r.registerToolInfo(toolInfo)
+}
+
+func (r *GlobalToolRegistry) registerToolInfo(toolInfo ToolInfo) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.serverTools[toolInfo.ServerName]; !ok {
+		r.serverTools[toolInfo.ServerName] = make(map[string]ToolInfo)
+	}
+	r.serverTools[toolInfo.ServerName][toolInfo.Name] = toolInfo
+	log.Debugf("Registered tool %s/%s", toolInfo.ServerName, toolInfo.Name)
 }
 
 // GetToolInfo retrieves tool information from the global registry.
 func (r *GlobalToolRegistry) GetToolInfo(serverName string, toolName string) (ToolInfo, bool) {
-	if serverTools, ok := r.serverTools[serverName]; ok {
-		toolInfo, found := serverTools[toolName]
-		return toolInfo, found
+	r.mu.RLock()
+	serverTools, serverFound := r.serverTools[serverName]
+	toolInfo, found := serverTools[toolName]
+	r.mu.RUnlock()
+	if !serverFound || !found {
+		return ToolInfo{}, false
 	}
-	return ToolInfo{}, false
+	// Clone after releasing the registry lock. Stored descriptors are immutable,
+	// and no caller-controlled getter or traversal runs inside the lock.
+	if toolInfo.inputSchemaSerializable {
+		toolInfo.InputSchema, toolInfo.inputSchemaSerializable = cloneRegistrySchema(toolInfo.InputSchema)
+	}
+	if toolInfo.OutputSchema != nil {
+		toolInfo.OutputSchema, _ = cloneRegistrySchema(toolInfo.OutputSchema)
+	}
+	return toolInfo, true
 }
 
 func onPluginStartOrReload(context wrapper.PluginContext) error {
@@ -291,13 +350,14 @@ type ConfigOptions struct {
 }
 
 type McpServerConfig struct {
-	serverName     string // Store the server name directly
-	serverVersion  string
-	server         Server // Can be a single server or a composed server
-	methodHandlers utils.MethodHandlers
-	toolSet        *ToolSetConfig // Parsed toolset configuration
-	isComposed     bool
-	directTools    directToolSnapshot
+	serverName         string // Store the server name directly
+	serverVersion      string
+	serverInstructions string
+	server             Server // Can be a single server or a composed server
+	methodHandlers     utils.MethodHandlers
+	toolSet            *ToolSetConfig // Parsed toolset configuration
+	isComposed         bool
+	directTools        directToolSnapshot
 }
 
 // GetServerName returns the server name for external access
@@ -313,6 +373,18 @@ func (c *McpServerConfig) GetServerVersion() string {
 // GetIsComposed returns whether this is a composed server for external access
 func (c *McpServerConfig) GetIsComposed() bool {
 	return c.isComposed
+}
+
+// buildToolList 为已成功解析的配置生成独立的响应描述，并应用已求交集的工具白名单。
+// 组合服务必须在规则全部加载后的请求阶段读取其绑定的本代 registry，避免冻结尚未注册的来源；
+// 普通服务继续使用解析时的冻结快照，不重新调用来源工具的描述 getter。返回值允许调用方修改，
+// 空集合返回空切片；组合快照只保存在当前调用中，不写回配置或跨配置代共享。
+func (c *McpServerConfig) buildToolList(effectiveAllowTools *map[string]struct{}) []map[string]any {
+	if c.isComposed {
+		// 使用配置持有的 ComposedMCPServer，而不是重载后可能替换的全局 registry。
+		return captureDirectToolSnapshot(c.server).buildToolList(effectiveAllowTools)
+	}
+	return c.directTools.buildToolList(effectiveAllowTools)
 }
 
 func normalizeServerVersion(version string) string {
@@ -378,37 +450,30 @@ func computeEffectiveAllowToolsFromHeader(configAllowTools *map[string]struct{},
 	}
 }
 
-func buildToolList(server Server, effectiveAllowTools *map[string]struct{}, includeOutputSchema bool) []map[string]any {
-	var listedTools []map[string]any
-	for _, entry := range snapshotTools(server) {
-		if effectiveAllowTools != nil {
-			if _, allow := (*effectiveAllowTools)[entry.name]; !allow {
-				continue
-			}
-		}
-		toolDef := map[string]any{
-			"name":        entry.name,
-			"description": entry.tool.Description(),
-			"inputSchema": entry.tool.InputSchema(),
-		}
-		if includeOutputSchema {
-			if toolWithSchema, ok := entry.tool.(ToolWithOutputSchema); ok {
-				if outputSchema := toolWithSchema.OutputSchema(); len(outputSchema) > 0 {
-					toolDef["outputSchema"] = outputSchema
-				}
-			}
-		}
-		listedTools = append(listedTools, toolDef)
-	}
-	return listedTools
-}
-
-// parseConfigCore contains the core config parsing logic with dependency injection
+// parseConfigCore 校验单条服务/工具集配置并安装协议处理器；opts 提供本配置代的依赖与 registry。
+// 成功后普通服务发布冻结描述，组合服务保留本代 registry 引用并在请求阶段生成列表；
+// 无效配置返回错误，不将代理工具部分发布。调用方在全部规则解析成功后再接收新配置请求。
 func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *ConfigOptions) error {
 	toolSetJson := configJson.Get("toolSet")
 	serverJson := configJson.Get("server")                        // This is for single server or REST server definition
 	pluginServerConfigJson := configJson.Get("server.config").Raw // Config for the plugin instance itself, if any.
 	config.serverVersion = DefaultServerVersion
+	config.serverInstructions = ""
+	instructionsJson := serverJson.Get("instructions")
+	if instructionsJson.Exists() && instructionsJson.Type != gjson.String {
+		return errors.New("server.instructions must be a string")
+	}
+
+	if value := serverJson.Get("passthroughInstructions"); value.Exists() {
+		if value.Type != gjson.True && value.Type != gjson.False {
+			return errors.New("server.passthroughInstructions must be a boolean")
+		}
+		if value.Bool() && (toolSetJson.Exists() || serverJson.Get("type").String() != "mcp-proxy" ||
+			serverJson.Get("protocolStrategy").String() != string(ProtocolStrategyModern) ||
+			serverJson.Get("transport").String() != string(TransportHTTP)) {
+			return errors.New("server.passthroughInstructions requires a single modern HTTP mcp-proxy server")
+		}
+	}
 
 	// serverConfigJsonForInstance is the config passed to the specific server instance (single or REST)
 	// It's distinct from pluginServerConfigJson which might be for the mcp-server plugin itself.
@@ -466,8 +531,6 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 					if err := proxyServer.AddProxyTool(proxyTool); err != nil {
 						return fmt.Errorf("failed to add proxy tool %s: %v", proxyTool.Name, err)
 					}
-					// Register tool to registry
-					opts.ToolRegistry.RegisterTool(config.serverName, proxyTool.Name, proxyServer.GetMCPTools()[proxyTool.Name])
 				}
 			}
 			// Set the proxy server regardless of whether tools are configured
@@ -522,8 +585,6 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				if err := restServer.AddRestTool(restTool); err != nil {
 					return fmt.Errorf("failed to add tool %s: %v", restTool.Name, err)
 				}
-				// Register tool to registry
-				opts.ToolRegistry.RegisterTool(config.serverName, restTool.Name, restServer.GetMCPTools()[restTool.Name])
 			}
 			config.server = restServer
 		} else {
@@ -536,16 +597,9 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				if serverInstance, exist := opts.Servers[config.serverName]; exist {
 					clonedServer := serverInstance.Clone()
 					clonedServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
-					directTools, err := compileDirectToolSnapshot(clonedServer)
-					if err != nil {
-						return err
-					}
+					directTools := captureDirectToolSnapshot(clonedServer)
 					config.server = clonedServer
 					config.directTools = directTools
-					// Register tools from this server to registry
-					for toolName, toolInstance := range clonedServer.GetMCPTools() {
-						opts.ToolRegistry.RegisterTool(config.serverName, toolName, toolInstance)
-					}
 				} else {
 					return fmt.Errorf("mcp server type '%s' not registered", config.serverName)
 				}
@@ -555,16 +609,27 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		return errors.New("either 'server' or 'toolSet' field must be present in the configuration")
 	}
 
-	// Proxy descriptors remain upstream-owned and transparent. Direct tools use
-	// one compiled snapshot for modern discovery and invocation so unsupported
-	// schema semantics fail before the configuration can serve requests.
-	if config.server != nil {
-		if _, isProxy := config.server.(*McpProxyServer); !isProxy && config.directTools.byName == nil {
-			directTools, err := compileDirectToolSnapshot(config.server)
-			if err != nil {
-				return err
-			}
-			config.directTools = directTools
+	if instructionsJson.Exists() {
+		if _, isRest := config.server.(*RestMCPServer); !isRest {
+			return errors.New("server.instructions requires a REST-to-MCP server")
+		}
+		config.serverInstructions = instructionsJson.String()
+	}
+
+	if proxyServer, isProxy := config.server.(*McpProxyServer); isProxy {
+		// Publish local descriptors for tool sets only after the server config parses.
+		for name, tool := range proxyServer.GetMCPTools() {
+			opts.ToolRegistry.RegisterTool(config.serverName, name, tool)
+		}
+	} else if config.server != nil && !config.isComposed {
+		// 组合规则之后仍可能加载来源，不能在此阶段捕获不完整的组合描述。
+		if config.directTools.ordered == nil {
+			config.directTools = captureDirectToolSnapshot(config.server)
+		}
+		// Publish direct tools to the shared registry only after the complete
+		// generation snapshot has captured each tool descriptor.
+		for _, entry := range config.directTools.ordered {
+			opts.ToolRegistry.registerCapturedTool(config.serverName, entry)
 		}
 	}
 
@@ -587,6 +652,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 	// Use config.serverName which is now reliably set
 	currentServerNameForHandlers := config.serverName
 	currentServerVersionForHandlers := config.serverVersion
+	currentServerInstructionsForHandlers := config.serverInstructions
 
 	config.methodHandlers["ping"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
 		utils.OnMCPResponseSuccess(ctx, map[string]any{}, fmt.Sprintf("mcp:%s:ping", currentServerNameForHandlers))
@@ -610,16 +676,16 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		// MCP specification compliant version negotiation:
 		// If the server supports the requested protocol version, it MUST respond with the same version.
 		// Otherwise, the server MUST respond with another protocol version it supports.
-		// This SHOULD be the latest version supported by the server.
+		// The specification recommends the latest alternative; retain the established
+		// fallback here so accepting another handshake version does not change it.
 		negotiatedVersion := requestedVersion
 		if !slices.Contains(SupportedMCPVersions, requestedVersion) {
-			// Return the latest supported version instead of rejecting the request
-			negotiatedVersion = SupportedMCPVersions[len(SupportedMCPVersions)-1]
-			log.Warnf("Client requested unsupported version %s, responding with latest supported version %s",
+			negotiatedVersion = initializeFallbackVersion
+			log.Warnf("Client requested unsupported version %s, responding with compatibility fallback version %s",
 				requestedVersion, negotiatedVersion)
 		}
 
-		utils.OnMCPResponseSuccess(ctx, map[string]any{
+		result := map[string]any{
 			"protocolVersion": negotiatedVersion,
 			"capabilities": map[string]any{
 				"tools": map[string]any{},
@@ -628,7 +694,11 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				"name":    currentServerNameForHandlers, // Use the actual server name (single or composed)
 				"version": currentServerVersionForHandlers,
 			},
-		}, fmt.Sprintf("mcp:%s:initialize", currentServerNameForHandlers))
+		}
+		if currentServerInstructionsForHandlers != "" {
+			result["instructions"] = currentServerInstructionsForHandlers
+		}
+		utils.OnMCPResponseSuccess(ctx, result, fmt.Sprintf("mcp:%s:initialize", currentServerNameForHandlers))
 		return nil
 	}
 	config.methodHandlers["server/discover"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
@@ -637,9 +707,15 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			utils.OnMCPResponseError(ctx, errors.New("method not found:server/discover"), utils.ErrMethodNotFound, fmt.Sprintf("mcp:%s:server/discover:legacy", currentServerNameForHandlers))
 			return nil
 		}
-		toolsAvailable := modernMethodPolicy(*config, "tools/list").Available &&
+		toolsAvailable := !config.isComposed && modernMethodPolicy(*config, "tools/list").Available &&
 			modernMethodPolicy(*config, "tools/call").Available
 		result := ShapeResult(request, currentServerNameForHandlers, DiscoveryResult(toolsAvailable))
+		if currentServerInstructionsForHandlers != "" {
+			result["instructions"] = currentServerInstructionsForHandlers
+		}
+		if proxyServer, ok := config.server.(*McpProxyServer); ok && proxyServer.passthroughInstructions {
+			return proxyServer.forwardDiscovery(ctx, result)
+		}
 		utils.OnMCPResponseSuccess(ctx, result, fmt.Sprintf("mcp:%s:server/discover", currentServerNameForHandlers))
 		return nil
 	}
@@ -659,15 +735,8 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		config.methodHandlers["tools/list"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
 			// Compute effective allowTools using helper function
 			effectiveAllowTools := computeEffectiveAllowTools(allowTools)
-			request, modern := ModernRequestContext(ctx)
-			var tools []map[string]any
-			if modern {
-				// The modern descriptor comes from the same validated snapshot used by
-				// tools/call and deliberately omits unvalidated outputSchema.
-				tools = config.directTools.buildModernToolList(effectiveAllowTools)
-			} else {
-				tools = buildToolList(config.server, effectiveAllowTools, true)
-			}
+			request, _ := ModernRequestContext(ctx)
+			tools := config.buildToolList(effectiveAllowTools)
 			semantic := protocol.SemanticResult{
 				Value: map[string]any{
 					"tools": tools,
@@ -708,33 +777,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				}
 			}
 
-			var toolToCall Tool
-			var ok bool
-			if _, modern := ModernRequestContext(ctx); modern {
-				validatedTool, exists := config.directTools.byName[toolName]
-				if exists {
-					toolToCall = validatedTool.tool
-					ok = true
-					if err := validatedTool.validator.validateArguments(args.Raw); err != nil {
-						sendToolExecutionError(
-							ctx,
-							fmt.Errorf("invalid arguments for tool %q: %w", toolName, err),
-							fmt.Sprintf("mcp:%s:tools/call:invalid_arguments", currentServerNameForHandlers),
-						)
-						return nil
-					}
-				}
-				if reason, legacyOnly := config.directTools.legacyOnly[toolName]; legacyOnly {
-					sendToolExecutionError(
-						ctx,
-						fmt.Errorf("tool %q is unavailable in the modern profile because its input schema cannot be validated: %s", toolName, reason),
-						fmt.Sprintf("mcp:%s:tools/call:legacy_only_schema", currentServerNameForHandlers),
-					)
-					return nil
-				}
-			} else {
-				toolToCall, ok = config.server.GetMCPTools()[toolName]
-			}
+			toolToCall, ok := config.server.GetMCPTools()[toolName]
 			if !ok {
 				utils.OnMCPResponseError(ctx, fmt.Errorf("unknown tool: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:invalid_tool_name", currentServerNameForHandlers))
 				return nil
@@ -756,7 +799,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				unregisterCancellation()
 			}
 			if err != nil {
-				sendToolExecutionError(ctx, err, fmt.Sprintf("mcp:%s:tools/call:error", currentServerNameForHandlers))
+				utils.OnMCPToolCallError(ctx, err, fmt.Sprintf("mcp:%s:tools/call:error", currentServerNameForHandlers))
 				return nil
 			}
 			return nil
@@ -786,7 +829,6 @@ func parseConfig(context wrapper.PluginContext, configJson gjson.Result, config 
 		ToolRegistry: registry,
 	}
 
-	// Call the core parsing logic
 	return parseConfigCore(configJson, config, opts)
 }
 
@@ -881,13 +923,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 	proxywasm.RemoveHttpRequestHeader(protocol.HeaderMethod)
 	proxywasm.RemoveHttpRequestHeader(protocol.HeaderName)
 
-	if protocolError := protocol.ValidateOrigin(transport); protocolError != nil {
-		utils.SendProtocolError(ctx, protocol.ID{}, protocolError, "mcp_request_origin_rejected")
-		return types.HeaderStopAllIterationAndWatermark
-	}
-
 	if protocol.HasModernIdentityHeaders(transport) {
-		ctx.SetRequestBodyBufferLimit(protocol.ModernMaxBodyBytes)
 		if transport.ProtocolVersion != "" &&
 			!protocol.IsLegacyVersion(protocol.Version(transport.ProtocolVersion)) &&
 			!protocol.IsModernVersion(protocol.Version(transport.ProtocolVersion)) {
@@ -940,6 +976,10 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config McpServerConfig, body []b
 		id := protocol.ID{}
 		if request != nil {
 			id = request.Envelope.ID
+			ctx.SetContext(utils.CtxJsonRpcClientID, id)
+			// Identity and framing failures are rejected before notification policy.
+			// Unknown ordinary methods retain the existing empty acknowledgement.
+			ctx.SetContext(utils.CtxJsonRpcNotification, request.Era == protocol.EraModern && request.Envelope.Notification && protocolError.Code == protocol.CodeMethodNotFound)
 		}
 		utils.SendProtocolError(ctx, id, protocolError, "mcp_modern_request_rejected")
 		return types.ActionContinue
@@ -952,12 +992,6 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config McpServerConfig, body []b
 }
 
 func modernMethodPolicy(config McpServerConfig, method string) protocol.MethodPolicy {
-	if method == "server/discover" {
-		return protocol.MethodPolicy{Available: config.methodHandlers[method] != nil}
-	}
-	if config.isComposed && method == "tools/call" {
-		return protocol.MethodPolicy{}
-	}
 	return protocol.MethodPolicy{Available: config.methodHandlers[method] != nil}
 }
 
@@ -981,6 +1015,21 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config McpServerConfig) type
 	// Check if this request initiated SSE channel (tools/list or tools/call with SSE transport)
 	// Only these requests need special SSE streaming response processing
 	if ctx.GetContext(CtxSSEProxyState) != nil {
+		if ctx.GetContext(CtxSSEProxyState) == SSEStateComplete {
+			return types.HeaderStopAllIterationAndWatermark
+		}
+		responseHeaders, _ := proxywasm.GetHttpResponseHeaders()
+		status, _ := autoHeader(responseHeaders, ":status")
+		if status == "401" || status == "403" {
+			code := 401
+			if status == "403" {
+				code = 403
+			}
+			ctx.SetContext(utils.CtxRoutedProxyResponse, true)
+			sendUpstreamAuthFailure(ctx, code, responseHeaders, "sse")
+			ctx.SetContext(CtxSSEProxyState, SSEStateComplete)
+			return types.HeaderStopAllIterationAndWatermark
+		}
 		// Check if response has a body
 		if ctx.HasResponseBody() {
 			// Pause streaming response for processing
@@ -990,6 +1039,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config McpServerConfig) type
 		} else {
 			// No body, return error
 			utils.OnMCPResponseError(ctx, fmt.Errorf("no response body in SSE response"), utils.ErrInternalError, "mcp-proxy:sse:no_body")
+			finishSSERequest(ctx)
 			return types.HeaderStopAllIterationAndWatermark
 		}
 	}
@@ -1013,6 +1063,10 @@ func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config McpServerConfig
 }
 
 func onHttpStreamDone(ctx wrapper.HttpContext, config McpServerConfig) {
+	if exchange, ok := ctx.GetContext(CtxMcpAutoExchange).(*AutoExchange); ok {
+		exchange.closeStream()
+	}
+	finishProxyRequest(ctx)
 	if request, ok := ModernRequestContext(ctx); ok {
 		request.Cancel()
 	}

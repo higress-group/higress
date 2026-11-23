@@ -330,6 +330,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config KeyAuthConfig, log log
 		return deniedUnauthorizedConsumer()
 	}
 
+	// Replace rather than append: a client-supplied identity must never survive.
+	proxywasm.RemoveHttpRequestHeader("X-Mse-Consumer")
 	proxywasm.AddHttpRequestHeader("X-Mse-Consumer", name)
 
 	// 全局生效：

@@ -88,7 +88,10 @@ type RequestTemplate struct {
 	ArgsToJsonBody bool                      `json:"argsToJsonBody,omitempty"`
 	ArgsToUrlParam bool                      `json:"argsToUrlParam,omitempty"`
 	ArgsToFormBody bool                      `json:"argsToFormBody,omitempty"`
-	Security       *ToolSecurity             `json:"security,omitempty"`
+	// AllowUnsafePathArgs is passed through to the mcp-server plugin. It is
+	// unsafe and intended only as a temporary compatibility escape hatch.
+	AllowUnsafePathArgs bool          `json:"allowUnsafePathArgs,omitempty"`
+	Security            *ToolSecurity `json:"security,omitempty"`
 }
 
 type RequestTemplateHeaders struct {

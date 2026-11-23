@@ -63,12 +63,14 @@ func (c *ClientCapabilities) UnmarshalJSON(data []byte) error {
 		case "experimental":
 			decoded.Experimental, err = decodeJSONObjectMap(raw, nil)
 		case "roots":
-			var roots JSONObject
-			roots, err = decodeJSONObject(raw)
-			if err == nil && len(roots) != 0 {
-				err = errors.New("roots capability must be an empty object")
-			}
-			if err == nil {
+			// SEP-2577 deprecates roots as of 2026-07-28 but keeps it in the
+			// specification as an open object (no additionalProperties: false)
+			// for at least twelve months. Tolerate and ignore legacy members
+			// such as the 2025-06-18 listChanged flag instead of rejecting them.
+			_, rootsErr := decodeJSONObject(raw)
+			if rootsErr != nil {
+				err = rootsErr
+			} else {
 				decoded.Roots = &RootCapabilities{}
 			}
 		case "sampling":
@@ -129,6 +131,9 @@ func decodeSamplingCapabilities(raw json.RawMessage) (*SamplingCapabilities, err
 	}
 	capability := &SamplingCapabilities{}
 	for name, value := range members {
+		// The 2026-07-28 schema defines context and tools but leaves the
+		// object open (no additionalProperties: false); unknown members are
+		// tolerated and ignored so newer or older clients stay interoperable.
 		object, objectErr := decodeJSONObject(value)
 		if objectErr != nil {
 			return nil, fmt.Errorf("sampling.%s must be an object", name)
@@ -138,8 +143,6 @@ func decodeSamplingCapabilities(raw json.RawMessage) (*SamplingCapabilities, err
 			capability.Context = &object
 		case "tools":
 			capability.Tools = &object
-		default:
-			return nil, fmt.Errorf("unknown sampling capability %q", name)
 		}
 	}
 	return capability, nil
@@ -152,6 +155,9 @@ func decodeElicitationCapabilities(raw json.RawMessage) (*ElicitationCapabilitie
 	}
 	capability := &ElicitationCapabilities{}
 	for name, value := range members {
+		// form and url are defined by the 2026-07-28 schema; the object stays
+		// open (no additionalProperties: false), so unknown members are
+		// tolerated and ignored for forward compatibility.
 		object, objectErr := decodeJSONObject(value)
 		if objectErr != nil {
 			return nil, fmt.Errorf("elicitation.%s must be an object", name)
@@ -161,8 +167,6 @@ func decodeElicitationCapabilities(raw json.RawMessage) (*ElicitationCapabilitie
 			capability.Form = &object
 		case "url":
 			capability.URL = &object
-		default:
-			return nil, fmt.Errorf("unknown elicitation capability %q", name)
 		}
 	}
 	return capability, nil

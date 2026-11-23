@@ -35,6 +35,7 @@ type ErrorData struct {
 	Supported            []Version           `json:"supported,omitempty"`
 	Requested            Version             `json:"requested,omitempty"`
 	RequiredCapabilities *ClientCapabilities `json:"requiredCapabilities,omitempty"`
+	Reason               string              `json:"reason,omitempty"`
 }
 
 // Error is a transport-aware JSON-RPC error. Messages are deliberately fixed
@@ -94,7 +95,7 @@ func MethodNotFound() *Error {
 }
 
 func MethodNotAllowed() *Error {
-	return newError(405, CodeInvalidRequest, "modern MCP requires HTTP POST")
+	return newError(405, CodeInvalidRequest, "HTTP method not supported on this MCP endpoint")
 }
 
 func UnsupportedMediaType() *Error {
@@ -110,7 +111,7 @@ func UntrustedOrigin() *Error {
 }
 
 func RequestTooLarge() *Error {
-	return newError(413, CodeInvalidRequest, "request body exceeds the modern MCP limit")
+	return newError(413, CodeInvalidRequest, "request body exceeds the MCP limit")
 }
 
 type errorObject struct {

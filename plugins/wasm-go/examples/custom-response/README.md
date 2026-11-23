@@ -1,6 +1,6 @@
 ---
 title: 自定义应答
-keywords: [higress,customn response]
+keywords: [higress,custom response]
 description: 自定义应答插件配置参考
 ---
 

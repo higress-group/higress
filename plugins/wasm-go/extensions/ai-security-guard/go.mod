@@ -7,7 +7,7 @@ toolchain go1.24.4
 require (
 	github.com/google/uuid v1.6.0
 	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20251103120604-77e9cce339d2
-	github.com/higress-group/wasm-go v1.0.10-0.20260120033417-1c84f010156d
+	github.com/higress-group/wasm-go v1.2.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tidwall/gjson v1.18.0
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546

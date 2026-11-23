@@ -22,6 +22,7 @@ import (
 	"github.com/alibaba/higress/v2/pkg/bootstrap"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
+	"istio.io/istio/pilot/pkg/features"
 )
 
 func TestServe(t *testing.T) {
@@ -64,6 +65,35 @@ func TestServe(t *testing.T) {
 	a.GreaterOrEqual(cost, delay)
 
 	a.True(executed)
+}
+
+// TestServeGrpcAddressDefault pins the shipped default for the MCP-over-xDS config-push
+// listener. It must stay a wildcard bind: `hgctl code-debug start` rewrites istiod's
+// configSources entry to xds://<non-loopback-IPv4>:15051 (hgctl/pkg/code_debug.go), so a
+// developer-run controller has to be reachable off-loopback. Co-located deployments that
+// want a loopback-only bind use --grpcAddress.
+func TestServeGrpcAddressDefault(t *testing.T) {
+	getServerCommand()
+
+	a := assert.New(t)
+	a.Equal(":15051", serverArgs.GrpcAddress)
+}
+
+func TestServeGrpcAddressOverride(t *testing.T) {
+	serveCmd := getServerCommand()
+
+	a := assert.New(t)
+	a.NoError(serveCmd.ParseFlags([]string{"--grpcAddress", "127.0.0.1:15051"}))
+	a.Equal("127.0.0.1:15051", serverArgs.GrpcAddress)
+}
+
+// TestXDSAuthFeatureDefault pins the contract Server.initAuthenticators relies on: the xDS
+// authenticators are wired by default. The flag alone authenticates nothing on the plaintext
+// :15051 listener, because pkg/security/authentication.go skips authentication for non-TLS
+// peers unless XDS_AUTH_PLAINTEXT is also set.
+func TestXDSAuthFeatureDefault(t *testing.T) {
+	a := assert.New(t)
+	a.True(features.XDSAuth)
 }
 
 type delayedServer struct {

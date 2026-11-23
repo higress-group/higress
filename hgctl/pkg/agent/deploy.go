@@ -53,6 +53,8 @@ type DeployHandler struct {
 }
 
 func deployAgentCmd() *cobra.Command {
+	var cloud = false
+
 	cmd := &cobra.Command{
 		Use:   "deploy [name]",
 		Short: "Deploy the specified agent locally or to the cloud",
@@ -61,11 +63,14 @@ func deployAgentCmd() *cobra.Command {
 			handler := &DeployHandler{
 				Name: args[0],
 			}
+			if cloud {
+				handler.Type = AgentRun
+			}
+
 			cmdutil.CheckErr(handler.Deploy())
 		},
 	}
 
-	var cloud = false
 	cmd.PersistentFlags().BoolVar(&cloud, "agentrun", false, "deploy agent using agentrun")
 
 	return cmd
@@ -278,6 +283,10 @@ func (h *DeployHandler) getAgentType() error {
 	}
 	h.AgentDir = path
 
+	if h.Type != "" {
+		return nil
+	}
+
 	filePath := filepath.Join(h.AgentDir, "requirements.txt")
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		h.Type = Local
@@ -337,7 +346,7 @@ func (h *DeployHandler) HandleAgentRun() error {
 
 // Set Serverless's Access Key in s.yaml, details see: https://github.com/Serverless-Devs/agentrun-sdk-python
 // Example:
-// $ s config get -a defualt
+// $ s config get -a default
 
 // You have not yet been found to have configured key information.
 // You can use [s config add] for key configuration, or use [s config add -h] to view configuration help.

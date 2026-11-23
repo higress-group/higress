@@ -1,4 +1,7 @@
 {{- if .Values.gateway.autoscaling.enabled }}
+{{- if ne .Values.gateway.kind "Deployment" }}
+{{- fail "gateway autoscaling requires gateway.kind to be Deployment" }}
+{{- end }}
 {{- if not .Values.global.autoscalingv2API }}
 apiVersion: autoscaling/v2beta1
 kind: HorizontalPodAutoscaler

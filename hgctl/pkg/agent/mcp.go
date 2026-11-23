@@ -151,7 +151,6 @@ func (h *MCPAddHandler) addHTTPMCP() error {
 func (h *MCPAddHandler) addOpenAPIMCP() error {
 	// fmt.Printf("get mcp server: %s openapi-spec-file: %s\n", h.arg.name, h.arg.spec)
 	config := h.parseOpenapiSpec()
-	config.Server.SecuritySchemes[0].DefaultCredential = "b5b9752c7ad2cb9c6b19fb5fd6a23be8852eca9c"
 	// fmt.Printf("get config struct: %v", config)
 
 	// publish to higress
@@ -177,7 +176,18 @@ func (h *MCPAddHandler) addOpenAPIMCP() error {
 }
 
 func (h *MCPAddHandler) parseOpenapiSpec() *models.MCPConfig {
-	return parseOpenapi2MCP(h.arg)
+	config := parseOpenapi2MCP(h.arg)
+	prepareOpenAPIMCPConfig(config)
+	return config
+}
+
+// prepareOpenAPIMCPConfig is applied to converted OpenAPI MCP config before
+// publish. It must not inject DefaultCredential; a required-but-missing
+// credential stays empty so request auth returns a configuration error.
+func prepareOpenAPIMCPConfig(config *models.MCPConfig) {
+	if config == nil {
+		return
+	}
 }
 
 func handleAddMCP(w io.Writer, arg MCPAddArg) error {

@@ -41,6 +41,8 @@ class MockContext : public proxy_wasm::ContextBase {
   MOCK_METHOD(WasmResult, getHeaderMapValue,
               (WasmHeaderMapType /* type */, std::string_view /* key */,
                std::string_view* /*result */));
+  MOCK_METHOD(WasmResult, removeHeaderMapValue,
+              (WasmHeaderMapType /* type */, std::string_view /* key */));
   MOCK_METHOD(WasmResult, addHeaderMapValue,
               (WasmHeaderMapType /* type */, std::string_view /* key */,
                std::string_view /* value */));

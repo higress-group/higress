@@ -17,6 +17,12 @@ The following examples are Go counterparts of official C++ plugins:
 `model-mapper` and `model-router` remain official Go plugins under
 `extensions/`; their C++ counterparts do not make them reference-only.
 
+`simple-jwt-auth` is a reference implementation demonstrating Wasm plugin
+development. It moved here from `extensions/` after its console marketplace
+retirement; production deployments should use the fully supported `jwt-auth`.
+Previously published `plugins/simple-jwt-auth` images stay available as
+immutable artifacts.
+
 Build one from `plugins/wasm-go/` with:
 
 ```bash

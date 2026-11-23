@@ -80,7 +80,7 @@ description: 流量染色插件配置参考
 
 **例1: 基于内容的匹配**
 
-按照下例的配置，满足请求头`role` 的值是`user`、`viwer`、`editor`其中之一且存在查询参数`foo=bar`的请求将被添加请求头`x-mse-tag: gray`。由于配置了`defaultTagKey`和`defaultTagVal`，当未匹配到任何条件时，请求将被添加请求头`x-mse-tag: base`。
+按照下例的配置，满足请求头`role` 的值是`user`、`viewer`、`editor`其中之一且存在查询参数`foo=bar`的请求将被添加请求头`x-mse-tag: gray`。由于配置了`defaultTagKey`和`defaultTagVal`，当未匹配到任何条件时，请求将被添加请求头`x-mse-tag: base`。
 
 ```yaml
 defaultTagKey: x-mse-tag

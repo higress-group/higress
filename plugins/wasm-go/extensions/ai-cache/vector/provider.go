@@ -16,7 +16,20 @@ const (
 	PROVIDER_TYPE_PINECONE    = "pinecone"
 	PROVIDER_TYPE_QDRANT      = "qdrant"
 	PROVIDER_TYPE_MILVUS      = "milvus"
+
+	ConsumerContextKey = "aiCacheAuthenticatedConsumer"
+	TenantField        = "consumer"
 )
+
+// ConsumerFromContext returns the consumer recorded after consumer
+// authentication. Ai-cache must run after that authentication stage.
+func ConsumerFromContext(ctx wrapper.HttpContext) string {
+	if ctx == nil {
+		return ""
+	}
+	consumer, _ := ctx.GetContext(ConsumerContextKey).(string)
+	return consumer
+}
 
 type providerInitializer interface {
 	ValidateConfig(ProviderConfig) error
@@ -24,6 +37,8 @@ type providerInitializer interface {
 }
 
 var (
+	ErrConsumerRequired = errors.New("authenticated consumer is required")
+
 	providerInitializers = map[string]providerInitializer{
 		PROVIDER_TYPE_DASH_VECTOR: &dashVectorProviderInitializer{},
 		PROVIDER_TYPE_CHROMA:      &chromaProviderInitializer{},
@@ -41,6 +56,7 @@ type QueryResult struct {
 	Embedding []float64 // 相似文本的向量
 	Score     float64   // 文本的向量相似度或距离等度量
 	Answer    string    // 相似文本对应的LLM生成的回答
+	Consumer  string    // 上传时记录的认证 consumer
 }
 
 type Provider interface {
@@ -108,14 +124,16 @@ type ProviderConfig struct {
 	// @Description zh-CN 向量存储服务的 Collection ID
 	collectionID string
 	// @Title zh-CN 相似度度量阈值
-	// @Description zh-CN 默认相似度度量阈值，默认为 1000。
-	Threshold float64
+	// @Description zh-CN 启用语义缓存时必须显式配置，无数值默认值。
+	Threshold    float64
+	thresholdSet bool
 	// @Title zh-CN 相似度度量比较方式
-	// @Description zh-CN 相似度度量比较方式，默认为小于。
+	// @Description zh-CN 启用语义缓存时必须显式配置。
 	// 相似度度量方式有 Cosine, DotProduct, Euclidean 等，前两者值越大相似度越高，后者值越小相似度越高。
 	// 所以需要允许自定义比较方式，对于 Cosine 和 DotProduct 选择 gt，对于 Euclidean 则选择 lt。
-	// 默认为 lt，所有条件包括 lt (less than，小于)、lte (less than or equal to，小等于)、gt (greater than，大于)、gte (greater than or equal to，大等于)
-	ThresholdRelation string
+	// 所有条件包括 lt (less than，小于)、lte (less than or equal to，小等于)、gt (greater than，大于)、gte (greater than or equal to，大等于)
+	ThresholdRelation    string
+	thresholdRelationSet bool
 
 	// ES 配置
 	// @Title zh-CN ES 用户名
@@ -128,6 +146,14 @@ type ProviderConfig struct {
 
 func (c *ProviderConfig) GetProviderType() string {
 	return c.typ
+}
+
+func (c *ProviderConfig) HasThreshold() bool {
+	return c.thresholdSet
+}
+
+func (c *ProviderConfig) HasThresholdRelation() bool {
+	return c.thresholdRelationSet
 }
 
 func (c *ProviderConfig) FromJson(json gjson.Result) {
@@ -148,14 +174,12 @@ func (c *ProviderConfig) FromJson(json gjson.Result) {
 	if c.timeout == 0 {
 		c.timeout = 10000
 	}
-	c.Threshold = json.Get("threshold").Float()
-	if c.Threshold == 0 {
-		c.Threshold = 1000
-	}
-	c.ThresholdRelation = json.Get("thresholdRelation").String()
-	if c.ThresholdRelation == "" {
-		c.ThresholdRelation = "lt"
-	}
+	threshold := json.Get("threshold")
+	c.thresholdSet = threshold.Exists() && threshold.Type != gjson.Null
+	c.Threshold = threshold.Float()
+	relation := json.Get("thresholdRelation")
+	c.thresholdRelationSet = relation.Exists() && relation.String() != ""
+	c.ThresholdRelation = relation.String()
 
 	// ES
 	c.esUsername = json.Get("esUsername").String()
@@ -170,7 +194,7 @@ func (c *ProviderConfig) Validate() error {
 	if !has {
 		return errors.New("unknown vector database service provider type: " + c.typ)
 	}
-	if !isRelationValid(c.ThresholdRelation) {
+	if c.ThresholdRelation != "" && !isRelationValid(c.ThresholdRelation) {
 		return errors.New("invalid thresholdRelation: " + c.ThresholdRelation)
 	}
 	if err := initializer.ValidateConfig(*c); err != nil {

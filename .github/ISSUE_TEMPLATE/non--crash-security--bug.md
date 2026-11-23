@@ -8,10 +8,12 @@ assignees: ''
 ---
 
 **If you are reporting a potential security issue, do not open a public issue.
-You must submit the same substantive report through both
-[GitHub Private Security Advisories](https://github.com/higress-group/higress/security/advisories/new)
-and the [Alibaba Security Response Center](https://security.alibaba.com/), as
-required by the project's [security policy](https://github.com/higress-group/higress/blob/main/SECURITY.md).
+Please submit it through a
+[GitHub Private Security Advisory](https://github.com/higress-group/higress/security/advisories/new),
+the project's required and sufficient private intake. You may also submit the
+same report to the [Alibaba Security Response Center](https://security.alibaba.com/)
+as an optional additional channel, as described in the project's
+[security policy](https://github.com/higress-group/higress/blob/main/SECURITY.md).
 A crash with no suspected security impact may be reported with this template.**
 
 - [ ] I have searched the [issues](https://github.com/higress-group/higress/issues) of this repository and believe that this is not a duplicate.

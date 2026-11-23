@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	wasmlog "github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -278,6 +280,177 @@ func TestDenyBodies(t *testing.T) {
 	require.Equal(t, "blocked", gjson.Get(payloads[0], "choices.0.delta.content").String())
 	require.Equal(t, "stop", gjson.Get(payloads[1], "choices.0.finish_reason").String())
 	require.True(t, isDonePayload(payloads[2]))
+}
+
+// unsafeGuardResponse is the OpenAI-compatible classification reply a
+// Qwen3Guard service returns for a prompt it wants blocked.
+const unsafeGuardResponse = `{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: Violence\nRefusal: No"}}]}`
+
+// requestOnlyDenyMessage is the custom denyMessage used by the intercept tests
+// below. It is deliberately distinct from the plugin default so the assertions
+// cannot pass by accident.
+const requestOnlyDenyMessage = "blocked by qwen3guard"
+
+// requestOnlyConfig only moderates the request side, which is the flow reported
+// for Dify: the platform asks for a streaming completion and the plugin has to
+// answer in the same shape.
+var requestOnlyConfig = json.RawMessage(`{
+	"serviceSource": "k8s",
+	"serviceName": "qwen3guard",
+	"servicePort": 8000,
+	"checkRequest": true,
+	"checkResponse": false,
+	"denyMessage": "` + requestOnlyDenyMessage + `"
+}`)
+
+// responseOnlyConfig keeps request moderation off but still reads the request
+// body, so it exercises the buffered (non-SSE) response intercept path.
+var responseOnlyConfig = json.RawMessage(`{
+	"serviceSource": "k8s",
+	"serviceName": "qwen3guard",
+	"servicePort": 8000,
+	"checkRequest": false,
+	"checkResponse": true,
+	"denyMessage": "` + requestOnlyDenyMessage + `"
+}`)
+
+func headerValue(headers [][2]string, name string) string {
+	for _, header := range headers {
+		if strings.EqualFold(header[0], name) {
+			return header[1]
+		}
+	}
+	return ""
+}
+
+func TestIsStreamingRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "boolean true", body: `{"stream":true}`, want: true},
+		{name: "string true", body: `{"stream":"true"}`, want: true},
+		{name: "boolean false", body: `{"stream":false}`, want: false},
+		{name: "missing flag", body: `{"messages":[]}`, want: false},
+		{name: "invalid json", body: `not-json`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isStreamingRequest([]byte(tt.body)))
+		})
+	}
+}
+
+func TestBuildDenyResponsePicksMatchingFormat(t *testing.T) {
+	streaming := buildDenyResponse("blocked", true)
+	require.Equal(t, contentTypeSSE, streaming.contentType)
+	payloads := extractSSEDataPayloads(string(streaming.body))
+	require.Len(t, payloads, 3)
+	require.Equal(t, "blocked", gjson.Get(payloads[0], "choices.0.delta.content").String())
+
+	nonStreaming := buildDenyResponse("blocked", false)
+	require.Equal(t, contentTypeJSON, nonStreaming.contentType)
+	require.Equal(t, "chat.completion", gjson.GetBytes(nonStreaming.body, "object").String())
+	require.Equal(t, "blocked", gjson.GetBytes(nonStreaming.body, "choices.0.message.content").String())
+}
+
+// TestRequestDenyMatchesRequestStreamMode is the regression test for the
+// reported Dify behaviour: a streaming request that gets blocked used to be
+// answered with a non-streaming chat.completion document, so the client's SSE
+// reader produced an empty message. The intercept must now speak the same
+// protocol the request asked for.
+func TestRequestDenyMatchesRequestStreamMode(t *testing.T) {
+	tests := []struct {
+		name            string
+		requestBody     string
+		wantContentType string
+	}{
+		{
+			name:            "streaming request gets an SSE intercept",
+			requestBody:     `{"model":"qwen","stream":true,"messages":[{"role":"user","content":"unsafe prompt"}]}`,
+			wantContentType: contentTypeSSE,
+		},
+		{
+			name:            "non-streaming request keeps the JSON intercept",
+			requestBody:     `{"model":"qwen","stream":false,"messages":[{"role":"user","content":"unsafe prompt"}]}`,
+			wantContentType: contentTypeJSON,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, status := test.NewTestHost(requestOnlyConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/v1/chat/completions"},
+				{":method", "POST"},
+			})
+			require.Equal(t, types.ActionPause, host.CallOnHttpRequestBody([]byte(tt.requestBody)))
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			}, []byte(unsafeGuardResponse))
+
+			local := host.GetLocalResponse()
+			require.NotNil(t, local, "expected the request intercept to send a local reply")
+			require.Equal(t, uint32(defaultDenyCode), local.StatusCode)
+			require.Equal(t, tt.wantContentType, headerValue(local.Headers, "content-type"))
+
+			if tt.wantContentType == contentTypeSSE {
+				require.True(t, strings.HasPrefix(string(local.Data), "data: "),
+					"streaming intercept must be SSE framed so the client can parse it")
+				payloads := extractSSEDataPayloads(string(local.Data))
+				require.Len(t, payloads, 3)
+				require.Equal(t, "chat.completion.chunk", gjson.Get(payloads[0], "object").String())
+				require.Equal(t, requestOnlyDenyMessage, gjson.Get(payloads[0], "choices.0.delta.content").String())
+				require.Equal(t, "stop", gjson.Get(payloads[1], "choices.0.finish_reason").String())
+				require.True(t, isDonePayload(payloads[2]))
+			} else {
+				require.Equal(t, "chat.completion", gjson.GetBytes(local.Data, "object").String())
+				require.Equal(t, requestOnlyDenyMessage, gjson.GetBytes(local.Data, "choices.0.message.content").String())
+			}
+		})
+	}
+}
+
+// TestResponseDenyFollowsRequestStreamMode covers the buffered response
+// intercept: even when the upstream produced a non-SSE body, the replacement
+// reply has to match the streaming mode the caller negotiated.
+func TestResponseDenyFollowsRequestStreamMode(t *testing.T) {
+	host, status := test.NewTestHost(responseOnlyConfig)
+	defer host.Reset()
+	require.Equal(t, types.OnPluginStartStatusOK, status)
+
+	host.CallOnHttpRequestHeaders([][2]string{
+		{":authority", "example.com"},
+		{":path", "/v1/chat/completions"},
+		{":method", "POST"},
+	})
+	require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(
+		[]byte(`{"model":"qwen","stream":true,"messages":[{"role":"user","content":"hello"}]}`)))
+
+	require.Equal(t, types.HeaderStopIteration, host.CallOnHttpResponseHeaders([][2]string{
+		{":status", "200"},
+		{"content-type", "application/json"},
+	}))
+	require.Equal(t, types.ActionPause, host.CallOnHttpResponseBody(
+		[]byte(`{"choices":[{"message":{"content":"unsafe answer"}}]}`)))
+
+	host.CallOnHttpCall([][2]string{
+		{":status", "200"},
+		{"content-type", "application/json"},
+	}, []byte(unsafeGuardResponse))
+
+	local := host.GetLocalResponse()
+	require.NotNil(t, local, "expected the response intercept to send a local reply")
+	require.Equal(t, contentTypeSSE, headerValue(local.Headers, "content-type"))
+	payloads := extractSSEDataPayloads(string(local.Data))
+	require.NotEmpty(t, payloads)
+	require.Equal(t, requestOnlyDenyMessage, gjson.Get(payloads[0], "choices.0.delta.content").String())
 }
 
 func TestShouldBlockRisk(t *testing.T) {

@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
@@ -22,6 +24,10 @@ func TestTruncateString(t *testing.T) {
 		{"Truncated String", "Higress Is an AI-Native API Gateway", 20, "Higress Is...(truncated)...PI Gateway"},
 		{"Empty String", "", 10, ""},
 		{"Single Char", "A", 10, "A"},
+		{"Chinese Truncated", "中中中中", 7, "中...(truncated)...中"},
+		{"Emoji Truncated", "😀😀😀😀", 9, "😀...(truncated)...😀"},
+		{"Aligned UTF-8 Cut", "中文中文", 6, "中...(truncated)...文"},
+		{"Tiny Max Length", "中文", 1, "...(truncated)..."},
 	}
 
 	for _, tt := range tests {
@@ -31,6 +37,42 @@ func TestTruncateString(t *testing.T) {
 			if result != tt.expected {
 				t.Errorf("truncateString(%q, %d) = %q; want %q", tt.input, tt.maxLen, result, tt.expected)
 			}
+		})
+	}
+}
+
+// TestTruncateStringUTF8 verifies that truncation never splits a multi-byte rune.
+func TestTruncateStringUTF8(t *testing.T) {
+	chinese := strings.Repeat("中", 20)
+	emoji := strings.Repeat("😀", 16)
+
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+	}{
+		{"Chinese odd limit", chinese, 21},
+		{"Chinese tiny limit", chinese, 5},
+		{"Emoji odd limit", emoji, 15},
+		{"Mixed content", "Higress 是一个 AI 原生的 API 网关 😀🚀", 18},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			half := tt.maxLen / 2
+			require.False(t, utf8.ValidString(tt.input[:half]),
+				"test case must start with a mid-rune cut")
+
+			config := McpConverterConfig{MaxHeaderLength: tt.maxLen}
+			result := truncateString(tt.input, config)
+
+			require.True(t, utf8.ValidString(result), "result is not valid UTF-8: %q", result)
+			prefix, suffix, found := strings.Cut(result, "...(truncated)...")
+			require.True(t, found, "result is missing the truncation marker: %q", result)
+			require.True(t, strings.HasPrefix(tt.input, prefix), "prefix cut through a rune boundary: %q", prefix)
+			require.True(t, strings.HasSuffix(tt.input, suffix), "suffix cut through a rune boundary: %q", suffix)
+			require.LessOrEqual(t, len(prefix), half)
+			require.LessOrEqual(t, len(suffix), half)
 		})
 	}
 }

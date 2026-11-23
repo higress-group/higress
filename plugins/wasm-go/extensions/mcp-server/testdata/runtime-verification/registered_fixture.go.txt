@@ -1,0 +1,105 @@
+// Copyright (c) 2026 Alibaba Group Holding Limited
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/server"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
+)
+
+var runtimeCreates, runtimeCalls atomic.Uint64
+
+// A new VM must never look like an unchanged zero counter after recycling.
+var runtimeGeneration = fmt.Sprintf("%d", time.Now().UnixNano())
+
+type runtimeRawSummaryTool struct{ raw []byte }
+
+func (t *runtimeRawSummaryTool) Create(raw []byte) server.Tool {
+	runtimeCreates.Add(1)
+	return &runtimeRawSummaryTool{raw: bytes.Clone(raw)}
+}
+func (t *runtimeRawSummaryTool) Call(ctx server.HttpContext, _ server.Server) error {
+	runtimeCalls.Add(1)
+	utils.OnMCPResponseSuccess(ctx, map[string]any{
+		"rawLength": len(t.raw), "rawSha256": fmt.Sprintf("%x", sha256.Sum256(t.raw)),
+	}, "runtime:raw-summary")
+	return nil
+}
+func (t *runtimeRawSummaryTool) Description() string {
+	return "raw Create contract and bounded result fixture"
+}
+func (t *runtimeRawSummaryTool) InputSchema() map[string]any {
+	return map[string]any{"type": "object", "required": []string{"schemaOnly"},
+		"custom": runtimeDescriptorMarshaler{}, "raw": json.RawMessage(`{"number":900719925474099312345}`)}
+}
+func (t *runtimeRawSummaryTool) OutputSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"rawLength": map[string]any{"type": "integer"}}}
+}
+
+type runtimeDescriptorMarshaler struct{}
+
+func (runtimeDescriptorMarshaler) MarshalJSON() ([]byte, error) {
+	return []byte(`{"value":"serialized","number":900719925474099312345}`), nil
+}
+
+type runtimeCountersTool struct{}
+
+func (t *runtimeCountersTool) Create([]byte) server.Tool { return t }
+func (t *runtimeCountersTool) Call(ctx server.HttpContext, _ server.Server) error {
+	utils.OnMCPResponseSuccess(ctx, map[string]any{"generation": runtimeGeneration, "creates": runtimeCreates.Load(), "calls": runtimeCalls.Load()}, "runtime:counters")
+	return nil
+}
+func (t *runtimeCountersTool) Description() string {
+	return "business execution counter without incrementing it"
+}
+func (t *runtimeCountersTool) InputSchema() map[string]any { return map[string]any{"type": "object"} }
+
+type runtimeNumericSchemaTool struct{}
+
+func (t *runtimeNumericSchemaTool) Create(_ []byte) server.Tool { return t }
+func (t *runtimeNumericSchemaTool) Call(_ server.HttpContext, _ server.Server) error {
+	return nil
+}
+func (t *runtimeNumericSchemaTool) Description() string { return "numeric comparison bound fixture" }
+func (t *runtimeNumericSchemaTool) InputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"value": map[string]any{
+				"type": "number",
+				"enum": []any{json.Number("1e5000")},
+			},
+		},
+	}
+}
+
+func init() {
+	fixtureServer := mcp.NewMCPServer()
+	fixtureServer.AddMCPTool("numeric_comparison", &runtimeNumericSchemaTool{})
+	fixtureServer.AddMCPTool("raw_summary", &runtimeRawSummaryTool{})
+	fixtureServer.AddMCPTool(strings.Repeat("n", 5000), &runtimeRawSummaryTool{})
+	fixtureServer.AddMCPTool(strings.Repeat("界", 3000), &runtimeRawSummaryTool{})
+	fixtureServer.AddMCPTool("runtime_counters", &runtimeCountersTool{})
+	mcp.LoadMCPServer(mcp.AddMCPServer("runtime-schema-fixtures", fixtureServer))
+}

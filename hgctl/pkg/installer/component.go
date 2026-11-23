@@ -58,6 +58,12 @@ type ComponentOptions struct {
 
 type ComponentOption func(*ComponentOptions)
 
+func WithComponentName(name string) ComponentOption {
+	return func(opts *ComponentOptions) {
+		opts.Name = name
+	}
+}
+
 func WithComponentNamespace(namespace string) ComponentOption {
 	return func(opts *ComponentOptions) {
 		opts.Namespace = namespace

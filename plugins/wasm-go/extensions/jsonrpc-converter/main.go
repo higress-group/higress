@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"unicode/utf8"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
-	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
-	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 )
@@ -153,16 +154,24 @@ func printHeaders(stage ProcessStage, s string) {
 	log.Debugf("PrintHeaders %s: %v", s, headersNow)
 }
 
-// truncates a string to a maximum length of 4000 characters.
+// truncateString truncates a string to a maximum byte length, keeping the
+// prefix and suffix on UTF-8 rune boundaries.
 func truncateString(s string, config any) string {
 	length := config.(McpConverterConfig).MaxHeaderLength
 	if len(s) <= length {
 		return s
 	}
-	prefix := s[:length/2]
-	suffix := s[len(s)-length/2:]
+	half := length / 2
+	prefixEnd := half
+	for prefixEnd > 0 && !utf8.RuneStart(s[prefixEnd]) {
+		prefixEnd--
+	}
+	suffixStart := len(s) - half
+	for suffixStart < len(s) && !utf8.RuneStart(s[suffixStart]) {
+		suffixStart++
+	}
 
-	return fmt.Sprintf("%s...(truncated)...%s", prefix, suffix)
+	return fmt.Sprintf("%s...(truncated)...%s", s[:prefixEnd], s[suffixStart:])
 }
 
 func processJsonRpcRequest(context wrapper.HttpContext, config any, id utils.JsonRpcID, method string, params gjson.Result, rawBody []byte) types.Action {

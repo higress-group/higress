@@ -299,6 +299,20 @@ func TestParseSSEResponse(t *testing.T) {
 		expectedData string
 		shouldErr    bool
 	}{
+		{name: "no space LF", sseData: "data:{\"result\":{}}\n\n", expectedData: `{"result":{}}`},
+		{name: "no space CRLF", sseData: "data:{\"result\":{}}\r\n\r\n", expectedData: `{"result":{}}`},
+		{name: "original extra space preserved", sseData: "data:  JSON\n\n", expectedData: " JSON"},
+		{name: "mixed original priority", sseData: "data:{\"method\":\"notifications/progress\"}\n\ndata: {\"result\":{}}\n\n", expectedData: `{"result":{}}`},
+		{name: "first no space candidate", sseData: "data:first\n\ndata:second\n\n", expectedData: "first"},
+		{name: "empty before fallback", sseData: "data:\n\ndata:  \n\ndata:valid\n\n", expectedData: "valid"},
+		{name: "empty before original", sseData: "data:\n\ndata: valid\n\n", expectedData: "valid"},
+		{name: "empty only", sseData: "data:\ndata:  \n\n", shouldErr: true},
+		{name: "field distinction", sseData: ":data:comment\nevent: message\nid: 7\nmetadata:wrong\nData:wrong\ndata:valid\n", expectedData: "valid"},
+		{name: "nonmatching fields only", sseData: "metadata:wrong\nData:wrong\n", shouldErr: true},
+		{name: "original EOF without blank", sseData: "data: original", expectedData: "original"},
+		{name: "fallback EOF without blank", sseData: "data:fallback", expectedData: "fallback"},
+		{name: "fallback invalid JSON remains extracted", sseData: "data:{invalid json}\n\n", expectedData: "{invalid json}"},
+		{name: "fallback tab is not normalized", sseData: "data:\tJSON\n\n", expectedData: "\tJSON"},
 		{
 			name: "valid SSE with JSON data",
 			sseData: `event: message

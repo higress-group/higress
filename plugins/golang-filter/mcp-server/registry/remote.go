@@ -190,7 +190,7 @@ func selectOneInstance(ctx *RpcContext) (*Instance, error) {
 
 	instances := *ctx.Instances
 	if len(instances) > 1 {
-		instanceId = rand.Intn(len(instances) - 1)
+		instanceId = rand.Intn(len(instances))
 	}
 	select_instance := instances[instanceId]
 	return &select_instance, nil

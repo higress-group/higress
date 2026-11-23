@@ -30,7 +30,7 @@ expires: 3600
 
 ```bash
 curl http://example.com/test.png
-curl http://exmaple.com/test.jpg
+curl http://example.com/test.jpg
 ```
 2. 缓存所有文件，且缓存至最大时间 `“Thu, 31 Dec 2037 23:55:55 GMT”`
 ```yaml

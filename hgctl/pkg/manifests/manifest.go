@@ -39,7 +39,7 @@ func BuiltinOrDir(dir string) fs.FS {
 	return os.DirFS(dir)
 }
 
-// This funciton will write the embed sourceDir's files to target dir
+// This function will write the embed sourceDir's files to target dir
 func ExtractEmbedFiles(fsys fs.FS, srcDir, targetDir string) error {
 	return fs.WalkDir(fsys, srcDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

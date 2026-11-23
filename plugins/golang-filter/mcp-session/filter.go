@@ -1,7 +1,6 @@
 package mcp_session
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,13 +9,12 @@ import (
 	"strings"
 
 	"github.com/alibaba/higress/plugins/golang-filter/mcp-session/common"
-	"github.com/alibaba/higress/plugins/golang-filter/mcp-session/handler"
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
-	"github.com/mark3labs/mcp-go/mcp"
 )
 
 const (
 	RedisNotEnabledResponseBody = "Redis is not enabled, SSE connection is not supported"
+	mcpServerConfigHeader       = "x-higress-mcpserver-config"
 )
 
 // The callbacks in the filter, like `DecodeHeaders`, can be implemented on demand.
@@ -38,16 +36,12 @@ type filter struct {
 	skipResponseBody   bool
 	cachedResponseBody []byte
 	sseServer          *common.SSEServer // SSE server instance for this filter (per-request, not shared)
-
-	userLevelConfig     bool
-	mcpConfigHandler    *handler.MCPConfigHandler
-	ratelimit           bool
-	mcpRatelimitHandler *handler.MCPRatelimitHandler
 }
 
 // Callbacks which are called in request path
 // The endStream is true if the request doesn't have body
 func (f *filter) DecodeHeaders(header api.RequestHeaderMap, endStream bool) api.StatusType {
+	header.Del(mcpServerConfigHeader)
 	requestUrl := common.NewRequestURL(header)
 	if requestUrl == nil {
 		return api.Continue
@@ -67,26 +61,6 @@ func (f *filter) DecodeHeaders(header api.RequestHeaderMap, endStream bool) api.
 		Method: requestUrl.Method,
 		URL:    requestUrl.ParsedURL,
 	}
-
-	if strings.HasSuffix(f.path, ConfigPathSuffix) && f.config.enableUserLevelServer {
-		if !requestUrl.InternalIP {
-			api.LogWarnf("Access denied: non-Internal IP address %s", requestUrl.ParsedURL.String())
-			f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusForbidden, "", nil, 0, "")
-			return api.LocalReply
-		}
-		if strings.HasSuffix(f.path, ConfigPathSuffix) && requestUrl.Method == http.MethodGet {
-			api.LogDebugf("Handling config request: %s", f.path)
-			f.mcpConfigHandler.HandleConfigRequest(f.req, []byte{})
-			return api.LocalReply
-		}
-		f.userLevelConfig = true
-		if endStream {
-			return api.Continue
-		} else {
-			return api.StopAndBuffer
-		}
-	}
-
 	return f.processMcpRequestHeaders(header, endStream)
 }
 
@@ -106,25 +80,28 @@ func (f *filter) processMcpRequestHeadersForRestUpstream(header api.RequestHeade
 	requestUrl := f.req.URL
 	if !strings.HasSuffix(requestUrl.Path, GlobalSSEPathSuffix) {
 		f.proxyURL = requestUrl
-		if f.config.enableUserLevelServer {
-			parts := strings.Split(requestUrl.Path, "/")
-			if len(parts) >= 3 {
-				serverName := parts[1]
-				uid := parts[2]
-				// Get encoded config
-				encodedConfig, _ := f.mcpConfigHandler.GetEncodedConfig(serverName, uid)
-				if encodedConfig != "" {
-					header.Set("x-higress-mcpserver-config", encodedConfig)
-					api.LogDebugf("Set x-higress-mcpserver-config Header for %s:%s", serverName, uid)
+		if method == http.MethodPost && f.config.sessionRegistry != nil {
+			if sessionID := requestUrl.Query().Get("sessionId"); sessionID != "" {
+				sessionRegistry := f.config.sessionRegistry
+				if pinnedClient := common.GlobalSessionRegistry.PublisherForSession(sessionID, nil); pinnedClient != nil {
+					sessionRegistry = common.NewRedisSessionRegistry(pinnedClient)
+				}
+				valid, err := sessionRegistry.ValidateSession(f.matchedRule.SessionServerName(), sessionID)
+				if err != nil {
+					api.LogErrorf("Failed to validate MCP session: %v", err)
+					f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusServiceUnavailable, "", nil, 0, "")
+					return api.LocalReply
+				}
+				if !valid {
+					f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusForbidden, "", nil, 0, "")
+					return api.LocalReply
 				}
 			}
-			f.ratelimit = true
 		}
-		if endStream {
-			return api.Continue
-		} else {
-			return api.StopAndBuffer
-		}
+		// Plain REST/streamable MCP proxying never inspects the request body.
+		// Stream it directly to avoid Envoy's full-body buffer limit. See #3238.
+		f.skipRequestBody = true
+		return api.Continue
 	}
 
 	if method != http.MethodGet {
@@ -139,9 +116,11 @@ func (f *filter) processMcpRequestHeadersForRestUpstream(header api.RequestHeade
 		// Create SSE server instance for this filter (per-request, not shared)
 		// MCPServer is shared (thread-safe), but SSEServer must be per-request (contains request-specific messageEndpoint)
 		f.sseServer = common.NewSSEServer(f.config.sharedMCPServer,
+			common.WithServerName(f.matchedRule.SessionServerName()),
 			common.WithSSEEndpoint(GlobalSSEPathSuffix),
 			common.WithMessageEndpoint(trimmed),
-			common.WithRedisClient(f.config.redisClient))
+			common.WithRedisClient(f.config.redisClient),
+			common.WithSessionRegistry(f.config.sessionRegistry))
 		f.serverName = f.sseServer.GetServerName()
 		body := "SSE connection create"
 		f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusOK, body, nil, 0, "")
@@ -169,36 +148,6 @@ func (f *filter) DecodeData(buffer api.BufferInstance, endStream bool) api.Statu
 	}
 	if !endStream {
 		return api.StopAndBuffer
-	}
-	if f.userLevelConfig {
-		// Handle config POST request
-		api.LogDebugf("Handling config request: %s", f.path)
-		f.mcpConfigHandler.HandleConfigRequest(f.req, buffer.Bytes())
-		return api.LocalReply
-	} else if f.ratelimit {
-		if checkJSONRPCMethod(buffer.Bytes(), "tools/list") {
-			api.LogDebugf("Not a tools call request, skipping ratelimit")
-			return api.Continue
-		}
-		parts := strings.Split(f.req.URL.Path, "/")
-		if len(parts) < 3 {
-			api.LogWarnf("Access denied: no valid uid found")
-			f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusForbidden, "", nil, 0, "")
-			return api.LocalReply
-		}
-		serverName := parts[1]
-		uid := parts[2]
-		encodedConfig, err := f.mcpConfigHandler.GetEncodedConfig(serverName, uid)
-		if err != nil {
-			api.LogWarnf("Access denied: no valid config found for uid %s", uid)
-			f.callbacks.DecoderFilterCallbacks().SendLocalReply(http.StatusForbidden, "", nil, 0, "")
-			return api.LocalReply
-		} else if encodedConfig == "" && checkJSONRPCMethod(buffer.Bytes(), "tools/call") {
-			api.LogDebugf("Empty config found for %s:%s", serverName, uid)
-			if !f.mcpRatelimitHandler.HandleRatelimit(f.req, buffer.Bytes()) {
-				return api.LocalReply
-			}
-		}
 	}
 	return api.Continue
 }
@@ -257,6 +206,18 @@ func (f *filter) EncodeData(buffer api.BufferInstance, endStream bool) api.Statu
 	return ret
 }
 
+// resolveSessionRedisClient returns the Redis client whose backend must receive
+// the response for the message endpoint request of the given session.
+//
+// A live SSE session is pinned to the client that opened its subscription (see
+// common.SessionRegistry), so a hot update of mcpServer.redis cannot move the
+// publication to a different backend while the subscription keeps listening on
+// the original one. Requests without a live session fall back to the currently
+// configured client.
+func (f *filter) resolveSessionRedisClient(sessionID string) *common.RedisClient {
+	return common.GlobalSessionRegistry.PublisherForSession(sessionID, f.config.redisClient)
+}
+
 func (f *filter) encodeDataFromRestUpstream(buffer api.BufferInstance, endStream bool) api.StatusType {
 	if !f.needProcess {
 		return api.Continue
@@ -267,11 +228,19 @@ func (f *filter) encodeDataFromRestUpstream(buffer api.BufferInstance, endStream
 	if f.proxyURL != nil && f.config.redisClient != nil {
 		sessionID := f.proxyURL.Query().Get("sessionId")
 		if sessionID != "" {
-			channel := common.GetSSEChannelName(sessionID)
-			eventData := fmt.Sprintf("event: message\ndata: %s\n\n", buffer.String())
-			publishErr := f.config.redisClient.Publish(channel, eventData)
-			if publishErr != nil {
-				api.LogErrorf("Failed to publish wasm mcp server message to Redis: %v", publishErr)
+			// Publish on the backend that owns the live SSE session instead of the
+			// currently configured one: mcpServer.redis can be hot-updated while
+			// the SSE connection stays open, and its subscription keeps reading
+			// from the client that created it. Publishing through the configured
+			// client would write to a different backend and the SSE client would
+			// never see the response.
+			publisher := f.resolveSessionRedisClient(sessionID)
+			if publisher != nil {
+				channel := common.GetSSEChannelName(sessionID)
+				eventData := fmt.Sprintf("event: message\ndata: %s\n\n", buffer.String())
+				if publishErr := publisher.Publish(channel, eventData); publishErr != nil {
+					api.LogErrorf("Failed to publish wasm mcp server message to Redis: %v", publishErr)
+				}
 			}
 		}
 	}
@@ -295,9 +264,12 @@ func (f *filter) encodeDataFromSSEUpstream(buffer api.BufferInstance, endStream 
 	bufferData := string(bufferBytes)
 	api.LogDebugf("Received SSE data: %q, length: %d, endStream: %v", bufferData, len(bufferData), endStream)
 
-	// Combine cached data with new data
+	// Combine cached data with new data. Cached chunks were already drained from
+	// the wire, so every path that consumes the cache must put the assembled data
+	// back into the buffer, otherwise the client only sees the last chunk. See #4651.
 	var combinedData string
-	if len(f.cachedResponseBody) > 0 {
+	hasCachedData := len(f.cachedResponseBody) > 0
+	if hasCachedData {
 		combinedData = string(f.cachedResponseBody) + bufferData
 		api.LogDebugf("Combined with cached data: %q, total length: %d", combinedData, len(combinedData))
 	} else {
@@ -308,6 +280,10 @@ func (f *filter) encodeDataFromSSEUpstream(buffer api.BufferInstance, endStream 
 	if err != nil {
 		api.LogWarnf("Failed to find endpoint URL in SSE data: %v", err)
 		f.needProcess = false
+		f.cachedResponseBody = nil
+		if hasCachedData {
+			_ = buffer.SetString(combinedData)
+		}
 		return api.Continue
 	}
 	if endpointUrl == "" {
@@ -331,12 +307,18 @@ func (f *filter) encodeDataFromSSEUpstream(buffer api.BufferInstance, endStream 
 		endpointUrlIndex := strings.Index(combinedData, endpointUrl)
 		if endpointUrlIndex == -1 {
 			api.LogWarnf("Something wrong, the previously found endpoint URL %s not found in the SSE data now", endpointUrl)
+			if hasCachedData {
+				_ = buffer.SetString(combinedData)
+			}
 		} else {
 			newBufferData := combinedData[:endpointUrlIndex] + newEndpointUrl + combinedData[endpointUrlIndex+len(endpointUrl):]
 			_ = buffer.SetString(newBufferData)
 		}
 	} else {
 		api.LogDebugf("The endpoint URL %s is not changed", endpointUrl)
+		if hasCachedData {
+			_ = buffer.SetString(combinedData)
+		}
 	}
 
 	f.needProcess = false
@@ -520,15 +502,4 @@ func (f *filter) OnDestroy(reason api.DestroyReason) {
 			close(f.stopChan)
 		}
 	}
-}
-
-// check if the request is a tools/call request
-func checkJSONRPCMethod(body []byte, method string) bool {
-	var request mcp.CallToolRequest
-	if err := json.Unmarshal(body, &request); err != nil {
-		api.LogWarnf("Failed to unmarshal request body: %v, not a JSON RPC request", err)
-		return true
-	}
-
-	return request.Method == method
 }

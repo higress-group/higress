@@ -199,6 +199,61 @@ TEST_F(RequestBlockTest, CaseSensitive) {
   EXPECT_EQ(context_->onRequestBody(11, true), FilterDataStatus::Continue);
 }
 
+TEST_F(RequestBlockTest, DomainMatchAsciiCaseInsensitive) {
+  std::string configuration = R"(
+{
+  "_rules_": [
+    {
+      "_match_domain_": [
+        "EXACT.example", "lower.example", "MiXeD.example", "\u00c4xample.test"
+      ],
+      "block_urls": ["/blocked"]
+    },
+    {
+      "_match_domain_": ["*.SUFFIX.example"],
+      "block_urls": ["/blocked"]
+    },
+    {
+      "_match_domain_": ["PREFIX.*"],
+      "block_urls": ["/blocked"]
+    }
+  ]
+})";
+
+  config_.set({configuration.data(), configuration.size()});
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  path_ = "/blocked";
+  auto expectBlocked = [this](const std::string& host) {
+    authority_ = host;
+    SCOPED_TRACE(host);
+    EXPECT_CALL(*mock_context_, sendLocalResponse(403, testing::_, testing::_,
+                                                  testing::_, testing::_));
+    EXPECT_EQ(context_->onRequestHeaders(0, false),
+              FilterHeadersStatus::StopIteration);
+  };
+  auto expectAllowed = [this](const std::string& host) {
+    authority_ = host;
+    SCOPED_TRACE(host);
+    EXPECT_EQ(context_->onRequestHeaders(0, false),
+              FilterHeadersStatus::Continue);
+  };
+
+  expectBlocked("exact.example");
+  expectBlocked("LOWER.EXAMPLE");
+  expectBlocked("mIxEd.ExAmPlE");
+  expectBlocked("exact.example:8443");
+  expectBlocked("www.suffix.EXAMPLE");
+  expectBlocked("WWW.SUFFIX.example");
+  expectBlocked("prefix.COM");
+  expectBlocked("PrEfIx.OrG");
+  expectBlocked("\xc3\x84xample.test");
+
+  expectAllowed("unrelated.example");
+  expectAllowed("exact.example.");
+  expectAllowed("\xc3\xa4xample.test");
+}
+
 TEST_F(RequestBlockTest, CaseInsensitive) {
   std::string configuration = R"(
 {

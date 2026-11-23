@@ -21,11 +21,11 @@ description: OAuth2 认证插件配置参考
 | `consumers`          | array of object | 必填                                        | -               | 配置服务的调用者，用于对请求进行认证                                                                                                                                          |
 | `issuer`             | string          | 选填                                        | Higress-Gateway | 用于填充JWT中的issuer                                                                                                                                                         |
 | `auth_path`          | string          | 选填                                        | /oauth2/token   | 指定路径后缀用于签发Token，路由级配置时，要确保首先能匹配对应的路由, 使用 API 管理时，需要创建相同路径的接口                                                                  |
-| `global_credentials` | bool            | 选填                                        | ture            | 在通过 consumer 认证的前提下，允许任意路由签发的凭证访问                                                                                                                      |
+| `global_credentials` | bool            | 选填                                        | true            | 在通过 consumer 认证的前提下，允许任意路由签发的凭证访问                                                                                                                      |
 | `auth_header_name`   | string          | 选填                                        | Authorization   | 用于指定从哪个请求头获取JWT                                                                                                                                                   |
 | `token_ttl`          | number          | 选填                                        | 7200            | token从签发后多久内有效，单位为秒                                                                                                                                             |
 | `clock_skew_seconds` | number          | 选填                                        | 60              | 校验JWT的exp和iat字段时允许的时钟偏移量，单位为秒                                                                                                                             |
-| `keep_token`         | bool            | 选填                                        | ture            | 转发给后端时是否保留JWT                                                                                                                                                       |
+| `keep_token`         | bool            | 选填                                        | true            | 转发给后端时是否保留JWT                                                                                                                                                       |
 | `global_auth`        | array of string | 选填(**仅实例级别配置**)                    | -               | 只能在实例级别配置，若配置为true，则全局生效认证机制; 若配置为false，则只对做了配置的域名和路由生效认证机制; 若不配置则仅当没有域名和路由配置时全局 生效（兼容老用户使用习惯） |
 
 `consumers`中每一项的配置字段说明如下：
@@ -40,6 +40,8 @@ description: OAuth2 认证插件配置参考
 - 对于开启该配置的路由，如果路径后缀和`auth_path`匹配，则该路由不会到原目标服务，而是用于生成Token
 - 如果关闭`global_credentials`,请确保启用此插件的路由不是精确匹配路由，此时若存在另一条前缀匹配路由，则可能导致预期外行为
 - 对于通过认证鉴权的请求，请求的header会被添加一个`X-Mse-Consumer`字段，用以标识调用者的名称。
+  该字段由网关**覆盖写入**而非追加：客户端请求中自带的 `X-Mse-Consumer` 会先被移除，再写入本次认证得到的 Consumer 名称。
+  因此下游读取到的始终是网关的认证结果，调用方无法通过自带该请求头伪造身份。
 
 ### 鉴权配置（非必需）
 
@@ -99,7 +101,7 @@ allow:
 - consumer1
 ```
 
-在`*.exmaple.com`和`test.com`两个域名做如下插件配置：
+在`*.example.com`和`test.com`两个域名做如下插件配置：
 
 ```yaml
 allow:
