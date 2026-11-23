@@ -47,10 +47,16 @@ and pinned images. It uses a separate `runtime_v1.py` proof gate, not a weakened
 V0 verdict. The original V0 runtime entry point and historical evidence retain
 their original meaning. The original diagnostic-on load failure remains a
 failure in V1 evidence, never a successful runtime control. V1 requires actual
-expanded compile/link actions, both module identities, unchanged control bytes,
+expanded compile/link actions, both current-run module identities, unchanged control source/target,
 two complete nodiag corpus rounds with immediate valid-after controls, per-case
 probe logs, no traps, final artifact/host/container byte equality and checked
 cleanup command outcomes. Import disappearance or readiness alone cannot pass.
+
+Design section 17 authorizes a minimal harness-only closure: historical control
+SHA equality is retained as a non-gating diagnostic with an unknown cause for
+differences; cross-run bit-identical rebuilds are not promised. This does not
+claim semantic equivalence or relabel earlier failed/PARTIAL CI. Every current-run
+input/action/artifact/helper/tag/runtime/recovery/cleanup proof remains a hard gate.
 
 No production mechanism, cross-library unwinding, arbitrary runtime version,
 nine-plugin acceptance or release is authorized by a successful V1 probe.

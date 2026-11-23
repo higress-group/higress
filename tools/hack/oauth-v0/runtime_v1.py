@@ -58,7 +58,8 @@ def main():
         modules = [read_json(output / variant / "module-info.json") for variant in ("candidate_eh", "candidate_eh_nodiag")]
         helper_present = [any(entry["module"] == "env" and entry["name"] == HELPER for entry in module["imports"]) for module in modules]
         verdict["module_comparison"] = [{"variant": variant, "sha256": module["sha256"], "size": module["size"], "diagnostic_helper_import": helper, "sections": module["sections"], "target_features": module["target_features"]} for variant, module, helper in zip(("candidate_eh", "candidate_eh_nodiag"), modules, helper_present)]
-        proof["control_bytes_unchanged_helper_removed_from_candidate"] = modules[0]["sha256"] == CONTROL_SHA256 and helper_present == [True, False] and all(any(section["id"] == 13 for section in module["sections"]) for module in modules)
+        verdict["historical_control_diagnostic"] = {"historical_sha256": CONTROL_SHA256, "current_sha256": modules[0]["sha256"], "equal": modules[0]["sha256"] == CONTROL_SHA256, "cause": "unknown"}
+        proof["control_helper_present_candidate_helper_removed_eh_tags_preserved"] = helper_present == [True, False] and all(any(section["id"] == 13 for section in module["sections"]) for module in modules)
         control_log = (directory / "candidate_eh/envoy-upstream.log").read_text(errors="replace")
         proof["control_honest_missing_import_load_failure"] = not control["loaded"] and not control["rows"] and "missing import: env." + HELPER in control_log and control.get("artifact_host_container_equal") is True
         native_rows = [line.split("\t") for line in (output / "native/results.tsv").read_text().splitlines()]
