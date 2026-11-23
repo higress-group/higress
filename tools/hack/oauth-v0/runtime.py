@@ -73,11 +73,22 @@ def record_response(directory, name, response):
     (directory / (name + ".json")).write_text(json.dumps(metadata, indent=2) + "\n")
 
 
+def production_echo(response, token, strip_token=False):
+    if response["status"] != 200:
+        return False
+    try:
+        headers = {name.lower(): value for name, value in json.loads(response["body"])["headers"].items()}
+        return headers.get("x-mse-consumer") == ["probe"] and (not headers.get("authorization") if strip_token else headers.get("authorization") == ["Bearer " + token])
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
 def run_variant(variant, cases):
+    production = os.environ.get("OAUTH_PROBE_VERSION") == "production"
     directory = OUT / "runtime" / variant
     directory.mkdir(parents=True, exist_ok=True)
     module = OUT / variant / "plugin.wasm"
-    result = {"variant": variant, "module_present": module.is_file(), "loaded": False, "rows": [], "ready_after": [], "errors": [], "cleanup": False}
+    result = {"variant": variant, "module_present": module.is_file(), "loaded": False, "rows": [], "generations": [], "ready_after": [], "errors": [], "cleanup": False}
     if not module.is_file():
         result["errors"].append("module not produced; runtime not-run")
         return result
@@ -87,6 +98,14 @@ def run_variant(variant, cases):
     compose_text = (ROOT / "docs/developers/wasm-runtime-verification/compose.yaml").read_text().replace("internal: true", "internal: false")
     (harness / "compose.yaml").write_text(compose_text)
     shutil.copyfile(ROOT / "docs/developers/wasm-runtime-verification/envoy.yaml", harness / "envoy.yaml")
+    if production:
+        configuration = json.loads((OUT / "fixtures/config.json").read_text())
+        text = (harness / "envoy.yaml").read_text().replace('value: "{}"', "value: '" + json.dumps(configuration, sort_keys=True) + "'")
+        text = text.replace("FLAGS=%RESPONSE_FLAGS%", "DETAILS=%RESPONSE_CODE_DETAILS% FLAGS=%RESPONSE_FLAGS%")
+        text = text.replace("                        - match:", "                        - name: v0\n                          match:")
+        routes = "".join("                        - name: " + name + "\n                          match:\n                            prefix: " + prefix + "\n                          route:\n                            cluster: httpbin\n" for name, prefix in (("forbidden", "/forbidden/"), ("v0-strip", "/strip/")))
+        text = text.replace("                      routes:\n", "                      routes:\n" + routes)
+        (harness / "envoy.yaml").write_text(text)
     environment = dict(os.environ, HIGRESS_GATEWAY_IMAGE=GATEWAY, HTTPBIN_IMAGE=HTTPBIN, WASM_PATH="./plugin.wasm", ENVOY_PORT="10000", ENVOY_ADMIN_PORT="9901")
     project = "oauth-" + os.environ.get("OAUTH_PROBE_VERSION", "v0") + "-" + os.environ["GITHUB_RUN_ID"] + "-" + variant.replace("_", "-")
     compose = ["docker", "compose", "--project-name", project, "--file", str(harness / "compose.yaml")]
@@ -126,15 +145,25 @@ def run_variant(variant, cases):
             for case in cases:
                 name = str(repeat) + "-" + case["name"]
                 before = upstream_count(directory, name + "-counter-before")
-                response = request("/anything/" + name, case["token"], name)
+                path = case.get("prefix", "/anything/") + name
+                response = request(path, case["token"], name)
                 record_response(directory, name, response)
                 after = upstream_count(directory, name + "-counter-after")
                 expected_valid = case["expected"] == "valid"
                 marker = {key.lower(): value for key, value in response["headers"].items()}.get("x-oauth-probe-result")
-                passed = response["status"] == (200 if expected_valid else 401) and after - before == (1 if expected_valid else 0)
-                if not expected_valid:
+                expected_status = 403 if case["expected"] == "forbidden" else 200 if expected_valid else 401
+                passed = response["status"] == expected_status and after - before == (1 if expected_valid else 0)
+                if production:
+                    if expected_valid:
+                        passed = passed and production_echo(response, case["token"], case.get("strip_token", False))
+                    elif expected_status == 401:
+                        headers = {key.lower(): value for key, value in response["headers"].items()}
+                        passed = passed and response["body"] == b"Invalid Jwt token" and headers.get("www-authenticate") == 'Bearer realm="http://127.0.0.1:10000' + path + '"'
+                    else:
+                        passed = passed and response["body"] == b"Access Denied" and "www-authenticate" not in {key.lower() for key in response["headers"]}
+                elif not expected_valid:
                     passed = passed and marker == case["expected"] and response["body"].startswith(("probe:" + case["expected"] + ":").encode())
-                row = {"name": case["name"], "repeat": repeat, "case_id": name, "request_path": "/anything/" + name, "expected": case["expected"], "status": response["status"], "marker": marker, "upstream_before": before, "upstream_after": after, "passed": passed}
+                row = {"name": case["name"], "repeat": repeat, "case_id": name, "request_path": path, "expected": case["expected"], "status": response["status"], "marker": marker, "upstream_before": before, "upstream_after": after, "passed": passed}
                 result["rows"].append(row)
                 if not expected_valid:
                     followup = request("/anything/" + name + "-valid-after", control["token"], name + "-valid-after")
@@ -143,6 +172,19 @@ def run_variant(variant, cases):
                     row["following_valid_status"] = followup["status"]
                     row["following_valid_upstream_after"] = recovered
                     row["following_valid_passed"] = followup["status"] == 200 and recovered - after == 1
+                    if production:
+                        row["following_valid_passed"] = row["following_valid_passed"] and production_echo(followup, control["token"])
+            if production:
+                generation_name = str(repeat) + "-token-generation"
+                generation_before = upstream_count(directory, generation_name + "-before")
+                generated = request("/oauth2/token?grant_type=client_credentials&client_id=probe-client&client_secret=oauth-v0-test-key", "", generation_name)
+                record_response(directory, generation_name, generated)
+                generation_after = upstream_count(directory, generation_name + "-after")
+                generated_token = json.loads(generated["body"]).get("access_token", "") if generated["status"] == 200 else ""
+                generated_valid = request("/anything/" + generation_name + "-valid", generated_token, generation_name + "-valid")
+                record_response(directory, generation_name + "-valid", generated_valid)
+                generation_recovered = upstream_count(directory, generation_name + "-valid-after")
+                result["generations"].append({"repeat": repeat, "status": generated["status"], "upstream_delta": generation_after - generation_before, "following_valid_status": generated_valid["status"], "following_valid_delta": generation_recovered - generation_after, "passed": generated["status"] == 200 and bool(generated_token) and generation_after == generation_before and generation_recovered - generation_after == 1 and production_echo(generated_valid, generated_token)})
             ready_after = request("/ready")
             record_response(directory, str(repeat) + "-ready-after", ready_after)
             result["ready_after"].append(ready_after["status"])
@@ -173,6 +215,8 @@ def run_variant(variant, cases):
         result["catch_log_count"] = len(re.findall(r"OAUTH_V0 case=.*outcome=caught", log))
         result["rejected_log_count"] = len(re.findall(r"OAUTH_V0 case=.*outcome=rejected", log))
         for row in result["rows"]:
+            if production:
+                row["local_details_observed"] = row["expected"] == "valid" or any("PATH=" + row["request_path"] + " CODE=" + str(row["status"]) + " " in line and "DETAILS=oauth_access_denied " in line for line in log.splitlines())
             row["probe_log_observed"] = "OAUTH_V0 case=" + row["case_id"] + " outcome=" + row["expected"] + " detail=" in log
             if row["expected"] != "valid":
                 row["following_valid_log_observed"] = "OAUTH_V0 case=" + row["case_id"] + "-valid-after outcome=valid detail=" in log

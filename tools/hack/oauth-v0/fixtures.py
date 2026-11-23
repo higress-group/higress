@@ -17,6 +17,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -36,6 +37,9 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     header = '{"alg":"HS256","typ":"JWT"}'
     payload = '{"client_id":"probe-client","iss":"oauth-v0","sub":"probe","aud":"v0","exp":4102444800,"iat":1700000000}'
+    production = os.environ.get("OAUTH_PROBE_VERSION") == "production"
+    if production:
+        header = '{"alg":"HS256","typ":"application/at+jwt"}'
     valid = token(header, payload)
     header_segment, payload_segment, signature_segment = valid.split(".")
     cases = [
@@ -64,6 +68,16 @@ def main():
         ("invalid-signature", "rejected", header_segment + "." + payload_segment + "." + encode("wrong-signature")),
     ]
     records = [{"name": name, "expected": expected, "token": encoded} for name, expected, encoded in cases]
+    if production:
+        for name, changed in (("unknown-consumer", payload.replace('"probe-client"', '"unknown"')), ("wrong-issuer", payload.replace('"oauth-v0"', '"wrong"')), ("wrong-subject", payload.replace('"probe"', '"wrong"'))):
+            records.append({"name": name, "expected": "rejected", "token": token(header, changed)})
+        records.append({"name": "wrong-audience", "expected": "forbidden", "token": token(header, payload.replace('"v0"', '"wrong"'))})
+        records.append({"name": "allow-set-forbidden", "expected": "forbidden", "token": valid, "prefix": "/forbidden/"})
+        records.append({"name": "keep-token-false", "expected": "valid", "token": token(header, payload.replace('"v0"', '"v0-strip"')), "prefix": "/strip/", "strip_token": True})
+        configuration = {"issuer": "oauth-v0", "global_credentials": False, "consumers": [{"name": "probe", "client_id": "probe-client", "client_secret": "oauth-v0-test-key"}]}
+        strip = dict(configuration, _match_route_=["v0-strip"], keep_token=False)
+        configuration["_rules_"] = [{"_match_route_": ["forbidden"], "allow": ["other"]}, strip]
+        (output / "config.json").write_text(json.dumps(configuration, sort_keys=True, indent=2) + "\n")
     (output / "cases.json").write_text(json.dumps(records, indent=2) + "\n")
     (output / "cases.tsv").write_text("".join("\t".join(record) + "\n" for record in cases))
 

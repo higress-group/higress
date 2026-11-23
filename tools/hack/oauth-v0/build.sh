@@ -21,12 +21,16 @@ OAUTH_PROBE_VERSION="${OAUTH_PROBE_VERSION:-v0}"
 case "$OAUTH_PROBE_VERSION" in
   v0) variants=(default_disabled candidate_eh) ;;
   v1) variants=(candidate_eh candidate_eh_nodiag) ;;
+  production) variants=(oauth) ;;
   *) exit 1 ;;
 esac
 OUT="$ROOT/out/oauth-$OAUTH_PROBE_VERSION"
 mkdir -p "$OUT"
 test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-git diff --exit-code c87eb4ccf4a3dd429a2895815cc6956698e0cc17 -- plugins/wasm-cpp/extensions/oauth plugins/wasm-cpp/WORKSPACE plugins/wasm-cpp/bazel plugins/wasm-cpp/common
+if [[ "$OAUTH_PROBE_VERSION" != production ]]; then
+  git diff --exit-code c87eb4ccf4a3dd429a2895815cc6956698e0cc17 -- plugins/wasm-cpp/extensions/oauth
+fi
+git diff --exit-code b2319bd51d52253783ddb88b5049ed70b7611aa0 -- plugins/wasm-cpp/WORKSPACE plugins/wasm-cpp/bazel plugins/wasm-cpp/common plugins/wasm-cpp/Dockerfile plugins/wasm-cpp/.bazelrc plugins/wasm-cpp/.bazelversion
 if [[ "$OAUTH_PROBE_VERSION" = v1 ]]; then
   git diff --exit-code 311fa2f3bf8017a61b283562d5748eade44b3ec1 -- \
     plugins/wasm-cpp/extensions plugins/wasm-cpp/WORKSPACE plugins/wasm-cpp/bazel \
@@ -42,6 +46,7 @@ git ls-tree HEAD plugins/wasm-cpp/extensions/oauth/ > "$OUT/production-oauth-blo
 git ls-tree HEAD plugins/wasm-cpp/WORKSPACE plugins/wasm-cpp/Dockerfile plugins/wasm-cpp/.bazelversion > "$OUT/toolchain-blobs.txt"
 sha256sum plugins/wasm-cpp/WORKSPACE plugins/wasm-cpp/bazel/wasm.bzl plugins/wasm-cpp/Dockerfile plugins/wasm-cpp/tests/oauth_parse_probe/* tools/hack/oauth-v0/* > "$OUT/input-SHA256SUMS"
 sha256sum .github/workflows/oauth-v0-feasibility.yaml docs/developers/wasm-runtime-verification/compose.yaml docs/developers/wasm-runtime-verification/envoy.yaml >> "$OUT/input-SHA256SUMS"
+sha256sum plugins/wasm-cpp/extensions/oauth/BUILD plugins/wasm-cpp/extensions/oauth/plugin.cc plugins/wasm-cpp/extensions/oauth/plugin_test.cc >> "$OUT/input-SHA256SUMS"
 python3 tools/hack/oauth-v0/fixtures.py "$OUT/fixtures"
 if [[ "$OAUTH_PROBE_VERSION" = v1 ]]; then
   printf '%s  %s\n' 28fba56d19d6faa7130daad97b45424e29390ed96bb22f773dfc2fbf5bd74a22 "$OUT/fixtures/cases.json" | sha256sum --check
@@ -59,7 +64,11 @@ for variant in "${variants[@]}"; do
     python3 tools/hack/oauth-v0/module_info.py "$OUT/$variant/plugin.wasm" "$OUT/$variant/module-info.json"
   fi
 done
-python3 tools/hack/oauth-v0/check_actions.py "$OUT/candidate_eh"
+if [[ "$OAUTH_PROBE_VERSION" = production ]]; then
+  python3 tools/hack/oauth-v0/check_actions.py "$OUT/oauth"
+else
+  python3 tools/hack/oauth-v0/check_actions.py "$OUT/candidate_eh"
+fi
 if [[ "$OAUTH_PROBE_VERSION" = v1 ]]; then
   python3 tools/hack/oauth-v0/check_actions.py "$OUT/candidate_eh_nodiag"
 fi

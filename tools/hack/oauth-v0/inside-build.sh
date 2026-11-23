@@ -18,16 +18,25 @@ OAUTH_PROBE_VERSION="${OAUTH_PROBE_VERSION:-v0}"
 case "$OAUTH_PROBE_VERSION" in
   v0) variants=(default_disabled candidate_eh) ;;
   v1) variants=(candidate_eh candidate_eh_nodiag) ;;
+  production) variants=(oauth) ;;
   *) exit 1 ;;
 esac
 OUT="/repo/out/oauth-$OAUTH_PROBE_VERSION"
 mkdir -p "$OUT/native" "$OUT/hmac"
 bazel --version > "$OUT/bazel-version.txt"
+package=tests/oauth_parse_probe
+if [[ "$OAUTH_PROBE_VERSION" = production ]]; then
+  package=extensions/oauth
+  bazel test --runs_per_test=2 --cache_test_results=no --test_output=all //extensions/oauth:oauth_test 2>&1 | tee "$OUT/native/native.log"
+  printf '%s\n' "${PIPESTATUS[0]}" > "$OUT/native/run.exit"
+  cp -rL bazel-testlogs/extensions/oauth/oauth_test "$OUT/native/testlogs"
+else
 bazel build --subcommands --verbose_failures //tests/oauth_parse_probe:native_probe 2>&1 | tee "$OUT/native/build.log"
 printf '%s\n' "${PIPESTATUS[0]}" > "$OUT/native/build.exit"
 if [[ "$(cat "$OUT/native/build.exit")" -eq 0 ]]; then
   bazel-bin/tests/oauth_parse_probe/native_probe "$OUT/fixtures/cases.tsv" 2>&1 | tee "$OUT/native/results.tsv"
   printf '%s\n' "${PIPESTATUS[0]}" > "$OUT/native/run.exit"
+fi
 fi
 if [[ "$OAUTH_PROBE_VERSION" = v0 ]]; then
   bazel test --test_output=all //extensions/hmac_auth:hmac_auth_test 2>&1 | tee "$OUT/hmac/native.log"
@@ -37,16 +46,16 @@ for variant in "${variants[@]}"; do
   mkdir -p "$OUT/$variant"
   bazel build --subcommands --verbose_failures --materialize_param_files \
     --execution_log_json_file="$OUT/$variant/execution.json" \
-    "//tests/oauth_parse_probe:$variant.wasm" 2>&1 | tee "$OUT/$variant/build.log"
+    "//$package:$variant.wasm" 2>&1 | tee "$OUT/$variant/build.log"
   build_status=${PIPESTATUS[0]}
   printf '%s\n' "$build_status" > "$OUT/$variant/build.exit"
   if [[ "$build_status" -eq 0 ]]; then
-    cp "bazel-bin/tests/oauth_parse_probe/$variant.wasm" "$OUT/$variant/plugin.wasm"
+    cp "bazel-bin/$package/$variant.wasm" "$OUT/$variant/plugin.wasm"
   fi
   mkdir -p "$OUT/params"
-  find -L bazel-out -name '*.params' -path '*oauth_parse_probe*' -type f -exec cp --parents '{}' "$OUT/params/" ';'
+  find -L bazel-out -name '*.params' -path "*$package*" -type f -exec cp --parents '{}' "$OUT/params/" ';'
   bazel aquery --output=jsonproto --include_commandline --include_param_files \
-    "mnemonic('CppCompile|CppLink', deps(//tests/oauth_parse_probe:$variant.wasm))" \
+    "mnemonic('CppCompile|CppLink', deps(//$package:$variant.wasm))" \
     > "$OUT/$variant/actions.json" 2> "$OUT/$variant/aquery.log"
   printf '%s\n' "$?" > "$OUT/$variant/aquery.exit"
 done
