@@ -105,13 +105,11 @@ func escapeCacheValue(value string) string {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return value
-	}
+	// Encode cannot fail for a string value, and it always writes exactly one
+	// JSON string literal followed by a single newline, so the error is not
+	// actionable and the bounds below are guaranteed.
+	_ = encoder.Encode(value)
 	quoted := strings.TrimSuffix(buf.String(), "\n")
-	if len(quoted) < 2 {
-		return value
-	}
 	return quoted[1 : len(quoted)-1]
 }
 
