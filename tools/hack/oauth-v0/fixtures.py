@@ -74,7 +74,7 @@ def main():
         records.append({"name": "wrong-audience", "expected": "forbidden", "token": token(header, payload.replace('"v0"', '"wrong"'))})
         records.append({"name": "allow-set-forbidden", "expected": "forbidden", "token": valid, "prefix": "/forbidden/"})
         records.append({"name": "keep-token-false", "expected": "valid", "token": token(header, payload.replace('"v0"', '"v0-strip"')), "prefix": "/strip/", "strip_token": True})
-        configuration = {"issuer": "oauth-v0", "global_credentials": False, "consumers": [{"name": "probe", "client_id": "probe-client", "client_secret": "oauth-v0-test-key"}]}
+        configuration = {"issuer": "oauth-v0", "global_auth": True, "global_credentials": False, "consumers": [{"name": "probe", "client_id": "probe-client", "client_secret": "oauth-v0-test-key"}]}
         strip = dict(configuration, _match_route_=["v0-strip"], keep_token=False)
         configuration["_rules_"] = [{"_match_route_": ["forbidden"], "allow": ["other"]}, strip]
         (output / "config.json").write_text(json.dumps(configuration, sort_keys=True, indent=2) + "\n")

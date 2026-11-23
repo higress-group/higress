@@ -372,7 +372,7 @@ TEST_F(OAuthTest, malformedMatrix) {
     testing::Mock::VerifyAndClearExpectations(mock_context_.get());
     jwt_header_ = "Bearer " + valid;
     EXPECT_CALL(*mock_context_, sendLocalResponse(testing::_, testing::_, testing::_, testing::_, testing::_)).Times(0);
-    EXPECT_CALL(*mock_context_, addHeaderMapValue(WasmHeaderMapType::RequestHeaders, "X-Mse-Consumer", "probe")).Times(1);
+    EXPECT_CALL(*mock_context_, addHeaderMapValue(WasmHeaderMapType::RequestHeaders, std::string_view("X-Mse-Consumer"), std::string_view("probe"))).Times(1);
     EXPECT_NO_THROW({ EXPECT_EQ(context_->onRequestHeaders(0, false), FilterHeadersStatus::Continue); });
     testing::Mock::VerifyAndClearExpectations(mock_context_.get());
   }
