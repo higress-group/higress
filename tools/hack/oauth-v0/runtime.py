@@ -103,7 +103,7 @@ def run_variant(variant, cases):
         text = (harness / "envoy.yaml").read_text().replace('value: "{}"', "value: '" + json.dumps(configuration, sort_keys=True) + "'")
         text = text.replace("FLAGS=%RESPONSE_FLAGS%", "DETAILS=%RESPONSE_CODE_DETAILS% FLAGS=%RESPONSE_FLAGS%")
         text = text.replace("                        - match:", "                        - name: v0\n                          match:")
-        routes = "".join("                        - name: " + name + "\n                          match:\n                            prefix: " + prefix + "\n                          route:\n                            cluster: httpbin\n" for name, prefix in (("forbidden", "/forbidden/"), ("v0-strip", "/strip/")))
+        routes = "".join("                        - name: " + name + "\n                          match:\n                            prefix: " + prefix + "\n                          route:\n                            cluster: httpbin\n" + ("                            prefix_rewrite: /anything/\n" if name == "v0-strip" else "") for name, prefix in (("forbidden", "/forbidden/"), ("v0-strip", "/strip/")))
         text = text.replace("                      routes:\n", "                      routes:\n" + routes)
         (harness / "envoy.yaml").write_text(text)
     environment = dict(os.environ, HIGRESS_GATEWAY_IMAGE=GATEWAY, HTTPBIN_IMAGE=HTTPBIN, WASM_PATH="./plugin.wasm", ENVOY_PORT="10000", ENVOY_ADMIN_PORT="9901")
@@ -195,6 +195,8 @@ def run_variant(variant, cases):
     finally:
         time.sleep(1)
         cleanup_exits = {}
+        if production:
+            cleanup_exits["stop"] = execute(compose + ["stop", "--timeout", "10"], directory / "stop.log", environment)
         cleanup_exits["logs"] = execute(compose + ["logs", "--no-color", "envoy", "httpbin"], directory / "envoy-upstream.log", environment)
         cleanup_exits["ps_before"] = execute(compose + ["ps", "--all"], directory / "containers-before-cleanup.txt", environment)
         cleanup_exits["down"] = execute(compose + ["down", "--volumes", "--remove-orphans"], directory / "cleanup.log", environment)
