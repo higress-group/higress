@@ -458,3 +458,28 @@ func TestCompleteFlow(t *testing.T) {
 		})
 	})
 }
+
+func TestParseConfigRejectsInvalidExpires(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		t.Run("missing expires", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{"suffix": "jpg"})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		t.Run("non-numeric expires", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{"suffix": "jpg", "expires": "1h"})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+
+		t.Run("negative expires", func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]interface{}{"suffix": "jpg", "expires": "-1"})
+			host, status := test.NewTestHost(cfg)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusFailed, status)
+		})
+	})
+}
