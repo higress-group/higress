@@ -174,3 +174,15 @@ func TestRetryApplyRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestRetryParseUnknownCondition(t *testing.T) {
+	config := &Ingress{}
+	annotations := Annotations{
+		buildNginxAnnotationKey(retryOn): "bogus",
+	}
+	assert.NoError(t, retry{}.Parse(annotations, config, nil))
+	if assert.NotNil(t, config.Retry) {
+		assert.Equal(t, defaultRetryOn, config.Retry.retryOn, "an unrecognised condition must keep the default retry policy")
+		assert.Equal(t, int32(defaultRetryCount), config.Retry.retryCount)
+	}
+}
