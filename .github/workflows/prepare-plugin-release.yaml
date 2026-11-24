@@ -277,7 +277,17 @@ jobs:
                 make -C plugins/wasm-rust PLUGIN_NAME="$build_name" test build
                 ;;
               cpp)
-                (cd plugins/wasm-cpp && bazel test --test_output=errors "//extensions/$build_name:${build_name}_test")
+                local builder
+                builder="$(sed -n 's/^ARG BUILDER=//p' plugins/wasm-cpp/Dockerfile)"
+                case "$builder" in
+                  *@sha256:*) ;;
+                  *) echo 'Builder must be pinned by digest' >&2; return 1 ;;
+                esac
+                docker run --rm \
+                  -v "$GITHUB_WORKSPACE/plugins/wasm-cpp:/workspace" \
+                  -w /workspace \
+                  "$builder" \
+                  bash -euo pipefail -c 'bazel test --test_output=errors "//extensions/$1:$1_test"' -- "$build_name"
                 make -C plugins/wasm-cpp PLUGIN_NAME="$build_name" build
                 ;;
               *) echo "unsupported planned implementation: $implementation" >&2; return 1 ;;
