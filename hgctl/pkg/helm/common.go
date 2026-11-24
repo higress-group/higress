@@ -115,7 +115,9 @@ func GetValueForSetFlag(setFlags []string, path string) string {
 
 // getPV returns the path and value components for the given set flag string, which must be in path=value format.
 func getPV(setFlag string) (path string, value string) {
-	pv := strings.Split(setFlag, "=")
+	// Split after the first '=' only: values legitimately contain '=' (base64,
+	// JWTs, query strings), so splitting on every '=' dropped them.
+	pv := strings.SplitN(setFlag, "=", 2)
 	if len(pv) != 2 {
 		return setFlag, ""
 	}
@@ -149,7 +151,7 @@ func GenerateConfig(inFilenames []string, setFlags []string) (string, *Profile, 
 // validateSetFlags validates that setFlags all have path=value format.
 func validateSetFlags(setFlags []string) error {
 	for _, sf := range setFlags {
-		pv := strings.Split(sf, "=")
+		pv := strings.SplitN(sf, "=", 2)
 		if len(pv) != 2 {
 			return fmt.Errorf("set flag %s has incorrect format, must be path=value", sf)
 		}

@@ -71,3 +71,13 @@ func TestUnsupportedLocalDockerUpgradeOverlayPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestSetFlagValueContainingEquals(t *testing.T) {
+	setFlags := []string{"secret.value=aGVsbG8="}
+	if err := validateSetFlags(setFlags); err != nil {
+		t.Fatalf("a value containing '=' is still a valid path=value flag, got: %v", err)
+	}
+	if got := GetValueForSetFlag(setFlags, "secret.value"); got != "aGVsbG8=" {
+		t.Fatalf("expected the value to be kept intact, got %q", got)
+	}
+}
