@@ -161,43 +161,89 @@ func TestCPPHotfixActualWriteStepFailsBeforeLoginOrCopy(t *testing.T) {
 }
 
 func TestCPPHotfixActualInputGuardRejectsNonDryRun(t *testing.T) {
-	for _, workflowName := range []string{"prepare-plugin-release.yaml", "promote-plugin-release.yaml"} {
-		workflow := mustWorkflow(t, workflowName)
-		step := "Reject disabled hotfix public promotion"
-		if workflowName == "prepare-plugin-release.yaml" {
-			step = "Reject disabled hotfix candidate preparation"
-		}
-		guardStart := strings.Index(workflow, "  input-guard:\n")
-		if guardStart < 0 {
-			t.Fatal("workflow lacks an independent first input guard")
-		}
-		guardEnd := strings.Index(workflow[guardStart:], "\n  "+map[string]string{"prepare-plugin-release.yaml": "preflight", "promote-plugin-release.yaml": "verify-and-promote"}[workflowName]+":\n")
-		if guardEnd < 0 {
-			t.Fatal("workflow lacks an independent first input guard")
-		}
-		guard := workflow[guardStart : guardStart+guardEnd]
-		for _, forbidden := range []string{"environment:", "secrets.", "oras ", "always()"} {
-			if strings.Contains(guard, forbidden) {
-				t.Fatalf("input guard contains %s", forbidden)
-			}
-		}
-		if !strings.Contains(workflow, "    needs: input-guard\n") {
-			t.Fatal("credential job lacks the success dependency")
-		}
-		for _, scenario := range []struct {
-			mode string
-			dry  string
-			pass bool
-		}{{"cpp-hotfix", "false", false}, {"cpp-hotfix", "true", true}, {"standard", "false", true}, {"standard", "true", true}} {
-			t.Run(workflowName+"/"+scenario.mode+"/"+scenario.dry, func(t *testing.T) {
-				result := runHotfixStepBodiesWithEnv(t, workflow, "guard", []string{step}, []string{"RELEASE_MODE=" + scenario.mode, "DRY_RUN=" + scenario.dry})
-				if (result.Err == nil) != scenario.pass {
-					t.Fatalf("guard mode=%s dry=%s: %+v", scenario.mode, scenario.dry, result)
-				}
-				assertNoHotfixLoginOrWrite(t, result.Calls)
-			})
+	workflow := mustWorkflow(t, "promote-plugin-release.yaml")
+	guardStart := strings.Index(workflow, "  input-guard:\n")
+	if guardStart < 0 {
+		t.Fatal("workflow lacks an independent first input guard")
+	}
+	guardEnd := strings.Index(workflow[guardStart:], "\n  verify-and-promote:\n")
+	if guardEnd < 0 {
+		t.Fatal("workflow lacks an independent first input guard")
+	}
+	guard := workflow[guardStart : guardStart+guardEnd]
+	for _, forbidden := range []string{"environment:", "secrets.", "oras ", "always()"} {
+		if strings.Contains(guard, forbidden) {
+			t.Fatalf("input guard contains %s", forbidden)
 		}
 	}
+	if !strings.Contains(workflow, "    needs: input-guard\n") {
+		t.Fatal("credential job lacks the success dependency")
+	}
+	for _, scenario := range []struct {
+		mode string
+		dry  string
+		pass bool
+	}{{"cpp-hotfix", "false", false}, {"cpp-hotfix", "true", true}, {"standard", "false", true}, {"standard", "true", true}} {
+		t.Run(scenario.mode+"/"+scenario.dry, func(t *testing.T) {
+			result := runHotfixStepBodiesWithEnv(t, workflow, "guard", []string{"Reject disabled hotfix public promotion"}, []string{"RELEASE_MODE=" + scenario.mode, "DRY_RUN=" + scenario.dry})
+			if (result.Err == nil) != scenario.pass {
+				t.Fatalf("guard mode=%s dry=%s: %+v", scenario.mode, scenario.dry, result)
+			}
+			assertNoHotfixLoginOrWrite(t, result.Calls)
+		})
+	}
+}
+
+func TestCPPHotfixPrepareAllowsNonDryRunCandidatesOnly(t *testing.T) {
+	prepare := mustWorkflow(t, "prepare-plugin-release.yaml")
+	for _, forbidden := range []string{
+		"  input-guard:\n", "needs: input-guard", "cpp-hotfix is dry-run-only",
+		":latest", "PLUGIN_PUBLIC_REGISTRY", "oras cp ", "oras tag ", "go run . promote",
+	} {
+		if strings.Contains(prepare, forbidden) {
+			t.Fatalf("candidate-only preparation contains %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		"jobs:\n  preflight:\n    runs-on: ubuntu-latest\n",
+		"  prepare:\n    needs: preflight\n",
+		"CANDIDATE_REGISTRY: ${{ vars.PLUGIN_CANDIDATE_REGISTRY }}",
+		`candidate="$CANDIDATE_REGISTRY/candidates/$id:${plan_id}${input_hash#sha256:}"`,
+		`publish_plugin_manifest "$candidate"`,
+		"release_id=cpp-hotfix-2.0.1",
+		`branch="release/plugin-snapshot-$release_id"`,
+	} {
+		if !strings.Contains(prepare, required) {
+			t.Fatalf("candidate-only preparation lacks %q", required)
+		}
+	}
+	for _, step := range []string{
+		"Build and publish content-addressed candidates",
+		"Render canonical snapshot",
+		"Create or update deterministic preparation PR",
+	} {
+		if !strings.Contains(prepare, "      - name: "+step+"\n        if: ${{ !inputs.dry_run }}\n") {
+			t.Fatalf("candidate-only step %q must allow non-dry-run cpp-hotfix", step)
+		}
+	}
+	t.Cleanup(func() { _ = os.Remove("/tmp/overrides.json") })
+	result := runHotfixStepBodiesWithEnv(t, prepare, "candidate-only", []string{"Validate immutable inputs"}, []string{
+		"RELEASE_MODE=cpp-hotfix", "DRY_RUN=false", "GATEWAY_VERSION=2.2.7",
+		"TARGET_REF=" + strings.Repeat("a", 40), "PREVIOUS=", "BOOTSTRAP_BASE=", "OVERRIDES={}",
+	})
+	if result.Err != nil {
+		t.Fatalf("non-dry-run cpp-hotfix candidate inputs were rejected: %+v\n%s", result, result.Output)
+	}
+	assertNoHotfixLoginOrWrite(t, result.Calls)
+	promote := mustWorkflow(t, "promote-plugin-release.yaml")
+	blocked := runHotfixStepBodiesWithEnv(t, promote, "guard", []string{"Reject disabled hotfix public promotion"}, []string{
+		"RELEASE_MODE=cpp-hotfix", "DRY_RUN=false",
+	})
+	if blocked.Err == nil {
+		t.Fatal("non-dry-run cpp-hotfix public promotion must remain rejected")
+	}
+	assertNoHotfixLoginOrWrite(t, blocked.Calls)
+	t.Log("non-dry-run cpp-hotfix candidate inputs accepted; public promotion rejected before login/write")
 }
 
 func assertNoHotfixLoginOrWrite(t *testing.T, calls []hotfixSpyCall) {

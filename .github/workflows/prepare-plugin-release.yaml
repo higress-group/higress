@@ -46,22 +46,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  input-guard:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Reject disabled hotfix candidate preparation
-        env:
-          RELEASE_MODE: ${{ inputs.release_mode }}
-          DRY_RUN: ${{ inputs.dry_run }}
-        run: |
-          set -euo pipefail
-          if [ "$RELEASE_MODE" = cpp-hotfix ] && [ "$DRY_RUN" != true ]; then
-            echo "cpp-hotfix is dry-run-only; candidate preparation is pending separate authorization" >&2
-            exit 1
-          fi
-
   preflight:
-    needs: input-guard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
