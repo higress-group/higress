@@ -302,7 +302,9 @@ func (ctx *editorContext) loadPathFromHeader() {
 		return
 	}
 
-	ctx.requestPath = u.Path
+	// Keep the encoded path so query edits do not turn escaped delimiters
+	// into path separators, query strings, or fragments when reparsing it.
+	ctx.requestPath = u.EscapedPath()
 	for k, vs := range u.Query() {
 		queries[k] = vs
 	}
