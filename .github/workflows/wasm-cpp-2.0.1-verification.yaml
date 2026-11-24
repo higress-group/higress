@@ -1,0 +1,421 @@
+name: Wasm C++ 2.0.1 Hotfix Verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/wasm-cpp-2.0.1-verification.yaml'
+      - 'plugins/wasm-cpp/**'
+      - 'tools/hack/cpp201-*'
+      - 'test/e2e/conformance/base/**'
+      - 'test/e2e/conformance/tests/cpp-wasm-basic-auth.*'
+      - 'test/e2e/conformance/tests/cpp-wasm-key-auth.*'
+      - 'test/e2e/conformance/tests/cpp-wasm-request-block.*'
+      - 'docs/developers/wasm-runtime-verification/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp201-verification-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    name: Static and negative hotfix contracts
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      EVIDENCE_DIR: ${{ github.workspace }}/out/cpp201-contracts
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run positive and negative contracts
+        run: tools/hack/cpp201-run-contracts.sh
+      - name: Upload contract evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-contracts-${{ github.event.pull_request.head.sha }}
+          path: out/cpp201-contracts
+          if-no-files-found: error
+          retention-days: 14
+
+  build-native:
+    name: ${{ matrix.source }} native and Wasm
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        source:
+          - basic_auth
+          - bot_detect
+          - custom_response
+          - hmac_auth
+          - jwt_auth
+          - key_auth
+          - key_rate_limit
+          - oauth
+          - request_block
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      SOURCE: ${{ matrix.source }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source contract
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(cat "plugins/wasm-cpp/extensions/$SOURCE/VERSION")" = '2.0.1'
+          test "$(cat plugins/wasm-cpp/.bazelversion)" = '6.0.0'
+          git diff --exit-code 392b64e8cce43e63d3207f00ba5c8fe2ff8921d9 -- plugins/wasm-cpp/common/route_rule_matcher.h
+          mkdir -p "plugins/wasm-cpp/out/$SOURCE"
+          printf '%s\n' "$EXPECTED_HEAD" | tee "plugins/wasm-cpp/out/$SOURCE/source-head.txt"
+          printf 'native_target=//extensions/%s:%s_test\nwasm_target=//extensions/%s:%s.wasm\n' "$SOURCE" "$SOURCE" "$SOURCE" "$SOURCE" | tee "plugins/wasm-cpp/out/$SOURCE/targets.txt"
+      - name: Pull pinned builder
+        id: builder
+        working-directory: plugins/wasm-cpp
+        run: |
+          set -euo pipefail
+          BUILDER="$(sed -n 's/^ARG BUILDER=//p' Dockerfile)"
+          case "$BUILDER" in
+            *@sha256:*) ;;
+            *) echo 'Builder must be pinned by digest' >&2; exit 1 ;;
+          esac
+          docker pull "$BUILDER"
+          RESOLVED="$(docker image inspect --format '{{index .RepoDigests 0}}' "$BUILDER")"
+          case "$RESOLVED" in
+            *@sha256:*) ;;
+            *) echo 'Resolved builder digest is missing' >&2; exit 1 ;;
+          esac
+          printf 'builder=%s\nresolved=%s\n' "$BUILDER" "$RESOLVED" | tee "out/$SOURCE/toolchain.txt"
+          echo "ref=$BUILDER" >> "$GITHUB_OUTPUT"
+      - name: Run native target
+        id: native
+        continue-on-error: true
+        working-directory: plugins/wasm-cpp
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/plugins/wasm-cpp:/workspace" \
+            -w /workspace \
+            "${{ steps.builder.outputs.ref }}" \
+            bash -euo pipefail -c '
+              bazel --version | tee "out/$1/bazel-version.txt"
+              bazel test --test_output=errors "//extensions/$1:$1_test" 2>&1 | tee "out/$1/native.log"
+            ' -- "$SOURCE"
+      - name: Build final Wasm
+        working-directory: plugins/wasm-cpp
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/plugins/wasm-cpp:/workspace" \
+            -w /workspace \
+            "${{ steps.builder.outputs.ref }}" \
+            bash -euo pipefail -c '
+              bazel build "//extensions/$1:$1.wasm" 2>&1 | tee "out/$1/build.log"
+              cp "bazel-bin/extensions/$1/$1.wasm" "out/$1/plugin.wasm"
+            ' -- "$SOURCE"
+          test -s "out/$SOURCE/plugin.wasm"
+          python3 "$GITHUB_WORKSPACE/tools/hack/cpp201_wasm_imports.py" "out/$SOURCE/plugin.wasm" --output "out/$SOURCE/imports.json"
+          printf '%s\n' '${{ steps.native.outcome }}' > "out/$SOURCE/native-result.txt"
+          (cd "out/$SOURCE" && sha256sum plugin.wasm source-head.txt targets.txt toolchain.txt native.log native-result.txt build.log bazel-version.txt imports.json) | tee "out/$SOURCE/SHA256SUMS"
+      - name: Upload non-OCI build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-${{ matrix.source }}-${{ github.event.pull_request.head.sha }}
+          path: plugins/wasm-cpp/out/${{ matrix.source }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Enforce native target result
+        if: always()
+        run: test "${{ steps.native.outcome }}" = 'success'
+
+  basic-baseline:
+    name: Build pre-fix basic_auth baseline
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      EVIDENCE_DIR: ${{ github.workspace }}/out/cpp201-basic-baseline
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build baseline with identical build-only inputs
+        run: tools/hack/cpp201-build-basic-baseline.sh
+      - name: Upload baseline evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-basic-baseline-${{ github.event.pull_request.head.sha }}
+          path: out/cpp201-basic-baseline
+          if-no-files-found: error
+          retention-days: 14
+
+  cpp-e2e:
+    name: Three final-byte CPP e2e targets
+    needs: [build-native, build-evidence]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      ARTIFACT_DIR: ${{ github.workspace }}/downloaded
+      NATIVE_RESULTS: ${{ github.workspace }}/downloaded/build-index/native-results.txt
+      EVIDENCE_DIR: ${{ github.workspace }}/out/cpp201-e2e
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go for conformance
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26'
+      - name: Download final basic_auth bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-basic_auth-${{ github.event.pull_request.head.sha }}
+          path: downloaded/cpp201-basic_auth-${{ github.event.pull_request.head.sha }}
+      - name: Download final key_auth bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-key_auth-${{ github.event.pull_request.head.sha }}
+          path: downloaded/cpp201-key_auth-${{ github.event.pull_request.head.sha }}
+      - name: Download final request_block bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-request_block-${{ github.event.pull_request.head.sha }}
+          path: downloaded/cpp201-request_block-${{ github.event.pull_request.head.sha }}
+      - name: Download exact-run native outcomes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-build-index-${{ github.event.pull_request.head.sha }}
+          path: downloaded/build-index
+      - name: Run three targets without rebuilding Wasm
+        run: tools/hack/cpp201-run-e2e.sh
+      - name: Upload e2e evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-e2e-${{ github.event.pull_request.head.sha }}
+          path: out/cpp201-e2e
+          if-no-files-found: error
+          retention-days: 14
+
+  basic-proxy-wasm-ab:
+    name: Real proxy-Wasm basic_auth A/B
+    needs: [build-native, basic-baseline]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      FIXED_ARTIFACT: ${{ github.workspace }}/downloaded/fixed
+      BASELINE_ARTIFACT: ${{ github.workspace }}/downloaded/baseline
+      EVIDENCE_DIR: ${{ github.workspace }}/out/cpp201-basic-ab-evidence
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download final basic_auth bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-basic_auth-${{ github.event.pull_request.head.sha }}
+          path: downloaded/fixed
+      - name: Download pre-fix basic_auth bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-basic-baseline-${{ github.event.pull_request.head.sha }}
+          path: downloaded/baseline
+      - name: Run repeated real Envoy A/B
+        run: tools/hack/cpp201-run-basic-ab.sh
+      - name: Upload proxy-Wasm A/B evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-basic-ab-${{ github.event.pull_request.head.sha }}
+          path: out/cpp201-basic-ab-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+  oauth-load:
+    name: Real proxy-Wasm oauth load smoke
+    needs: build-native
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      OAUTH_ARTIFACT: ${{ github.workspace }}/downloaded/oauth
+      EVIDENCE_DIR: ${{ github.workspace }}/out/cpp201-oauth-load-evidence
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download final oauth bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-oauth-${{ github.event.pull_request.head.sha }}
+          path: downloaded/oauth
+      - name: Run real Envoy load smoke
+        run: tools/hack/cpp201-run-oauth-load.sh
+      - name: Upload oauth load evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-oauth-load-${{ github.event.pull_request.head.sha }}
+          path: out/cpp201-oauth-load-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+  build-evidence:
+    name: Verify nine non-OCI build evidence sets
+    needs: build-native
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Download exact-head build evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          pattern: cpp201-*-${{ github.event.pull_request.head.sha }}
+          path: evidence
+      - name: Enforce nine complete evidence sets
+        run: |
+          set -euo pipefail
+          expected='basic_auth bot_detect custom_response hmac_auth jwt_auth key_auth key_rate_limit oauth request_block'
+          : > actual.txt
+          : > native-results.txt
+          for source in $expected; do
+            directory="evidence/cpp201-$source-$EXPECTED_HEAD"
+            test -s "$directory/plugin.wasm"
+            test "$(cat "$directory/source-head.txt")" = "$EXPECTED_HEAD"
+            (cd "$directory" && sha256sum -c SHA256SUMS)
+            native_result="$(cat "$directory/native-result.txt")"
+            case "$native_result" in
+              success|failure) ;;
+              *) echo "Invalid native outcome for $source: $native_result" >&2; exit 1 ;;
+            esac
+            printf '%s\t%s\n' "$source" "$native_result" >> native-results.txt
+            basename "$directory" >> actual.txt
+          done
+          sort -o actual.txt actual.txt
+          for source in $expected; do printf 'cpp201-%s-%s\n' "$source" "$EXPECTED_HEAD"; done | sort > expected.txt
+          diff -u expected.txt actual.txt
+          sha256sum evidence/*/* > build-evidence-sha256.txt
+          printf '%s\n' 'OCI candidate/provenance/pull gate: not-run; these are non-OCI GitHub Actions artifacts only.' > coverage.txt
+          for source in bot_detect custom_response hmac_auth jwt_auth key_rate_limit oauth; do
+            native_result="$(sed -n "s/^$source\t//p" native-results.txt)"
+            if [[ "$native_result" == success ]]; then
+              printf '%s: accepted-minimum build/native/shared-matcher; runtime-e2e=not-run; coverage-gap=accepted\n' "$source" >> coverage.txt
+            else
+              printf '%s: build=passed; native=failed; shared-matcher=passed; runtime-e2e=not-run; coverage-gap=native-failed\n' "$source" >> coverage.txt
+            fi
+          done
+      - name: Upload aggregate build evidence index
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-build-index-${{ github.event.pull_request.head.sha }}
+          path: |
+            actual.txt
+            expected.txt
+            native-results.txt
+            build-evidence-sha256.txt
+            coverage.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Enforce aggregate native outcomes
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$(wc -l < native-results.txt)" -eq 9
+          if grep $'\tfailure$' native-results.txt; then
+            exit 1
+          fi
+
+  evidence:
+    name: Final C++ hotfix verification evidence
+    needs: [contracts, build-evidence, cpp-e2e, basic-proxy-wasm-ab, oauth-load]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Download build index
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-build-index-${{ github.event.pull_request.head.sha }}
+          path: evidence/build-index
+      - name: Download contract evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-contracts-${{ github.event.pull_request.head.sha }}
+          path: evidence/contracts
+      - name: Download e2e evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-e2e-${{ github.event.pull_request.head.sha }}
+          path: evidence/e2e
+      - name: Download A/B evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-basic-ab-${{ github.event.pull_request.head.sha }}
+          path: evidence/basic-ab
+      - name: Download oauth load evidence
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: cpp201-oauth-load-${{ github.event.pull_request.head.sha }}
+          path: evidence/oauth-load
+      - name: Verify final evidence contract
+        run: |
+          set -euo pipefail
+          test "$(cat evidence/e2e/source-head.txt)" = "$EXPECTED_HEAD"
+          test "$(cat evidence/basic-ab/identity.txt | sed -n 's/^fixed_source=//p')" = "$EXPECTED_HEAD"
+          test "$(cat evidence/basic-ab/identity.txt | sed -n 's/^baseline_source=//p')" = 'da836d066d6c69c2faee8a55b926795308fecae0'
+          test "$(wc -l < evidence/e2e/gateway-wasm-hashes.txt)" -eq 3
+          for test_name in CPPWasmPluginsBasicAuth CPPWasmPluginsKeyAuth CPPWasmPluginsRequestBlock; do
+            test "$(cat "evidence/e2e/$test_name.exit")" -eq 0
+          done
+          test "$(grep -c $'\t2\t' evidence/basic-ab/summary.tsv)" -eq 14
+          grep -Fx 'proxy-wasm-load-smoke=passed' evidence/oauth-load/coverage.txt
+          grep -Fx 'runtime-e2e=not-run' evidence/oauth-load/coverage.txt
+          grep -Fx 'valid=passed' evidence/contracts/summary.txt
+          find evidence/contracts evidence/build-index evidence/e2e evidence/basic-ab evidence/oauth-load -type f -print0 | sort -z | xargs -0 sha256sum > final-evidence-sha256.txt
+          printf '%s\n' 'All artifacts are non-OCI CI evidence. OCI candidate/provenance/pull/promotion and public release are not-run.' > release-boundary.txt
+      - name: Upload final evidence index
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp201-final-index-${{ github.event.pull_request.head.sha }}
+          path: |
+            final-evidence-sha256.txt
+            release-boundary.txt
+          if-no-files-found: error
+          retention-days: 14

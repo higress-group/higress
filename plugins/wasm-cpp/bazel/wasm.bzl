@@ -6,6 +6,17 @@ load(
     "container_push",
 )
 
+def build_include_content(includes):
+    return """
+load("@rules_cc//cc:defs.bzl", "cc_library")
+cc_library(
+    name = "lib",
+    hdrs = glob(["**"]),
+    includes = {},
+    visibility = ["//visibility:public"],
+)
+""".format(repr(includes))
+
 def wasm_libraries():
     http_archive(
         name = "com_google_absl",
@@ -45,6 +56,7 @@ def wasm_libraries():
 
     http_archive(
         name = "boringssl",
+        sha256 = "579cb415458e9f3642da0a39a72f79fdfe6dc9c1713b3a823f1e276681b9703e",
         urls = ["https://github.com/google/boringssl/archive/648cbaf033401b7fe7acdce02f275b06a88aab5c.tar.gz"],
         strip_prefix = "boringssl-648cbaf033401b7fe7acdce02f275b06a88aab5c",
         patch_args = ["-p1"],
@@ -56,12 +68,6 @@ def wasm_libraries():
         actual = "@boringssl//:ssl",
     )
 
-    http_archive(
-        name = "com_google_protobuf",
-        urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v{version}/protobuf-all-3.18.0.tar.gz"],
-        strip_prefix = "protobuf-3.18.0",
-    )
-
     native.bind(
         name = "protobuf",
         actual = "@com_google_protobuf//:protobuf",
@@ -69,6 +75,7 @@ def wasm_libraries():
 
     http_archive(
         name = "com_googlesource_code_re2",
+        sha256 = "2e9489a31ae007c81e90e8ec8a15d62d58a9c18d4fd1603f6441ef248556b41f",
         urls = ["https://github.com/google/re2/archive/2020-07-06.tar.gz"],
         strip_prefix = "re2-2020-07-06",
         patch_args = ["-p1"],
@@ -97,10 +104,26 @@ def wasm_libraries():
 
     http_archive(
         name = "com_github_google_jwt_verify",
+        sha256 = "8964c2b3a833dc5fc2600b2768ea1e73a0fcf8a1ed9d2cbc5fa3387c4cdd5caa",
         urls = ["https://github.com/google/jwt_verify_lib/archive/26c22c0ce1bc607eec8fa5dd26b707378adc7a88.tar.gz"],
-        strip_prefix = "jwt_verify_lib-26c22c0ce1bc607eec8fa5dd26b707378adc7a88"
+        strip_prefix = "jwt_verify_lib-26c22c0ce1bc607eec8fa5dd26b707378adc7a88",
     )
-    
+
+    http_archive(
+        name = "com_github_thalhammer_jwt_cpp",
+        sha256 = "099cc5756319cd435e6088521323244fab7bbaa40145788d0ad2c7bc4148789a",
+        urls = ["https://github.com/Thalhammer/jwt-cpp/archive/ad08c684a2bf9db413786e800e0d92e65772d9d6.tar.gz"],
+        strip_prefix = "jwt-cpp-ad08c684a2bf9db413786e800e0d92e65772d9d6",
+        build_file_content = build_include_content(includes = ["include"]),
+    )
+
+    http_archive(
+        name = "com_github_mariusbancila_stduuid",
+        sha256 = "e11f9bf30c7f9c03d8e9a3a3fd7fe016eb5d8d9b89a2fe2c11b5f049e1d97916",
+        urls = ["https://github.com/mariusbancila/stduuid/archive/3afe7193facd5d674de709fccc44d5055e144d7a.tar.gz"],
+        strip_prefix = "stduuid-3afe7193facd5d674de709fccc44d5055e144d7a",
+        build_file_content = build_include_content(includes = ["include", "."]),
+    )
     
 def declare_wasm_image_targets(name, wasm_file):
     # Rename to the spec compatible name.

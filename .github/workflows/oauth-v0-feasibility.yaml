@@ -1,0 +1,64 @@
+name: Production OAuth Minimal Fix Verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/oauth-v0-feasibility.yaml'
+      - 'plugins/wasm-cpp/tests/oauth_parse_probe/**'
+      - 'plugins/wasm-cpp/extensions/oauth/**'
+      - 'tools/hack/oauth-v0/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oauth-production-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Official OAuth native and pinned real-Wasm production entry
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      OAUTH_PROBE_VERSION: production
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build official oauth.wasm and run the full production native suite twice
+        id: build
+        continue-on-error: true
+        run: bash tools/hack/oauth-v0/build.sh
+      - name: Exercise the official OAuth production entry on pinned real Envoy
+        if: always()
+        run: python3 tools/hack/oauth-v0/production.py
+      - name: Seal actual evidence hashes
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p out/oauth-production
+          printf 'run=%s\njob=%s\nattempt=%s\nhead=%s\nrunner=%s\n' "$GITHUB_RUN_ID" "$GITHUB_JOB" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_HEAD" "$RUNNER_NAME" > out/oauth-production/run-identity.txt
+          printf 'Design 18 authorized official OAuth parse-boundary verification only. Target assertions/debug checks/exception stack diagnostics lost. Non-OCI evidence; no public release.\n' > out/oauth-production/scope.txt
+          find out/oauth-production -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > out/oauth-production/SHA256SUMS
+      - name: Upload non-OCI probe evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: oauth-production-${{ github.event.pull_request.head.sha }}
+          path: out/oauth-production
+          if-no-files-found: error
+          retention-days: 14
+      - name: Enforce complete production-entry proof without waivers
+        if: always()
+        run: |
+          set -euo pipefail
+          test "${{ steps.build.outcome }}" = success
+          test "$(cat out/oauth-production/builder.exit)" -eq 0
+          test "$(cat out/oauth-production/native/run.exit)" -eq 0
+          python3 -c 'import json; from pathlib import Path; result=json.loads(Path("out/oauth-production/verdict.json").read_text()); print(result["verdict"]); assert result["verdict"] == "VALIDATED" and result["proof"] and all(result["proof"].values())'

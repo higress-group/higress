@@ -327,7 +327,7 @@ TEST_F(BasicAuthTest, OnConfigureDuplicateRules) {
 
     EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
         .WillOnce([&buffer](WasmBufferType) { return &buffer; });
-    EXPECT_FALSE(root_context_->configure(configuration.size()));
+    EXPECT_TRUE(root_context_->configure(configuration.size()));
   }
 
   // with consumer
@@ -351,8 +351,116 @@ TEST_F(BasicAuthTest, OnConfigureDuplicateRules) {
 
     EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
         .WillOnce([&buffer](WasmBufferType) { return &buffer; });
-    EXPECT_FALSE(root_context_->configure(configuration.size()));
+    EXPECT_TRUE(root_context_->configure(configuration.size()));
   }
+}
+
+TEST_F(BasicAuthTest, RouteDomainPrecedence) {
+  std::string configuration = R"(
+{
+  "_rules_": [
+    {
+      "_match_domain_": ["route-domain.example"],
+      "_match_route_": ["selected-route"],
+      "credentials": ["route:pass"]
+    }
+  ]
+})";
+
+  BufferBase buffer;
+  buffer.set({configuration.data(), configuration.size()});
+
+  EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
+      .WillOnce([&buffer](WasmBufferType) { return &buffer; });
+  EXPECT_TRUE(root_context_->configure(configuration.size()));
+
+  struct TestCase {
+    std::string name;
+    std::string route;
+    std::string host;
+  };
+  const TestCase cases[] = {
+      {"match-match", "selected-route", "route-domain.example"},
+      {"match-mismatch", "selected-route", "other.example"},
+      {"mismatch-match", "other-route", "route-domain.example"},
+      {"mismatch-mismatch", "other-route", "other.example"},
+  };
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(test_case.name);
+    route_name_ = test_case.route;
+    authority_ = test_case.host;
+    cred_ = test_case.route == "selected-route" ? "route:pass" : "domain:pass";
+    authorization_header_ =
+        "Basic " + Base64::encode(cred_.data(), cred_.size());
+    EXPECT_EQ(context_->onRequestHeaders(0, false),
+              FilterHeadersStatus::Continue);
+  }
+
+  route_name_ = "selected-route";
+  authority_ = "route-domain.example";
+  cred_ = "domain:pass";
+  authorization_header_ =
+      "Basic " + Base64::encode(cred_.data(), cred_.size());
+  EXPECT_CALL(*mock_context_, sendLocalResponse(401, testing::_, testing::_,
+                                                testing::_, testing::_));
+  EXPECT_EQ(context_->onRequestHeaders(0, false),
+            FilterHeadersStatus::StopIteration);
+}
+
+TEST_F(BasicAuthTest, FirstMatchingRuleWins) {
+  auto verifyOrder = [this](const std::string& configuration) {
+    auto root_context = std::make_unique<PluginRootContext>(0, "");
+    auto context = std::make_unique<PluginContext>(1, root_context.get());
+    BufferBase buffer;
+    buffer.set({configuration.data(), configuration.size()});
+
+    EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
+        .WillOnce([&buffer](WasmBufferType) { return &buffer; });
+    ASSERT_TRUE(root_context->configure(configuration.size()));
+
+    authority_ = "ordered.example";
+    route_name_ = "ordered-route";
+    cred_ = "first:pass";
+    authorization_header_ =
+        "Basic " + Base64::encode(cred_.data(), cred_.size());
+    EXPECT_EQ(context->onRequestHeaders(0, false),
+              FilterHeadersStatus::Continue);
+
+    cred_ = "second:pass";
+    authorization_header_ =
+        "Basic " + Base64::encode(cred_.data(), cred_.size());
+    EXPECT_CALL(*mock_context_, sendLocalResponse(401, testing::_, testing::_,
+                                                  testing::_, testing::_));
+    EXPECT_EQ(context->onRequestHeaders(0, false),
+              FilterHeadersStatus::StopIteration);
+  };
+
+  verifyOrder(R"(
+{
+  "_rules_": [
+    {
+      "_match_domain_": ["ordered.example"],
+      "credentials": ["first:pass"]
+    },
+    {
+      "_match_route_": ["ordered-route"],
+      "credentials": ["second:pass"]
+    }
+  ]
+})");
+  verifyOrder(R"(
+{
+  "_rules_": [
+    {
+      "_match_route_": ["ordered-route"],
+      "credentials": ["first:pass"]
+    },
+    {
+      "_match_domain_": ["ordered.example"],
+      "credentials": ["second:pass"]
+    }
+  ]
+})");
 }
 
 TEST_F(BasicAuthTest, OnConfigureNoCredentials) {
