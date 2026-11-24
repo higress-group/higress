@@ -1,4 +1,4 @@
-module github.com/alibaba/higress/plugins/wasm-go/extensions/hello-world
+module github.com/alibaba/higress/plugins/wasm-go/extensions/ai-json-resp
 
 go 1.24.1
 
