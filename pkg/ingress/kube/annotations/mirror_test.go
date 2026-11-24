@@ -220,3 +220,18 @@ func TestMirror_ApplyRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePercentage(t *testing.T) {
+	inRange := parsePercentage(Annotations{
+		buildNginxAnnotationKey(mirrorPercentage): "50",
+	})
+	if inRange == nil || inRange.GetValue() != 50 {
+		t.Fatalf("an in-range percentage must be kept, got %v", inRange)
+	}
+
+	if got := parsePercentage(Annotations{
+		buildNginxAnnotationKey(mirrorPercentage): "-10",
+	}); got != nil {
+		t.Fatalf("a negative percentage is not a valid Envoy mirrorPercentage, got %v", got.GetValue())
+	}
+}

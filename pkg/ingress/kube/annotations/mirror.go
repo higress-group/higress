@@ -111,7 +111,9 @@ func parsePercentage(annotations Annotations) *wrappers.DoubleValue {
 	var percentage *wrappers.DoubleValue
 
 	if value, err := annotations.ParseIntASAP(mirrorPercentage); err == nil {
-		if value < 100 {
+		// Envoy's mirrorPercentage is a Percent: a negative value is not a valid
+		// fraction and used to be forwarded as-is.
+		if value >= 0 && value < 100 {
 			percentage = &wrappers.DoubleValue{
 				Value: float64(value),
 			}
