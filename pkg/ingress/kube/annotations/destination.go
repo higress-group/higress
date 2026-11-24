@@ -66,6 +66,10 @@ func (a destination) Parse(annotations Annotations, config *Ingress, _ *GlobalCo
 				IngressLog.Errorf("parse destination atoi error %v within ingress %s/%s", err, config.Namespace, config.Name)
 				return nil
 			}
+			if weight < 0 {
+				IngressLog.Errorf("destination %s has a negative weight within ingress %s/%s", value, config.Namespace, config.Name)
+				return nil
+			}
 			addrIndex++
 		}
 		weightSum += weight

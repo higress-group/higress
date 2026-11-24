@@ -109,7 +109,9 @@ func (c cors) Parse(annotations Annotations, config *Ingress, _ *GlobalContext) 
 	}
 
 	// max age
-	if age, err := annotations.ParseIntASAP(maxAge); err == nil {
+	// A negative max age is not a usable duration; ignore it like any other
+	// unparsable annotation instead of forwarding it to Envoy.
+	if age, err := annotations.ParseIntASAP(maxAge); err == nil && age >= 0 {
 		corsConfig.MaxAge = age
 	}
 
