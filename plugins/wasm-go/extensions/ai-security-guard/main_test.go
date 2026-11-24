@@ -545,6 +545,29 @@ func TestParseConfig(t *testing.T) {
 			require.Equal(t, "low", securityConfig.GetMaliciousUrlLevelBar("ccc-regexp-test"))
 		})
 
+		t.Run("invalid regexp in consumer matcher fails config", func(t *testing.T) {
+			configJSON, err := json.Marshal(map[string]interface{}{
+				"serviceName":               "security-service",
+				"servicePort":               8080,
+				"serviceHost":               "security.example.com",
+				"accessKey":                 "test-ak",
+				"secretKey":                 "test-sk",
+				"checkRequest":              true,
+				"contentModerationLevelBar": "high",
+				"promptAttackLevelBar":      "high",
+				"sensitiveDataLevelBar":     "S3",
+				"consumerRiskLevel": map[string]interface{}{
+					"name":                 "(",
+					"matchType":            "regexp",
+					"maliciousUrlLevelBar": "low",
+				},
+			})
+			require.NoError(t, err)
+			var securityConfig cfg.AISecurityConfig
+			parseErr := securityConfig.Parse(gjson.ParseBytes(configJSON))
+			require.Error(t, parseErr)
+		})
+
 		t.Run("custom response fallback paths config", func(t *testing.T) {
 			configJSON, err := json.Marshal(map[string]interface{}{
 				"serviceName":                            "security-service",
