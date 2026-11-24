@@ -170,16 +170,18 @@ func promptInstall(writer io.Writer, profileName string) bool {
 	for {
 		fmt.Fprintf(writer, "\nThis will install Higress \"%s\" profile into the cluster. \nProceed? (y/N)", profileName)
 		fmt.Scanln(&answer)
-		if strings.TrimSpace(answer) == "y" {
+		val := strings.TrimSpace(answer)
+		if val == "y" || val == "Y" {
 			fmt.Fprintf(writer, "\n")
 			return true
 		}
-		if strings.TrimSpace(answer) == "N" {
+		if val == "" || val == "n" || val == "N" {
 			fmt.Fprintf(writer, "Cancelled.\n")
 			return false
 		}
 	}
 }
+
 
 func promptProfileName(writer io.Writer) string {
 	answer := ""
