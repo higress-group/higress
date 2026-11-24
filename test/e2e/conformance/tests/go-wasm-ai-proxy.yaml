@@ -391,6 +391,44 @@ spec:
                 port:
                   number: 3000
 ---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-moonshot
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.moonshot.cn"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wasmplugin-ai-proxy-coze
+  namespace: higress-conformance-ai-backend
+spec:
+  ingressClassName: higress
+  rules:
+    - host: "api.coze.cn"
+      http:
+        paths:
+          - pathType: Prefix
+            path: "/"
+            backend:
+              service:
+                name: llm-mock-service
+                port:
+                  number: 3000
+---
 apiVersion: extensions.higress.io/v1alpha1
 kind: WasmPlugin
 metadata:
@@ -600,6 +638,25 @@ spec:
           type: grok
       ingress:
         - higress-conformance-ai-backend/wasmplugin-ai-proxy-grok
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          modelMapping:
+            "gpt-3": moonshot-v1-8k
+            "*": moonshot-v1-128k
+          type: moonshot
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-moonshot
+    - config:
+        provider:
+          apiTokens:
+            - fake_token
+          modelMapping:
+            "*": coze-mock-bot
+          type: coze
+      ingress:
+        - higress-conformance-ai-backend/wasmplugin-ai-proxy-coze
     - config:
         provider:
           apiTokens:
