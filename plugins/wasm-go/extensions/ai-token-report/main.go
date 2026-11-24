@@ -36,6 +36,7 @@ const (
 	CtxAccumulatedBody = "accumulated_body"
 	CtxSkipPlugin      = "skip_token_report"
 	CtxProductSource   = "token_report_product_source"
+	CtxResponseStatus  = "token_report_response_status"
 	providerTypeKey    = "providerType"
 
 	// HTTP headers
@@ -89,6 +90,7 @@ func init() {
 		wrapper.ParseConfig(parseConfig),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
+		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingBody),
 		wrapper.ProcessResponseBody(onHttpResponseBody),
 	)
@@ -626,6 +628,15 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 	}
 }
 
+func onHttpResponseHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfig) types.Action {
+	// Keep the status before Envoy releases response headers during body callbacks.
+	status, err := proxywasm.GetHttpResponseHeader(":status")
+	if err == nil && status != "" {
+		ctx.SetContext(CtxResponseStatus, status)
+	}
+	return types.ActionContinue
+}
+
 func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageReportConfig, responseBody []byte) {
 	// Add panic recovery to ensure this function never interrupts the main flow
 	defer func() {
@@ -633,6 +644,17 @@ func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageRepor
 			log.Errorf("Panic in reportTokenUsageFromContext (recovered): %v", r)
 		}
 	}()
+
+	// Both JSON and SSE use this reporting boundary. Zero tokens may be a
+	// successful image, so only the HTTP response status decides eligibility.
+	statusCode, err := proxywasm.GetHttpResponseHeader(":status")
+	if err != nil || statusCode == "" {
+		statusCode, _ = ctx.GetContext(CtxResponseStatus).(string)
+	}
+	if statusCode != "200" {
+		log.Debugf("ai-token-report: skip billing report for response status %q", statusCode)
+		return
+	}
 
 	// Skip if disableOpenaiUsage is enabled
 	if config.disableOpenaiUsage {
