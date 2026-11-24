@@ -153,17 +153,22 @@ func TestCPPHotfixContractCIRejectsFloatingRepositoryRefs(t *testing.T) {
 }
 
 func TestCPPHotfixReworkBaselineFindingsAreReproduced(t *testing.T) {
-	previous, err := runGit("../..", "show", hotfixReworkBaseline+":.github/workflows/promote-plugin-release.yaml")
-	if err != nil || !strings.Contains(previous, "environment: plugin-release-cpp-hotfix-version") || strings.Contains(previous, "  input-guard:\n") {
-		t.Fatalf("H01 baseline evidence changed: %v", err)
+	source := mustHotfixReworkBaseline(t, "SOURCE.md")
+	if !strings.Contains(source, hotfixReworkBaseline) {
+		t.Fatal("baseline provenance lacks the exact source commit")
 	}
-	previousCI, err := runGit("../..", "show", hotfixReworkBaseline+":.github/workflows/cpp-hotfix-release-contract.yaml")
-	if err != nil || !strings.Contains(previousCI, "default: main") {
-		t.Fatalf("H03 baseline no longer accepts floating server main: %v", err)
+	previous := mustHotfixReworkBaseline(t, "promote-plugin-release.yaml")
+	if !strings.Contains(previous, "environment: plugin-release-cpp-hotfix-version") || strings.Contains(previous, "  input-guard:\n") {
+		t.Fatal("H01 baseline evidence changed")
 	}
-	previousDelivery, err := runGit("../..", "ls-tree", "-r", "--name-only", hotfixReworkBaseline, "--", "delivery")
-	if err != nil || len(strings.Split(previousDelivery, "\n")) != 3 {
-		t.Fatalf("H04 baseline does not reproduce three tracked temporary files: %s (%v)", previousDelivery, err)
+	previousCI := mustHotfixReworkBaseline(t, "cpp-hotfix-release-contract.yaml")
+	if !strings.Contains(previousCI, "default: main") {
+		t.Fatal("H03 baseline no longer accepts floating server main")
+	}
+	previousDelivery := mustHotfixReworkBaseline(t, "delivery-files.txt")
+	wantDelivery := "delivery/HANDOFF.json\ndelivery/PROGRESS.json\ndelivery/RESULT.md\n"
+	if previousDelivery != wantDelivery {
+		t.Fatalf("H04 baseline must reproduce exactly three tracked temporary paths: got %q, want %q", previousDelivery, wantDelivery)
 	}
 	t.Log("H01/H03/H04 RED baseline evidence reproduced; current guards, exact-SHA gates, and untracked delivery are checked independently")
 }

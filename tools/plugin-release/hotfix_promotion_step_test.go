@@ -25,7 +25,32 @@ import (
 	"testing"
 )
 
-const hotfixReworkBaseline = "cbe73567ab2e2092761d169c3c9418e9a5d7165e"
+const (
+	hotfixReworkBaseline       = "cbe73567ab2e2092761d169c3c9418e9a5d7165e"
+	hotfixReworkPromoteSHA256  = "25641862a33c4e09c74404c7a2f1a1739d55f3edc36ee672d29a5f5437e1b518"
+	hotfixReworkContractSHA256 = "9c29a4245862eaa87f5832966c538f5bdccdba0a68c4095bd250302bd278a8cd"
+	hotfixReworkDeliverySHA256 = "17282997eec2bb8d52ff33a398612b543977f5afbb570869385666aba8838e53"
+	hotfixReworkSourceSHA256   = "e92381fb9f6ca37fe52840c97738a299058a717fbf2f3d771353d3945bc058b3"
+)
+
+func mustHotfixReworkBaseline(t *testing.T, name string) string {
+	t.Helper()
+	hashes := map[string]string{
+		"promote-plugin-release.yaml":      hotfixReworkPromoteSHA256,
+		"cpp-hotfix-release-contract.yaml": hotfixReworkContractSHA256,
+		"delivery-files.txt":               hotfixReworkDeliverySHA256,
+		"SOURCE.md":                        hotfixReworkSourceSHA256,
+	}
+	want, ok := hashes[name]
+	if !ok {
+		t.Fatalf("unknown hotfix rework baseline fixture %q", name)
+	}
+	data := mustRead(t, filepath.Join("testdata", "hotfix-rework-baseline", name))
+	if got := sha256Hex(data); got != want {
+		t.Fatalf("baseline %s from %s: SHA-256 got %s, want %s", name, hotfixReworkBaseline, got, want)
+	}
+	return string(data)
+}
 
 type hotfixSpyCall struct {
 	Tool string   `json:"tool"`
@@ -71,10 +96,7 @@ func workflowRunBody(t *testing.T, workflow, stepName string) string {
 }
 
 func TestCPPHotfixStepBodyReworkRedGreen(t *testing.T) {
-	previous, err := runGit("../..", "show", hotfixReworkBaseline+":.github/workflows/promote-plugin-release.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	previous := mustHotfixReworkBaseline(t, "promote-plugin-release.yaml")
 	for _, fixture := range []struct {
 		name     string
 		workflow string
