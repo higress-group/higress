@@ -852,3 +852,28 @@ func TestAutoRoutingIntegration(t *testing.T) {
 		})
 	})
 }
+
+func TestAutoRoutingUsesOnlyFinalUserTurn(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, tc := range []struct{ name, content, want string }{
+			{"image only", `[{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]`, "qwen-turbo"},
+			{"empty parts", `[]`, "qwen-turbo"},
+			{"text in final turn", `[{"type":"text","text":"calculate 2+2"}]`, "qwen-math"},
+			{"last text part preserved", `[{"type":"text","text":"code"},{"type":"text","text":"calculate 2+2"}]`, "qwen-math"},
+			{"plain text", `"calculate 2+2"`, "qwen-math"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				host, status := test.NewTestHost(autoRoutingConfig)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				host.CallOnHttpRequestHeaders([][2]string{{":authority", "example.com"}, {":path", "/v1/chat/completions"}, {":method", "POST"}, {"content-type", "application/json"}})
+				body := []byte(`{"model":"higress/auto","messages":[{"role":"user","content":"write code"},{"role":"assistant","content":"previous answer"},{"role":"user","content":` + tc.content + `},{"role":"assistant","content":"code"}]}`)
+				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+				require.Equal(t, tc.want, gjson.GetBytes(host.GetRequestBody(), "model").String())
+				model, found := getHeader(host.GetRequestHeaders(), "x-model")
+				require.True(t, found)
+				require.Equal(t, tc.want, model)
+			})
+		}
+	})
+}
