@@ -422,3 +422,44 @@ func TestTemplateReplacementLogic(t *testing.T) {
 		require.Equal(t, "Hello World, welcome!", template)
 	})
 }
+
+func TestTemplatePropertiesPreserveJSON(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			value interface{}
+			want  string
+		}{
+			{"quotes", `say "hello"`, `say "hello"`},
+			{"newlines and tabs", "first\nsecond\tline", "first\nsecond\tline"},
+			{"backslashes", `C:\users\example`, `C:\users\example`},
+			{"control characters", "a\x00\x01b", "a\x00\x01b"},
+			{"json object", map[string]interface{}{"name": "example"}, `{"name":"example"}`},
+			{"unicode", "你好🌍", "你好🌍"},
+			{"number", 42, "42"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				config := json.RawMessage(`{"templates":[{"name":"json","template":{"model":"example-model","messages":[{"role":"user","content":"before {{value}} after"}]}}]}`)
+				host, status := test.NewTestHost(config)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				host.CallOnHttpRequestHeaders([][2]string{{":authority", "example.com"}, {":path", "/v1/chat/completions"}, {":method", "POST"}, {"content-type", "application/json"}})
+				body, err := json.Marshal(map[string]interface{}{"template": "json", "properties": map[string]interface{}{"value": tc.value}})
+				require.NoError(t, err)
+				require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
+				var got struct {
+					Model    string `json:"model"`
+					Messages []struct {
+						Role    string `json:"role"`
+						Content string `json:"content"`
+					} `json:"messages"`
+				}
+				require.NoError(t, json.Unmarshal(host.GetRequestBody(), &got))
+				require.Equal(t, "example-model", got.Model)
+				require.Len(t, got.Messages, 1)
+				require.Equal(t, "user", got.Messages[0].Role)
+				require.Equal(t, "before "+tc.want+" after", got.Messages[0].Content)
+			})
+		}
+	})
+}
