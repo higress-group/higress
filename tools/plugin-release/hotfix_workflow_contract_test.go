@@ -30,7 +30,6 @@ func TestCPPHotfixPrepareUsesStableInterfaceAndSeparateReleaseID(t *testing.T) {
 		"render-snapshot --catalog",
 		"args+=(--mode=cpp-hotfix)",
 		"release_id=cpp-hotfix-2.0.1",
-		`bazel test --test_output=errors "//extensions/$build_name:${build_name}_test"`,
 		`make -C plugins/wasm-cpp PLUGIN_NAME="$build_name" build`,
 		`test "$(git rev-parse refs/remotes/origin/main)" = "$TARGET_REF"`,
 	} {
@@ -42,10 +41,39 @@ func TestCPPHotfixPrepareUsesStableInterfaceAndSeparateReleaseID(t *testing.T) {
 		t.Fatal("prepare workflow contains an out-of-scope C++ plugin")
 	}
 	validate := mustWorkflow(t, "validate-plugin-preparation-pr.yaml")
-	for _, required := range []string{"cpp-hotfix-2.0.1", "args+=(--mode=cpp-hotfix)", `bazel test --test_output=errors "//extensions/$build_name:${build_name}_test"`} {
+	for _, required := range []string{"cpp-hotfix-2.0.1", "args+=(--mode=cpp-hotfix)"} {
 		if !strings.Contains(validate, required) {
 			t.Fatalf("preparation validation workflow lacks %q", required)
 		}
+	}
+}
+
+func TestCPPReleaseNativeTestsUsePinnedBuilder(t *testing.T) {
+	for _, name := range []string{"prepare-plugin-release.yaml", "validate-plugin-preparation-pr.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			workflow := mustWorkflow(t, name)
+			build := workflowShellContract(t, name, "plugin-build-contract")
+			for _, required := range []string{
+				`builder="$(sed -n 's/^ARG BUILDER=//p' plugins/wasm-cpp/Dockerfile)"`,
+				`case "$builder" in
+                  *@sha256:*) ;;
+                  *) echo 'Builder must be pinned by digest' >&2; return 1 ;;
+                esac`,
+				`docker run --rm \
+                  -v "$GITHUB_WORKSPACE/plugins/wasm-cpp:/workspace" \
+                  -w /workspace \
+                  "$builder" \
+                  bash -euo pipefail -c 'bazel test --test_output=errors "//extensions/$1:$1_test"' -- "$build_name"`,
+				`make -C plugins/wasm-cpp PLUGIN_NAME="$build_name" build`,
+			} {
+				if !strings.Contains(build, required) {
+					t.Fatalf("%s build contract lacks %q", name, required)
+				}
+			}
+			if strings.Contains(workflow, "(cd plugins/wasm-cpp && bazel test") {
+				t.Fatalf("%s still runs native C++ tests with host bazel", name)
+			}
+		})
 	}
 }
 
