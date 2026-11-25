@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
-	"strings"
 )
 
 type HistoryArtifact struct {
