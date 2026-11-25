@@ -180,6 +180,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$TARGET_REF"
           git fetch --no-tags origin main
           test "$(git rev-parse refs/remotes/origin/main)" = "$TARGET_REF"
+          CANDIDATE_IMPORT="${CANDIDATE_IMPORT:-}"
+          HISTORY_IMPORT="${HISTORY_IMPORT:-}"
           if [ -n "$CANDIDATE_IMPORT" ] || [ -n "$HISTORY_IMPORT" ]; then test -n "$CANDIDATE_IMPORT"; test -n "$HISTORY_IMPORT"; fi
           for manifest in "$CANDIDATE_IMPORT" "$HISTORY_IMPORT"; do
             if [ -z "$manifest" ]; then continue; fi
@@ -219,6 +221,8 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
+          CANDIDATE_IMPORT="${CANDIDATE_IMPORT:-}"
+          HISTORY_IMPORT="${HISTORY_IMPORT:-}"
           source tools/hack/oras-retry.sh
           (cd tools/plugin-release && go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json)
           mkdir -p plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence plugins/release/imports

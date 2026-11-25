@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os/exec"
+	"io"
+	"net/http"
 	"reflect"
+	"time"
 )
 
 func validatePlanImports(root string, catalog Catalog, plan Plan, previous Snapshot, evidence CandidateEvidenceFile) error {
@@ -243,9 +245,21 @@ func verifyHistoryImportOrigin(root string, proof ProofRef) error {
 	if err != nil {
 		return err
 	}
-	remote, err := exec.Command("gh", "api", "repos/"+manifest.Repository+"/contents/unmanaged-plugins.lock.json?ref="+manifest.SourceCommit, "--header", "Accept: application/vnd.github.raw+json").Output()
+	if manifest.Repository != "higress-group/plugin-server" || !commitPattern.MatchString(manifest.SourceCommit) {
+		return errors.New("invalid pinned history origin identity")
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	response, err := client.Get("https://raw.githubusercontent.com/" + manifest.Repository + "/" + manifest.SourceCommit + "/unmanaged-plugins.lock.json")
 	if err != nil {
 		return errors.New("cannot independently read the pinned history lock origin")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("pinned history origin returned HTTP %d", response.StatusCode)
+	}
+	remote, err := io.ReadAll(io.LimitReader(response.Body, int64(len(archived))+1))
+	if err != nil {
+		return err
 	}
 	if !bytes.Equal(archived, remote) {
 		return errors.New("history lock archive differs from pinned origin bytes")

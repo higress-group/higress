@@ -13,7 +13,7 @@ on:
       - 'helm/core/**'
       - '.github/workflows/**'
   push:
-    branches: [main, feat/cpp-managed-release-contracts]
+    branches: [main]
     paths:
       - 'plugins/wasm-cpp/**'
       - 'plugins/release/**'

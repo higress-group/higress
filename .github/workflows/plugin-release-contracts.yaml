@@ -9,7 +9,7 @@ on:
       - '.github/workflows/*plugin*'
       - '.github/workflows/*cpp*'
   push:
-    branches: [main, feat/cpp-managed-release-contracts]
+    branches: [main]
     paths:
       - 'tools/plugin-release/**'
       - 'tools/hack/*cpp*'
@@ -37,6 +37,9 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: '1.24.0'
+      - uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20
+        with:
+          version: 1.2.3
       - name: Exact-head serial release-tool tests
         shell: bash
         run: |
