@@ -195,8 +195,13 @@ func migrationControlTags(previousPath string) ([]migrationControlCandidate, err
 	if _, err := readJSON(previousPath, &previous); err != nil {
 		return nil, err
 	}
-	var built, adopted []migrationControlCandidate
+	var built, adopted, historical []migrationControlCandidate
 	for _, entry := range previous.Plugins {
+		for _, artifact := range entry.History {
+			if artifact.OCIRef != "" && digestPattern.MatchString(artifact.Digest) {
+				historical = append(historical, migrationControlCandidate{ref: artifact.OCIRef, digest: artifact.Digest})
+			}
+		}
 		if entry.Migration != nil {
 			continue
 		}
@@ -210,7 +215,7 @@ func migrationControlTags(previousPath string) ([]migrationControlCandidate, err
 			adopted = append(adopted, migrationControlCandidate{ref: entry.OCIRef, digest: entry.Digest})
 		}
 	}
-	candidates := append(built, adopted...)
+	candidates := append(append(built, adopted...), historical...)
 	if len(candidates) == 0 {
 		return nil, errors.New("previous snapshot carries no published, non-excluded public control tag; migration preflight cannot calibrate its probe")
 	}

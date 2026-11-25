@@ -150,11 +150,7 @@ func wasmFromTar(data []byte) ([]byte, error) {
 }
 
 func calibrateHistoryProbe(previous Snapshot, evidence *HistoryEvidence) error {
-	matched := false
-	for _, entry := range previous.Plugins {
-		matched = matched || entry.Migration == nil && entry.OCIRef == evidence.ControlRef && entry.Digest == evidence.ControlDigest
-	}
-	if !matched {
+	if !matchesHistoryControl(previous, evidence) {
 		return errors.New("history control does not bind a previous non-excluded entry")
 	}
 	manifest, err := ociManifestResolver(evidence.ControlRef)
@@ -248,6 +244,15 @@ func replayHistoryEvidence(root string, plan Plan, previous Snapshot, evidence *
 			return err
 		}
 		expected := evidence.Entries[id]
+		if expected.Publication != "published" && expected.WasmSHA256 != "" && entry.WasmSHA256 == "" {
+			hash, err := ociWasmHashResolver(root, entry, entry.CandidateRef)
+			if err != nil {
+				return err
+			}
+			if hash != expected.WasmSHA256 {
+				return fmt.Errorf("%s: optional unpublished Wasm hash does not match candidate bytes", id)
+			}
+		}
 		if actual.Publication != expected.Publication || actual.ObservedDigest != expected.ObservedDigest || actual.ObservedVersion != expected.ObservedVersion || actual.ObservedRevision != expected.ObservedRevision || actual.ObservedInputHash != expected.ObservedInputHash || actual.Publication == "published" && actual.WasmSHA256 != expected.WasmSHA256 {
 			return fmt.Errorf("%s: history evidence classification does not replay against registry", id)
 		}

@@ -230,11 +230,7 @@ func validateHistoryEvidence(plan Plan, previous Snapshot, evidence *HistoryEvid
 	if evidence == nil || evidence.SchemaVersion != 1 || !registryQualifiedReferencePattern.MatchString(evidence.ControlRef) || !digestPattern.MatchString(evidence.ControlDigest) || len(evidence.Entries) != len(subjects) {
 		return errors.New("historyEvidence requires a complete calibrated control and exact upgraded entry set")
 	}
-	control := false
-	for _, entry := range previous.Plugins {
-		control = control || entry.Migration == nil && entry.OCIRef == evidence.ControlRef && entry.Digest == evidence.ControlDigest
-	}
-	if !control {
+	if !matchesHistoryControl(previous, evidence) {
 		return errors.New("historyEvidence control is not a non-excluded previous public reference")
 	}
 	for id, record := range evidence.Entries {
@@ -266,6 +262,20 @@ func validateHistoryEvidence(plan Plan, previous Snapshot, evidence *HistoryEvid
 		}
 	}
 	return nil
+}
+
+func matchesHistoryControl(previous Snapshot, evidence *HistoryEvidence) bool {
+	for _, entry := range previous.Plugins {
+		if entry.Migration == nil && entry.OCIRef == evidence.ControlRef && entry.Digest == evidence.ControlDigest {
+			return true
+		}
+		for _, artifact := range entry.History {
+			if artifact.OCIRef == evidence.ControlRef && artifact.Digest == evidence.ControlDigest {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func deriveHistory(previous SnapshotEntry, record HistoryEvidenceEntry) ([]HistoryArtifact, error) {

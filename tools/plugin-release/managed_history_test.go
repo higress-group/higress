@@ -302,3 +302,36 @@ func TestManagedHistoryStrictSchemaAndCollisions(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedHistoryReplansWhenOnlyPreviousHistoryIsPublic(t *testing.T) {
+	for _, implementation := range []string{"go", "rust"} {
+		t.Run(implementation, func(t *testing.T) {
+			root, _, plan, previous, _ := historyFixtureForImplementation(t, false, implementation)
+			previous.Plugins = previous.Plugins[:1]
+			mustCanonical(t, filepath.Join(root, "previous.json"), previous)
+			old := previous.Plugins[0]
+			withManifestResolver(t, func(ref string) (ociManifest, error) {
+				if ref == old.History[0].OCIRef {
+					return ociManifest{Digest: old.History[0].Digest}, nil
+				}
+				return ociManifest{}, errors.New("HTTP 404 Not Found")
+			})
+			evidence, err := captureHistoryEvidence(root, filepath.Join(root, "previous.json"), plan, previous)
+			if err != nil || evidence.ControlRef != old.History[0].OCIRef || evidence.Entries["demo"].Publication != "absent" {
+				t.Fatalf("cannot calibrate against retained published history: %+v %v", evidence, err)
+			}
+			if err := replayHistoryEvidence(root, plan, previous, evidence); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := migrationPreflight(filepath.Join(root, "catalog.json"), filepath.Join(root, "plan.json"), filepath.Join(root, "previous.json"), filepath.Join(root, "built.json")); err != nil {
+				t.Fatalf("history-only control blocks migration recovery: %v", err)
+			}
+			record := evidence.Entries["demo"]
+			record.WasmSHA256 = strings.Repeat("0", 64)
+			evidence.Entries["demo"] = record
+			if err := replayHistoryEvidence(root, plan, previous, evidence); err == nil {
+				t.Fatal("unbound optional Wasm hash accepted for unpublished previous current")
+			}
+		})
+	}
+}
