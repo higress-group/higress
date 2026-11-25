@@ -281,3 +281,51 @@ func TestManagedCPPFirstImportRejectsEachOccupiedDifferentTag(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedCPPImportCaptureIsReadOnlyAndHasNoBuildFallback(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reuse-all-nine", true: "candidate-404-zero-write"}[missing], func(t *testing.T) {
+			root, catalogPath, previousPath, freeze, candidatePath, historyPath, original := importFixture(t)
+			plan, err := buildPlanWithImports(root, catalogPath, previousPath, "", freeze, "2.1.0", "", "", candidatePath, historyPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			planPath, builtPath, outputPath := filepath.Join(root, "plan.json"), filepath.Join(root, "built.json"), filepath.Join(root, "output.json")
+			mustCanonical(t, planPath, plan)
+			mustCanonical(t, builtPath, CandidateEvidenceFile{Plugins: map[string]CandidateEvidence{}})
+			calls := map[string]int{}
+			withWasmHashResolver(t, func(_ string, entry SnapshotEntry, ref string) (string, error) {
+				old := original.Plugins[entry.LogicalID]
+				if ref != old.CandidateRef || entry.SourceCommit != old.SourceCommit || entry.Digest != old.Digest || entry.InputHash != old.InputHash {
+					t.Fatal("candidate import changed immutable artifact source/ref/bytes")
+				}
+				calls[entry.LogicalID]++
+				if missing {
+					return "", fmt.Errorf("HTTP 404 Not Found")
+				}
+				return strings.Repeat("a", 64), nil
+			})
+			err = commandCaptureHistoryEvidence([]string{"--root", root, "--catalog", catalogPath, "--plan", planPath, "--previous", previousPath, "--candidate-evidence", builtPath, "--output", outputPath})
+			if missing {
+				if err == nil {
+					t.Fatal("missing candidate accepted")
+				}
+				if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+					t.Fatal("candidate failure wrote fallback evidence")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(calls) != 9 {
+				t.Fatalf("read only %d imported artifacts", len(calls))
+			}
+			for id, count := range calls {
+				if count != 1 {
+					t.Fatalf("imported candidate %s was resolved %d times", id, count)
+				}
+			}
+		})
+	}
+}

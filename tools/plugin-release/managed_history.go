@@ -55,6 +55,30 @@ type legacyHistoryArtifact struct {
 	History       []legacyHistoryArtifact `json:"history,omitempty"`
 }
 
+func (artifact *HistoryArtifact) UnmarshalJSON(data []byte) error {
+	type plain HistoryArtifact
+	var decoded plain
+	if err := strictDecode(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if decoded.ProvenanceMode == "public" {
+		for _, field := range []string{"sourceCommit", "inputHash", "candidateRef", "candidateImport"} {
+			if _, present := fields[field]; present {
+				return errors.New("public history must omit build provenance fields")
+			}
+		}
+	}
+	if raw, present := fields["candidateImport"]; present && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return errors.New("candidateImport must be a proof object")
+	}
+	*artifact = HistoryArtifact(decoded)
+	return nil
+}
+
 func (entry *SnapshotEntry) UnmarshalJSON(data []byte) error {
 	type plain SnapshotEntry
 	var decoded plain
@@ -189,6 +213,13 @@ func historySubjects(plan Plan, previous Snapshot) map[string]SnapshotEntry {
 }
 
 func validateHistoryEvidence(plan Plan, previous Snapshot, evidence *HistoryEvidence) error {
+	seenPrevious := map[string]bool{}
+	for _, entry := range previous.Plugins {
+		if seenPrevious[entry.LogicalID] {
+			return errors.New("duplicate previous current in history evidence")
+		}
+		seenPrevious[entry.LogicalID] = true
+	}
 	subjects := historySubjects(plan, previous)
 	if len(subjects) == 0 {
 		if evidence != nil {
