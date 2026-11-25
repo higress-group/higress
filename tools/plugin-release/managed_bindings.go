@@ -60,6 +60,11 @@ func validatePlanImports(root string, catalog Catalog, plan Plan, previous Snaps
 }
 
 func renderManagedBindings(root string, catalog Catalog, plan Plan, previous Snapshot, evidence CandidateEvidenceFile, snapshot *Snapshot) error {
+	if plan.HistoryImport != nil || evidence.HistoryEvidence != nil {
+		if plan.PlanID != "sha256:"+canonicalObjectHash(plan, true) {
+			return errors.New("managed planId does not bind its canonical content")
+		}
+	}
 	if err := validatePlanImports(root, catalog, plan, previous, evidence); err != nil {
 		return err
 	}
