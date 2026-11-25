@@ -17,19 +17,25 @@ func withWasmHashResolver(t *testing.T, resolver func(string, SnapshotEntry, str
 }
 
 func historyFixture(t *testing.T, existingHash bool) (string, Catalog, Plan, Snapshot, CandidateEvidenceFile) {
+	return historyFixtureForImplementation(t, existingHash, "go")
+}
+
+func historyFixtureForImplementation(t *testing.T, existingHash bool, implementation string) (string, Catalog, Plan, Snapshot, CandidateEvidenceFile) {
 	t.Helper()
 	root := t.TempDir()
 	mustRun(t, root, "git", "init", "-q")
 	mustRun(t, root, "git", "config", "user.name", "test")
 	mustRun(t, root, "git", "config", "user.email", "test@example.com")
-	source := "plugins/wasm-go/extensions/demo"
+	source := "plugins/wasm-" + implementation + "/extensions/demo"
 	mustWrite(t, filepath.Join(root, source, "main.go"), "package main\n")
 	mustWrite(t, filepath.Join(root, source, "VERSION"), "1.0.0\n")
-	mustWrite(t, filepath.Join(root, "plugins/wasm-rust/extensions/.keep"), "")
+	for _, language := range []string{"go", "rust"} {
+		mustWrite(t, filepath.Join(root, "plugins/wasm-"+language+"/extensions/.keep"), "")
+	}
 	mustRun(t, root, "git", "add", ".")
 	mustRun(t, root, "git", "commit", "-qm", "source")
 	head, _ := resolveCommit(root, "HEAD")
-	plugin := Plugin{LogicalID: "demo", Implementation: "go", SourceDir: source, Image: "plugins/demo", ReleaseEligible: true, ArtifactInputs: []string{source + "/**"}, Consumers: PluginConsumers{PluginServer: &PluginServerConsumer{InventoryKey: "demo", HTTPPath: "demo"}}}
+	plugin := Plugin{LogicalID: "demo", Implementation: implementation, SourceDir: source, Image: "plugins/demo", ReleaseEligible: true, ArtifactInputs: []string{source + "/**"}, Consumers: PluginConsumers{PluginServer: &PluginServerConsumer{InventoryKey: "demo", HTTPPath: "demo"}}}
 	catalog := Catalog{SchemaVersion: 1, Registry: "registry.example", Plugins: []Plugin{plugin}, ConsumerInventories: map[string][]ConsumerInventory{"pluginServer": {{Key: "demo", Classification: "managed", LogicalID: "demo"}}}}
 	mustCanonical(t, filepath.Join(root, "catalog.json"), catalog)
 	oldHash, err := inputHash(root, head, "1.0.0", catalog, plugin)
@@ -40,13 +46,13 @@ func historyFixture(t *testing.T, existingHash bool) (string, Catalog, Plan, Sna
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := SnapshotEntry{LogicalID: "demo", Implementation: "go", SourceDir: source, Image: plugin.Image, Version: "1.0.0", OCIRef: "registry.example/plugins/demo:1.0.0", Digest: "sha256:" + strings.Repeat("a", 64), InputHash: oldHash, SourceCommit: head, CandidateRef: "registry.example/candidates/demo@sha256:" + strings.Repeat("a", 64), ProvenanceMode: "candidate", Consumers: plugin.Consumers,
+	old := SnapshotEntry{LogicalID: "demo", Implementation: implementation, SourceDir: source, Image: plugin.Image, Version: "1.0.0", OCIRef: "registry.example/plugins/demo:1.0.0", Digest: "sha256:" + strings.Repeat("a", 64), InputHash: oldHash, SourceCommit: head, CandidateRef: "registry.example/candidates/demo@sha256:" + strings.Repeat("a", 64), ProvenanceMode: "candidate", Consumers: plugin.Consumers,
 		History: []HistoryArtifact{{Version: "0.9.0", OCIRef: "registry.example/plugins/demo:0.9.0", Digest: "sha256:" + strings.Repeat("c", 64), WasmSHA256: strings.Repeat("d", 64), ProvenanceMode: "public"}}}
 	if existingHash {
 		old.WasmSHA256 = strings.Repeat("e", 64)
 	}
 	previous := Snapshot{SchemaVersion: 1, GatewayVersion: "2.0.0", SourceCommit: head, ProvenanceMode: "candidate", Plugins: []SnapshotEntry{old, {LogicalID: "control", Version: "1.0.0", OCIRef: "registry.example/plugins/control:1.0.0", Digest: "sha256:" + strings.Repeat("f", 64), ProvenanceMode: "public"}}}
-	plan := Plan{SchemaVersion: 1, GatewayVersion: "2.0.1", SourceCommit: head, BaseCommit: head, PreviousRelease: "2.0.0", CatalogSHA256: sha256Hex(mustRead(t, filepath.Join(root, "catalog.json"))), Plugins: []PlanEntry{{LogicalID: "demo", Implementation: "go", SourceDir: source, Image: plugin.Image, PreviousVersion: "1.0.0", Version: "1.0.1", InputHash: newHash, ChangedPaths: []string{}}}}
+	plan := Plan{SchemaVersion: 1, GatewayVersion: "2.0.1", SourceCommit: head, BaseCommit: head, PreviousRelease: "2.0.0", CatalogSHA256: sha256Hex(mustRead(t, filepath.Join(root, "catalog.json"))), Plugins: []PlanEntry{{LogicalID: "demo", Implementation: implementation, SourceDir: source, Image: plugin.Image, PreviousVersion: "1.0.0", Version: "1.0.1", InputHash: newHash, ChangedPaths: []string{}}}}
 	plan.PlanID = "sha256:" + canonicalObjectHash(plan, true)
 	evidence := CandidateEvidenceFile{Plugins: map[string]CandidateEvidence{"demo": {CandidateRef: "registry.example/candidates/demo@sha256:" + strings.Repeat("b", 64), Digest: "sha256:" + strings.Repeat("b", 64), SourceCommit: head, InputHash: newHash, WasmSHA256: strings.Repeat("e", 64)}}}
 	mustCanonical(t, filepath.Join(root, "plan.json"), plan)
@@ -105,10 +111,16 @@ func historyRegistry(t *testing.T, previous Snapshot, behavior string) {
 }
 
 func TestManagedHistoryPublicationMatrix(t *testing.T) {
+	for _, implementation := range []string{"go", "rust"} {
+		t.Run(implementation, func(t *testing.T) { testManagedHistoryPublicationMatrix(t, implementation) })
+	}
+}
+
+func testManagedHistoryPublicationMatrix(t *testing.T, implementation string) {
 	for _, hasHash := range []bool{false, true} {
 		for _, behavior := range []string{"published", "404", "excluded", "401", "403", "network", "unknown", "different", "annotations"} {
 			t.Run(map[bool]string{false: "missing-hash", true: "existing-hash"}[hasHash]+"/"+behavior, func(t *testing.T) {
-				root, _, plan, previous, evidence := historyFixture(t, hasHash)
+				root, _, plan, previous, evidence := historyFixtureForImplementation(t, hasHash, implementation)
 				if behavior == "excluded" {
 					previous.Plugins[0].Migration = &SnapshotMigration{State: migrationStateBlocked, SourceCommit: plan.SourceCommit, ExistingDigest: "sha256:" + strings.Repeat("9", 64), PlannedDigest: previous.Plugins[0].Digest, SourceComparison: migrationSourceUnannotated, Recommendation: migrationRecommendDeleteLegacy}
 					mustCanonical(t, filepath.Join(root, "previous.json"), previous)

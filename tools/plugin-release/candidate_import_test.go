@@ -329,3 +329,56 @@ func TestManagedCPPImportCaptureIsReadOnlyAndHasNoBuildFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedCPPImportedSnapshotVerifiesPreparationAndMergedHeads(t *testing.T) {
+	root, catalogPath, previousPath, freeze, candidatePath, historyPath, evidence := importFixture(t)
+	plan, err := buildPlanWithImports(root, catalogPath, previousPath, "", freeze, "2.1.0", "", "", candidatePath, historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, proof := range evidence.Plugins {
+		proof.WasmSHA256 = strings.Repeat("a", 64)
+		evidence.Plugins[id] = proof
+	}
+	planPath, evidencePath, snapshotPath := filepath.Join(root, "plan.json"), releaseEvidencePath(root, Snapshot{GatewayVersion: plan.GatewayVersion}), filepath.Join(root, "snapshot.json")
+	mustCanonical(t, planPath, plan)
+	mustCanonical(t, evidencePath, evidence)
+	snapshot, err := renderSnapshotAtRoot(root, catalogPath, planPath, previousPath, evidencePath, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCanonical(t, snapshotPath, snapshot)
+	if err := applyPlan(root, plan); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, root, "git", "add", ".")
+	mustRun(t, root, "git", "commit", "-qm", "preparation fixture Q")
+	preparation, _ := resolveCommit(root, "HEAD")
+	if err := verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousPath, freeze, preparation, false, "candidate"); err != nil {
+		t.Fatalf("import verification at Q: %v", err)
+	}
+	mustRun(t, root, "git", "commit", "--allow-empty", "-qm", "merged fixture M")
+	merged, _ := resolveCommit(root, "HEAD")
+	if err := verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousPath, freeze, merged, false, "candidate"); err != nil {
+		t.Fatalf("import verification at M: %v", err)
+	}
+	mustWrite(t, filepath.Join(root, "plugins/wasm-cpp/common/route_rule_matcher.h"), "changed matcher\n")
+	mustRun(t, root, "git", "add", ".")
+	mustRun(t, root, "git", "commit", "-qm", "shared matcher drift")
+	drifted, _ := resolveCommit(root, "HEAD")
+	if err := verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousPath, freeze, drifted, false, "candidate"); err == nil {
+		t.Fatal("committed-source artifact drift accepted")
+	}
+	next, err := buildPlan(root, catalogPath, snapshotPath, "", drifted, "2.2.0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Plugins) != 9 {
+		t.Fatalf("shared matcher pruned normal managed plan to %d", len(next.Plugins))
+	}
+	for _, entry := range next.Plugins {
+		if entry.Version != "2.0.2" || entry.CandidateImport != nil || entry.ArtifactSourceCommit != "" {
+			t.Fatal("later managed planning reimported a candidate or failed to bump")
+		}
+	}
+}

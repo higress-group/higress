@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for suite in TestManagedCPPExplicitImportPreservesArtifactSourceAndTuple TestManagedCPPImportFailsClosed TestManagedCPPFixedCatalogStatesAndDirectorySet TestManagedCPPImportCaptureIsReadOnlyAndHasNoBuildFallback TestManagedResolveVerifiesActualOCIManifestAndWasmBytes TestManagedHistoryPublicationMatrix TestManagedHistoryRejectsForgedPublished404InResolve TestManagedHistoryEvidenceRejectsIncompleteOrUnboundRecords TestManagedHistoryStrictSchemaAndCollisions TestManagedCPPMatrixIsCatalogDerivedAndNeverPruned TestManagedCPPMatrixRejectsUnknownSetAndUnpinnedToolchain TestManagedCPPEvidenceFailsClosedOnSkippedNativeMissingBytesAndWrongIdentity TestManagedCPPWorkflowPreservesNonSkippingReadOnlyRuntimeContract; do
+          for suite in TestManagedCPPExplicitImportPreservesArtifactSourceAndTuple TestManagedCPPImportFailsClosed TestManagedCPPFixedCatalogStatesAndDirectorySet TestManagedCPPImportedSnapshotVerifiesPreparationAndMergedHeads TestManagedCPPImportCaptureIsReadOnlyAndHasNoBuildFallback TestManagedResolveVerifiesActualOCIManifestAndWasmBytes TestManagedHistoryPublicationMatrix TestManagedHistoryRejectsForgedPublished404InResolve TestManagedHistoryEvidenceRejectsIncompleteOrUnboundRecords TestManagedHistoryStrictSchemaAndCollisions TestManagedCPPMatrixIsCatalogDerivedAndNeverPruned TestManagedCPPMatrixRejectsUnknownSetAndUnpinnedToolchain TestManagedCPPEvidenceFailsClosedOnSkippedNativeMissingBytesAndWrongIdentity TestManagedCPPWorkflowPreservesNonSkippingReadOnlyRuntimeContract; do
             jq -e -s --arg suite "$suite" 'any(.[]; .Test == $suite and .Action == "pass")' out/release-contracts/tests.jsonl
           done
           cd tools/plugin-release
