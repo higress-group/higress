@@ -217,3 +217,72 @@ func TestManagedCPPWorkflowPreservesNonSkippingReadOnlyRuntimeContract(t *testin
 		t.Fatal("runtime hashing can race deployment availability or select an unready/terminating gateway pod")
 	}
 }
+
+func TestManagedCPPVerifierCallersBindPlanAndPrevious(t *testing.T) {
+	authorization := mustWorkflow(t, "authorize-higress-release-tag.yaml")
+	pluginServer := mustWorkflow(t, "build-plugin-server-from-snapshot.yaml")
+	for _, caller := range []struct {
+		name     string
+		workflow string
+		required []string
+	}{
+		{
+			name:     "gateway-release-commit",
+			workflow: authorization,
+			required: []string{
+				`test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"`,
+				`previous_path="$GITHUB_WORKSPACE/plugins/release/snapshots/$previous.json"`,
+				`previous_path=/tmp/release-bootstrap-previous.json`,
+				`--existing-evidence "../../$marker" --output "$previous_path"`,
+				`test -f "$previous_path"`,
+				`verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan" --previous "$previous_path" --committed-source "$RELEASE_COMMIT" --resolve --oci-source public)`,
+			},
+		},
+		{
+			name:     "gateway-plugin-server-source",
+			workflow: authorization,
+			required: []string{
+				`ref: ${{ inputs.release_commit }}`,
+				`git show "$PLUGIN_SERVER_HIGRESS_COMMIT:$SNAPSHOT_PATH"`,
+				`cmp /tmp/plugin-server-source-snapshot.json "$SNAPSHOT_PATH"`,
+				`verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan" --previous "$previous_path" --committed-source "$PLUGIN_SERVER_HIGRESS_COMMIT" --oci-source public)`,
+			},
+		},
+		{
+			name:     "plugin-server-bootstrap",
+			workflow: pluginServer,
+			required: []string{
+				`test "$(git rev-parse HEAD)" = "$HIGRESS_COMMIT"`,
+				`args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan" --committed-source "$HIGRESS_COMMIT" --resolve --oci-source candidate)`,
+				`if [ -z "$marker" ]; then`,
+				`previous_path="plugins/release/snapshots/$previous.json"`,
+				`test -f "$previous_path"`,
+				`args+=(--previous "../../$previous_path")`,
+				`--existing-evidence "../../$marker" --output /tmp/plugin-server-bootstrap-previous.json)`,
+				`args+=(--previous /tmp/plugin-server-bootstrap-previous.json)`,
+				`(cd tools/plugin-release && go run . "${args[@]}")`,
+			},
+		},
+	} {
+		t.Run(caller.name, func(t *testing.T) {
+			bindings := []string{
+				`test "$(jq -er .gatewayVersion "$SNAPSHOT_PATH")" = "$GATEWAY_VERSION"`,
+				`plan="plugins/release/plans/$GATEWAY_VERSION.json"`,
+				`test -f "$plan"`,
+				`snapshot_source=$(jq -er .sourceCommit "$SNAPSHOT_PATH")`,
+				`test "$(jq -er .gatewayVersion "$plan")" = "$GATEWAY_VERSION"`,
+				`test "$(jq -er .sourceCommit "$plan")" = "$snapshot_source"`,
+				`previous=$(jq -er .previousRelease "$SNAPSHOT_PATH")`,
+				`[[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]`,
+				`marker=$(jq -r '.bootstrapEvidence.path // empty' "$SNAPSHOT_PATH")`,
+				`test -f "$marker"`,
+				`bootstrap-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$previous" --source "$snapshot_source" --existing-evidence "../../$marker"`,
+			}
+			for _, required := range append(bindings, caller.required...) {
+				if !strings.Contains(caller.workflow, required) {
+					t.Fatalf("verifier caller lacks plan/previous contract %q", required)
+				}
+			}
+		})
+	}
+}

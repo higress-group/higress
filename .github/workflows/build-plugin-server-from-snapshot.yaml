@@ -84,13 +84,22 @@ jobs:
           (cd plugin-server && python3 -m unittest test_pull_plugins.py)
           plan="plugins/release/plans/$GATEWAY_VERSION.json"
           test -f "$plan"
+          snapshot_source=$(jq -er .sourceCommit "$SNAPSHOT_PATH")
+          test "$(jq -er .gatewayVersion "$plan")" = "$GATEWAY_VERSION"
+          test "$(jq -er .sourceCommit "$plan")" = "$snapshot_source"
+          previous=$(jq -er .previousRelease "$SNAPSHOT_PATH")
+          [[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan" --committed-source "$HIGRESS_COMMIT" --resolve --oci-source candidate)
-          if [ -z "$(jq -r '.bootstrapEvidence.path // empty' "$SNAPSHOT_PATH")" ]; then
-            previous=$(jq -r '.previousRelease // empty' "$SNAPSHOT_PATH")
-            [[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          marker=$(jq -r '.bootstrapEvidence.path // empty' "$SNAPSHOT_PATH")
+          if [ -z "$marker" ]; then
             previous_path="plugins/release/snapshots/$previous.json"
             test -f "$previous_path"
             args+=(--previous "../../$previous_path")
+          else
+            [[ "$marker" =~ ^plugins/release/bootstrap-evidence/[0-9]+\.[0-9]+\.[0-9]+\.json$ ]]
+            test -f "$marker"
+            (cd tools/plugin-release && go run . bootstrap-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$previous" --source "$snapshot_source" --existing-evidence "../../$marker" --output /tmp/plugin-server-bootstrap-previous.json)
+            args+=(--previous /tmp/plugin-server-bootstrap-previous.json)
           fi
           (cd tools/plugin-release && go run . "${args[@]}")
       - name: Confirm dry-run boundary
