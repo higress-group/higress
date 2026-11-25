@@ -63,6 +63,25 @@ jobs:
           fi
           grep -F 'intentional runner-only propagation probe' ../../out/release-contracts/expected-failure.log
           printf 'failure-propagation=verified\n' > ../../out/release-contracts/propagation.txt
+      - name: Prove stripped-history regression is red on the pinned pre-fix verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=bfdb58a428eed22ccbcb32634841a0fb7264de90
+          path=tools/plugin-release/managed_bindings.go
+          cp "$path" /tmp/managed-bindings-fixed.go
+          trap 'cp /tmp/managed-bindings-fixed.go "$path"; rm -f /tmp/managed-bindings-fixed.go' EXIT
+          git show "$baseline:$path" > "$path"
+          printf 'baseline=%s\nfixed=%s\n' "$baseline" "$EXPECTED_HEAD" > out/release-contracts/history-strip-baseline.txt
+          cd tools/plugin-release
+          if timeout 5m go test -p 1 -parallel 1 -count=1 -run '^TestManagedHistoryCannotDowngradeToLegacyByDeletingAllNewFields$' ./... > ../../out/release-contracts/history-strip-baseline.log 2>&1; then
+            echo 'Pre-fix verifier unexpectedly rejected the history stripping mutation' >&2; exit 1
+          fi
+          grep -F 'deleting all new fields bypassed previous-history binding through legacy compatibility' ../../out/release-contracts/history-strip-baseline.log
+          cd ../..
+          cp /tmp/managed-bindings-fixed.go "$path"
+          git diff --exit-code -- "$path"
+          printf 'baseline=red; fixed=green\n' > out/release-contracts/history-strip-red-green.txt
       - name: Hash evidence
         if: always()
         run: cd out/release-contracts && sha256sum * > SHA256SUMS

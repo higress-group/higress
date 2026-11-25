@@ -337,6 +337,8 @@ func TestManagedHistoryReplansWhenOnlyPreviousHistoryIsPublic(t *testing.T) {
 }
 
 func TestManagedHistoryCannotDowngradeToLegacyByDeletingAllNewFields(t *testing.T) {
+	t.Setenv("GIT_AUTHOR_DATE", "2026-01-02T03:04:05+00:00")
+	t.Setenv("GIT_COMMITTER_DATE", "2026-01-02T03:04:05+00:00")
 	root, _, plan, previous, evidence := historyFixture(t, true)
 	historyRegistry(t, previous, "published")
 	var err error
