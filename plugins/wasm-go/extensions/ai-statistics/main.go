@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -423,19 +424,17 @@ func getToolCallsFromBuffer(buffer *StreamingToolCallsBuffer) []ToolCall {
 		return nil
 	}
 
-	// Find max index to create properly sized slice
-	maxIndex := 0
-	for idx := range buffer.ToolCalls {
-		if idx > maxIndex {
-			maxIndex = idx
+	indexes := make([]int, 0, len(buffer.ToolCalls))
+	for index := range buffer.ToolCalls {
+		if index >= 0 {
+			indexes = append(indexes, index)
 		}
 	}
+	sort.Ints(indexes)
 
-	result := make([]ToolCall, 0, len(buffer.ToolCalls))
-	for i := 0; i <= maxIndex; i++ {
-		if tc, exists := buffer.ToolCalls[i]; exists {
-			result = append(result, *tc)
-		}
+	result := make([]ToolCall, 0, len(indexes))
+	for _, index := range indexes {
+		result = append(result, *buffer.ToolCalls[index])
 	}
 	return result
 }
@@ -1508,10 +1507,10 @@ func setSpanAttribute(key string, value interface{}) {
 
 // isErrorResponse checks whether the LLM response indicates an error.
 // Detects errors by:
-// 1. Response body contains non-null "error" field at root level (OpenAI/Anthropic format).
-//    Handles both raw JSON and SSE "data: " prefixed chunks, including multi-event
-//    streaming buffers.
-// 2. HTTP status code >= 400 as fallback when body is empty.
+//  1. Response body contains non-null "error" field at root level (OpenAI/Anthropic format).
+//     Handles both raw JSON and SSE "data: " prefixed chunks, including multi-event
+//     streaming buffers.
+//  2. HTTP status code >= 400 as fallback when body is empty.
 //
 // Note: some providers (e.g. Anthropic streaming responses) emit {"error":""}
 // even on success; an empty-string error is treated as not-an-error to avoid
