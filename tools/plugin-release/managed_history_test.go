@@ -374,3 +374,54 @@ func TestManagedHistoryCannotDowngradeToLegacyByDeletingAllNewFields(t *testing.
 		t.Fatal("deleting all new fields bypassed previous-history binding through legacy compatibility")
 	}
 }
+
+func TestManagedBindingsCannotStripFirstAdoptionSignals(t *testing.T) {
+	t.Setenv("GIT_AUTHOR_DATE", "2026-01-02T03:04:05+00:00")
+	t.Setenv("GIT_COMMITTER_DATE", "2026-01-02T03:04:05+00:00")
+	t.Run("structured-evidence", func(t *testing.T) {
+		root, _, plan, previous, evidence := historyFixture(t, false)
+		previous.Plugins[0].History = nil
+		mustCanonical(t, filepath.Join(root, "previous.json"), previous)
+		historyRegistry(t, previous, "published")
+		var err error
+		evidence.HistoryEvidence, err = captureHistoryEvidence(root, filepath.Join(root, "previous.json"), plan, previous)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evidencePath := releaseEvidencePath(root, Snapshot{GatewayVersion: plan.GatewayVersion})
+		mustCanonical(t, evidencePath, evidence)
+		snapshot, err := renderSnapshotAtRoot(root, filepath.Join(root, "catalog.json"), filepath.Join(root, "plan.json"), filepath.Join(root, "previous.json"), evidencePath, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshotPath := filepath.Join(root, "snapshot.json")
+		mustCanonical(t, snapshotPath, snapshot)
+		if err := applyPlan(root, plan); err != nil {
+			t.Fatal(err)
+		}
+		mustRun(t, root, "git", "add", ".")
+		mustRun(t, root, "git", "commit", "-qm", "first structured preparation")
+		committed, _ := resolveCommit(root, "HEAD")
+		if err := verifySnapshotBindings(root, filepath.Join(root, "catalog.json"), snapshotPath, filepath.Join(root, "plan.json"), filepath.Join(root, "previous.json"), plan.SourceCommit, committed, false, "candidate"); err != nil {
+			t.Fatal(err)
+		}
+		for index := range snapshot.Plugins {
+			snapshot.Plugins[index].History = nil
+			snapshot.Plugins[index].WasmSHA256 = ""
+		}
+		mustCanonical(t, snapshotPath, snapshot)
+		if err := verifySnapshotBindings(root, filepath.Join(root, "catalog.json"), snapshotPath, filepath.Join(root, "plan.json"), filepath.Join(root, "previous.json"), plan.SourceCommit, committed, false, "candidate"); err == nil {
+			t.Fatal("stripped first structured evidence entered legacy compatibility")
+		}
+	})
+	t.Run("active-cpp-catalog", func(t *testing.T) {
+		root, catalogPath, previousPath, _, _, _, _ := importFixture(t)
+		var catalog Catalog
+		if _, err := readJSON(catalogPath, &catalog); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyManagedBindings(root, catalog, Snapshot{GatewayVersion: "2.1.0"}, "", previousPath, "", false); err == nil {
+			t.Fatal("active C++ catalog entered legacy compatibility without import bindings")
+		}
+	})
+}

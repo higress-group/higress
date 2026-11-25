@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for suite in TestManagedCPPExplicitImportPreservesArtifactSourceAndTuple TestManagedCPPImportFailsClosed TestManagedCPPFixedCatalogStatesAndDirectorySet TestManagedCPPImportedSnapshotVerifiesPreparationAndMergedHeads TestManagedCPPImportCaptureIsReadOnlyAndHasNoBuildFallback TestManagedResolveVerifiesActualOCIManifestAndWasmBytes TestManagedHistoryPublicationMatrix TestManagedHistoryRejectsForgedPublished404InResolve TestManagedHistoryCannotDowngradeToLegacyByDeletingAllNewFields TestManagedHistoryEvidenceRejectsIncompleteOrUnboundRecords TestManagedHistoryStrictSchemaAndCollisions TestManagedCPPMatrixIsCatalogDerivedAndNeverPruned TestManagedCPPMatrixRejectsUnknownSetAndUnpinnedToolchain TestManagedCPPEvidenceFailsClosedOnSkippedNativeMissingBytesAndWrongIdentity TestManagedCPPWorkflowPreservesNonSkippingReadOnlyRuntimeContract; do
+          for suite in TestManagedCPPExplicitImportPreservesArtifactSourceAndTuple TestManagedCPPImportFailsClosed TestManagedCPPFixedCatalogStatesAndDirectorySet TestManagedCPPImportedSnapshotVerifiesPreparationAndMergedHeads TestManagedCPPImportCaptureIsReadOnlyAndHasNoBuildFallback TestManagedResolveVerifiesActualOCIManifestAndWasmBytes TestManagedHistoryPublicationMatrix TestManagedHistoryRejectsForgedPublished404InResolve TestManagedHistoryCannotDowngradeToLegacyByDeletingAllNewFields TestManagedBindingsCannotStripFirstAdoptionSignals TestManagedHistoryEvidenceRejectsIncompleteOrUnboundRecords TestManagedHistoryStrictSchemaAndCollisions TestManagedCPPMatrixIsCatalogDerivedAndNeverPruned TestManagedCPPMatrixRejectsUnknownSetAndUnpinnedToolchain TestManagedCPPEvidenceFailsClosedOnSkippedNativeMissingBytesAndWrongIdentity TestManagedCPPWorkflowPreservesNonSkippingReadOnlyRuntimeContract; do
             jq -e -s --arg suite "$suite" 'any(.[]; .Test == $suite and .Action == "pass")' out/release-contracts/tests.jsonl
           done
           cd tools/plugin-release
@@ -82,6 +82,27 @@ jobs:
           cp /tmp/managed-bindings-fixed.go "$path"
           git diff --exit-code -- "$path"
           printf 'baseline=red; fixed=green\n' > out/release-contracts/history-strip-red-green.txt
+      - name: Prove first-adoption compatibility mutations fail on the fixed verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=16b6561c6fc282808bf9e4a08653cb9d6caa7551
+          path="$GITHUB_WORKSPACE/tools/plugin-release/managed_bindings.go"
+          cp "$path" /tmp/managed-bindings-adoption-fixed.go
+          trap 'cp /tmp/managed-bindings-adoption-fixed.go "$path"; rm -f /tmp/managed-bindings-adoption-fixed.go' EXIT
+          git show "$baseline:tools/plugin-release/managed_bindings.go" > "$path"
+          printf 'baseline=%s\nfixed=%s\n' "$baseline" "$EXPECTED_HEAD" > out/release-contracts/first-adoption-baseline.txt
+          cd tools/plugin-release
+          for mutation in structured-evidence active-cpp-catalog; do
+            if timeout 5m go test -p 1 -parallel 1 -count=1 -run "^TestManagedBindingsCannotStripFirstAdoptionSignals$/$mutation$" ./... > "../../out/release-contracts/first-adoption-$mutation-baseline.log" 2>&1; then
+              echo "Pre-fix verifier unexpectedly rejected $mutation" >&2; exit 1
+            fi
+          done
+          grep -F 'stripped first structured evidence entered legacy compatibility' ../../out/release-contracts/first-adoption-structured-evidence-baseline.log
+          grep -F 'active C++ catalog entered legacy compatibility without import bindings' ../../out/release-contracts/first-adoption-active-cpp-catalog-baseline.log
+          cp /tmp/managed-bindings-adoption-fixed.go "$path"
+          git diff --exit-code -- "$path"
+          printf 'structured-evidence=red/green; active-cpp-catalog=red/green\n' > ../../out/release-contracts/first-adoption-red-green.txt
       - name: Hash evidence
         if: always()
         run: cd out/release-contracts && sha256sum * > SHA256SUMS

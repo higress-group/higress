@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"reflect"
 	"time"
 )
@@ -136,7 +137,22 @@ func verifyManagedBindings(root string, catalog Catalog, snapshot Snapshot, plan
 			return err
 		}
 	}
-	if !hasManagedFields(snapshot) && !hasManagedFields(previous) {
+	managed := hasManagedFields(snapshot) || hasManagedFields(previous)
+	for _, plugin := range catalog.Plugins {
+		managed = managed || plugin.Implementation == "cpp" && plugin.ReleaseEligible
+	}
+	var evidence CandidateEvidenceFile
+	evidencePath := releaseEvidencePath(root, snapshot)
+	evidenceData, evidenceErr := readJSON(evidencePath, &evidence)
+	if evidenceErr == nil {
+		managed = managed || evidence.HistoryEvidence != nil
+		for _, proof := range evidence.Plugins {
+			managed = managed || proof.WasmSHA256 != ""
+		}
+	} else if !errors.Is(evidenceErr, os.ErrNotExist) {
+		return fmt.Errorf("committed merged candidate evidence: %w", evidenceErr)
+	}
+	if !managed {
 		return nil
 	}
 	if planPath == "" || previousPath == "" || committed == "" {
@@ -149,11 +165,8 @@ func verifyManagedBindings(root string, catalog Catalog, snapshot Snapshot, plan
 	if _, err := readJSON(planPath, &plan); err != nil {
 		return err
 	}
-	var evidence CandidateEvidenceFile
-	evidencePath := releaseEvidencePath(root, snapshot)
-	evidenceData, err := readJSON(evidencePath, &evidence)
-	if err != nil {
-		return fmt.Errorf("committed merged candidate evidence: %w", err)
+	if evidenceErr != nil {
+		return fmt.Errorf("committed merged candidate evidence: %w", evidenceErr)
 	}
 	tracked, err := repositoryBytesAtCommit(root, committed, "plugins/release/evidence/"+snapshot.GatewayVersion+".json")
 	if err != nil || !bytes.Equal(tracked, evidenceData) {
