@@ -210,4 +210,10 @@ func TestManagedCPPWorkflowPreservesNonSkippingReadOnlyRuntimeContract(t *testin
 	if !strings.Contains(validation, `$entry.artifactSourceCommit // $plan[0].sourceCommit`) || !strings.Contains(validation, `--committed-source "$PREPARATION_HEAD"`) {
 		t.Fatal("PR validation confuses artifact source with Q")
 	}
+	runtime := string(mustRead(t, "../hack/cpp-managed-run-e2e.sh"))
+	rollout := strings.Index(runtime, "kubectl rollout status --timeout=10m")
+	firstHash := strings.Index(runtime, "\nassert_wasm_hashes\n")
+	if rollout < 0 || firstHash < rollout || !strings.Contains(runtime, `.metadata.deletionTimestamp == null`) || !strings.Contains(runtime, `.ready == true`) {
+		t.Fatal("runtime hashing can race deployment availability or select an unready/terminating gateway pod")
+	}
 }

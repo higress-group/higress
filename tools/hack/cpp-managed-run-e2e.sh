@@ -94,12 +94,14 @@ helm get manifest higress -n higress-system > "$EVIDENCE_DIR/helm-manifest.yaml"
 helm get values higress -n higress-system -o yaml > "$EVIDENCE_DIR/helm-values.yaml"
 kubectl wait --timeout=10m -n higress-system deployment/higress-controller --for=condition=Available
 kubectl wait --timeout=10m -n higress-system deployment/higress-gateway --for=condition=Available
+kubectl rollout restart -n higress-system deployment/higress-gateway
+kubectl rollout status --timeout=10m -n higress-system deployment/higress-gateway
 kubectl get pods -A -o json > "$EVIDENCE_DIR/pods.json"
 kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{"\n"}{range .status.containerStatuses[*]}{.name}{"\t"}{.image}{"\t"}{.imageID}{"\n"}{end}{end}' > "$EVIDENCE_DIR/pod-image-identities.txt"
 
 assert_wasm_hashes() {
   local pod source artifact_hash host_hash gateway_hash
-  pod="$(kubectl get pod -n higress-system -l app=higress-gateway -o jsonpath='{.items[0].metadata.name}')"
+  pod="$(kubectl get pod -n higress-system -l app=higress-gateway -o json | jq -er '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | select(any(.status.containerStatuses[]?; .name == "higress-gateway" and .ready == true))] | if length == 1 then .[0].metadata.name else error("expected one ready, non-terminating gateway pod") end')"
   test -n "$pod"
   : > "$EVIDENCE_DIR/gateway-wasm-hashes.txt"
   for source in "${SOURCES[@]}"; do
