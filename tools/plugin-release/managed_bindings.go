@@ -300,7 +300,7 @@ func commandCaptureHistoryEvidence(args []string) error {
 		if err != nil {
 			return err
 		}
-		if !ok || proof.SourceCommit != source || proof.InputHash != selected.InputHash || !digestPattern.MatchString(proof.Digest) || !registryQualifiedReferencePattern.MatchString(proof.CandidateRef) || !bytes.HasSuffix([]byte(proof.CandidateRef), []byte("@"+proof.Digest)) {
+		if !ok || proof.SourceCommit != source || proof.InputHash != selected.InputHash || !validPinnedCandidateReference(proof.CandidateRef, proof.Digest) {
 			return errors.New("candidate evidence is incomplete or mismatched")
 		}
 		entry := SnapshotEntry{LogicalID: selected.LogicalID, Version: selected.Version, Digest: proof.Digest, SourceCommit: source, InputHash: selected.InputHash, CandidateRef: proof.CandidateRef, WasmSHA256: proof.WasmSHA256, ProvenanceMode: "candidate"}

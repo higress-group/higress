@@ -16,6 +16,17 @@ import (
 
 var wasmHashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+func validPinnedCandidateReference(reference, digest string) bool {
+	if !digestPattern.MatchString(digest) || !strings.HasSuffix(reference, "@"+digest) {
+		return false
+	}
+	unpinned := strings.TrimSuffix(reference, "@"+digest)
+	if strings.HasSuffix(unpinned, ":latest") {
+		return false
+	}
+	return registryQualifiedReferencePattern.MatchString(reference) || registryQualifiedReferencePattern.MatchString(unpinned)
+}
+
 type ProofRef struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
@@ -197,7 +208,7 @@ func loadCandidateImport(root string, proof ProofRef, freeze string, catalog Cat
 			}
 		}
 		if !digestPattern.MatchString(proofEntry.Digest) || proofEntry.SourceCommit != manifest.SourceCommit || proofEntry.InputHash != planned.InputHash ||
-			!registryQualifiedReferencePattern.MatchString(proofEntry.CandidateRef) || !strings.HasSuffix(proofEntry.CandidateRef, "@"+proofEntry.Digest) || snapshotEntry.CandidateRef != proofEntry.CandidateRef || snapshotEntry.Digest != proofEntry.Digest ||
+			!validPinnedCandidateReference(proofEntry.CandidateRef, proofEntry.Digest) || snapshotEntry.CandidateRef != proofEntry.CandidateRef || snapshotEntry.Digest != proofEntry.Digest ||
 			snapshotEntry.Implementation != planned.Implementation || snapshotEntry.SourceDir != planned.SourceDir || snapshotEntry.Image != planned.Image || snapshotEntry.Version != planned.Version ||
 			snapshotEntry.SourceCommit != manifest.SourceCommit || snapshotEntry.InputHash != proofEntry.InputHash || snapshotEntry.OCIRef != catalog.Registry+"/"+planned.Image+":"+planned.Version {
 			return manifest, evidence, fmt.Errorf("%s original candidate tuple mismatch", planned.LogicalID)

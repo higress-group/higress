@@ -17,7 +17,7 @@ import (
 var ociWasmHashResolver = resolveOCIWasmHash
 
 func resolveOCIWasmHash(root string, entry SnapshotEntry, ref string) (string, error) {
-	if !digestPattern.MatchString(entry.Digest) || !registryQualifiedReferencePattern.MatchString(ref) {
+	if !digestPattern.MatchString(entry.Digest) || !registryQualifiedReferencePattern.MatchString(ref) && !validPinnedCandidateReference(ref, entry.Digest) {
 		return "", errors.New("invalid artifact read reference")
 	}
 	repository := strings.Split(ref, "@")[0]

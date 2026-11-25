@@ -243,6 +243,15 @@ func TestManagedContractFailurePropagation(t *testing.T) {
 	}
 }
 
+func TestManagedPinnedCandidateReferenceRetainsOriginalTag(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	for reference, expected := range map[string]bool{"registry.example/candidates/demo:old-plan@" + digest: true, "registry.example/candidates/demo@" + digest: true, "registry.example/candidates/demo:latest@" + digest: false, "registry.example/candidates/demo:old-plan": false} {
+		if validPinnedCandidateReference(reference, digest) != expected {
+			t.Fatalf("pinned reference contract: %s", reference)
+		}
+	}
+}
+
 func TestManagedCPPFirstImportRejectsEachOccupiedDifferentTag(t *testing.T) {
 	for _, id := range sortedCPPIDs() {
 		t.Run(id, func(t *testing.T) {

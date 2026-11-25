@@ -137,7 +137,7 @@ func validateHistoryArtifact(registry, image string, artifact HistoryArtifact) e
 		}
 	case "candidate":
 		if !commitPattern.MatchString(artifact.SourceCommit) || !digestPattern.MatchString(artifact.InputHash) ||
-			!registryQualifiedReferencePattern.MatchString(artifact.CandidateRef) || !strings.HasSuffix(artifact.CandidateRef, "@"+artifact.Digest) {
+			!validPinnedCandidateReference(artifact.CandidateRef, artifact.Digest) {
 			return errors.New("invalid candidate history provenance")
 		}
 		if artifact.CandidateImport != nil {
