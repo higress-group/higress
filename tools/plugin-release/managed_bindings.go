@@ -130,7 +130,13 @@ func hasManagedFields(snapshot Snapshot) bool {
 }
 
 func verifyManagedBindings(root string, catalog Catalog, snapshot Snapshot, planPath, previousPath, committed string, resolve bool) error {
-	if !hasManagedFields(snapshot) {
+	var previous Snapshot
+	if previousPath != "" {
+		if _, err := readJSON(previousPath, &previous); err != nil {
+			return err
+		}
+	}
+	if !hasManagedFields(snapshot) && !hasManagedFields(previous) {
 		return nil
 	}
 	if planPath == "" || previousPath == "" || committed == "" {
@@ -140,11 +146,7 @@ func verifyManagedBindings(root string, catalog Catalog, snapshot Snapshot, plan
 		return err
 	}
 	var plan Plan
-	var previous Snapshot
 	if _, err := readJSON(planPath, &plan); err != nil {
-		return err
-	}
-	if _, err := readJSON(previousPath, &previous); err != nil {
 		return err
 	}
 	var evidence CandidateEvidenceFile

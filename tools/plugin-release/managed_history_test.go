@@ -335,3 +335,40 @@ func TestManagedHistoryReplansWhenOnlyPreviousHistoryIsPublic(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedHistoryCannotDowngradeToLegacyByDeletingAllNewFields(t *testing.T) {
+	root, _, plan, previous, evidence := historyFixture(t, true)
+	historyRegistry(t, previous, "published")
+	var err error
+	evidence.HistoryEvidence, err = captureHistoryEvidence(root, filepath.Join(root, "previous.json"), plan, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := releaseEvidencePath(root, Snapshot{GatewayVersion: plan.GatewayVersion})
+	mustCanonical(t, evidencePath, evidence)
+	snapshot, err := renderSnapshotAtRoot(root, filepath.Join(root, "catalog.json"), filepath.Join(root, "plan.json"), filepath.Join(root, "previous.json"), evidencePath, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotPath := filepath.Join(root, "snapshot.json")
+	mustCanonical(t, snapshotPath, snapshot)
+	if err := applyPlan(root, plan); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, root, "git", "add", ".")
+	mustRun(t, root, "git", "commit", "-qm", "preparation with managed history")
+	committed, _ := resolveCommit(root, "HEAD")
+	if err := verifySnapshotBindings(root, filepath.Join(root, "catalog.json"), snapshotPath, filepath.Join(root, "plan.json"), filepath.Join(root, "previous.json"), plan.SourceCommit, committed, false, "candidate"); err != nil {
+		t.Fatal(err)
+	}
+	for index := range snapshot.Plugins {
+		snapshot.Plugins[index].History = nil
+		snapshot.Plugins[index].WasmSHA256 = ""
+		snapshot.Plugins[index].CandidateImport = nil
+	}
+	snapshot.HistoryImport = nil
+	mustCanonical(t, snapshotPath, snapshot)
+	if err := verifySnapshotBindings(root, filepath.Join(root, "catalog.json"), snapshotPath, filepath.Join(root, "plan.json"), filepath.Join(root, "previous.json"), plan.SourceCommit, committed, false, "candidate"); err == nil {
+		t.Fatal("deleting all new fields bypassed previous-history binding through legacy compatibility")
+	}
+}
