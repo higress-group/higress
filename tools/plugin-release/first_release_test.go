@@ -48,6 +48,9 @@ func TestFirstManagedReleasePlansExactlyFromV223DespiteMissingVersions(t *testin
 	c.SharedInputGroups["cpp-workspace"] = currentCatalog.SharedInputGroups["cpp-workspace"]
 	for _, plugin := range currentCatalog.Plugins {
 		if plugin.Implementation == "cpp" {
+			plugin.ReleaseEligible = false
+			plugin.UnmanagedReason = "historical fixture classification only"
+			plugin.Consumers = PluginConsumers{}
 			c.Plugins = append(c.Plugins, plugin)
 		}
 	}
@@ -58,6 +61,7 @@ func TestFirstManagedReleasePlansExactlyFromV223DespiteMissingVersions(t *testin
 		}
 		for _, item := range inventory {
 			if _, cpp := managedCPPSources[item.Key]; cpp && !seen[item.Key] {
+				item = ConsumerInventory{Key: item.Key, Classification: "unmanaged", Reason: "historical fixture classification only"}
 				c.ConsumerInventories[consumer] = append(c.ConsumerInventories[consumer], item)
 			}
 		}
