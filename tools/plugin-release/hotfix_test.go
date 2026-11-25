@@ -140,6 +140,12 @@ func prepareCPPHotfixFixture(t *testing.T, targetVersion string) (string, string
 		mustWrite(t, filepath.Join(root, source, "plugin.cc"), "// fixture\n")
 		mustWrite(t, filepath.Join(root, source, "VERSION"), "2.0.0\n")
 		catalog.Plugins = append(catalog.Plugins, Plugin{LogicalID: id, Implementation: "cpp", SourceDir: source, Image: "plugins/" + id, ReleaseEligible: false, UnmanagedReason: "hotfix-only", ArtifactInputs: []string{source + "/**"}, SharedInputGroups: []string{"cpp-workspace"}})
+		for _, consumer := range []string{"console", "pluginServer"} {
+			catalog.ConsumerInventories[consumer] = append(catalog.ConsumerInventories[consumer], ConsumerInventory{Key: id, Classification: "unmanaged", Reason: "hotfix-only"})
+		}
+	}
+	for _, source := range excludedCPPSources {
+		mustWrite(t, filepath.Join(root, "plugins/wasm-cpp/extensions", source, ".keep"), "")
 	}
 	catalogPath := filepath.Join(root, "catalog.json")
 	if err := writeCanonical(catalogPath, catalog); err != nil {

@@ -1,0 +1,71 @@
+name: Plugin release contracts
+
+on:
+  pull_request:
+    paths:
+      - 'tools/plugin-release/**'
+      - 'tools/hack/*cpp*'
+      - 'plugins/release/**'
+      - '.github/workflows/*plugin*'
+      - '.github/workflows/*cpp*'
+  push:
+    branches: [main, feat/cpp-managed-release-contracts]
+    paths:
+      - 'tools/plugin-release/**'
+      - 'tools/hack/*cpp*'
+      - 'plugins/release/**'
+      - '.github/workflows/*plugin*'
+      - '.github/workflows/*cpp*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      GOMAXPROCS: '1'
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.24.0'
+      - name: Exact-head serial release-tool tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          mkdir -p out/release-contracts
+          printf '%s\n' "$EXPECTED_HEAD" > out/release-contracts/head.txt
+          cd tools/plugin-release
+          timeout 20m go test -json -p 1 -parallel 1 -count=1 ./... | tee ../../out/release-contracts/tests.jsonl
+          go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json
+      - name: Prove negative tests ran and failures propagate
+        shell: bash
+        run: |
+          set -euo pipefail
+          for suite in TestManagedCPPExplicitImportPreservesArtifactSourceAndTuple TestManagedCPPImportFailsClosed TestManagedCPPFixedCatalogStatesAndDirectorySet TestManagedHistoryPublicationMatrix TestManagedHistoryRejectsForgedPublished404InResolve TestManagedHistoryEvidenceRejectsIncompleteOrUnboundRecords TestManagedHistoryStrictSchemaAndCollisions; do
+            jq -e -s --arg suite "$suite" 'any(.[]; .Test == $suite and .Action == "pass")' out/release-contracts/tests.jsonl
+          done
+          cd tools/plugin-release
+          if PLUGIN_RELEASE_NEGATIVE_PROBE=1 timeout 5m go test -p 1 -parallel 1 -count=1 -run '^TestManagedContractFailurePropagation$' ./... > ../../out/release-contracts/expected-failure.log 2>&1; then
+            echo 'Failure propagation probe unexpectedly passed' >&2; exit 1
+          fi
+          grep -F 'intentional runner-only propagation probe' ../../out/release-contracts/expected-failure.log
+          printf 'failure-propagation=verified\n' > ../../out/release-contracts/propagation.txt
+      - name: Hash evidence
+        if: always()
+        run: cd out/release-contracts && sha256sum * > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: plugin-release-contracts-${{ env.EXPECTED_HEAD }}
+          path: out/release-contracts
+          if-no-files-found: error
