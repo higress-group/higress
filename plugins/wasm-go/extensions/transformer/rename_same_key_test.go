@@ -16,9 +16,10 @@ package main
 
 import (
 	"encoding/json"
+	"testing"
+
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestRenameSameKeyPreservesValue(t *testing.T) {
