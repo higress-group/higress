@@ -46,6 +46,9 @@ type BalanceCheckConfig struct {
 	teamEndpoint          *url.URL
 	teamRouteMode         string
 	teamSettlement        string
+	teamVersionGuardOnly  bool
+	teamPaidPaths         map[string]bool
+	unlistedConfig        *BalanceCheckConfig
 	teamFallback          string
 	teamSigningKey        string
 	teamImageBillingModel string
@@ -63,6 +66,33 @@ func init() {
 }
 
 func parseConfig(json gjson.Result, config *BalanceCheckConfig) error {
+	config.teamVersionGuardOnly = json.Get("teamVersionGuardOnly").Bool()
+	if config.teamVersionGuardOnly {
+		return nil
+	}
+	if paths := json.Get("teamPaidPaths"); paths.Exists() {
+		if !paths.IsArray() || len(paths.Array()) == 0 {
+			return fmt.Errorf("teamPaidPaths requires exact paid paths")
+		}
+		config.teamPaidPaths = make(map[string]bool)
+		for _, item := range paths.Array() {
+			path := item.String()
+			if !strings.HasPrefix(path, "/") {
+				return fmt.Errorf("invalid paid path")
+			}
+			config.teamPaidPaths[path] = true
+		}
+	}
+	if previous := json.Get("teamUnlistedPathConfig"); previous.Exists() {
+		if config.teamPaidPaths == nil || !previous.IsObject() || previous.Get("teamPaidPaths").Exists() || previous.Get("teamUnlistedPathConfig").Exists() {
+			return fmt.Errorf("teamUnlistedPathConfig must be a flat original policy alongside teamPaidPaths")
+		}
+		config.unlistedConfig = new(BalanceCheckConfig)
+		if err := parseConfig(previous, config.unlistedConfig); err != nil {
+			return fmt.Errorf("teamUnlistedPathConfig: %w", err)
+		}
+	}
+
 	teamBilling := json.Get("teamBilling").Bool()
 	config.teamRouteMode = json.Get("teamRouteMode").String()
 	config.teamSettlement = json.Get("teamSettlement").String()
@@ -264,7 +294,46 @@ func shouldSkipPath(path string, skipPaths []string) bool {
 //   header 阶段返回 HeaderStopAllIterationAndWatermark 则会暂停整条 filter chain 的
 //   header + body + trailers,直到本插件显式调用 ResumeHttpRequest() / SendHttpResponse()。
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config BalanceCheckConfig) types.Action {
-	// Skip if plugin is disabled
+	version, versionErr := proxywasm.GetHttpRequestHeader("X-Wujie-Billing-Version")
+	if versionErr != nil && versionErr != types.ErrorStatusNotFound {
+		return teamAdmissionError(http.StatusServiceUnavailable)
+	}
+	marked := versionErr == nil
+	if marked {
+		if version != "2" {
+			return teamAdmissionError(http.StatusBadRequest)
+		}
+		if config.teamRouteMode == "" {
+			return teamAdmissionError(http.StatusServiceUnavailable)
+		}
+	}
+	if config.teamVersionGuardOnly {
+		return types.ActionContinue
+	}
+	if config.teamPaidPaths != nil {
+		raw, err := proxywasm.GetHttpRequestHeader(":path")
+		if err != nil || raw == "" {
+			return teamAdmissionError(http.StatusServiceUnavailable)
+		}
+		path, _, _ := strings.Cut(raw, "?")
+		if !config.teamPaidPaths[path] {
+			if marked || config.teamRouteMode == "strict" {
+				return teamAdmissionError(http.StatusServiceUnavailable)
+			}
+			if config.unlistedConfig != nil {
+				config = *config.unlistedConfig
+			} else {
+				// Older prefix configs contain the legacy balance URL but no policy snapshot.
+				config.teamEndpoint = nil
+			}
+			if _, err := proxywasm.GetHttpRequestHeader(teamUUIDHeader); err != types.ErrorStatusNotFound && (err != nil || config.teamEndpoint == nil) {
+				return teamAdmissionError(http.StatusServiceUnavailable)
+			}
+			if proxywasm.SetProperty([]string{"wasm.teamBillingUnlistedPath"}, []byte("1")) != nil {
+				return teamAdmissionError(http.StatusServiceUnavailable)
+			}
+		}
+	}
 	if config.apiUrl == "" {
 		log.Debugf("ai-balance-check: plugin disabled (no apiUrl)")
 		return types.ActionContinue
@@ -319,6 +388,9 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config BalanceCheckConfig) ty
 			case "strict":
 				return teamAdmissionError(http.StatusBadRequest)
 			case "compat":
+				if marked {
+					return teamAdmissionError(http.StatusBadRequest)
+				}
 				return checkTeamAdmission(ctx, config, nil)
 			}
 		default:
