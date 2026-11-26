@@ -718,6 +718,8 @@ func (b *bedrockProvider) GetApiName(path string) ApiName {
 		return ApiNameChatCompletion
 	case bedrockInvokePathPattern.MatchString(path):
 		return ApiNameImageGeneration
+	case strings.HasSuffix(path, bedrockMantleMessagesPath):
+		return ApiNameAnthropicMessages
 	default:
 		return ""
 	}
