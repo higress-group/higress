@@ -19,6 +19,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	wasmtest "github.com/higress-group/wasm-go/pkg/test"
@@ -169,7 +170,7 @@ func TestProductionDiscoveryAndToolsListResultContracts(t *testing.T) {
 		}
 	})
 
-	t.Run("composed discovery does not advertise tool execution", func(t *testing.T) {
+	t.Run("empty composed discovery omits tool capability", func(t *testing.T) {
 		host, status := wasmtest.NewTestHost(json.RawMessage(`{"toolSet":{"name":"composed","serverTools":[]}}`))
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 		t.Cleanup(host.Reset)
@@ -182,6 +183,54 @@ func TestProductionDiscoveryAndToolsListResultContracts(t *testing.T) {
 		response := host.GetLocalResponse()
 		require.NotNil(t, response)
 		require.False(t, gjson.GetBytes(response.Data, "result.capabilities.tools").Exists())
+	})
+
+	t.Run("composed discovery follows dispatch even with an empty directory", func(t *testing.T) {
+		config := json.RawMessage(`{
+			"toolSet":{"name":"composed","serverTools":[{"serverName":"source","tools":["echo"]}]},
+			"_rules_":[{"_match_domain_":["source.example.test"],"server":{"name":"source"},
+				"tools":[{"name":"echo","description":"echo","requestTemplate":{"url":"/echo","method":"GET"}}]}]
+		}`)
+		for _, tc := range []struct {
+			name, dispatch   string
+			empty, available bool
+		}{
+			{name: "standalone"},
+			{name: "disabled", dispatch: "false"},
+			{name: "invalid dispatch state", dispatch: "invalid"},
+			{name: "enabled with registered tools", dispatch: "true", available: true},
+			{name: "enabled with empty tool set", dispatch: "true", empty: true, available: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rawConfig := config
+				if tc.empty {
+					rawConfig = json.RawMessage(`{"toolSet":{"name":"composed","serverTools":[]}}`)
+				}
+				host, status := wasmtest.NewTestHost(rawConfig)
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				t.Cleanup(host.Reset)
+				host.InitHttp()
+				t.Cleanup(host.CompleteHttp)
+				if tc.dispatch != "" {
+					require.NoError(t, host.SetProperty([]string{consts.MCPRouterToolDispatchEnabled}, []byte(tc.dispatch)))
+				}
+				headers := append(commonHeaders(),
+					[2]string{protocol.HeaderProtocolVersion, string(protocol.Version20260728)},
+					[2]string{protocol.HeaderMethod, "server/discover"},
+					[2]string{consts.MCPRouterToolDispatchEnabled, "true"},
+				)
+				require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+				host.CallOnHttpRequestBody([]byte(modernBody("server/discover")))
+				response := host.GetLocalResponse()
+				require.NotNil(t, response)
+				require.Equal(t, uint32(200), response.StatusCode)
+				tools := gjson.GetBytes(response.Data, "result.capabilities.tools")
+				require.Equal(t, tc.available, tools.Exists())
+				if tc.available {
+					require.JSONEq(t, "{}", tools.Raw)
+				}
+			})
+		}
 	})
 
 	t.Run("legacy shapes unchanged", func(t *testing.T) {

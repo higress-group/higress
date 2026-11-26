@@ -21,4 +21,8 @@ const (
 	// only typed protocol data and never runtime session identifiers.
 	CtxProtocolTransport = "mcp.protocol.transport"
 	CtxProtocolRequest   = "mcp.protocol.request"
+
+	// MCPRouterToolDispatchEnabled is a request-scoped flag shared by
+	// mcp-router and mcp-server during discovery.
+	MCPRouterToolDispatchEnabled = "mcp_router_tool_dispatch_enabled"
 )

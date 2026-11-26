@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
-	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp"
-	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/consts"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -35,6 +37,9 @@ func init() {
 	mcp.LoadMCPFilter(
 		mcp.FilterName("mcp-router"),
 		mcp.SetConfigOverrideParser(ParseGlobalConfig, ParseOverrideConfig),
+		mcp.SetJsonRpcRequestFilter(func(_ wrapper.HttpContext, config any, _ utils.JsonRpcID, method string, _ gjson.Result, _ []byte) types.Action {
+			return markToolDispatchEnabled(config, method, proxywasm.SetProperty)
+		}),
 		mcp.SetToolCallRequestFilter(ProcessRequest),
 	)
 	mcp.InitMCPFilter()
@@ -91,7 +96,20 @@ func ParseOverrideConfig(configBytes []byte, globalConfig any, ruleConfig *any) 
 	return nil
 }
 
-func ProcessRequest(context wrapper.HttpContext, config any, toolName string, toolArgs gjson.Result, rawBody []byte) types.Action {
+// markToolDispatchEnabled tells the following mcp-server filter that the
+// matched rule enables tool dispatch on this discovery request.
+func markToolDispatchEnabled(config any, method string, setProperty func([]string, []byte) error) types.Action {
+	routerConfig, ok := config.(McpRouterConfig)
+	if method == "server/discover" && ok && routerConfig.enable {
+		// If the host cannot set the flag, discovery treats dispatch as absent.
+		if err := setProperty([]string{consts.MCPRouterToolDispatchEnabled}, []byte("true")); err != nil {
+			log.Warnf("Failed to set mcp-router tool dispatch flag: %v", err)
+		}
+	}
+	return types.ActionContinue
+}
+
+func ProcessRequest(context wrapper.HttpContext, config any, toolName string, _ gjson.Result, rawBody []byte) types.Action {
 	routerConfig, ok := config.(McpRouterConfig)
 	if !ok {
 		log.Errorf("Invalid config type for mcp-router")
@@ -126,37 +144,71 @@ func ProcessRequest(context wrapper.HttpContext, config any, toolName string, to
 		return types.ActionContinue
 	}
 
-	log.Infof("Routing to server '%s': domain=[%s], path=[%s]", serverName, targetServer.Domain, targetServer.Path)
-
-	// Modify the :authority header (domain) if it's configured
-	if targetServer.Domain != "" {
-		if err := proxywasm.ReplaceHttpRequestHeader(":authority", targetServer.Domain); err != nil {
-			log.Errorf("Failed to set :authority header to '%s': %v", targetServer.Domain, err)
+	headers, err := proxywasm.GetHttpRequestHeaders()
+	if err != nil {
+		log.Errorf("Failed to read MCP request headers: %v", err)
+		return types.ActionContinue
+	}
+	transport := protocol.NewTransport(context.Method(), context.Host(), headers)
+	request, protocolError := protocol.PrepareModernToolCall(transport, rawBody)
+	if protocolError != nil {
+		var id protocol.ID
+		if request != nil {
+			id = request.Envelope.ID
+		}
+		utils.SendProtocolError(context, id, protocolError, "mcp_modern_request_rejected")
+		return types.ActionContinue
+	}
+	var nameHeader string
+	if request != nil {
+		nameHeader = protocol.EncodeNameHeader(actualToolName)
+		if nameHeader == "" {
+			utils.SendProtocolError(context, request.Envelope.ID, protocol.InvalidParams("tools/call params.name is required"), "mcp_router_invalid_tool_name")
 			return types.ActionContinue
 		}
 	}
 
-	proxywasm.ReplaceHttpRequestHeader("x-envoy-internal-route", "true")
-
-	// Modify the :path header
-	if err := proxywasm.ReplaceHttpRequestHeader(":path", targetServer.Path); err != nil {
-		log.Errorf("Failed to set :path header to '%s': %v", targetServer.Path, err)
-		return types.ActionContinue
-	}
-
-	// Create a new JSON with the modified tool name
 	modifiedBody, err := sjson.SetBytes(rawBody, "params.name", actualToolName)
 	if err != nil {
-		log.Errorf("Failed to modify tool name, body: %s, err: %v", rawBody, err)
+		log.Errorf("Failed to modify MCP tool name: %v", err)
 		return types.ActionContinue
 	}
-	// Replace the request body
-	if err := proxywasm.ReplaceHttpRequestBody([]byte(modifiedBody)); err != nil {
-		log.Errorf("Failed to replace request body: %v", err)
+	log.Infof("Routing to server '%s': domain=[%s], path=[%s]", serverName, targetServer.Domain, targetServer.Path)
+
+	if err := forwardToolCall(targetServer, nameHeader, modifiedBody, proxywasm.ReplaceHttpRequestHeader); err != nil {
+		log.Errorf("Failed to route MCP tool call: %v", err)
+		if request != nil {
+			// A partially rewritten Modern request must never reach a source.
+			utils.SendProtocolError(context, request.Envelope.ID, &protocol.Error{
+				HTTPStatus: 500, Code: protocol.CodeInternalError, Message: "Failed to route MCP tool call",
+			}, "mcp_router_rewrite_failed")
+		}
 		return types.ActionContinue
 	}
 
 	log.Infof("Successfully routed request for tool '%s' to server '%s'. New tool name is '%s'.",
 		toolName, serverName, actualToolName)
 	return types.ActionContinue
+}
+
+// forwardToolCall applies the prepared route and name; Legacy calls have no
+// replacement Mcp-Name header.
+func forwardToolCall(target *ServerConfig, nameHeader string, body []byte, replaceHeader func(string, string) error) error {
+	if target.Domain != "" {
+		if err := replaceHeader(":authority", target.Domain); err != nil {
+			return fmt.Errorf("set authority: %w", err)
+		}
+	}
+	if err := replaceHeader("x-envoy-internal-route", "true"); err != nil {
+		return fmt.Errorf("set internal route marker: %w", err)
+	}
+	if err := replaceHeader(":path", target.Path); err != nil {
+		return fmt.Errorf("set path: %w", err)
+	}
+	if nameHeader != "" {
+		if err := replaceHeader(protocol.HeaderName, nameHeader); err != nil {
+			return fmt.Errorf("set Mcp-Name: %w", err)
+		}
+	}
+	return proxywasm.ReplaceHttpRequestBody(body)
 }
