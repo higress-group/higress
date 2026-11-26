@@ -118,7 +118,9 @@ func checkTeamAdmission(ctx wrapper.HttpContext, config BalanceCheckConfig, team
 	if err != nil {
 		return teamAdmissionError(http.StatusServiceUnavailable)
 	}
-	return types.ActionPause
+	// Keep both headers and body behind admission. HeaderStopIteration alone
+	// allows incoming body data to advance later filters before the callback.
+	return types.HeaderStopAllIterationAndWatermark
 }
 
 const fallbackProofHeader = "X-Wujie-Model-Fallback-Proof"

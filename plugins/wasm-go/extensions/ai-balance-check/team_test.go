@@ -41,7 +41,7 @@ func TestTeamAdmission(t *testing.T) {
 					{":authority", "example.com"},
 					{OriginalAPIKey, "unit-test-key"},
 					{teamUUIDHeader, uuid},
-				}); action != types.ActionPause {
+				}); action != types.HeaderStopAllIterationAndWatermark {
 					t.Fatalf("action = %v", action)
 				}
 				calls := host.GetHttpCalloutAttributes()
@@ -80,7 +80,7 @@ func TestMissingTeamSelectorUsesLegacyBalance(t *testing.T) {
 		if action := host.CallOnHttpRequestHeaders([][2]string{
 			{":authority", "example.com"},
 			{OriginalAPIKey, "unit-test-key"},
-		}); action != types.ActionPause {
+		}); action != types.HeaderStopAllIterationAndWatermark {
 			t.Fatalf("action = %v", action)
 		}
 		calls := host.GetHttpCalloutAttributes()
