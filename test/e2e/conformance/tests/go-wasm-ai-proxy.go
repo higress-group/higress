@@ -1207,6 +1207,52 @@ data: [DONE]
 					},
 				},
 			},
+			{
+				Meta: http.AssertionMeta{
+					TestCaseName:  "bedrock case 1: non-streaming request",
+					CompareTarget: http.CompareTargetResponse,
+				},
+				Request: http.AssertionRequest{
+					ActualRequest: http.Request{
+						Host:        "bedrock-runtime.us-east-1.amazonaws.com",
+						Path:        "/v1/chat/completions",
+						Method:      "POST",
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"model":"gpt-3","messages":[{"role":"user","content":"你好，你是谁？"}],"stream":false}`),
+					},
+				},
+				Response: http.AssertionResponse{
+					ExpectedResponse: http.Response{
+						StatusCode:           200,
+						ContentType:          http.ContentTypeApplicationJson,
+						JsonBodyIgnoreFields: []string{"id", "created", "usage"},
+						Body:                 []byte(`{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"This is a mock response from Bedrock provider. You said: 你好，你是谁？"},"finish_reason":"stop","logprobs":null}],"created":0,"model":"amazon.nova-lite-v1:0","object":"chat.completion","usage":{}}`),
+					},
+				},
+			},
+			{
+				Meta: http.AssertionMeta{
+					TestCaseName:  "bedrock case 2: streaming request",
+					CompareTarget: http.CompareTargetResponse,
+				},
+				Request: http.AssertionRequest{
+					ActualRequest: http.Request{
+						Host:        "bedrock-runtime.us-east-1.amazonaws.com",
+						Path:        "/v1/chat/completions",
+						Method:      "POST",
+						ContentType: http.ContentTypeApplicationJson,
+						Body:        []byte(`{"model":"gpt-3","messages":[{"role":"user","content":"你好，你是谁？"}],"stream":true}`),
+					},
+				},
+				Response: http.AssertionResponse{
+					ExpectedResponse: http.Response{
+						StatusCode: 200,
+						Headers: map[string]string{
+							"Content-Type": "text/event-stream",
+						},
+					},
+				},
+			},
 		}
 		t.Run("WasmPlugins ai-proxy", func(t *testing.T) {
 			for _, testcase := range testcases {
