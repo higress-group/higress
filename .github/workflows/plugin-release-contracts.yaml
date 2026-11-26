@@ -1,0 +1,114 @@
+name: Plugin release contracts
+
+on:
+  pull_request:
+    paths:
+      - 'tools/plugin-release/**'
+      - 'tools/hack/*cpp*'
+      - 'plugins/release/**'
+      - '.github/workflows/*plugin*'
+      - '.github/workflows/*cpp*'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/plugin-release/**'
+      - 'tools/hack/*cpp*'
+      - 'plugins/release/**'
+      - '.github/workflows/*plugin*'
+      - '.github/workflows/*cpp*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      GOMAXPROCS: '1'
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.24.0'
+      - uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20
+        with:
+          version: 1.2.3
+      - name: Exact-head serial release-tool tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          mkdir -p out/release-contracts
+          printf '%s\n' "$EXPECTED_HEAD" > out/release-contracts/head.txt
+          cd tools/plugin-release
+          timeout 20m go test -json -p 1 -parallel 1 -count=1 ./... | tee ../../out/release-contracts/tests.jsonl
+          go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json
+      - name: Prove negative tests ran and failures propagate
+        shell: bash
+        run: |
+          set -euo pipefail
+          for suite in TestManagedCPPExplicitImportPreservesArtifactSourceAndTuple TestManagedCPPImportFailsClosed TestManagedCPPFixedCatalogStatesAndDirectorySet TestManagedCPPImportedSnapshotVerifiesPreparationAndMergedHeads TestManagedCPPImportCaptureIsReadOnlyAndHasNoBuildFallback TestManagedResolveVerifiesActualOCIManifestAndWasmBytes TestManagedHistoryPublicationMatrix TestManagedHistoryRejectsForgedPublished404InResolve TestManagedHistoryCannotDowngradeToLegacyByDeletingAllNewFields TestManagedBindingsCannotStripFirstAdoptionSignals TestManagedHistoryEvidenceRejectsIncompleteOrUnboundRecords TestManagedHistoryStrictSchemaAndCollisions TestManagedCPPMatrixIsCatalogDerivedAndNeverPruned TestManagedCPPMatrixRejectsUnknownSetAndUnpinnedToolchain TestManagedCPPEvidenceFailsClosedOnSkippedNativeMissingBytesAndWrongIdentity TestManagedCPPWorkflowPreservesNonSkippingReadOnlyRuntimeContract; do
+            jq -e -s --arg suite "$suite" 'any(.[]; .Test == $suite and .Action == "pass")' out/release-contracts/tests.jsonl
+          done
+          cd tools/plugin-release
+          if PLUGIN_RELEASE_NEGATIVE_PROBE=1 timeout 5m go test -p 1 -parallel 1 -count=1 -run '^TestManagedContractFailurePropagation$' ./... > ../../out/release-contracts/expected-failure.log 2>&1; then
+            echo 'Failure propagation probe unexpectedly passed' >&2; exit 1
+          fi
+          grep -F 'intentional runner-only propagation probe' ../../out/release-contracts/expected-failure.log
+          printf 'failure-propagation=verified\n' > ../../out/release-contracts/propagation.txt
+      - name: Prove stripped-history regression is red on the pinned pre-fix verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=bfdb58a428eed22ccbcb32634841a0fb7264de90
+          path=tools/plugin-release/managed_bindings.go
+          cp "$path" /tmp/managed-bindings-fixed.go
+          trap 'cp /tmp/managed-bindings-fixed.go "$path"; rm -f /tmp/managed-bindings-fixed.go' EXIT
+          git show "$baseline:$path" > "$path"
+          printf 'baseline=%s\nfixed=%s\n' "$baseline" "$EXPECTED_HEAD" > out/release-contracts/history-strip-baseline.txt
+          cd tools/plugin-release
+          if timeout 5m go test -p 1 -parallel 1 -count=1 -run '^TestManagedHistoryCannotDowngradeToLegacyByDeletingAllNewFields$' ./... > ../../out/release-contracts/history-strip-baseline.log 2>&1; then
+            echo 'Pre-fix verifier unexpectedly rejected the history stripping mutation' >&2; exit 1
+          fi
+          grep -F 'deleting all new fields bypassed previous-history binding through legacy compatibility' ../../out/release-contracts/history-strip-baseline.log
+          cd ../..
+          cp /tmp/managed-bindings-fixed.go "$path"
+          git diff --exit-code -- "$path"
+          printf 'baseline=red; fixed=green\n' > out/release-contracts/history-strip-red-green.txt
+      - name: Prove first-adoption compatibility mutations fail on the fixed verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=16b6561c6fc282808bf9e4a08653cb9d6caa7551
+          path="$GITHUB_WORKSPACE/tools/plugin-release/managed_bindings.go"
+          cp "$path" /tmp/managed-bindings-adoption-fixed.go
+          trap 'cp /tmp/managed-bindings-adoption-fixed.go "$path"; rm -f /tmp/managed-bindings-adoption-fixed.go' EXIT
+          git show "$baseline:tools/plugin-release/managed_bindings.go" > "$path"
+          printf 'baseline=%s\nfixed=%s\n' "$baseline" "$EXPECTED_HEAD" > out/release-contracts/first-adoption-baseline.txt
+          cd tools/plugin-release
+          for mutation in structured-evidence active-cpp-catalog; do
+            if timeout 5m go test -p 1 -parallel 1 -count=1 -run "^TestManagedBindingsCannotStripFirstAdoptionSignals$/$mutation$" ./... > "../../out/release-contracts/first-adoption-$mutation-baseline.log" 2>&1; then
+              echo "Pre-fix verifier unexpectedly rejected $mutation" >&2; exit 1
+            fi
+          done
+          grep -F 'stripped first structured evidence entered legacy compatibility' ../../out/release-contracts/first-adoption-structured-evidence-baseline.log
+          grep -F 'active C++ catalog entered legacy compatibility without import bindings' ../../out/release-contracts/first-adoption-active-cpp-catalog-baseline.log
+          cp /tmp/managed-bindings-adoption-fixed.go "$path"
+          git diff --exit-code -- "$path"
+          printf 'structured-evidence=red/green; active-cpp-catalog=red/green\n' > ../../out/release-contracts/first-adoption-red-green.txt
+      - name: Hash evidence
+        if: always()
+        run: cd out/release-contracts && sha256sum * > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: plugin-release-contracts-${{ env.EXPECTED_HEAD }}
+          path: out/release-contracts
+          if-no-files-found: error

@@ -21,7 +21,7 @@ func readJSON(path string, out any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(data, out); err != nil {
+	if err := strictDecode(data, out); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return data, nil

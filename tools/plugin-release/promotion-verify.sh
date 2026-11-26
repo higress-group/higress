@@ -30,5 +30,12 @@ build_promotion_verify_args() {
         previous_path="plugins/release/snapshots/$previous.json"
         test -f "$previous_path"
         args+=(--previous "../../$previous_path")
+    elif jq -e 'any(.plugins[]; .wasmSha256 != null or .candidateImport != null or .history != null) or .historyImport != null' "$SNAPSHOT_PATH" >/dev/null; then
+        local artifact_freeze marker
+        artifact_freeze=$(jq -er .sourceCommit "$SNAPSHOT_PATH")
+        marker=$(jq -er .bootstrapEvidence.path "$SNAPSHOT_PATH")
+        previous=$(jq -er .previousRelease "$SNAPSHOT_PATH")
+        (cd tools/plugin-release && go run . bootstrap-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$previous" --source "$artifact_freeze" --existing-evidence "../../$marker" --output /tmp/promotion-bootstrap-previous.json)
+        args+=(--previous /tmp/promotion-bootstrap-previous.json)
     fi
 }
