@@ -116,6 +116,8 @@ func TestMigratedRouteBilling(t *testing.T) {
 			wantStatus             uint32
 		}{
 			{"old client gets default team", "compat", "usage", nil, `{"teamId":"42","teamUuid":"` + uuid + `"}`, "{}", 0},
+			{"versioned missing selector", "compat", "usage", nil, "", "", 400},
+			{"versioned explicit team", "compat", "usage", &uuid, `{"teamId":"42","teamUuid":"` + uuid + `"}`, `{"teamUuid":"` + uuid + `"}`, 0},
 			{"new missing selector", "strict", "usage", nil, "", "", 400},
 			{"new explicit team", "strict", "usage", &uuid, `{"teamId":"42","teamUuid":"` + uuid + `"}`, `{"teamUuid":"` + uuid + `"}`, 0},
 			{"legacy account service still deployed", "compat", "usage", nil, `{"teamId":"42","teamUuid":"` + uuid + `","personalOwnerUid":"7"}`, "{}", 503},
@@ -133,6 +135,9 @@ func TestMigratedRouteBilling(t *testing.T) {
 					t.Fatal(status)
 				}
 				headers := [][2]string{{":authority", "a.test"}, {":method", "POST"}, {"x-request-id", "request-42"}, {OriginalAPIKey, "fixture-key"}, {admittedTeamHeader, "999"}, {timestampHeader, "100"}, {signatureHeader, "invalid"}}
+				if tc.name == "versioned missing selector" || tc.name == "versioned explicit team" {
+					headers = append(headers, [2]string{"X-Wujie-Billing-Version", "2"})
+				}
 				if tc.team != nil {
 					headers = append(headers, [2]string{teamUUIDHeader, *tc.team})
 				}
@@ -257,6 +262,30 @@ func TestNativeFallbackKeepsAdmissionAcrossRecreatedStream(t *testing.T) {
 				if value, _ := proxywasm.GetProperty([]string{teamIDProperty}); string(value) != "42" {
 					t.Fatal("target ledger changed")
 				}
+			})
+		}
+	})
+}
+
+func TestVersionOnlyGuard(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, marked := range []bool{false, true} {
+			t.Run(fmt.Sprint(marked), func(t *testing.T) {
+				host, status := test.NewTestHost([]byte(`{"teamVersionGuardOnly":true}`))
+				defer host.Reset()
+				if status != types.OnPluginStartStatusOK {
+					t.Fatal(status)
+				}
+				headers := [][2]string{{":authority", "a.test"}, {":path", "/v1/test"}}
+				if marked {
+					headers = append(headers, [2]string{"X-Wujie-Billing-Version", "2"})
+				}
+				host.CallOnHttpRequestHeaders(headers)
+				got := host.GetLocalResponse()
+				if marked && (got == nil || got.StatusCode != 503) || !marked && got != nil || len(host.GetHttpCalloutAttributes()) != 0 {
+					t.Fatal("unexpected guard decision", marked, got)
+				}
+				host.CompleteHttp()
 			})
 		}
 	})

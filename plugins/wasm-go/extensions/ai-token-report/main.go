@@ -641,7 +641,8 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 		// Admission strips the selector after it has set the team ID. A
 		// selector left on a team route belongs to an unadmitted request.
 		_, selectorErr := proxywasm.GetHttpRequestHeader(teamUUIDHeader)
-		if config.requireTeamID || (config.teamReportCluster != nil && selectorErr == nil) {
+		_, versionErr := proxywasm.GetHttpRequestHeader("X-Wujie-Billing-Version")
+		if versionErr != types.ErrorStatusNotFound || config.requireTeamID || (config.teamReportCluster != nil && selectorErr == nil) {
 			return
 		}
 	}
