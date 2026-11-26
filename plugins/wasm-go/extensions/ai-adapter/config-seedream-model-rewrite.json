@@ -1,0 +1,16 @@
+{
+  "enableRequestTransform": true,
+  "requestBodyRules": [
+    {
+      "uri": "/wj-open/v2/open-platform/task/task_create_sync",
+      "method": "POST",
+      "conditions": [
+        { "path": ["taskCode"], "equals": 2511 },
+        { "path": ["param", "model"], "equals": "doubao-seedream-5-0-lite-260128" }
+      ],
+      "set": [
+        { "path": ["param", "model"], "value": "doubao-seedream-5-0-pro-260628" }
+      ]
+    }
+  ]
+}

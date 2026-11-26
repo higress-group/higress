@@ -19,24 +19,22 @@ const (
 	pluginName = "ai-adapter"
 
 	// 上下文键
-	ctxKeyModel         = "model"
-	ctxKeyProvider      = "provider"
-	ctxKeyMappingIndex  = "mapping_index"
-	ctxKeyOriginalPath  = "original_path"
-	ctxKeyOriginalBody  = "original_body"
+	ctxKeyModel        = "model"
+	ctxKeyProvider     = "provider"
+	ctxKeyMappingIndex = "mapping_index"
+	ctxKeyOriginalPath = "original_path"
+	ctxKeyOriginalBody = "original_body"
 	// 与 ai-proxy/provider/provider.go 中的 CtxKeyApiName 保持一致
-	ctxKeyApiName       = "apiName"
+	ctxKeyApiName = "apiName"
 
 	// 最大 body 大小限制
 	defaultMaxBodyBytes uint32 = 100 * 1024 * 1024
 )
 
-var (
-	// 配置
-	pluginConfig PluginConfig
-)
-
 type PluginConfig struct {
+	// 按 URI 和 JSON 字段匹配的请求体规则，先于原有 body 转换执行。
+	RequestBodyRules []RequestBodyRule `json:"requestBodyRules"`
+
 	// 模型到渠道的映射配置
 	ModelProviderMappings []ModelProviderMapping `json:"modelProviderMappings"`
 
@@ -148,8 +146,8 @@ func init() {
 		wrapper.ParseConfigBy(parseConfig),
 		wrapper.ProcessRequestHeadersBy(onHttpRequestHeaders),
 		wrapper.ProcessRequestBodyBy(onHttpRequestBody),
-// 		wrapper.ProcessResponseHeadersBy(onHttpResponseHeaders),
-// 		wrapper.ProcessResponseBodyBy(onHttpResponseBody),
+		// 		wrapper.ProcessResponseHeadersBy(onHttpResponseHeaders),
+		// 		wrapper.ProcessResponseBodyBy(onHttpResponseBody),
 		wrapper.WithRebuildAfterRequests[PluginConfig](1000),
 		wrapper.WithRebuildMaxMemBytes[PluginConfig](200*1024*1024),
 	)
@@ -157,6 +155,12 @@ func init() {
 
 // parseConfig 解析插件配置
 func parseConfig(json gjson.Result, config *PluginConfig, log log.Log) error {
+	rules, err := parseRequestBodyRules(json.Get("requestBodyRules"))
+	if err != nil {
+		return err
+	}
+	config.RequestBodyRules = rules
+
 	if log != nil {
 		log.Infof("parsing config: %s", json.String())
 	}
@@ -195,9 +199,8 @@ func parseConfig(json gjson.Result, config *PluginConfig, log log.Log) error {
 		config.ImageDownloadServiceName = "wujieai-cdn" // 默认值
 	}
 
-	pluginConfig = *config
 	if log != nil {
-		log.Infof("config loaded: %d mappings, image download service: %s", len(config.ModelProviderMappings), config.ImageDownloadServiceName)
+		log.Infof("config loaded: %d mappings, %d request body rules, image download service: %s", len(config.ModelProviderMappings), len(config.RequestBodyRules), config.ImageDownloadServiceName)
 	}
 
 	return nil
@@ -295,8 +298,8 @@ func parseTransformConfig(json gjson.Result) *TransformConfig {
 		})
 
 		transform.BodyTransform = &BodyTransformConfig{
-			SetValues:    setValues,
-			RemovePaths:  extractStrings(bodyTransformJson.Get("removePaths")),
+			SetValues:   setValues,
+			RemovePaths: extractStrings(bodyTransformJson.Get("removePaths")),
 		}
 	}
 
@@ -354,16 +357,16 @@ func getClusterName(ctx wrapper.HttpContext) string {
 
 // findTransformMappingByProvider 根据 provider 名称查找转换配置
 // 返回匹配的映射配置索引
-func findTransformMappingByProvider(provider string) int {
+func findTransformMappingByProvider(config PluginConfig, provider string) int {
 	// 先精确匹配
-	for i, mapping := range pluginConfig.ModelProviderMappings {
+	for i, mapping := range config.ModelProviderMappings {
 		if mapping.Provider == provider {
 			return i
 		}
 	}
 
 	// 通配符匹配
-	for i, mapping := range pluginConfig.ModelProviderMappings {
+	for i, mapping := range config.ModelProviderMappings {
 		if mapping.Provider == "*" {
 			return i
 		}
@@ -404,12 +407,12 @@ func matchModel(model, pattern string) bool {
 // findTransformMappingByModelAndProvider 根据模型名称和 provider 名称查找转换配置
 // 需要同时匹配模型和 provider
 // 返回匹配的映射配置索引
-func findTransformMappingByModelAndProvider(model, provider string) int {
+func findTransformMappingByModelAndProvider(config PluginConfig, model, provider string) int {
 	log.Debugf("findTransformMappingByModelAndProvider called: model=%s, provider=%s", model, provider)
-	log.Debugf("Available mappings count: %d", len(pluginConfig.ModelProviderMappings))
+	log.Debugf("Available mappings count: %d", len(config.ModelProviderMappings))
 
 	// 先精确匹配 provider，再匹配模型
-	for i, mapping := range pluginConfig.ModelProviderMappings {
+	for i, mapping := range config.ModelProviderMappings {
 		log.Debugf("Checking mapping %d: mapping.Provider=%s, mapping.Model=%s", i, mapping.Provider, mapping.Model)
 		if mapping.Provider == provider {
 			log.Debugf("Provider matched! Checking model: mapping.Model != %s = %v", "", mapping.Model != "")
@@ -429,7 +432,7 @@ func findTransformMappingByModelAndProvider(model, provider string) int {
 	log.Debugf("No exact provider match found, trying wildcard matching")
 
 	// provider 通配符匹配
-	for i, mapping := range pluginConfig.ModelProviderMappings {
+	for i, mapping := range config.ModelProviderMappings {
 		if mapping.Provider == "*" {
 			if mapping.Model != "" && matchModel(model, mapping.Model) {
 				return i
@@ -449,8 +452,8 @@ func findTransformMappingByModelAndProvider(model, provider string) int {
 	return -1
 }
 
-// onHttpRequestHeaders 处理请求头
-func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.Log) types.Action {
+// onLegacyRequestHeaders 处理原有模型/渠道转换的请求头
+func onLegacyRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.Log) types.Action {
 	ctx.DisableReroute()
 
 	// 获取模型名称（用于判断是否需要处理此请求）
@@ -509,7 +512,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.
 
 	// 根据模型和 provider 查找匹配的转换配置
 	// 需要同时匹配模型和 provider
-	mappingIndex := findTransformMappingByModelAndProvider(model, provider)
+	mappingIndex := findTransformMappingByModelAndProvider(config, model, provider)
 	if mappingIndex < 0 {
 		log.Debugf("no transform configured for model: %s and provider: %s", model, provider)
 		ctx.DontReadRequestBody()
@@ -570,6 +573,20 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.
 
 // onHttpRequestBody 处理请求体
 func onHttpRequestBody(ctx wrapper.HttpContext, config PluginConfig, body []byte, log log.Log) types.Action {
+	if rules, ok := ctx.GetContext(ctxKeyBodyRules).([]RequestBodyRule); ok {
+		updated, changed, err := applyRequestBodyRules(body, rules)
+		if err != nil {
+			log.Warnf("request body rule skipped: %v", err)
+		} else if changed {
+			if err := proxywasm.ReplaceHttpRequestBody(updated); err != nil {
+				log.Errorf("failed to replace request body for rule: %v", err)
+			} else {
+				body = updated
+				log.Infof("request body rule applied")
+			}
+		}
+	}
+
 	// 从上下文中获取映射索引（避免重复查找）
 	mappingIndex, ok := ctx.GetContext(ctxKeyMappingIndex).(int)
 	if !ok || mappingIndex < 0 || mappingIndex >= len(config.ModelProviderMappings) {

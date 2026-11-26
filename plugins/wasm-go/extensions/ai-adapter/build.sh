@@ -78,7 +78,7 @@ if [ "$1" = "tinygo" ]; then
         -trim-path \
         -stack-size-bytes=8192 \
         -dump=source \
-        main.go
+        ./
 
     if [ $? -eq 0 ]; then
         echo "✅ Build successful with TinyGo"
