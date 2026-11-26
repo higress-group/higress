@@ -17,9 +17,25 @@ AI Adapter 插件用于解决不同 AI 服务渠道之间的协议差异。通�
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `modelProviderMappings` | 数组 | 是 | 模型到渠道的映射配置 |
+| `modelProviderMappings` | 数组 | 否 | 模型到渠道的映射配置 |
+| `requestBodyRules` | 数组 | 否 | 按 URI、方法和 JSON 字段匹配的请求体修改规则 |
 | `enableRequestTransform` | 布尔 | 否 | 是否启用请求转换 |
 | `enableResponseTransform` | 布尔 | 否 | 是否启用响应转换 |
+
+### RequestBodyRule 配置
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `uri` | 字符串 | 是 | 精确路径，不含查询参数；匹配时忽略请求查询参数 |
+| `method` | 字符串 | 否 | 大写 HTTP 方法，默认 `POST` |
+| `conditions` | 数组 | 是 | 非空，每项包含 `path` 和 `equals`，所有条件同时匹配 |
+| `set` | 数组 | 是 | 非空，每项包含 `path` 和 `value`，只修改已存在的字段 |
+
+`path` 使用非空字符串数组表示对象字段路径，最多 32 层；支持穿过 JSON 字符串，但不支持数组下标。
+`equals` 和 `value` 可为任意 JSON 值（含 `null`），不能省略。比较保留类型及数字表示，不会将 `"2511"` 或 `2511.0` 当作 `2511`。
+配置顺序决定优先级，只执行首条命中的规则；所有写入成功后才更新请求体。
+需要开启 `enableRequestTransform`，并将插件配置在业务接口经过的路由上。
+与原有转换的执行顺序、Content-Type 限制及示例见 README 的“按 URI 和请求字段替换模型”部分和 `config-seedream-model-rewrite.json`。
 
 ### ModelProviderMapping 配置
 

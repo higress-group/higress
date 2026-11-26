@@ -65,6 +65,39 @@ modelProviderMappings:
 
 ## 配置说明
 
+### 按 URI 和请求字段替换模型
+
+新增 `requestBodyRules` 可处理业务任务接口，不依赖 `wasm.requestModel` 或模型渠道映射。
+完整示例见 `config-seedream-model-rewrite.json`，可以把其中的 `requestBodyRules` 合并进已有配置，并启用 `enableRequestTransform`。
+
+```json
+{
+  "enableRequestTransform": true,
+  "requestBodyRules": [{
+    "uri": "/wj-open/v2/open-platform/task/task_create_sync",
+    "method": "POST",
+    "conditions": [
+      {"path": ["taskCode"], "equals": 2511},
+      {"path": ["param", "model"], "equals": "doubao-seedream-5-0-lite-260128"}
+    ],
+    "set": [
+      {"path": ["param", "model"], "value": "doubao-seedream-5-0-pro-260628"}
+    ]
+  }]
+}
+```
+
+- `uri` 精确匹配插件收到的请求路径，忽略查询参数，不支持通配符。`method` 默认 `POST`。
+- `conditions` 全部满足才执行 `set`；规则按配置顺序处理，只执行第一条命中的规则。
+- `path` 是逐层对象字段名数组，最多 32 层。支持穿过 JSON 字符串，写回后仍保留字符串类型；不支持数组下标。字段名中的点按字面处理。
+- 值按 JSON 类型比较：数字 `2511` 不等于字符串 `"2511"`；数字使用原始表示，`2511.0` 不等于 `2511`。大整数不会转成浮点数。
+- 此前任务请求的 `taskCode` 在顶层，因此示例为 `["taskCode"]`；如果实际请求位于 `param` 中，改为 `["param", "taskCode"]` 即可。`param` 是对象或 JSON 字符串均支持。
+- 只处理未带 `Content-Encoding` 的 `application/json` 或 `application/*+json` 请求。无效 JSON、条件字段缺失或不匹配时不修改 body；写入字段必须已存在，任一写入失败则整条规则不写回。
+- 未配置规则时沿用原有流程。URI 和方法命中候选规则的 JSON 请求会缓存 body（沿用 100 MB 上限），并移除 `Content-Length` 由代理处理消息边界，即使最终 body 条件未命中也是如此。
+- 原有头转换仍执行；新规则在原有 body 转换之前执行。若两者修改同一字段，后执行的原有 body 转换会覆盖新规则。新规则不重算已确定的模型路由或 `wasm.requestModel`。
+
+插件必须挂在该任务创建接口实际经过的网关路由上，并在读取请求体的业务处理前执行。如果入口已重写 URI，配置需使用插件看到的路径。修改本地代码和配置不会自动改变已部署插件，需构建并发布新版本后生效。
+
 ### 完整配置结构
 
 ```yaml

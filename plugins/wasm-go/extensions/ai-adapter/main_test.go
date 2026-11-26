@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/tidwall/gjson"
 )
 
@@ -50,9 +52,9 @@ func TestParseConfig(t *testing.T) {
 // 测试模型匹配
 func TestMatchModel(t *testing.T) {
 	tests := []struct {
-		model     string
-		pattern   string
-		expected  bool
+		model    string
+		pattern  string
+		expected bool
 	}{
 		{"gpt-image-2", "gpt-image-2", true},
 		{"gpt-4", "gpt-*", true},
@@ -76,39 +78,39 @@ func TestMatchModel(t *testing.T) {
 // 测试 cluster_name 提取
 func TestExtractClusterName(t *testing.T) {
 	tests := []struct {
-		name              string
-		clusterName       string
-		expectedProvider  string
+		name             string
+		clusterName      string
+		expectedProvider string
 	}{
 		{
-			name:              "Extract RightCodes from standard format",
-			clusterName:       "outbound|443||llm-RightCodes.internal.dns",
-			expectedProvider:  "RightCodes",
+			name:             "Extract RightCodes from standard format",
+			clusterName:      "outbound|443||llm-RightCodes.internal.dns",
+			expectedProvider: "RightCodes",
 		},
 		{
-			name:              "Extract Azure from standard format",
-			clusterName:       "outbound|443||llm-Azure.internal.dns",
-			expectedProvider:  "Azure",
+			name:             "Extract Azure from standard format",
+			clusterName:      "outbound|443||llm-Azure.internal.dns",
+			expectedProvider: "Azure",
 		},
 		{
-			name:              "Extract Qiniu from standard format",
-			clusterName:       "outbound|443||llm-Qiniu.internal.dns",
-			expectedProvider:  "Qiniu",
+			name:             "Extract Qiniu from standard format",
+			clusterName:      "outbound|443||llm-Qiniu.internal.dns",
+			expectedProvider: "Qiniu",
 		},
 		{
-			name:              "Handle cluster name without llm prefix",
-			clusterName:       "outbound|443||RightCodes.internal.dns",
-			expectedProvider:  "RightCodes",
+			name:             "Handle cluster name without llm prefix",
+			clusterName:      "outbound|443||RightCodes.internal.dns",
+			expectedProvider: "RightCodes",
 		},
 		{
-			name:              "Handle cluster name without dot suffix",
-			clusterName:       "outbound|443||llm-RightCodes",
-			expectedProvider:  "RightCodes",
+			name:             "Handle cluster name without dot suffix",
+			clusterName:      "outbound|443||llm-RightCodes",
+			expectedProvider: "RightCodes",
 		},
 		{
-			name:              "Handle cluster name with complex format",
-			clusterName:       "outbound|8080||llm-TestService.prod.example.com",
-			expectedProvider:  "TestService",
+			name:             "Handle cluster name with complex format",
+			clusterName:      "outbound|8080||llm-TestService.prod.example.com",
+			expectedProvider: "TestService",
 		},
 	}
 
@@ -138,7 +140,16 @@ func TestExtractClusterName(t *testing.T) {
 
 // 测试根据模型和 provider 查找转换配置
 func TestFindTransformMappingByModelAndProvider(t *testing.T) {
-	pluginConfig = PluginConfig{
+	// 匹配函数使用宿主日志接口，原生测试也需要初始化该接口。
+	vm := proxywasm.GetVMContext()
+	host, reset := proxytest.NewHostEmulator(proxytest.NewEmulatorOption().WithVMContext(vm))
+	host.RegisterForeignFunction("get_log_level", func([]byte) []byte { return []byte{0, 0, 0, 0} })
+	t.Cleanup(func() {
+		reset()
+		proxywasm.SetVMContext(vm)
+	})
+
+	config := PluginConfig{
 		ModelProviderMappings: []ModelProviderMapping{
 			{Model: "gpt-image-2", Provider: "Azure"},
 			{Model: "gpt-image-2", Provider: "RightCode"},
@@ -148,31 +159,31 @@ func TestFindTransformMappingByModelAndProvider(t *testing.T) {
 	}
 
 	// 精确匹配
-	index := findTransformMappingByModelAndProvider("gpt-image-2", "Azure")
+	index := findTransformMappingByModelAndProvider(config, "gpt-image-2", "Azure")
 	if index != 0 {
 		t.Errorf("Expected index 0 for (gpt-image-2, Azure), got %d", index)
 	}
 
 	// 同一模型不同 provider
-	index = findTransformMappingByModelAndProvider("gpt-image-2", "RightCode")
+	index = findTransformMappingByModelAndProvider(config, "gpt-image-2", "RightCode")
 	if index != 1 {
 		t.Errorf("Expected index 1 for (gpt-image-2, RightCode), got %d", index)
 	}
 
 	// 通配符模型匹配
-	index = findTransformMappingByModelAndProvider("gpt-4", "OpenAI")
+	index = findTransformMappingByModelAndProvider(config, "gpt-4", "OpenAI")
 	if index != 2 {
 		t.Errorf("Expected index 2 for (gpt-4, OpenAI), got %d", index)
 	}
 
 	// 双重通配符匹配
-	index = findTransformMappingByModelAndProvider("unknown-model", "Default")
+	index = findTransformMappingByModelAndProvider(config, "unknown-model", "Default")
 	if index != 3 {
 		t.Errorf("Expected index 3 for (unknown-model, Default), got %d", index)
 	}
 
 	// 不匹配的情况
-	index = findTransformMappingByModelAndProvider("gpt-image-2", "UnknownProvider")
+	index = findTransformMappingByModelAndProvider(config, "gpt-image-2", "UnknownProvider")
 	if index != -1 {
 		t.Errorf("Expected -1 for no match, got %d", index)
 	}

@@ -27,7 +27,7 @@ build-tinygo:
 		-trim-path \
 		-stack-size-bytes=8192 \
 		-dump=source \
-		main.go
+		./
 	@echo "Build successful: main.wasm"
 
 # Default build (use Go 1.24)
