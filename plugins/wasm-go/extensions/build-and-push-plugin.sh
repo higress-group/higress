@@ -103,6 +103,7 @@ COMMIT_ID=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null)
 IMAGE_TAG="${TIMESTAMP}-${COMMIT_ID:-unknown}"
 
 if [ "${SKIP_GIT_GUARD}" != "1" ]; then
+    print_info "检查工作副本和远端源码版本..."
     # 护栏 1：拒绝脏 checkout（已跟踪文件有未提交改动时，无法确定镜像对应哪份源码）
     if [ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
         print_error "工作副本有未提交改动，拒绝构建：请先 commit 或 stash（否则镜像无法对应确定的源码版本）"
@@ -114,7 +115,16 @@ if [ "${SKIP_GIT_GUARD}" != "1" ]; then
     fi
 
     # 护栏 2：拒绝落后远端的 checkout（09-20 事故的直接机制）
-    if [ "${GIT_BRANCH}" != "HEAD" ] && git -C "${REPO_ROOT}" fetch origin "${GIT_BRANCH}" >/dev/null 2>&1 \
+    if [ "${GIT_BRANCH}" != "HEAD" ]; then
+        print_info "获取 origin/${GIT_BRANCH}（连续 30 秒无有效传输将中止；Ctrl+C 取消）..."
+        if ! GIT_TERMINAL_PROMPT=0 git -C "${REPO_ROOT}" \
+            -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
+            fetch --progress origin "${GIT_BRANCH}"; then
+            print_error "远端源码检查失败，拒绝构建。请检查网络或 Git 登录状态后重试。"
+            exit 1
+        fi
+    fi
+    if [ "${GIT_BRANCH}" != "HEAD" ] \
         && git -C "${REPO_ROOT}" rev-parse --verify -q "origin/${GIT_BRANCH}" >/dev/null; then
         BEHIND=$(git -C "${REPO_ROOT}" rev-list --count HEAD..origin/"${GIT_BRANCH}")
         if [ "${BEHIND}" -gt 0 ]; then
@@ -133,7 +143,7 @@ print_info "Higress 插件构建和推送脚本"
 print_info "======================================"
 print_info "插件名称: ${PLUGIN_NAME}"
 print_info "插件目录: ${PLUGIN_DIR}"
-print_info "源码版本: ${BRANCH}@${COMMIT_ID:-unknown}"
+print_info "源码版本: ${GIT_BRANCH}@${COMMIT_ID:-unknown}"
 print_info "版本号: ${IMAGE_TAG}"
 print_info "Dockerfile: ${DOCKERFILE_PATH}"
 print_info "SWR 仓库: ${SWR_REGISTRY}/${SWR_NAMESPACE}/${SWR_IMAGE_NAME}:${IMAGE_TAG}"
