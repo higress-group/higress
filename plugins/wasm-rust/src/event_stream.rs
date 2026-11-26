@@ -38,6 +38,12 @@ impl Iterator for EventStream {
     type Item = Vec<u8>;
     /// Get the next event from the event stream. Return the event data if available, otherwise return None.
     /// CRLF pairs are consumed together, including pairs split across updates.
+    ///
+    /// A delimiter ending in CR at the buffer boundary completes the event
+    /// immediately. Waiting for the next byte to distinguish CR from CRLF
+    /// would delay dispatch when that byte is not LF, or never arrives.
+    /// `update` skips an optional following LF using `skip_lf`, so it does not
+    /// become an extra line ending.
     fn next(&mut self) -> Option<Self::Item> {
         let mut i = self.processed_offset;
 
