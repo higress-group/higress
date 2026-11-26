@@ -351,10 +351,16 @@ func (m *hunyuanProvider) convertChunkFromHunyuanToOpenAI(ctx wrapper.HttpContex
 		return []byte(""), nil
 	}
 
+	return buildOpenAIStreamChunkFromHunyuan(ctx.GetStringContext(ctxKeyFinalRequestModel, ""), hunyuanFormattedChunk), nil
+}
+
+// buildOpenAIStreamChunkFromHunyuan converts one native hunyuan streaming
+// frame into one OpenAI chat.completion.chunk SSE event.
+func buildOpenAIStreamChunkFromHunyuan(model string, hunyuanFormattedChunk *hunyuanTextGenDetailedResponseNonStreaming) []byte {
 	openAIFormattedChunk := &chatCompletionResponse{
 		Id:                hunyuanFormattedChunk.Id,
 		Created:           time.Now().UnixMilli() / 1000,
-		Model:             ctx.GetStringContext(ctxKeyFinalRequestModel, ""),
+		Model:             model,
 		SystemFingerprint: "",
 		Object:            objectChatCompletionChunk,
 		Usage: &usage{
@@ -362,9 +368,18 @@ func (m *hunyuanProvider) convertChunkFromHunyuanToOpenAI(ctx wrapper.HttpContex
 			CompletionTokens: hunyuanFormattedChunk.Usage.CompletionTokens,
 			TotalTokens:      hunyuanFormattedChunk.Usage.TotalTokens,
 		},
+		Choices: make([]chatCompletionChoice, 0),
 	}
 	// tmpStr3, _ := json.Marshal(hunyuanFormattedChunk)
 	// log.Debugf("@@@ --- 源数据是：: %s", tmpStr3)
+
+	// Frames without Choices (e.g. usage-only or error frames of the native
+	// API) carry no delta: keep the converted chunk with an empty choices
+	// list instead of indexing Choices[0], which panicked and leaked the raw
+	// native frame to OpenAI clients (#4893).
+	if len(hunyuanFormattedChunk.Choices) == 0 {
+		return marshalOpenAIStreamChunk(openAIFormattedChunk)
+	}
 
 	// 是否为最后一个chunk？
 	if hunyuanFormattedChunk.Choices[0].FinishReason == hunyuanStreamEndMark {
@@ -391,6 +406,10 @@ func (m *hunyuanProvider) convertChunkFromHunyuanToOpenAI(ctx wrapper.HttpContex
 		// log.Debugf("@@@ --- 中间chunk: choices 是: %s", tmpStr)
 	}
 
+	return marshalOpenAIStreamChunk(openAIFormattedChunk)
+}
+
+func marshalOpenAIStreamChunk(openAIFormattedChunk *chatCompletionResponse) []byte {
 	// 返回的格式
 	openAIFormattedChunkBytes, _ := json.Marshal(openAIFormattedChunk)
 	var openAIChunk strings.Builder
@@ -398,7 +417,7 @@ func (m *hunyuanProvider) convertChunkFromHunyuanToOpenAI(ctx wrapper.HttpContex
 	openAIChunk.WriteString(string(openAIFormattedChunkBytes))
 	openAIChunk.WriteString("\n\n")
 
-	return []byte(openAIChunk.String()), nil
+	return []byte(openAIChunk.String())
 }
 
 func (m *hunyuanProvider) TransformResponseBody(ctx wrapper.HttpContext, apiName ApiName, body []byte) ([]byte, error) {
