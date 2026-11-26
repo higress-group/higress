@@ -13,17 +13,33 @@ spec:
     matchLabels:
       app: higress-gateway
   podMetricsEndpoints:
-    - port: stats-prom
+    - port: istio-prom
       path: /stats/prometheus
       interval: 30s
       scrapeTimeout: 10s
-      # 可选：添加 metricRelabelings 来过滤指标
+      # Keep per-Pod target identity so rate/increase sees each counter reset.
       relabelings:
-        - sourceLabels: [__address__]
-          targetLabel: instance
-          replacement: 'higress-gateway'
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
       metricRelabelings:
-        # 只保留与内存相关的指标（可选）
+        - sourceLabels: [__name__, wujie_source]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: source
+          replacement: '${2}'
+        - sourceLabels: [__name__, wujie_model]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: model
+          replacement: '${2}'
+        - sourceLabels: [__name__, wujie_outcome]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: outcome
+          replacement: '${2}'
+        # Normalize Envoy's version/namespace prefix AFTER bootstrap tag extraction.
         - sourceLabels: [__name__]
-          regex: '.*container_memory.*|.*process_memory.*|.*go_mem.*|.*envoy_memory.*'
-          action: keep
+          regex: '.*wujie_model_(requests|submissions)_total'
+          targetLabel: __name__
+          replacement: 'wujie_model_${1}_total'
+        - action: labeldrop
+          regex: 'wujie_(source|model|outcome)'

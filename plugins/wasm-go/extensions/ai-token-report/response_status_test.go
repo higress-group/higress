@@ -1,0 +1,83 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"testing"
+
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/stretchr/testify/require"
+)
+
+func TestResponseStatusBillingBoundary(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, responseStatus := range []string{"200", "", "400", "401", "402", "403", "429", "502", "503"} {
+			for _, stream := range []bool{false, true} {
+				for _, released := range []bool{false, true} {
+					t.Run(fmt.Sprintf("status=%s/stream=%v/released=%v", responseStatus, stream, released), func(t *testing.T) {
+						host, status := test.NewTestHost(json.RawMessage(`{"reportApiUrl":"https://billing.test/report","reportServiceName":"billing"}`))
+						defer host.Reset()
+						require.Equal(t, types.OnPluginStartStatusOK, status)
+						require.NoError(t, host.SetProperty([]string{"wasm.providerType"}, []byte("openai")))
+						require.NoError(t, host.SetProperty([]string{"wasm.requestModel"}, []byte("test-model")))
+						id := host.InitializeHttpContext()
+						host.CallOnRequestHeaders(id, [][2]string{{":method", "POST"}, {":path", "/v1/chat/completions"}, {":authority", "model.test"}, {"x-original-api-key", "fixture-key"}, {"request-id", "fixture-request"}}, false)
+						contentType := "application/json"
+						if stream {
+							contentType = "text/event-stream"
+						}
+						headers := [][2]string{{"content-type", contentType}}
+						if responseStatus != "" {
+							headers = append(headers, [2]string{":status", responseStatus})
+						}
+						host.CallOnResponseHeaders(id, headers, false)
+						if released && responseStatus != "" {
+							require.NoError(t, proxywasm.RemoveHttpResponseHeader(":status"))
+						}
+						body := []byte(`{"model":"test-model","usage":{"prompt_tokens":9,"completion_tokens":5,"total_tokens":14}}`)
+						if stream {
+							host.CallOnResponseBody(id, append(append([]byte("data: "), body...), []byte("\n\n")...), false)
+							require.Empty(t, host.GetCalloutAttributesFromContext(id))
+							host.CallOnResponseBody(id, []byte("data: [DONE]\n\n"), true)
+						} else {
+							host.CallOnResponseBody(id, body, true)
+						}
+						calls := host.GetCalloutAttributesFromContext(id)
+						if responseStatus == "200" {
+							require.Len(t, calls, 1)
+							var report TokenUsageReportRequest
+							require.NoError(t, json.Unmarshal(calls[0].Body, &report))
+							require.Equal(t, int64(14), report.TotalToken)
+						} else {
+							require.Empty(t, calls, "失败请求不得触发计费上报")
+						}
+						host.CompleteHttpContext(id)
+					})
+				}
+			}
+		}
+	})
+}
+
+func TestSuccessfulZeroTokenImageStillReported(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(json.RawMessage(`{"reportApiUrl":"https://billing.test/report","reportServiceName":"billing"}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+		require.NoError(t, host.SetProperty([]string{"wasm.providerType"}, []byte("openai")))
+		require.NoError(t, host.SetProperty([]string{"wasm.requestModel"}, []byte("image-model")))
+		id := host.InitializeHttpContext()
+		host.CallOnRequestHeaders(id, [][2]string{{":method", "POST"}, {":path", "/v1/images/generations"}, {":authority", "model.test"}, {"x-original-api-key", "fixture-key"}}, false)
+		host.CallOnResponseHeaders(id, [][2]string{{":status", "200"}, {"content-type", "application/json"}}, false)
+		require.NoError(t, proxywasm.RemoveHttpResponseHeader(":status"))
+		host.CallOnResponseBody(id, []byte(`{"data":[{"url":"image.png"}]}`), true)
+		calls := host.GetCalloutAttributesFromContext(id)
+		require.Len(t, calls, 1)
+		var report TokenUsageReportRequest
+		require.NoError(t, json.Unmarshal(calls[0].Body, &report))
+		require.Zero(t, report.TotalToken)
+		host.CompleteHttpContext(id)
+	})
+}

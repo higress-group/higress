@@ -1,0 +1,41 @@
+[
+  {
+    "source_labels": [
+      "__name__",
+      "wujie_source"
+    ],
+    "regex": ".*wujie_model_(requests|submissions)_total;(.+)",
+    "target_label": "source",
+    "replacement": "${2}"
+  },
+  {
+    "source_labels": [
+      "__name__",
+      "wujie_model"
+    ],
+    "regex": ".*wujie_model_(requests|submissions)_total;(.+)",
+    "target_label": "model",
+    "replacement": "${2}"
+  },
+  {
+    "source_labels": [
+      "__name__",
+      "wujie_outcome"
+    ],
+    "regex": ".*wujie_model_(requests|submissions)_total;(.+)",
+    "target_label": "outcome",
+    "replacement": "${2}"
+  },
+  {
+    "source_labels": [
+      "__name__"
+    ],
+    "regex": ".*wujie_model_(requests|submissions)_total",
+    "target_label": "__name__",
+    "replacement": "wujie_model_${1}_total"
+  },
+  {
+    "action": "labeldrop",
+    "regex": "wujie_(source|model|outcome)"
+  }
+]

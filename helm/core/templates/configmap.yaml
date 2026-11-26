@@ -135,7 +135,7 @@ data:
 {{- include "mesh" . }}
 {{- end }}
 ---
-{{- if include "skywalking.enabled" . }}
+{{- if or (include "skywalking.enabled" .) .Values.gateway.modelRequestMetrics }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -146,6 +146,16 @@ metadata:
 data:
   custom_bootstrap.json: |-
     {
+      {{- if .Values.gateway.modelRequestMetrics }}
+      "stats_config": {
+        "stats_tags": [
+          {"tag_name": "wujie_source", "regex": "wujie_model_(?:requests|submissions)_total(\\.wujie_source=([A-Za-z0-9_-]+))"},
+          {"tag_name": "wujie_model", "regex": "wujie_model_(?:requests|submissions)_total\\.wujie_source=[A-Za-z0-9_-]+(\\.wujie_model=([A-Za-z0-9_-]+))"},
+          {"tag_name": "wujie_outcome", "regex": "wujie_model_(?:requests|submissions)_total\\.wujie_source=[A-Za-z0-9_-]+\\.wujie_model=[A-Za-z0-9_-]+(\\.wujie_outcome=([a-z_]+))"}
+        ]
+      }{{ if include "skywalking.enabled" . }},{{ end }}
+      {{- end }}
+      {{- if include "skywalking.enabled" . }}
       "stats_sinks": [
         {
           "name": "envoy.metrics_service",
@@ -160,6 +170,7 @@ data:
           }
         }
       ]
+      {{- end }}
     }
 ---
 {{- end }}

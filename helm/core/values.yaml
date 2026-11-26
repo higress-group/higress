@@ -414,6 +414,9 @@ meshConfig:
   # No hurry to do this in 1.6, we're trying to prove the code.
 
 gateway:
+  # Opt in to source/model/outcome extraction for ai-route-monitor terminal counters.
+  # Requires a gateway restart because stats tags are part of Envoy bootstrap.
+  modelRequestMetrics: false
   name: "higress-gateway"
   # -- Number of Higress Gateway pods
   replicas: 2

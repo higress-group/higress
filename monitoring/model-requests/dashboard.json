@@ -1,0 +1,532 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "选择采集 Higress PodMonitor 的 Prometheus 数据源",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "uid": "wujie-model-requests",
+  "title": "WujieAI 模型小时调用与成功率",
+  "tags": [
+    "wujieai",
+    "OPE-9626"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "Asia/Shanghai",
+  "refresh": "1m",
+  "time": {
+    "from": "now-23h/h",
+    "to": "now/h-1h+1s"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "source",
+        "label": "来源",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(wujie_model_requests_total, source)",
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": {
+          "selected": true,
+          "text": "wujieai",
+          "value": "wujieai"
+        },
+        "options": []
+      },
+      {
+        "name": "model",
+        "label": "模型",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(wujie_model_requests_total{source=~\"$source\"}, model)",
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "统计口径与整点小时",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "默认北京时间最近 24 个完整小时（不含当前未结束小时）。每个点 T 表示 (T-1h,T] 的已结束网关请求，Prometheus increase 为采样估算。成功率 = success / 所有终态；无请求显示无数据，全部失败显示 0%。仅统计已进入监控插件的请求；unknown 计入分母。异步提交独立展示，最终任务结果来自业务任务服务；不以提交成功代表生成成功。改变时间范围时保持整点且至少 1h。"
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "整体模型请求成功率 / 完整小时",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "interval": "1h",
+      "maxDataPoints": 1000,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "无数据",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "showPoints": "always",
+            "pointSize": 5
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "((sum(increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\",outcome=\"success\"}[1h]))) or (0 * (sum(increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\"}[1h]))))) / ((sum(increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\"}[1h]))) > 0)",
+          "legendFormat": "成功率",
+          "range": true,
+          "interval": "1h",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "各模型成功率 / 完整小时",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "interval": "1h",
+      "maxDataPoints": 1000,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "无数据",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "showPoints": "always",
+            "pointSize": 5
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "((sum by (model) (increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\",outcome=\"success\"}[1h]))) or (0 * (sum by (model) (increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\"}[1h]))))) / ((sum by (model) (increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\"}[1h]))) > 0)",
+          "legendFormat": "{{model}}",
+          "range": true,
+          "interval": "1h",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "北京时间整点小时调用量",
+      "description": "sum(increase(...[1h]))，先按每条 Pod/instance 序列计算增量，再汇总。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "interval": "1h",
+      "maxDataPoints": 1000,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "无数据",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "showPoints": "always",
+            "pointSize": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\"}[1h]))",
+          "legendFormat": "已结束请求",
+          "range": true,
+          "interval": "1h",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "各模型小时调用量",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "interval": "1h",
+      "maxDataPoints": 1000,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "无数据",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "showPoints": "always",
+            "pointSize": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (model) (increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\"}[1h]))",
+          "legendFormat": "{{model}}",
+          "range": true,
+          "interval": "1h",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "小时失败分类",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "interval": "1h",
+      "maxDataPoints": 1000,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "无数据",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "showPoints": "always",
+            "pointSize": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\",outcome!=\"success\"}[1h]))",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "interval": "1h",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "未知终态占比",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "interval": "1h",
+      "maxDataPoints": 1000,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "无数据",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "showPoints": "always",
+            "pointSize": 5
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "((sum(increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\",outcome=\"unknown\"}[1h]))) or (0 * (sum(increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\"}[1h]))))) / ((sum(increase(wujie_model_requests_total{source=~\"$source\",model=~\"$model\"}[1h]))) > 0)",
+          "legendFormat": "unknown / total",
+          "range": true,
+          "interval": "1h",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "异步任务提交请求 / 小时（非最终生成结果）",
+      "description": "仅 asyncSubmissionPaths 命中的提交请求。任务轮询必须从监控路由排除；最终任务业务快照见管理端任务统计。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 8
+      },
+      "interval": "1h",
+      "maxDataPoints": 1000,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "无数据",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "showPoints": "always",
+            "pointSize": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (model,outcome) (increase(wujie_model_submissions_total{source=~\"$source\",model=~\"$model\"}[1h]))",
+          "legendFormat": "{{model}} / {{outcome}}",
+          "range": true,
+          "interval": "1h",
+          "intervalFactor": 1
+        }
+      ]
+    }
+  ]
+}

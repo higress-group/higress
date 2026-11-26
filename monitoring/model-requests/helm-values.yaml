@@ -1,0 +1,34 @@
+# Overlay for helm/core. Merge into your release values; review before rollout.
+gateway:
+  modelRequestMetrics: true
+  metrics:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    podMonitorSelector:
+      release: prometheus
+    relabelings:
+      - sourceLabels: [__meta_kubernetes_pod_name]
+        targetLabel: pod
+      - sourceLabels: [__meta_kubernetes_namespace]
+        targetLabel: namespace
+    metricRelabelings:
+        - sourceLabels: [__name__, wujie_source]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: source
+          replacement: '${2}'
+        - sourceLabels: [__name__, wujie_model]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: model
+          replacement: '${2}'
+        - sourceLabels: [__name__, wujie_outcome]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: outcome
+          replacement: '${2}'
+        # Normalize Envoy's version/namespace prefix AFTER bootstrap tag extraction.
+        - sourceLabels: [__name__]
+          regex: '.*wujie_model_(requests|submissions)_total'
+          targetLabel: __name__
+          replacement: 'wujie_model_${1}_total'
+        - action: labeldrop
+          regex: 'wujie_(source|model|outcome)'

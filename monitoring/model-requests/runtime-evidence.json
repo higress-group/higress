@@ -1,0 +1,657 @@
+{
+  "date": "2026-11-04",
+  "host": "wujieai-mac-pkg-34",
+  "context": "colima-ope10117",
+  "image": "higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:2.1.9",
+  "imageDigest": "sha256:d80b4842303ecd082716fbe598ab7744f495a0b8445fa51cab2d6703d32101d3",
+  "architecture": "arm64",
+  "checks": [
+    {
+      "case": "success",
+      "options": {},
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "success"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 5.131165999999965
+    },
+    {
+      "case": "success",
+      "options": {
+        "source": null
+      },
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "unknown",
+            "gpt-4",
+            "success"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 3.540958000000316
+    },
+    {
+      "case": "success",
+      "options": {
+        "source": "arbitrary"
+      },
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "unknown",
+            "gpt-4",
+            "success"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 6.440874999999124
+    },
+    {
+      "case": "http429",
+      "options": {},
+      "httpStatus": 429,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "http_error"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 5.219041000000146
+    },
+    {
+      "case": "http500",
+      "options": {},
+      "httpStatus": 503,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "http_error"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 21.69366700000097
+    },
+    {
+      "case": "sse-normal",
+      "options": {},
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "success"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 63.220292000000455
+    },
+    {
+      "case": "sse-error",
+      "options": {},
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "stream_error"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 59.311125000000686
+    },
+    {
+      "case": "sse-missing",
+      "options": {},
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "unknown"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 32.96316700000013
+    },
+    {
+      "case": "timeout",
+      "options": {},
+      "httpStatus": 504,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "timeout"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 307.74225000000047
+    },
+    {
+      "case": "sse-reset",
+      "options": {},
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "interrupted"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 1029.2584169999993
+    },
+    {
+      "case": "downstream-close",
+      "options": {
+        "close": true
+      },
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "interrupted"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 8.58054200000069
+    },
+    {
+      "case": "retry",
+      "options": {},
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "success"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 33.80220800000089
+    },
+    {
+      "case": "success",
+      "options": {
+        "extra": {
+          "x-test-reject": "yes"
+        }
+      },
+      "httpStatus": 403,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "unknown",
+            "http_error"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 3.4844170000010166
+    },
+    {
+      "case": "success",
+      "options": {
+        "extra": {
+          "x-test-early-reject": "yes"
+        }
+      },
+      "httpStatus": 403,
+      "delta": [],
+      "passed": true,
+      "latencyMs": 2.737624999999966
+    },
+    {
+      "case": "success",
+      "options": {
+        "path": "/v1/tasks"
+      },
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "submissions",
+            "wujieai",
+            "gpt-4",
+            "success"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 10.488416999999473
+    },
+    {
+      "case": "sse-missing",
+      "options": {
+        "path": "/v1/responses"
+      },
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "unknown"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 35.1535829999996
+    },
+    {
+      "case": "sse-normal",
+      "options": {
+        "path": "/v1/responses"
+      },
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "success"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 63.77125000000028
+    },
+    {
+      "case": "sse-fixed-missing",
+      "options": {
+        "path": "/v1/responses"
+      },
+      "httpStatus": 200,
+      "delta": [
+        {
+          "labels": [
+            "requests",
+            "wujieai",
+            "gpt-4",
+            "unknown"
+          ],
+          "value": 1.0
+        }
+      ],
+      "passed": true,
+      "latencyMs": 9.430790999999772
+    },
+    {
+      "case": "report source/legacy fields success-completions",
+      "passed": true,
+      "reports": 3
+    },
+    {
+      "case": "report source/legacy fields sse-normal-completions",
+      "passed": true,
+      "reports": 1
+    },
+    {
+      "case": "upstream retry attempted twice",
+      "passed": true
+    }
+  ],
+  "prometheus": {
+    "version": "2.55.1",
+    "targetHealth": "up",
+    "gatewayEndpoint": "Envoy admin 9901 /stats/prometheus (fixture only)",
+    "canonicalLabels": [
+      "source",
+      "model",
+      "outcome",
+      "instance",
+      "pod",
+      "namespace",
+      "job"
+    ],
+    "dashboardQueries": [
+      {
+        "panel": 2,
+        "expression": "((sum(increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\",outcome=\"success\"}[1h]))) or (0 * (sum(increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\"}[1h]))))) / ((sum(increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\"}[1h]))) > 0)",
+        "result": {
+          "status": "success",
+          "data": {
+            "resultType": "vector",
+            "result": [
+              {
+                "metric": {},
+                "value": [
+                  1793784507.582,
+                  "0.8899586054743341"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        "panel": 3,
+        "expression": "((sum by (model) (increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\",outcome=\"success\"}[1h]))) or (0 * (sum by (model) (increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\"}[1h]))))) / ((sum by (model) (increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\"}[1h]))) > 0)",
+        "result": {
+          "status": "success",
+          "data": {
+            "resultType": "vector",
+            "result": [
+              {
+                "metric": {
+                  "model": "gpt-4"
+                },
+                "value": [
+                  1793784507.587,
+                  "0.8899581852156062"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        "panel": 4,
+        "expression": "sum(increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\"}[1h]))",
+        "result": {
+          "status": "success",
+          "data": {
+            "resultType": "vector",
+            "result": [
+              {
+                "metric": {},
+                "value": [
+                  1793784507.592,
+                  "57.85095154901258"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        "panel": 5,
+        "expression": "sum by (model) (increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\"}[1h]))",
+        "result": {
+          "status": "success",
+          "data": {
+            "resultType": "vector",
+            "result": [
+              {
+                "metric": {
+                  "model": "gpt-4"
+                },
+                "value": [
+                  1793784507.596,
+                  "57.87321260997"
+                ]
+              },
+              {
+                "metric": {
+                  "model": "unknown"
+                },
+                "value": [
+                  1793784507.596,
+                  "0"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        "panel": 6,
+        "expression": "sum by (outcome) (increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\",outcome!=\"success\"}[1h]))",
+        "result": {
+          "status": "success",
+          "data": {
+            "resultType": "vector",
+            "result": [
+              {
+                "metric": {
+                  "outcome": "http_error"
+                },
+                "value": [
+                  1793784507.6,
+                  "0"
+                ]
+              },
+              {
+                "metric": {
+                  "outcome": "stream_error"
+                },
+                "value": [
+                  1793784507.6,
+                  "1.060703827123094"
+                ]
+              },
+              {
+                "metric": {
+                  "outcome": "timeout"
+                },
+                "value": [
+                  1793784507.6,
+                  "1.060703827123094"
+                ]
+              },
+              {
+                "metric": {
+                  "outcome": "unknown"
+                },
+                "value": [
+                  1793784507.6,
+                  "3.182111481369282"
+                ]
+              },
+              {
+                "metric": {
+                  "outcome": "interrupted"
+                },
+                "value": [
+                  1793784507.6,
+                  "1.067467006280356"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        "panel": 7,
+        "expression": "((sum(increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\",outcome=\"unknown\"}[1h]))) or (0 * (sum(increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\"}[1h]))))) / ((sum(increase(wujie_model_requests_total{source=~\"wujieai\",model=~\".*\"}[1h]))) > 0)",
+        "result": {
+          "status": "success",
+          "data": {
+            "resultType": "vector",
+            "result": [
+              {
+                "metric": {},
+                "value": [
+                  1793784507.604,
+                  "0.05496284083138934"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      {
+        "panel": 8,
+        "expression": "sum by (model,outcome) (increase(wujie_model_submissions_total{source=~\"wujieai\",model=~\".*\"}[1h]))",
+        "result": {
+          "status": "success",
+          "data": {
+            "resultType": "vector",
+            "result": [
+              {
+                "metric": {
+                  "model": "gpt-4",
+                  "outcome": "success"
+                },
+                "value": [
+                  1793784507.609,
+                  "1.0878501050570164"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "smallSequentialBenchmark": {
+    "enabled": {
+      "terminalMetrics": true,
+      "samples": [
+        {
+          "case": "success",
+          "requests": 20,
+          "p50Ms": 52.70120850000026,
+          "p95Ms": 59.82395799999907
+        },
+        {
+          "case": "sse-normal",
+          "requests": 20,
+          "p50Ms": 62.508604000001355,
+          "p95Ms": 65.62408299999944
+        }
+      ]
+    },
+    "disabled": {
+      "terminalMetrics": false,
+      "samples": [
+        {
+          "case": "success",
+          "requests": 20,
+          "p50Ms": 52.55289549999986,
+          "p95Ms": 59.03591700000099
+        },
+        {
+          "case": "sse-normal",
+          "requests": 20,
+          "p50Ms": 62.56870849999885,
+          "p95Ms": 65.73283300000021
+        }
+      ]
+    },
+    "enabledResourceSample": [
+      {
+        "BlockIO": "0B / 0B",
+        "CPUPerc": "0.14%",
+        "Container": "ope9626-higress-gateway",
+        "ID": "7e619eab35ba",
+        "MemPerc": "27.50%",
+        "MemUsage": "492.9MiB / 1.75GiB",
+        "Name": "ope9626-higress-gateway",
+        "NetIO": "155kB / 4.18MB",
+        "PIDs": "12"
+      },
+      {
+        "BlockIO": "0B / 1.81MB",
+        "CPUPerc": "0.02%",
+        "Container": "ope9626-higress-mock",
+        "ID": "f9001c66a421",
+        "MemPerc": "10.60%",
+        "MemUsage": "13.56MiB / 128MiB",
+        "Name": "ope9626-higress-mock",
+        "NetIO": "115kB / 59.4kB",
+        "PIDs": "3"
+      }
+    ],
+    "disabledResourceSample": [
+      {
+        "BlockIO": "0B / 0B",
+        "CPUPerc": "0.36%",
+        "Container": "ope9626-higress-gateway",
+        "ID": "c4757a37bdd9",
+        "MemPerc": "27.61%",
+        "MemUsage": "494.8MiB / 1.75GiB",
+        "Name": "ope9626-higress-gateway",
+        "NetIO": "85.9kB / 211kB",
+        "PIDs": "12"
+      },
+      {
+        "BlockIO": "0B / 1.81MB",
+        "CPUPerc": "0.03%",
+        "Container": "ope9626-higress-mock",
+        "ID": "2a197d95009d",
+        "MemPerc": "9.55%",
+        "MemUsage": "12.22MiB / 128MiB",
+        "Name": "ope9626-higress-mock",
+        "NetIO": "85.6kB / 38.6kB",
+        "PIDs": "3"
+      }
+    ],
+    "limitation": "20 samples per payload after 3 warmups; timing includes mock/provider, async report and HTTP connection setup. Single gateway. Not capacity, p99, first-token or startup benchmark; resource snapshot is not peak RSS."
+  },
+  "cleanup": "own gateway/mock/Prometheus containers and network removed, only pre-existing ope10762-real-squad-db remained",
+  "unrun": [
+    "production filter chain",
+    "pilot-agent 15020 merge and Kubernetes PodMonitor discovery",
+    "real multi-Pod restart",
+    "Grafana import/render",
+    "live billing receiver/Kafka/database",
+    "capacity/p99/first-token/startup measurements"
+  ]
+}

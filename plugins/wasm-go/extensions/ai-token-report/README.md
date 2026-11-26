@@ -27,6 +27,15 @@ AI Token Report 插件用于将 AI 服务的 token 使用情况上报到指定�
 |---------|------|------|---------|
 | `reportServiceName` | string | 服务名，用于 DNS 解析 | `default` |
 | `reportTimeout` | integer | 上报超时时间（毫秒） | `5000` |
+| `source.headerName` | string | 请求头回调读取的普通来源 Header（合法 HTTP header token） | `x-wujie-source` |
+| `source.allowedValues` | string[] | 最多 16 个精确来源值；不识别任意请求值 | `[]` |
+| `source.fallbackValue` | string | 缺失或未命中的来源值 | `unknown` |
+
+来源配置语义与 ai-route-monitor 一致，允许值和 fallback 匹配 `[A-Za-z0-9_-]{1,64}`。在 `defaultConfig` 或 `matchRules[].config` 配置；各规则独立解析，请填写完整的上报和 source 配置。不配置 source 的旧配置继续有效，现有上报增加 `productSource:"unknown"`。通用插件不内置任何产品允许值。
+
+来源在请求头回调时保存于当前请求上下文，响应结束时写入原有上报 JSON，后续 path/host/source Header 改写不会改变快照；异步回调不再读取来源。当前 ai-proxy 请求处理未删除该来源头；实际部署仍需核对更早的自定义过滤器是否剥离它，插件无法恢复到达自身之前已被移除的头。
+
+这只补计费来源字段，不增加上报次数，不改变 token 提取、金额、幂等 ID、发送时机、超时/重试或旧业务规则。模型请求成功率继续独立使用 ai-route-monitor，不能按有无用量报告判定成功。
 
 ### 配置示例
 
@@ -42,7 +51,12 @@ AI Token Report 插件用于将 AI 服务的 token 使用情况上报到指定�
 {
   "reportApiUrl": "https://example.com/model/usage/report",
   "reportServiceName": "wujieai",
-  "reportTimeout": 5000
+  "reportTimeout": 5000,
+  "source": {
+    "headerName": "x-wujie-source",
+    "allowedValues": ["wujieai"],
+    "fallbackValue": "unknown"
+  }
 }
 ```
 
@@ -53,6 +67,7 @@ AI Token Report 插件用于将 AI 服务的 token 使用情况上报到指定�
 ```json
 {
   "requestId": "abc1234561710987654",
+  "productSource": "wujieai",
   "model": "gpt-4",
   "userKey": "user_123",
   "inputToken": 1000,
@@ -68,6 +83,7 @@ AI Token Report 插件用于将 AI 服务的 token 使用情况上报到指定�
 | 字段名 | 类型 | 说明 |
 |---------|------|------|
 | `requestId` | string | 请求唯一 ID，优先使用有效 `request-id` header；header 被移除时使用 `wasm.requestId`；未提供时使用有效 Envoy `x-request-id`；均无效时格式为 `{random8位}{timestamp毫秒}` |
+| `productSource` | string | 请求来源快照；新增 camelCase 字段，未命中为配置 fallback（默认 unknown），不按注册来源推断 |
 | `model` | string | 模型名称（从请求体中提取） |
 | `userKey` | string | 用户 Key（从 `X-Original-Api-Key` header 获取） |
 | `inputToken` | integer | 输入 token 数 |
@@ -268,3 +284,10 @@ spec:
 如有问题，请提交 Issue 到 Higress 项目：
 - GitHub: https://github.com/alibaba/higress
 - 官方文档: https://higress.io/
+
+## 团队用量上报
+
+在迁移后的聊天和实际出图路由设置 `requireTeamId: true`，并将 `teamReportService`
+设为已在 Higress 注册的 Open Platform 内部服务（例如 `onepiece-open-platform-internal.dns`，端口 8080）。
+插件从同一请求的 `wasm.teamId` 读取已准入的内部团队 ID，向 `/internal/model/usage/team-report` 上报。
+缺少团队归属或 HTTP 响应失败时跳过上报。Banana 使用出图路由配置的价格模型，成功返回图片且没有 token 时也会产生用量事件。

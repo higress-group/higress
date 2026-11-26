@@ -1,0 +1,34 @@
+# Review namespace, ingress names, image URL and model allowlist before use.
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-route-monitor
+  namespace: higress-system
+spec:
+  # Replace with the reviewed OCI artifact; no image is published by this task.
+  url: oci://REGISTRY/ai-route-monitor:REVIEWED_VERSION
+  phase: AUTHN
+  priority: 100
+  defaultConfig:
+    legacyMetrics: true
+    terminalMetrics: false
+    source:
+      headerName: x-wujie-source
+      allowedValues: [wujieai]
+      fallbackValue: unknown
+  matchRules:
+    - ingress: [REPLACE_WITH_GENERATION_INGRESS]
+      config:
+        legacyMetrics: true
+        terminalMetrics: true
+        source:
+          headerName: x-wujie-source
+          allowedValues: [wujieai]
+          fallbackValue: unknown
+        models:
+          # Exact wasm.requestModel values; all other values become unknown.
+          allowedValues: [gpt-4]
+          fallbackValue: unknown
+        # Add actual async SUBMISSION paths after reviewing route ownership.
+        # Polling/status routes must be excluded from this match rule.
+        asyncSubmissionPaths: []

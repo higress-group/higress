@@ -1,0 +1,56 @@
+# Run: promtool test rules monitoring/model-requests/queries.test.yaml
+rule_files: []
+evaluation_interval: 1m
+tests:
+  - name: per-instance reset before aggregation
+    interval: 20m
+    input_series:
+      - series: 'wujie_model_requests_total{source="wujieai",model="gpt-4",outcome="success",instance="a",pod="a"}'
+        values: '0 10 20 0 10'
+      - series: 'wujie_model_requests_total{source="wujieai",model="gpt-4",outcome="success",instance="b",pod="b"}'
+        values: '0 1 2 3 4'
+    promql_expr_test:
+      - expr: sum(increase(wujie_model_requests_total{source="wujieai"}[1h]))
+        eval_time: 81m
+        exp_samples:
+          - labels: '{}'
+            value: 18
+      - expr: (sum(increase(wujie_model_requests_total{source="wujieai",outcome="success"}[1h])) or (0 * sum(increase(wujie_model_requests_total{source="wujieai"}[1h])))) / (sum(increase(wujie_model_requests_total{source="wujieai"}[1h])) > 0)
+        eval_time: 81m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+  - name: all failed is zero percent, unknown included in denominator
+    interval: 1m
+    input_series:
+      - series: 'wujie_model_requests_total{source="wujieai",model="gpt-4",outcome="http_error",instance="a"}'
+        values: '0+1x60'
+      - series: 'wujie_model_requests_total{source="wujieai",model="gpt-4",outcome="unknown",instance="a"}'
+        values: '0+1x60'
+    promql_expr_test:
+      - expr: (sum(increase(wujie_model_requests_total{source="wujieai",outcome="success"}[1h])) or (0 * sum(increase(wujie_model_requests_total{source="wujieai"}[1h])))) / (sum(increase(wujie_model_requests_total{source="wujieai"}[1h])) > 0)
+        eval_time: 1h
+        exp_samples:
+          - labels: '{}'
+            value: 0
+      - expr: sum(increase(wujie_model_requests_total{source="wujieai",outcome="unknown"}[1h])) / sum(increase(wujie_model_requests_total{source="wujieai"}[1h]))
+        eval_time: 1h
+        exp_samples:
+          - labels: '{}'
+            value: 0.5
+  - name: zero traffic is no data
+    interval: 1m
+    input_series:
+      - series: 'wujie_model_requests_total{source="wujieai",model="gpt-4",outcome="success",instance="a"}'
+        values: '0+0x60'
+    promql_expr_test:
+      - expr: (sum(increase(wujie_model_requests_total{source="wujieai",outcome="success"}[1h])) or (0 * sum(increase(wujie_model_requests_total{source="wujieai"}[1h])))) / (sum(increase(wujie_model_requests_total{source="wujieai"}[1h])) > 0)
+        eval_time: 1h
+        exp_samples: []
+  - name: absent traffic is no data
+    interval: 1m
+    input_series: []
+    promql_expr_test:
+      - expr: (sum(increase(wujie_model_requests_total{source="wujieai",outcome="success"}[1h])) or (0 * sum(increase(wujie_model_requests_total{source="wujieai"}[1h])))) / (sum(increase(wujie_model_requests_total{source="wujieai"}[1h])) > 0)
+        eval_time: 1h
+        exp_samples: []

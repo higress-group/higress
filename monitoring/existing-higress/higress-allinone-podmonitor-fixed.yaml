@@ -1,3 +1,5 @@
+# Alternative examples of the SAME resource: apply only one.
+# Confirm containerPort 15020 is declared on the selected Pods before applying.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -7,26 +9,37 @@ metadata:
     app: higress-allinone
     release: prometheus
 spec:
-  podMetricsEndpoints:
-  - interval: 30s
-    path: /stats/prometheus
-    port: stats-prom  # 这个端口名来自 Service，不是 Pod
-    scheme: http
-    scrapeTimeout: 10s
-    relabelings:
-    # 使用 Service IP 而不是 Pod IP
-    - sourceLabels: [__address__]
-      targetLabel: __address__
-      replacement: higress-allinone-metrics.agent.svc.cluster.local:15020
-    # 添加实例标签
-    - replacement: higress-allinone
-      targetLabel: instance
-    # 添加 Pod 名称
-    - sourceLabels: [__meta_kubernetes_pod_name]
-      targetLabel: pod
-    # 添加命名空间
-    - sourceLabels: [__meta_kubernetes_namespace]
-      targetLabel: namespace
   selector:
     matchLabels:
       app: higress-allinone
+  podMetricsEndpoints:
+    - targetPort: 15020
+      path: /stats/prometheus
+      interval: 30s
+      scrapeTimeout: 10s
+      scheme: http
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+      metricRelabelings:
+        - sourceLabels: [__name__, wujie_source]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: source
+          replacement: '${2}'
+        - sourceLabels: [__name__, wujie_model]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: model
+          replacement: '${2}'
+        - sourceLabels: [__name__, wujie_outcome]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: outcome
+          replacement: '${2}'
+        # Normalize Envoy's version/namespace prefix AFTER bootstrap tag extraction.
+        - sourceLabels: [__name__]
+          regex: '.*wujie_model_(requests|submissions)_total'
+          targetLabel: __name__
+          replacement: 'wujie_model_${1}_total'
+        - action: labeldrop
+          regex: 'wujie_(source|model|outcome)'

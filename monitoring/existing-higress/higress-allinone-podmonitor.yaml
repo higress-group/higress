@@ -1,6 +1,5 @@
-# Higress All-in-One PodMonitor
-# 用于 Prometheus Operator 采集 Higress all-in-one 的监控指标
-
+# Alternative examples of the SAME resource: apply only one.
+# Confirm containerPort 15020 is declared on the selected Pods before applying.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -14,18 +13,33 @@ spec:
     matchLabels:
       app: higress-allinone
   podMetricsEndpoints:
-    # 15020: pilot-agent stats/prometheus 端口（推荐）
-    - port: stats-prom
+    - targetPort: 15020
       path: /stats/prometheus
       interval: 30s
       scrapeTimeout: 10s
       scheme: http
       relabelings:
-        - sourceLabels: [__address__]
-          targetLabel: instance
-          replacement: 'higress-allinone'
         - sourceLabels: [__meta_kubernetes_pod_name]
           targetLabel: pod
         - sourceLabels: [__meta_kubernetes_namespace]
           targetLabel: namespace
-      # 移除 metricRelabelings 过滤，保留所有指标（包括 container_memory）
+      metricRelabelings:
+        - sourceLabels: [__name__, wujie_source]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: source
+          replacement: '${2}'
+        - sourceLabels: [__name__, wujie_model]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: model
+          replacement: '${2}'
+        - sourceLabels: [__name__, wujie_outcome]
+          regex: '.*wujie_model_(requests|submissions)_total;(.+)'
+          targetLabel: outcome
+          replacement: '${2}'
+        # Normalize Envoy's version/namespace prefix AFTER bootstrap tag extraction.
+        - sourceLabels: [__name__]
+          regex: '.*wujie_model_(requests|submissions)_total'
+          targetLabel: __name__
+          replacement: 'wujie_model_${1}_total'
+        - action: labeldrop
+          regex: 'wujie_(source|model|outcome)'

@@ -242,3 +242,19 @@ Apache License 2.0
 ## Support
 
 For issues and questions, please refer to the Higress documentation and community support.
+
+## 团队计费路由
+
+在鉴权之后、模型转发之前运行余额检查。迁移后的路由设置 `teamBilling: true`，
+将 `teamApiUrl` 指向与现有 `apiUrl` 同源的 RedLine 团队准入接口。插件使用调用者原 API Key 校验团队。
+
+| 配置 | 行为 |
+| --- | --- |
+| `teamRouteMode: strict` | 新入口要求有效的 `X-Wujie-Team-Id`。 |
+| `teamRouteMode: compat` | 旧入口有团队头时使用该团队，省略时由 Claw 解析调用者自己的默认团队。 |
+| `teamSettlement: usage` | 聊天将准入确认的内部团队 ID 交给用量上报插件。 |
+| `teamSettlement: forward` | Banana 建单将已确认的公开团队 UUID 转交 Open Platform，由其使用原 API Key 再次校验。 |
+| `teamSettlement: image` | 实际出图路由通过 `teamImageBillingModel` 指定 Account 定价使用的模型。 |
+
+首批聊天和 Banana 使用上述三种结算配置，无需新增签名密钥。仅在实际聊天和出图路由启用用量上报。
+成员或余额校验失败分别返回 HTTP 422 的 `team_access_denied` 或 `team_credits_unavailable`。

@@ -1,11 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
-	"errors"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -24,7 +24,7 @@ const (
 	StartTimeKey  = "ai-route-monitor-start-time"
 	StatusCodeKey = "status_code"
 	UrlKey        = "url"
-	APIName                    = "api"
+	APIName       = "api"
 )
 
 const (
@@ -37,14 +37,14 @@ const (
 	MetricDurationCount   = "llm_duration_count"
 
 	// 非200错误异常监控指标
-	MetricErrorCount      = "error_count"
-	MetricErrorCode       = "error_code"
-	MetricErrorType       = "error_type"
+	MetricErrorCount = "error_count"
+	MetricErrorCode  = "error_code"
+	MetricErrorType  = "error_type"
 )
 
 const (
 	// 错误分类类别
-	ErrorCategoryRateLimit        = "rate_limit"
+	ErrorCategoryRateLimit         = "rate_limit"
 	ErrorCategoryAuth              = "auth"
 	ErrorCategoryInvalidRequest    = "invalid_request"
 	ErrorCategoryServerError       = "server_error"
@@ -65,23 +65,34 @@ func init() {
 		wrapper.ProcessRequestHeadersBy(onHttpRequestHeaders),
 		wrapper.ProcessResponseHeadersBy(onHttpResponseHeaders),
 		wrapper.ProcessResponseBodyBy(onHttpResponseBody),
+		wrapper.ProcessStreamingResponseBodyBy(onStreamingResponseBody),
+		wrapper.ProcessStreamDoneBy(onStreamDone),
 	)
 }
 
 // RouteMonitorConfig 路由监控插件配置
 type RouteMonitorConfig struct {
 	// Prometheus 监控指标计数器（懒初始化）
-	counterMetrics map[string]proxywasm.MetricCounter
+	counterMetrics       map[string]proxywasm.MetricCounter
+	legacyMetrics        bool
+	terminalMetrics      bool
+	source               dimensionConfig
+	models               dimensionConfig
+	asyncSubmissionPaths map[string]bool
 }
 
 // parseConfig 解析插件配置
 func parseConfig(json gjson.Result, config *RouteMonitorConfig, log log.Log) error {
+	if !json.IsObject() {
+		return fmt.Errorf("configuration must be a JSON object")
+	}
 	config.counterMetrics = make(map[string]proxywasm.MetricCounter)
-	return nil
+	return parseTerminalConfig(json, config)
 }
 
 // onHttpRequestHeaders 处理请求头，提取维度信息并记录开始时间
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config RouteMonitorConfig, log log.Log) types.Action {
+	startTerminalRequest(ctx, config)
 	ctx.DisableReroute()
 
 	// 获取路由名称
@@ -89,14 +100,14 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config RouteMonitorConfig, lo
 	ctx.SetContext(RouteName, route)
 
 	api, apiError := getAPIName()
-    if apiError == nil {
-        route = api
-    }
+	if apiError == nil {
+		route = api
+	}
 	ctx.SetUserAttribute(APIName, api)
 
-// 	// 获取 upstream cluster 名称（原始值，用于 metric 维度中的 cluster 字段）
+	// 	// 获取 upstream cluster 名称（原始值，用于 metric 维度中的 cluster 字段）
 	cluster := getRawClusterName()
-// 	ctx.SetContext(ClusterName, cluster)
+	// 	ctx.SetContext(ClusterName, cluster)
 
 	// 获取服务提供者名称（从 cluster_name 解析，用于 metric 维度中的 upstream 字段）
 	provider := parseProviderName(cluster)
@@ -129,8 +140,17 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config RouteMonitorConfig, lo
 
 // onHttpResponseHeaders 处理响应头，记录监控指标
 func onHttpResponseHeaders(ctx wrapper.HttpContext, config RouteMonitorConfig, log log.Log) types.Action {
+	observeResponseHeaders(ctx)
+	if !config.legacyMetrics {
+		if terminalState(ctx) == nil {
+			ctx.DontReadResponseBody()
+		}
+		return types.ActionContinue
+	}
 	if !wrapper.IsResponseFromUpstream() {
-		ctx.DontReadResponseBody()
+		if terminalState(ctx) == nil {
+			ctx.DontReadResponseBody()
+		}
 		return types.ActionContinue
 	}
 
@@ -138,14 +158,18 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config RouteMonitorConfig, l
 	statusCodeStr, err := proxywasm.GetHttpResponseHeader(":status")
 	if err != nil {
 		log.Debugf("failed to get response status code: %v", err)
-		ctx.DontReadResponseBody()
+		if terminalState(ctx) == nil {
+			ctx.DontReadResponseBody()
+		}
 		return types.ActionContinue
 	}
 
 	statusCode, err := strconv.Atoi(statusCodeStr)
 	if err != nil {
 		log.Debugf("failed to parse status code: %v, value: %q", err, statusCodeStr)
-		ctx.DontReadResponseBody()
+		if terminalState(ctx) == nil {
+			ctx.DontReadResponseBody()
+		}
 		return types.ActionContinue
 	}
 
@@ -155,12 +179,17 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config RouteMonitorConfig, l
 	// 非200错误需要读取响应体提取错误信息分类
 	if isErrorCode(statusCode) {
 		ctx.SetContext(StatusCodeKey, statusCode)
+		// Preserve the legacy buffered error-classification path. Successful SSE
+		// stays incremental; error responses were already buffered by this plugin.
+		ctx.BufferResponseBody()
 		ctx.SetResponseBodyBufferLimit(10 * 1024) // 限制 10KB
 		return types.ActionContinue
 	}
 
 	// 正常响应不需要读取响应体
-	ctx.DontReadResponseBody()
+	if terminalState(ctx) == nil {
+		ctx.DontReadResponseBody()
+	}
 	return types.ActionContinue
 }
 
@@ -215,6 +244,12 @@ func writeMetric(ctx wrapper.HttpContext, config RouteMonitorConfig, statusCode 
 
 // onHttpResponseBody 处理错误响应体，提取错误信息并分类
 func onHttpResponseBody(ctx wrapper.HttpContext, config RouteMonitorConfig, body []byte, log log.Log) types.Action {
+	if state := terminalState(ctx); state != nil {
+		state.observeBody(body, true)
+	}
+	if !config.legacyMetrics {
+		return types.ActionContinue
+	}
 	if !wrapper.IsResponseFromUpstream() {
 		return types.ActionContinue
 	}

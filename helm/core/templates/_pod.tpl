@@ -125,7 +125,7 @@ template:
         {{- end }}
         - name: ISTIO_DELTA_XDS
           value: "{{ .Values.global.enableDeltaXDS }}"
-        {{- if include "skywalking.enabled" . }}
+        {{- if or (include "skywalking.enabled" .) .Values.gateway.modelRequestMetrics }}
         - name: ISTIO_BOOTSTRAP_OVERRIDE
           value: /etc/istio/custom-bootstrap/custom_bootstrap.json
         {{- end }}
@@ -190,7 +190,7 @@ template:
           mountPath: /etc/istio/pod
         - name: proxy-socket
           mountPath: /etc/istio/proxy
-        {{- if include "skywalking.enabled" . }}
+        {{- if or (include "skywalking.enabled" .) .Values.gateway.modelRequestMetrics }}
         - mountPath: /etc/istio/custom-bootstrap
           name: custom-bootstrap-volume
         {{- end }}
@@ -278,7 +278,7 @@ template:
     - name: config
       configMap:
         name: higress-config
-    {{- if include "skywalking.enabled" . }}
+    {{- if or (include "skywalking.enabled" .) .Values.gateway.modelRequestMetrics }}
     - configMap:
         defaultMode: 420
         name: higress-custom-bootstrap

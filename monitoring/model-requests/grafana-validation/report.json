@@ -1,0 +1,1323 @@
+{
+  "date": "2026-11-05",
+  "issue": "OPE-11003",
+  "baselineCommit": "e8c361ebe9a109304379653f5f6e7bd7915d05ed",
+  "host": "wujieai-mac-pkg-34",
+  "architecture": "arm64",
+  "grafana": {
+    "version": "11.3.0",
+    "imageDigest": "sha256:a0f881232a6fb71a0554a47d0fe2203b6888fe77f4cefb7ea62bed7eb54e13c3",
+    "datasource": "Real Prometheus2.55.1; DS_PROMETHEUS import input mapped to ope11003-prometheus",
+    "anonymousAccess": false,
+    "login": "actual browser form, random task credential deleted"
+  },
+  "browser": {
+    "browser": "native Google Chrome headless on remote Mac",
+    "version": {
+      "protocolVersion": "1.3",
+      "product": "Chrome/156.0.8078.80",
+      "revision": "@fb096c0011f9d50f0a264a9376420cdea9c421e3",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+      "jsVersion": "15.6.75.27"
+    },
+    "checks": [
+      {
+        "name": "real browser authenticated login",
+        "passed": true
+      },
+      {
+        "name": "02-baseline-hours real panels rendered",
+        "passed": true,
+        "detail": [
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 341,
+              "width": 612,
+              "height": 214,
+              "top": 341,
+              "right": 937,
+              "bottom": 555,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 341,
+              "width": 612,
+              "height": 214,
+              "top": 341,
+              "right": 1575,
+              "bottom": 555,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 645,
+              "width": 612,
+              "height": 214,
+              "top": 645,
+              "right": 937,
+              "bottom": 859,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 645,
+              "width": 612,
+              "height": 214,
+              "top": 645,
+              "right": 1575,
+              "bottom": 859,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 949,
+              "width": 612,
+              "height": 214,
+              "top": 949,
+              "right": 937,
+              "bottom": 1163,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 949,
+              "width": 612,
+              "height": 214,
+              "top": 949,
+              "right": 1575,
+              "bottom": 1163,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 1250,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 1253,
+              "width": 1250,
+              "height": 214,
+              "top": 1253,
+              "right": 1575,
+              "bottom": 1467,
+              "left": 325
+            },
+            "visibility": "visible"
+          }
+        ]
+      },
+      {
+        "name": "02-baseline-hours no panel query errors",
+        "passed": true,
+        "detail": [
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ]
+        ]
+      },
+      {
+        "name": "03-default-hours real panels rendered",
+        "passed": true,
+        "detail": [
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 341,
+              "width": 612,
+              "height": 214,
+              "top": 341,
+              "right": 937,
+              "bottom": 555,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 341,
+              "width": 612,
+              "height": 214,
+              "top": 341,
+              "right": 1575,
+              "bottom": 555,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 645,
+              "width": 612,
+              "height": 214,
+              "top": 645,
+              "right": 937,
+              "bottom": 859,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 645,
+              "width": 612,
+              "height": 214,
+              "top": 645,
+              "right": 1575,
+              "bottom": 859,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 949,
+              "width": 612,
+              "height": 214,
+              "top": 949,
+              "right": 937,
+              "bottom": 1163,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 949,
+              "width": 612,
+              "height": 214,
+              "top": 949,
+              "right": 1575,
+              "bottom": 1163,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 1250,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 1253,
+              "width": 1250,
+              "height": 214,
+              "top": 1253,
+              "right": 1575,
+              "bottom": 1467,
+              "left": 325
+            },
+            "visibility": "visible"
+          }
+        ]
+      },
+      {
+        "name": "03-default-hours no panel query errors",
+        "passed": true,
+        "detail": [
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ]
+        ]
+      },
+      {
+        "name": "percent panels keep percentunit",
+        "passed": true
+      },
+      {
+        "name": "count panels keep short unit",
+        "passed": true
+      },
+      {
+        "name": "source default rendered wujieai",
+        "passed": true
+      },
+      {
+        "name": "model default rendered All",
+        "passed": true
+      },
+      {
+        "name": "query bounds select exactly the 24 bucket endpoints",
+        "passed": true,
+        "detail": {
+          "from": "1793764800000",
+          "to": "1793847600999"
+        }
+      },
+      {
+        "name": "plotted buckets on complete-hour boundaries",
+        "passed": true,
+        "detail": [
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000,
+          1793847600000,
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000,
+          1793847600000
+        ]
+      },
+      {
+        "name": "browser fixed one-hour query step",
+        "passed": true,
+        "detail": [
+          3600000
+        ]
+      },
+      {
+        "name": "query bounds select exactly the 24 bucket endpoints",
+        "passed": true,
+        "detail": {
+          "from": "1793764800000",
+          "to": "1793847600999"
+        }
+      },
+      {
+        "name": "plotted buckets on complete-hour boundaries",
+        "passed": true,
+        "detail": [
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000,
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000
+        ]
+      },
+      {
+        "name": "browser fixed one-hour query step",
+        "passed": true,
+        "detail": [
+          3600000
+        ]
+      },
+      {
+        "name": "query bounds select exactly the 24 bucket endpoints",
+        "passed": true,
+        "detail": {
+          "from": "1793764800000",
+          "to": "1793847600999"
+        }
+      },
+      {
+        "name": "plotted buckets on complete-hour boundaries",
+        "passed": true,
+        "detail": [
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000
+        ]
+      },
+      {
+        "name": "browser fixed one-hour query step",
+        "passed": true,
+        "detail": [
+          3600000
+        ]
+      },
+      {
+        "name": "query bounds select exactly the 24 bucket endpoints",
+        "passed": true,
+        "detail": {
+          "from": "1793764800000",
+          "to": "1793847600999"
+        }
+      },
+      {
+        "name": "plotted buckets on complete-hour boundaries",
+        "passed": true,
+        "detail": [
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000
+        ]
+      },
+      {
+        "name": "browser fixed one-hour query step",
+        "passed": true,
+        "detail": [
+          3600000
+        ]
+      },
+      {
+        "name": "query bounds select exactly the 24 bucket endpoints",
+        "passed": true,
+        "detail": {
+          "from": "1793764800000",
+          "to": "1793847600999"
+        }
+      },
+      {
+        "name": "plotted buckets on complete-hour boundaries",
+        "passed": true,
+        "detail": [
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000,
+          1793847600000
+        ]
+      },
+      {
+        "name": "browser fixed one-hour query step",
+        "passed": true,
+        "detail": [
+          3600000
+        ]
+      },
+      {
+        "name": "query bounds select exactly the 24 bucket endpoints",
+        "passed": true,
+        "detail": {
+          "from": "1793764800000",
+          "to": "1793847600999"
+        }
+      },
+      {
+        "name": "plotted buckets on complete-hour boundaries",
+        "passed": true,
+        "detail": [
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000,
+          1793847600000
+        ]
+      },
+      {
+        "name": "browser fixed one-hour query step",
+        "passed": true,
+        "detail": [
+          3600000
+        ]
+      },
+      {
+        "name": "query bounds select exactly the 24 bucket endpoints",
+        "passed": true,
+        "detail": {
+          "from": "1793764800000",
+          "to": "1793847600999"
+        }
+      },
+      {
+        "name": "plotted buckets on complete-hour boundaries",
+        "passed": true,
+        "detail": [
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000,
+          1793847600000,
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000,
+          1793847600000
+        ]
+      },
+      {
+        "name": "browser fixed one-hour query step",
+        "passed": true,
+        "detail": [
+          3600000
+        ]
+      },
+      {
+        "name": "baseline reproduces 25 completed-hour buckets",
+        "passed": true,
+        "detail": [
+          1793761200000,
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000,
+          1793847600000
+        ]
+      },
+      {
+        "name": "corrected default returns exactly 24 complete buckets",
+        "passed": true,
+        "detail": [
+          1793764800000,
+          1793768400000,
+          1793772000000,
+          1793775600000,
+          1793779200000,
+          1793782800000,
+          1793786400000,
+          1793790000000,
+          1793793600000,
+          1793797200000,
+          1793800800000,
+          1793804400000,
+          1793808000000,
+          1793811600000,
+          1793815200000,
+          1793818800000,
+          1793822400000,
+          1793826000000,
+          1793829600000,
+          1793833200000,
+          1793836800000,
+          1793840400000,
+          1793844000000,
+          1793847600000
+        ]
+      },
+      {
+        "name": "latest completed hour retained and incomplete hour excluded",
+        "passed": true
+      },
+      {
+        "name": "mixed-hour overall 30 percent",
+        "passed": true
+      },
+      {
+        "name": "all-failed hour is zero percent",
+        "passed": true
+      },
+      {
+        "name": "zero-traffic hour has no success-rate value",
+        "passed": true
+      },
+      {
+        "name": "per-model mixed hour gpt-4 60 percent",
+        "passed": true
+      },
+      {
+        "name": "failed-only model mixed hour zero percent",
+        "passed": true
+      },
+      {
+        "name": "unknown mixed-hour share 10 percent",
+        "passed": true
+      },
+      {
+        "name": "04-management-url real panels rendered",
+        "passed": true,
+        "detail": [
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 341,
+              "width": 612,
+              "height": 214,
+              "top": 341,
+              "right": 937,
+              "bottom": 555,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 341,
+              "width": 612,
+              "height": 214,
+              "top": 341,
+              "right": 1575,
+              "bottom": 555,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 645,
+              "width": 612,
+              "height": 214,
+              "top": 645,
+              "right": 937,
+              "bottom": 859,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 645,
+              "width": 612,
+              "height": 214,
+              "top": 645,
+              "right": 1575,
+              "bottom": 859,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 949,
+              "width": 612,
+              "height": 214,
+              "top": 949,
+              "right": 937,
+              "bottom": 1163,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 949,
+              "width": 612,
+              "height": 214,
+              "top": 949,
+              "right": 1575,
+              "bottom": 1163,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 1250,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 1253,
+              "width": 1250,
+              "height": 214,
+              "top": 1253,
+              "right": 1575,
+              "bottom": 1467,
+              "left": 325
+            },
+            "visibility": "visible"
+          }
+        ]
+      },
+      {
+        "name": "04-management-url no panel query errors",
+        "passed": true,
+        "detail": [
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ]
+        ]
+      },
+      {
+        "name": "encoded management URL preserves24 complete buckets",
+        "passed": true
+      },
+      {
+        "name": "05-failed-model real panels rendered",
+        "passed": true,
+        "detail": [
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 341,
+              "width": 612,
+              "height": 214,
+              "top": 341,
+              "right": 937,
+              "bottom": 555,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 341,
+              "width": 612,
+              "height": 214,
+              "top": 341,
+              "right": 1575,
+              "bottom": 555,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 645,
+              "width": 612,
+              "height": 214,
+              "top": 645,
+              "right": 937,
+              "bottom": 859,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 645,
+              "width": 612,
+              "height": 214,
+              "top": 645,
+              "right": 1575,
+              "bottom": 859,
+              "left": 963
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 325,
+              "y": 949,
+              "width": 612,
+              "height": 214,
+              "top": 949,
+              "right": 937,
+              "bottom": 1163,
+              "left": 325
+            },
+            "visibility": "visible"
+          },
+          {
+            "width": 612,
+            "height": 214,
+            "rect": {
+              "x": 963,
+              "y": 949,
+              "width": 612,
+              "height": 214,
+              "top": 949,
+              "right": 1575,
+              "bottom": 1163,
+              "left": 963
+            },
+            "visibility": "visible"
+          }
+        ]
+      },
+      {
+        "name": "05-failed-model no panel query errors",
+        "passed": true,
+        "detail": [
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ]
+        ]
+      },
+      {
+        "name": "model variable selection appears",
+        "passed": true
+      },
+      {
+        "name": "model selection filters real panel queries",
+        "passed": true
+      },
+      {
+        "name": "selected failed model zero percent",
+        "passed": true
+      },
+      {
+        "name": "06-absent-hour no panel query errors",
+        "passed": true,
+        "detail": [
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ],
+          [
+            "A"
+          ]
+        ]
+      },
+      {
+        "name": "absent-hour panels show no data",
+        "passed": true
+      },
+      {
+        "name": "absent-hour actual query frames contain no numbers",
+        "passed": true
+      }
+    ],
+    "errors": [],
+    "fixtureBoundary": "Historical values are synthetic; current-hour live gateway data is validated separately."
+  },
+  "liveGatewayProbes": [
+    {
+      "case": "success",
+      "outcome": "success",
+      "httpStatus": 200,
+      "counterDelta": 1.0,
+      "actualMetric": [
+        "wujie_model_requests_total{wujie_source=\"wujieai\",wujie_model=\"gpt-4\",wujie_outcome=\"success\"} 1"
+      ]
+    },
+    {
+      "case": "sse-normal",
+      "outcome": "success",
+      "httpStatus": 200,
+      "counterDelta": 1.0,
+      "actualMetric": [
+        "wujie_model_requests_total{wujie_source=\"wujieai\",wujie_model=\"gpt-4\",wujie_outcome=\"success\"} 2"
+      ]
+    },
+    {
+      "case": "sse-error",
+      "outcome": "stream_error",
+      "httpStatus": 200,
+      "counterDelta": 1.0,
+      "actualMetric": [
+        "wujie_model_requests_total{wujie_source=\"wujieai\",wujie_model=\"gpt-4\",wujie_outcome=\"stream_error\"} 1"
+      ]
+    },
+    {
+      "case": "sse-missing",
+      "outcome": "unknown",
+      "httpStatus": 200,
+      "counterDelta": 1.0,
+      "actualMetric": [
+        "wujie_model_requests_total{wujie_source=\"wujieai\",wujie_model=\"gpt-4\",wujie_outcome=\"unknown\"} 1"
+      ]
+    },
+    {
+      "case": "success",
+      "outcome": "success",
+      "httpStatus": 200,
+      "counterDelta": 1.0,
+      "actualMetric": [
+        "wujie_model_requests_total{wujie_source=\"wujieai\",wujie_model=\"gpt-4\",wujie_outcome=\"success\"} 3"
+      ]
+    },
+    {
+      "case": "sse-normal",
+      "outcome": "success",
+      "httpStatus": 200,
+      "counterDelta": 1.0,
+      "actualMetric": [
+        "wujie_model_requests_total{wujie_source=\"wujieai\",wujie_model=\"gpt-4\",wujie_outcome=\"success\"} 4"
+      ]
+    },
+    {
+      "case": "sse-error",
+      "outcome": "stream_error",
+      "httpStatus": 200,
+      "counterDelta": 1.0,
+      "actualMetric": [
+        "wujie_model_requests_total{wujie_source=\"wujieai\",wujie_model=\"gpt-4\",wujie_outcome=\"stream_error\"} 2"
+      ]
+    },
+    {
+      "case": "sse-missing",
+      "outcome": "unknown",
+      "httpStatus": 200,
+      "counterDelta": 1.0,
+      "actualMetric": [
+        "wujie_model_requests_total{wujie_source=\"wujieai\",wujie_model=\"gpt-4\",wujie_outcome=\"unknown\"} 2"
+      ]
+    }
+  ],
+  "prometheusQueries": {
+    "count": 7,
+    "passed": true,
+    "scope": "real canonical relabel/federation and actual dashboard expressions; current-hour gateway data plus clearly separated historical fixture"
+  },
+  "targetedDisconnect": [
+    {
+      "iteration": 0,
+      "httpStatus": 200,
+      "firstEventReceived": true,
+      "routeTimeout": "3s",
+      "delta": {
+        "interrupted": 1.0,
+        "timeout": 0,
+        "success": 0.0,
+        "unknown": 0.0
+      },
+      "passed": true
+    },
+    {
+      "iteration": 1,
+      "httpStatus": 200,
+      "firstEventReceived": true,
+      "routeTimeout": "3s",
+      "delta": {
+        "interrupted": 1.0,
+        "timeout": 0,
+        "success": 0.0,
+        "unknown": 0.0
+      },
+      "passed": true
+    },
+    {
+      "iteration": 2,
+      "httpStatus": 200,
+      "firstEventReceived": true,
+      "routeTimeout": "3s",
+      "delta": {
+        "interrupted": 1.0,
+        "timeout": 0,
+        "success": 0.0,
+        "unknown": 0.0
+      },
+      "passed": true
+    }
+  ],
+  "hourFixture": {
+    "hour": 1793847600,
+    "mixedEnd": 1793840400,
+    "failedEnd": 1793844000,
+    "emptyEnd": 1793847600,
+    "absentEnd": 1793750400,
+    "job": "hour-fixture",
+    "expectedMixed": {
+      "overallSuccessRate": 0.3,
+      "gpt4SuccessRate": 0.6,
+      "allFailedModelSuccessRate": 0,
+      "unknownShare": 0.1
+    },
+    "limitation": "Synthetic historical counters, not shifted real gateway traffic or actual business records."
+  },
+  "ranges": {
+    "baseline": {
+      "from": "now-24h/h",
+      "to": "now/h",
+      "actualBucketCount": 25,
+      "lastBucketEnd": "H (current hour start); incomplete hour was NOT included"
+    },
+    "corrected": {
+      "from": "now-23h/h",
+      "to": "now/h-1h+1s",
+      "actualBucketCount": 24,
+      "actualEndpointTimes": "H-23h through H, inclusive",
+      "actualCoveredWindows": "(H-24h,H]",
+      "rawGrafanaUpperBound": "H+999ms; fixed1h backend query step ends exactly H",
+      "encodedUrl": "/d/wujie-model-requests?var-source=wujieai&from=now-23h%2Fh&to=now%2Fh-1h%2B1s&timezone=Asia%2FShanghai"
+    }
+  },
+  "resources": {
+    "fullStackContainerCpuLimit": 2.0,
+    "fullStackContainerMemoryMiB": 2048.0,
+    "renderOnlyContainerCpuLimit": 0.85,
+    "renderOnlyContainerMemoryMiB": 896.0,
+    "nativeTaskPeakSampleRssMiB": 1489.3,
+    "minimumDiskFreeGiB": 21.26,
+    "minimumSystemMemoryFreePercent": 60,
+    "maximumOneMinuteLoad": 3.283203125,
+    "cleanup": {
+      "taskContainers": [],
+      "taskNetwork": [],
+      "taskNamedOrAnonymousVolumes": [],
+      "nativeNodeChromeAndHelpersExited": true,
+      "taskPasswordProfileTsdbRemoved": true
+    }
+  },
+  "visualQa": {
+    "passed": true,
+    "evidence": "Unedited native remote Chrome screenshots inspected; seven graphs and count/percent units visible; absent-hour seven no-data panels visible",
+    "captureRepair": "Explicit1600x1800 native window, matching viewport and scale1; active focus/paint; compositor surface capture. Earlier blank/cropped images retained only in raw attempt archives, not accepted as successful screenshot evidence."
+  },
+  "earlierAttempts": [
+    {
+      "attempt": 1,
+      "result": "20/21 older full-live assertions passed; downstream-close request first got504/timeout before event, correctly classified timeout; fixture not actual disconnect. Targeted3s route+first complete event before close subsequently passed3/3, no monitor production logic change."
+    },
+    {
+      "attempt": 2,
+      "result": "Incorrect raw upper-bound modulus assertion failed; actual last sample H showed no incomplete-hour inclusion."
+    },
+    {
+      "attempt": 3,
+      "result": "47 data/DOM assertions passed, but blank screenshot failed visual QA."
+    },
+    {
+      "attempt": 4,
+      "result": "50 browser data/DOM and3 disconnect assertions passed; screenshot native view cropped due window/viewport/Retina mismatch."
+    },
+    {
+      "attempt": 5,
+      "result": "Prometheus+Grafana render-only run (0.85CPU/896MiB), same50 actual browser assertions passed and full unedited screenshots visually verified. Live gateway/disconnect evidence retained from full-stack attempt4."
+    }
+  ],
+  "observations": [
+    "In a wholly absent historical range, Grafana label_values has no candidates and the source selector can appear empty. Default source wujieai was verified in the default populated range. No variable-behavior expansion was made."
+  ],
+  "notValidated": [
+    "production Operator discovery/pilot-agent15020 merge",
+    "production filter chain/other converters",
+    "real multi-Pod restart",
+    "capacity/startup/p99/first-token performance",
+    "deployed client/task/billing/Kafka/database/external channels"
+  ],
+  "rawLocalCapture": "/private/tmp/ope-9626-grafana-results-20261105",
+  "rawRemoteArchive": "/Users/wujieai/ope9626-validation/higress/20261104-ope11003/runtime/grafana/results-grafana-20261105.tar.gz",
+  "screenshots": {
+    "03-default-hours.png": "fbf15af7a500eda85f670e51933ce13e0363a30d5be210a7d8c375db66fb89c9",
+    "01-login.png": "2475a3383f8d9075fd57329cb6280c72282e4ad59dfd57debb7722f1f1a5c823",
+    "05-failed-model.png": "84420314b98f421f3661162226617bf0b659c0fc11be973d1777469736c7e63e",
+    "06-absent-hour.png": "8caa583791f9fefe011ef9693cc1ded40623981e9d8f6a53432ac215fcb92d33",
+    "02-baseline-hours.png": "b20ec90ac1df710060e8642b32de8e48d264ae5788c55917ca0d163fe25ebfca"
+  }
+}
