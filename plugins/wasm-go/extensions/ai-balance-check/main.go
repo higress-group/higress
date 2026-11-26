@@ -46,6 +46,7 @@ type BalanceCheckConfig struct {
 	teamSettlement        string
 	teamVersionGuardOnly  bool
 	teamPaidPaths         map[string]bool
+	unlistedConfig        *BalanceCheckConfig
 	teamFallback          string
 	teamSigningKey        string
 	teamImageBillingModel string
@@ -79,6 +80,16 @@ func parseConfig(json gjson.Result, config *BalanceCheckConfig) error {
 			config.teamPaidPaths[path] = true
 		}
 	}
+	if previous := json.Get("teamUnlistedPathConfig"); previous.Exists() {
+		if config.teamPaidPaths == nil || !previous.IsObject() || previous.Get("teamPaidPaths").Exists() || previous.Get("teamUnlistedPathConfig").Exists() {
+			return fmt.Errorf("teamUnlistedPathConfig must be a flat original policy alongside teamPaidPaths")
+		}
+		config.unlistedConfig = new(BalanceCheckConfig)
+		if err := parseConfig(previous, config.unlistedConfig); err != nil {
+			return fmt.Errorf("teamUnlistedPathConfig: %w", err)
+		}
+	}
+
 	teamBilling := json.Get("teamBilling").Bool()
 	config.teamRouteMode = json.Get("teamRouteMode").String()
 	config.teamSettlement = json.Get("teamSettlement").String()
@@ -241,10 +252,27 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config BalanceCheckConfig) ty
 		return types.ActionContinue
 	}
 	if config.teamPaidPaths != nil {
-		raw, _ := proxywasm.GetHttpRequestHeader(":path")
+		raw, err := proxywasm.GetHttpRequestHeader(":path")
+		if err != nil || raw == "" {
+			return teamAdmissionError(http.StatusServiceUnavailable)
+		}
 		path, _, _ := strings.Cut(raw, "?")
 		if !config.teamPaidPaths[path] {
-			return teamAdmissionError(http.StatusServiceUnavailable)
+			if marked || config.teamRouteMode == "strict" {
+				return teamAdmissionError(http.StatusServiceUnavailable)
+			}
+			if config.unlistedConfig != nil {
+				config = *config.unlistedConfig
+			} else {
+				// Older prefix configs contain the legacy balance URL but no policy snapshot.
+				config.teamEndpoint = nil
+			}
+			if _, err := proxywasm.GetHttpRequestHeader(teamUUIDHeader); err != types.ErrorStatusNotFound && (err != nil || config.teamEndpoint == nil) {
+				return teamAdmissionError(http.StatusServiceUnavailable)
+			}
+			if proxywasm.SetProperty([]string{"wasm.teamBillingUnlistedPath"}, []byte("1")) != nil {
+				return teamAdmissionError(http.StatusServiceUnavailable)
+			}
 		}
 	}
 	if config.apiUrl == "" {

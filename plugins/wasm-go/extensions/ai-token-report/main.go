@@ -84,6 +84,7 @@ type TokenUsageReportConfig struct {
 	disableOpenaiUsage bool
 	teamReportCluster  *wrapper.FQDNCluster
 	requireTeamID      bool
+	unlistedConfig     *TokenUsageReportConfig
 	source             sourceConfig
 }
 
@@ -102,6 +103,15 @@ func init() {
 }
 
 func parseConfig(json gjson.Result, config *TokenUsageReportConfig) error {
+	if previous := json.Get("teamUnlistedPathConfig"); previous.Exists() {
+		if !previous.IsObject() || previous.Get("teamUnlistedPathConfig").Exists() {
+			return fmt.Errorf("teamUnlistedPathConfig must be a flat original policy")
+		}
+		config.unlistedConfig = new(TokenUsageReportConfig)
+		if err := parseConfig(previous, config.unlistedConfig); err != nil {
+			return fmt.Errorf("teamUnlistedPathConfig: %w", err)
+		}
+	}
 	// Parse reportApiUrl (required)
 	config.reportApiUrl = json.Get("reportApiUrl").String()
 	config.requireTeamID = json.Get("requireTeamId").Bool()
@@ -193,9 +203,47 @@ func parseConfig(json gjson.Result, config *TokenUsageReportConfig) error {
 	return nil
 }
 
+// Use the balance filter's stream decision even after an upstream rewrites the path.
+func (cfg TokenUsageReportConfig) forStream(ctx wrapper.HttpContext) TokenUsageReportConfig {
+	if selected, ok := ctx.GetContext("unlistedReportConfig").(*TokenUsageReportConfig); ok {
+		return *selected
+	}
+	return cfg
+}
+
+func rejectTeamUsage(status int) types.Action {
+	body := `{"error":{"type":"team_billing_unavailable","code":"team_billing_unavailable","message":"Team billing unavailable"}}`
+	if status == http.StatusBadRequest {
+		body = `{"error":{"type":"invalid_team","code":"invalid_team","message":"Unsupported billing version"}}`
+	}
+	_ = proxywasm.SendHttpResponse(uint32(status), [][2]string{{"Content-Type", "application/json"}}, []byte(body), -1)
+	return types.HeaderStopAllIterationAndWatermark
+}
+
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfig) types.Action {
+	if config.unlistedConfig != nil {
+		if value, err := proxywasm.GetProperty([]string{"wasm.teamBillingUnlistedPath"}); err == nil && string(value) == "1" {
+			ctx.SetContext("unlistedReportConfig", config.unlistedConfig)
+			config = *config.unlistedConfig
+		}
+	}
 	// Check if plugin is enabled
 	if config.reportApiUrl == "" {
+		return types.ActionContinue
+	}
+	version, versionErr := proxywasm.GetHttpRequestHeader("X-Wujie-Billing-Version")
+	marked := versionErr == nil
+	if !marked && versionErr != types.ErrorStatusNotFound {
+		return rejectTeamUsage(http.StatusServiceUnavailable)
+	}
+	if marked && version != "2" {
+		return rejectTeamUsage(http.StatusBadRequest)
+	}
+	// Trusted submission/forward routes settle at execution, including when this plugin is global.
+	if settlement, err := proxywasm.GetProperty([]string{"wasm.teamBillingSettlement"}); err == nil && len(settlement) != 0 {
+		ctx.SetContext(CtxSkipPlugin, true)
+		ctx.DontReadRequestBody()
+		ctx.DontReadResponseBody()
 		return types.ActionContinue
 	}
 	// Snapshot attribution before later request rewrites. Async reporting consumes
@@ -207,11 +255,37 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfig
 	perCallModel, _ := proxywasm.GetProperty([]string{"wasm.teamBillingPerCallModel"})
 	providerType := getProviderType()
 	if providerType == "" && len(perCallModel) == 0 {
+		if marked {
+			return rejectTeamUsage(http.StatusServiceUnavailable)
+		}
 		log.Debugf("ai-token-report: providerType is empty, skipping (not an AI route)")
 		ctx.DontReadRequestBody()
 		ctx.DontReadResponseBody()
 		ctx.SetContext(CtxSkipPlugin, true)
 		return types.ActionContinue
+	}
+
+	// Freeze the billing decision while admission properties and the original headers are available.
+	value, admissionErr := proxywasm.GetProperty([]string{"wasm.teamId"})
+	if admissionErr == nil {
+		teamID, err := strconv.ParseInt(string(value), 10, 64)
+		if err != nil || teamID <= 0 || config.teamReportCluster == nil || (marked && config.disableOpenaiUsage) {
+			return rejectTeamUsage(http.StatusServiceUnavailable)
+		}
+		owner, ownerErr := proxywasm.GetProperty([]string{"wasm.teamPersonalOwnerUid"})
+		if ownerErr != types.ErrorStatusNotFound {
+			uid, err := strconv.ParseInt(string(owner), 10, 64)
+			if marked || ownerErr != nil || err != nil || uid <= 0 {
+				return rejectTeamUsage(http.StatusServiceUnavailable)
+			}
+			ctx.SetContext("billingPersonalOwnerUid", uid)
+		}
+		ctx.SetContext("billingTeamId", teamID)
+	} else {
+		_, selectorErr := proxywasm.GetHttpRequestHeader(teamUUIDHeader)
+		if admissionErr != types.ErrorStatusNotFound || marked || config.requireTeamID || (config.teamReportCluster != nil && selectorErr != types.ErrorStatusNotFound) {
+			return rejectTeamUsage(http.StatusServiceUnavailable)
+		}
 	}
 
 	// Clean up any residual data from previous requests to prevent memory leaks
@@ -236,6 +310,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfig
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config TokenUsageReportConfig, body []byte) types.Action {
+	config = config.forStream(ctx)
 	// 检查是否设置了跳过标记
 	if ctx.GetContext(CtxSkipPlugin) != nil {
 		return types.ActionContinue
@@ -351,6 +426,7 @@ func normalizeRequestID(value string) string {
 }
 
 func onHttpStreamingBody(ctx wrapper.HttpContext, config TokenUsageReportConfig, data []byte, endOfStream bool) []byte {
+	config = config.forStream(ctx)
 	// 检查是否设置了跳过标记
 	if ctx.GetContext(CtxSkipPlugin) != nil {
 		return data
@@ -433,6 +509,7 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config TokenUsageReportConfig,
 }
 
 func onHttpResponseBody(ctx wrapper.HttpContext, config TokenUsageReportConfig, body []byte) types.Action {
+	config = config.forStream(ctx)
 	// 检查是否设置了跳过标记
 	if ctx.GetContext(CtxSkipPlugin) != nil {
 		return types.ActionContinue
@@ -569,10 +646,6 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 		}
 		model = string(sku)
 	}
-	// Task submission is admitted once; its execution owns the billable event.
-	if settlement, err := proxywasm.GetProperty([]string{"wasm.teamBillingSettlement"}); err == nil && len(settlement) != 0 {
-		return
-	}
 	// Skip if report API client is not configured
 	if config.reportClient == nil {
 		log.Debugf("reportClient not configured, skipping token usage report")
@@ -622,29 +695,11 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 		log.Debugf("reportTokenUsage using generated ID: %s", requestID)
 	}
 
-	// Only the admission plugin sets this stream property.
-	var teamID, personalOwnerUID int64
-	if value, err := proxywasm.GetProperty([]string{"wasm.teamId"}); err == nil {
-		teamID, err = strconv.ParseInt(string(value), 10, 64)
-		if err != nil || teamID <= 0 || config.teamReportCluster == nil {
-			log.Errorf("Team usage report is invalid or not configured, requestId=%s", requestID)
-			return
-		}
-		if owner, ownerErr := proxywasm.GetProperty([]string{"wasm.teamPersonalOwnerUid"}); ownerErr == nil {
-			personalOwnerUID, ownerErr = strconv.ParseInt(string(owner), 10, 64)
-			if ownerErr != nil || personalOwnerUID <= 0 {
-				log.Errorf("Team usage report has an invalid personal owner, requestId=%s", requestID)
-				return
-			}
-		}
-	} else {
-		// Admission strips the selector after it has set the team ID. A
-		// selector left on a team route belongs to an unadmitted request.
-		_, selectorErr := proxywasm.GetHttpRequestHeader(teamUUIDHeader)
-		_, versionErr := proxywasm.GetHttpRequestHeader("X-Wujie-Billing-Version")
-		if versionErr != types.ErrorStatusNotFound || config.requireTeamID || (config.teamReportCluster != nil && selectorErr == nil) {
-			return
-		}
+	teamID, _ := ctx.GetContext("billingTeamId").(int64)
+	personalOwnerUID, _ := ctx.GetContext("billingPersonalOwnerUid").(int64)
+	if config.requireTeamID && teamID <= 0 {
+		log.Errorf("Missing team admission for usage report, requestId=%s", requestID)
+		return
 	}
 
 	// Build request body

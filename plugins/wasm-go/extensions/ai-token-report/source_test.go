@@ -75,7 +75,15 @@ func TestReportSourceSnapshot(t *testing.T) {
 					headers = append(headers, [2]string{teamUUIDHeader, "9943d4d9-d20b-49db-809d-88586f950fc7"})
 				}
 				original := append(append([][2]string{}, headers...), [2]string{tc.header, tc.value})
-				require.Equal(t, types.ActionContinue, host.CallOnRequestHeaders(id, original, false))
+				action := host.CallOnRequestHeaders(id, original, false)
+				if tc.rejected || (tc.teamRoute && !tc.hasAdmission) {
+					require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+					require.Equal(t, uint32(503), host.GetSentLocalResponse(id).StatusCode)
+					require.Empty(t, host.GetCalloutAttributesFromContext(id))
+					host.CompleteHttpContext(id)
+					return
+				}
+				require.Equal(t, types.ActionContinue, action)
 				// Later routing/provider/header plugins rewrite path/host and source.
 				// Reporting must retain the value captured by this decode callback.
 				headers[0][1] = "upstream.test"
@@ -88,9 +96,6 @@ func TestReportSourceSnapshot(t *testing.T) {
 					contentType = "text/event-stream"
 				}
 				responseStatus := "200"
-				if tc.rejected {
-					responseStatus = "403"
-				}
 				host.CallOnResponseHeaders(id, [][2]string{{":status", responseStatus}, {"content-type", contentType}}, false)
 				if tc.stream {
 					host.CallOnResponseBody(id, append(append([]byte("data: "), body...), []byte("\n\n")...), false)
@@ -100,8 +105,8 @@ func TestReportSourceSnapshot(t *testing.T) {
 					host.CallOnResponseBody(id, body, true)
 				}
 				calls := host.GetCalloutAttributesFromContext(id)
-				if tc.asyncTask || tc.rejected || (tc.teamRoute && !tc.hasAdmission) {
-					require.Empty(t, calls, "missing team attribution must never fall back to personal billing")
+				if tc.asyncTask {
+					require.Empty(t, calls, "task submission must not emit a second usage event")
 					host.CompleteHttpContext(id)
 					return
 				}

@@ -290,4 +290,4 @@ spec:
 在迁移后的聊天和实际出图路由设置 `requireTeamId: true`，并将 `teamReportService`
 设为已在 Higress 注册的 Open Platform 内部服务（例如 `onepiece-open-platform-internal.dns`，端口 8080）。
 插件从同一请求的 `wasm.teamId` 读取已准入的内部团队 ID，向 `/internal/model/usage/team-report` 上报。
-缺少团队归属或 HTTP 响应失败时跳过上报。Banana 使用出图路由配置的价格模型，成功返回图片且没有 token 时也会产生用量事件。
+版本 2 请求必须在进入上游前获得有效团队准入和团队上报目标；旧上报路由收到版本化请求将提前拒绝。成功执行的旧请求按原规则上报。模型前缀的 `teamUnlistedPathConfig` 保存该上报插件迁移前的有效配置（原先关闭时为 `{}`）。余额插件在请求内标记名单外路径，后续路径重写不影响选择。HTTP 响应失败时跳过上报。Banana 使用出图路由配置的价格模型，成功返回图片且没有 token 时也会产生用量事件。

@@ -290,3 +290,51 @@ func TestVersionOnlyGuard(t *testing.T) {
 		}
 	})
 }
+
+func TestPaidPathScope(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		const legacy = `{"apiUrl":"https://a.test/old-check","serviceName":"billing"}`
+		for _, tc := range []struct {
+			name, path, previous, version, call string
+			status                              uint32
+		}{
+			{"unlisted read with original check disabled", "/v1/models?all=true", "{}", "", "", 0},
+			{"unlisted read with original check enabled", "/v1/models", legacy, "", "/old-check", 0},
+			{"unlisted versioned request", "/v1/unknown", legacy, "2", "", 503},
+			{"listed paid request still needs team", "/v1/chat/completions?stream=true", legacy, "2", "", 400},
+			{"listed compatible request admits default team", "/v1/chat/completions", legacy, "", "/admit", 0},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				cfg := fmt.Sprintf(`{"teamPaidPaths":["/v1/chat/completions"],"teamUnlistedPathConfig":%s,"apiUrl":"https://a.test/legacy","teamBilling":true,"teamApiUrl":"https://a.test/admit","teamRouteMode":"compat","teamSettlement":"usage","serviceName":"billing"}`, tc.previous)
+				host, start := test.NewTestHost([]byte(cfg))
+				defer host.Reset()
+				if start != types.OnPluginStartStatusOK {
+					t.Fatal(start)
+				}
+				method := "POST"
+				if strings.HasPrefix(tc.path, "/v1/models") {
+					method = "GET"
+				}
+				headers := [][2]string{{":authority", "a.test"}, {":method", method}, {":path", tc.path}, {OriginalAPIKey, "fixture"}}
+				if tc.version != "" {
+					headers = append(headers, [2]string{"X-Wujie-Billing-Version", tc.version})
+				}
+				host.CallOnHttpRequestHeaders(headers)
+				local := host.GetLocalResponse()
+				if tc.status != 0 && (local == nil || local.StatusCode != tc.status) || tc.status == 0 && local != nil {
+					t.Fatalf("local response = %+v", local)
+				}
+				calls := host.GetHttpCalloutAttributes()
+				if tc.call == "" && len(calls) != 0 || tc.call != "" && (len(calls) != 1 || !hasCalloutHeader(calls[0].Headers, ":path", tc.call)) {
+					t.Fatalf("unexpected admission calls: %d", len(calls))
+				}
+				if tc.status == 0 && strings.HasPrefix(tc.path, "/v1/models") {
+					v, e := proxywasm.GetProperty([]string{"wasm.teamBillingUnlistedPath"})
+					if e != nil || string(v) != "1" {
+						t.Fatal("missing original policy selection")
+					}
+				}
+			})
+		}
+	})
+}
