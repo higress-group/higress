@@ -37,7 +37,6 @@ const (
 	CtxSkipPlugin      = "skip_token_report"
 	CtxStatusCode      = "response_status_code"
 	CtxProductSource   = "token_report_product_source"
-	CtxResponseStatus  = "token_report_response_status"
 	providerTypeKey    = "providerType"
 
 	// HTTP headers
@@ -760,15 +759,6 @@ func isPendingAsyncResponse(body []byte) bool {
 	return false
 }
 
-func onHttpResponseHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfig) types.Action {
-	// Keep the status before Envoy releases response headers during body callbacks.
-	status, err := proxywasm.GetHttpResponseHeader(":status")
-	if err == nil && status != "" {
-		ctx.SetContext(CtxResponseStatus, status)
-	}
-	return types.ActionContinue
-}
-
 func dispatchTeamReport(config TokenUsageReportConfig, requestID string, body []byte) error {
 	// Dispatch directly to the cluster service and keep the report body out of logs.
 	_, err := proxywasm.DispatchHttpCall(config.teamReportCluster.ClusterName(), [][2]string{
@@ -802,16 +792,7 @@ func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageRepor
 
 	// Both JSON and SSE use this reporting boundary. Zero tokens may be a
 	// successful image, so only the HTTP response status decides eligibility.
-// 	statusCode, err := proxywasm.GetHttpResponseHeader(":status")
-// 	if err != nil || statusCode == "" {
-// 		statusCode, _ = ctx.GetContext(CtxResponseStatus).(string)
-// 	}
-// 	if statusCode != "200" {
-// 		log.Debugf("ai-token-report: skip billing report for response status %q", statusCode)
-// 		return
-// 	}
-
-    // Re-read the current header: another filter may have changed it since the
+	// Re-read the current header: another filter may have changed it since the
 	// response-header callback. The saved status remains a fallback.
 	statusCode, ok := ctx.GetContext(CtxStatusCode).(string)
 	if currentStatus, err := proxywasm.GetHttpResponseHeader(":status"); err == nil {
@@ -827,7 +808,7 @@ func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageRepor
 		return
 	}
 
-    // An accepted async task is not a completed model result, even when an
+	// An accepted async task is not a completed model result, even when an
 	// adapter wraps the acknowledgement in data or normalizes HTTP 201 to 200.
 	if isPendingAsyncResponse(responseBody) ||
 		isPendingAsyncResponse(ctx.GetByteSliceContext(CtxAccumulatedBody, nil)) {
