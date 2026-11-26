@@ -32,6 +32,14 @@ on:
         required: false
         default: "{}"
         type: string
+      candidate_import:
+        description: "Tracked hash-bound candidate import manifest (read only; paired with history_import)"
+        required: false
+        type: string
+      history_import:
+        description: "Tracked hash-bound legacy history import manifest"
+        required: false
+        type: string
       dry_run:
         description: "Validate and render only; never upload candidates or create a PR"
         required: true
@@ -74,7 +82,7 @@ jobs:
           while IFS=$'\t' read -r registry image source_dir; do
             [[ "$registry" =~ ^[a-z0-9][a-z0-9.-]*(\:[0-9]+)?$ ]]
             [[ "$image" =~ ^plugins/[a-z0-9][a-z0-9._-]*$ ]]
-            [[ "$source_dir" =~ ^plugins/wasm-(go|rust)/extensions/[a-z0-9][a-z0-9._-]*$ ]]
+            [[ "$source_dir" =~ ^plugins/wasm-(go|rust|cpp)/extensions/[a-z0-9][a-z0-9._-]*$ ]]
             version="$(tr -d '\r\n' < "$source_dir/VERSION")"
             [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
             prerelease="${version#*-}"
@@ -163,6 +171,8 @@ jobs:
           PREVIOUS: ${{ inputs.previous_snapshot }}
           BOOTSTRAP_BASE: ${{ inputs.bootstrap_comparison_base }}
           OVERRIDES: ${{ inputs.version_overrides }}
+          CANDIDATE_IMPORT: ${{ inputs.candidate_import }}
+          HISTORY_IMPORT: ${{ inputs.history_import }}
         run: |
           set -euo pipefail
           [[ "$GATEWAY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -170,7 +180,17 @@ jobs:
           test "$(git rev-parse HEAD)" = "$TARGET_REF"
           git fetch --no-tags origin main
           test "$(git rev-parse refs/remotes/origin/main)" = "$TARGET_REF"
+          CANDIDATE_IMPORT="${CANDIDATE_IMPORT:-}"
+          HISTORY_IMPORT="${HISTORY_IMPORT:-}"
+          if [ -n "$CANDIDATE_IMPORT" ] || [ -n "$HISTORY_IMPORT" ]; then test -n "$CANDIDATE_IMPORT"; test -n "$HISTORY_IMPORT"; fi
+          for manifest in "$CANDIDATE_IMPORT" "$HISTORY_IMPORT"; do
+            if [ -z "$manifest" ]; then continue; fi
+            [[ "$manifest" =~ ^plugins/release/imports/[A-Za-z0-9._/-]+\.json$ ]]
+            git ls-files --error-unmatch -- "$manifest" >/dev/null
+            test -f "$manifest"; test ! -L "$manifest"
+          done
           if [ "$RELEASE_MODE" = cpp-hotfix ]; then
+            test -z "$CANDIDATE_IMPORT"; test -z "$HISTORY_IMPORT"
             test -z "$PREVIOUS"
             test -z "$BOOTSTRAP_BASE"
             test "$OVERRIDES" = '{}'
@@ -194,14 +214,18 @@ jobs:
           TARGET_REF: ${{ inputs.target_ref }}
           PREVIOUS: ${{ inputs.previous_snapshot }}
           BOOTSTRAP_BASE: ${{ inputs.bootstrap_comparison_base }}
+          CANDIDATE_IMPORT: ${{ inputs.candidate_import }}
+          HISTORY_IMPORT: ${{ inputs.history_import }}
           CANDIDATE_REGISTRY: ${{ vars.PLUGIN_CANDIDATE_REGISTRY }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
+          CANDIDATE_IMPORT="${CANDIDATE_IMPORT:-}"
+          HISTORY_IMPORT="${HISTORY_IMPORT:-}"
           source tools/hack/oras-retry.sh
           (cd tools/plugin-release && go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json)
-          mkdir -p plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence
+          mkdir -p plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence plugins/release/imports
           if [ "$RELEASE_MODE" = cpp-hotfix ]; then
             release_id=cpp-hotfix-2.0.1
             (cd tools/plugin-release && go run . plan --mode=cpp-hotfix --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$GATEWAY_VERSION" --target "$TARGET_REF" --base 392b64e8cce43e63d3207f00ba5c8fe2ff8921d9 --output /tmp/plan.json)
@@ -220,11 +244,13 @@ jobs:
             base_version=$(git show "$BOOTSTRAP_BASE:VERSION"); base_version=${base_version#v}
             (cd tools/plugin-release && go run . bootstrap-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$base_version" --source "$TARGET_REF" --existing-evidence /tmp/bootstrap-evidence.json --output /tmp/bootstrap-snapshot.json)
             args=(plan --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$GATEWAY_VERSION" --target "$TARGET_REF" --base "$BOOTSTRAP_BASE" --overrides /tmp/overrides.json --output /tmp/plan.json --previous /tmp/bootstrap-snapshot.json)
+            if [ -n "$CANDIDATE_IMPORT" ]; then args+=(--candidate-import "$CANDIDATE_IMPORT" --history-import "$HISTORY_IMPORT"); fi
             (cd tools/plugin-release && go run . "${args[@]}")
             cp /tmp/bootstrap-evidence.json "plugins/release/bootstrap-evidence/$GATEWAY_VERSION.json"
           else
             release_id="$GATEWAY_VERSION"
             args=(plan --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$GATEWAY_VERSION" --target "$TARGET_REF" --overrides /tmp/overrides.json --output /tmp/plan.json --previous "../../$PREVIOUS")
+            if [ -n "$CANDIDATE_IMPORT" ]; then args+=(--candidate-import "$CANDIDATE_IMPORT" --history-import "$HISTORY_IMPORT"); fi
             (cd tools/plugin-release && go run . "${args[@]}")
           fi
           cp /tmp/plan.json "plugins/release/plans/$release_id.json"
@@ -502,6 +528,7 @@ jobs:
           plan_id=$(jq -r '.planId | sub("sha256:"; "")' /tmp/plan.json)
           source_commit=$(git rev-parse HEAD)
           jq -c '.plugins[]' /tmp/plan.json | while read -r entry; do
+            if jq -e '.candidateImport != null' <<<"$entry" >/dev/null; then continue; fi
             id=$(jq -r .logicalId <<<"$entry"); implementation=$(jq -r .implementation <<<"$entry")
             source=$(jq -r .sourceDir <<<"$entry"); version=$(jq -r .version <<<"$entry"); input_hash=$(jq -r .inputHash <<<"$entry")
             build_name=$(basename "$source")
@@ -515,6 +542,18 @@ jobs:
           release_id="$GATEWAY_VERSION"
           if [ "$RELEASE_MODE" = cpp-hotfix ]; then release_id=cpp-hotfix-2.0.1; fi
           cp /tmp/candidates.json "plugins/release/evidence/$release_id.json"
+      - name: Read imported bytes and capture calibrated history publication evidence
+        if: ${{ !inputs.dry_run && inputs.release_mode != 'cpp-hotfix' }}
+        env:
+          PREVIOUS: ${{ inputs.previous_snapshot }}
+          GATEWAY_VERSION: ${{ inputs.gateway_version }}
+        run: |
+          set -euo pipefail
+          previous=/tmp/bootstrap-snapshot.json
+          if [ -n "$PREVIOUS" ]; then previous="../../$PREVIOUS"; fi
+          (cd tools/plugin-release && go run . capture-history-evidence --root ../.. --catalog ../../plugins/release/catalog.json --plan /tmp/plan.json --previous "$previous" --candidate-evidence /tmp/candidates.json --output /tmp/merged-candidates.json)
+          mv /tmp/merged-candidates.json /tmp/candidates.json
+          cp /tmp/candidates.json "plugins/release/evidence/$GATEWAY_VERSION.json"
       - name: Sweep public registry for planned tag conflicts
         if: ${{ inputs.release_mode != 'cpp-hotfix' }}
         env:
@@ -553,7 +592,7 @@ jobs:
             echo "Migration preflight ($probe_mode): no planned version tag is occupied by a different artifact." >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Upload migration preflight report
-        if: ${{ inputs.release_mode != 'cpp-hotfix' }}
+        if: ${{ always() && inputs.release_mode != 'cpp-hotfix' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: plugin-release-migration-report-${{ inputs.gateway_version }}
@@ -572,6 +611,7 @@ jobs:
           mkdir -p plugins/release/snapshots
           release_id="$GATEWAY_VERSION"
           args=(render-snapshot --catalog ../../plugins/release/catalog.json --plan /tmp/plan.json --candidate-evidence /tmp/candidates.json)
+          args+=(--root ../..)
           if [ "$RELEASE_MODE" = cpp-hotfix ]; then
             release_id=cpp-hotfix-2.0.1
             args+=(--mode=cpp-hotfix)
@@ -598,6 +638,7 @@ jobs:
           GATEWAY_VERSION: ${{ inputs.gateway_version }}
           TARGET_REF: ${{ inputs.target_ref }}
           RELEASE_MODE: ${{ inputs.release_mode }}
+          PREVIOUS: ${{ inputs.previous_snapshot }}
         run: |
           set -euo pipefail
           RELEASE_MODE="${RELEASE_MODE:-standard}"
@@ -611,8 +652,18 @@ jobs:
           branch="release/plugin-snapshot-$release_id"
           git config user.name "higress-release-bot"; git config user.email "release-bot@higress.io"
           git checkout -B "$branch"
-          git add plugins/wasm-go/extensions plugins/wasm-rust/extensions plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence
+          git add plugins/wasm-go/extensions plugins/wasm-rust/extensions plugins/wasm-cpp/extensions plugins/release/imports plugins/release/snapshots plugins/release/plans plugins/release/evidence plugins/release/bootstrap-evidence
           git commit -s -m "chore: prepare plugin snapshot $GATEWAY_VERSION" || true
+          preparation_head=$(git rev-parse HEAD)
+          verify_args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../plugins/release/snapshots/$release_id.json" --plan "../../plugins/release/plans/$release_id.json" --expected-source "$TARGET_REF" --committed-source "$preparation_head" --resolve --oci-source candidate)
+          if [ "$RELEASE_MODE" = cpp-hotfix ]; then
+            verify_args+=(--mode=cpp-hotfix)
+          elif [ -n "$PREVIOUS" ]; then
+            verify_args+=(--previous "../../$PREVIOUS")
+          else
+            verify_args+=(--previous /tmp/bootstrap-snapshot.json)
+          fi
+          (cd tools/plugin-release && go run . "${verify_args[@]}")
           git push --force-with-lease origin "$branch"
           # BEGIN preparation-pr-contract
           release_id="${release_id:-$GATEWAY_VERSION}"

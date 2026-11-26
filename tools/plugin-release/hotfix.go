@@ -27,17 +27,7 @@ const (
 	cppHotfixVersion     = "2.0.1"
 )
 
-var cppHotfixSources = map[string]string{
-	"basic-auth":      "basic_auth",
-	"bot-detect":      "bot_detect",
-	"custom-response": "custom_response",
-	"hmac-auth":       "hmac_auth",
-	"jwt-auth":        "jwt_auth",
-	"key-auth":        "key_auth",
-	"key-rate-limit":  "key_rate_limit",
-	"oauth":           "oauth",
-	"request-block":   "request_block",
-}
+var cppHotfixSources = managedCPPSources
 
 func validateReleaseMode(mode string) error {
 	if mode != releaseModeDefault && mode != releaseModeCPPHotfix {

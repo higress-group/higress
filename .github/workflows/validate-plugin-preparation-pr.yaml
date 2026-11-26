@@ -7,12 +7,17 @@ on:
       - 'plugins/wasm-go/extensions/**'
       - 'plugins/wasm-rust/extensions/**'
       - 'plugins/wasm-cpp/extensions/**'
+      - 'tools/plugin-release/**'
+      - '.github/workflows/prepare-plugin-release.yaml'
+      - '.github/workflows/validate-plugin-preparation-pr.yaml'
 
 permissions:
   contents: read
 
 jobs:
   validate:
+    env:
+      PREPARATION_HEAD: ${{ github.event.pull_request.head.sha }}
     # Same reason as prepare-plugin-release.yaml: Ubuntu 26 ships GCC 15,
     # which rejects the bundled oniguruma C sources in ai-data-masking's
     # onig_sys dependency before the snapshot can be validated.
@@ -20,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.0'
@@ -33,7 +40,8 @@ jobs:
         run: |
           set -euo pipefail
           (cd tools/plugin-release && go test ./... && go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json)
-          git diff --name-only "$BASE_SHA" "$GITHUB_SHA" | grep -E '^plugins/release/snapshots/([0-9]+\.[0-9]+\.[0-9]+|cpp-hotfix-2\.0\.1)\.json$' > /tmp/changed-snapshots || true
+          test "$(git rev-parse HEAD)" = "$PREPARATION_HEAD"
+          git diff --name-only "$BASE_SHA" "$PREPARATION_HEAD" | grep -E '^plugins/release/snapshots/([0-9]+\.[0-9]+\.[0-9]+|cpp-hotfix-2\.0\.1)\.json$' > /tmp/changed-snapshots || true
           test -s /tmp/changed-snapshots || { echo "No snapshot changed; catalog-only validation complete."; exit 0; }
           while read -r snapshot; do
             mode=$(jq -r .provenanceMode "$snapshot")
@@ -56,12 +64,15 @@ jobs:
                     $proof != null and
                     $proof.candidateRef == $published.candidateRef and
                     $proof.digest == $published.digest and
-                    $proof.sourceCommit == $plan[0].sourceCommit and
+                    $proof.sourceCommit == ($entry.artifactSourceCommit // $plan[0].sourceCommit) and
+                    $published.sourceCommit == $proof.sourceCommit and
+                    $published.candidateImport == $entry.candidateImport and
+                    $published.wasmSha256 == $proof.wasmSha256 and
                     $proof.inputHash == $entry.inputHash and
                     $published.version == $entry.version and
                     (($published.backfill // false) == ($entry.backfill // false))
                   )' "$snapshot" >/dev/null
-                args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$snapshot" --plan "../../$plan" --expected-source "$source" --committed-source "$GITHUB_SHA" --resolve --oci-source candidate)
+                args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$snapshot" --plan "../../$plan" --expected-source "$source" --committed-source "$PREPARATION_HEAD" --resolve --oci-source candidate)
                 marker=$(jq -r '.bootstrapEvidence.path // empty' "$snapshot")
                 if [ "$release_id" = cpp-hotfix-2.0.1 ]; then
                   args+=(--mode=cpp-hotfix)
@@ -72,6 +83,8 @@ jobs:
                   # digest and binds every public/backfill/deferred claim to it.
                   [[ "$marker" =~ ^plugins/release/bootstrap-evidence/[0-9]+\.[0-9]+\.[0-9]+\.json$ ]]
                   test -f "$marker"
+                  (cd tools/plugin-release && go run . bootstrap-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$(jq -r .previousRelease "../../$snapshot")" --source "$source" --existing-evidence "../../$marker" --output /tmp/bootstrap-previous.json)
+                  args+=(--previous /tmp/bootstrap-previous.json)
                 else
                   previous=$(jq -r '.previousRelease // empty' "$snapshot")
                   [[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -84,7 +97,7 @@ jobs:
                 ;;
               bootstrap-public)
                 test -f "plugins/release/bootstrap-evidence/$gateway.json"
-                (cd tools/plugin-release && go run . verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$snapshot" --expected-source "$source" --committed-source "$GITHUB_SHA" --resolve --oci-source public)
+                (cd tools/plugin-release && go run . verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$snapshot" --expected-source "$source" --committed-source "$PREPARATION_HEAD" --resolve --oci-source public)
                 ;;
               *) echo "unsupported snapshot provenance mode: $mode" >&2; exit 1 ;;
             esac
@@ -125,6 +138,7 @@ jobs:
           }
           # END plugin-build-contract
           sort -u /tmp/planned-artifacts | while read -r entry; do
+            if jq -e '.candidateImport != null' <<<"$entry" >/dev/null; then continue; fi
             implementation=$(jq -r .implementation <<<"$entry")
             source=$(jq -r .sourceDir <<<"$entry")
             name=$(basename "$source")
