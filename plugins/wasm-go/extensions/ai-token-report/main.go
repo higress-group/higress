@@ -361,24 +361,18 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config TokenUsageReportConfig,
 		return data
 	}
 
-	// Image JSON can span many large base64 chunks. Keep just enough prefix to
-	// recognize a returned image, without buffering the image in the gateway.
-	if perCallModel, err := proxywasm.GetProperty([]string{"wasm.teamBillingPerCallModel"}); err == nil {
-		if !ctx.GetBoolContext("teamHasBillableResult", false) {
-			const maxPrefix = 32 << 10
-			prefix := ctx.GetByteSliceContext("teamResultPrefix", nil)
-			if len(prefix) < maxPrefix {
-				prefix = append(prefix, data[:min(len(data), maxPrefix-len(prefix))]...)
-				// Terminate a truncated base64 value for bounded JSON inspection.
-				if hasBillableResult(string(perCallModel), append(append([]byte(nil), prefix...), []byte(`"}]}`)...)) {
-					ctx.SetContext("teamHasBillableResult", true)
-					ctx.SetContext("teamResultPrefix", nil)
-				} else {
-					ctx.SetContext("teamResultPrefix", prefix)
-				}
-			}
+	if sku, err := proxywasm.GetProperty([]string{"wasm.teamBillingPerCallModel"}); err == nil {
+		result, _ := ctx.GetContext("teamResultJSON").(*resultJSON)
+		if result == nil {
+			result = &resultJSON{search: string(sku) == "deepseek-search"}
+			ctx.SetContext("teamResultJSON", result)
 		}
-		ctx.SetContext(CtxKeyModel, string(perCallModel))
+		result.feed(data)
+		if endOfStream {
+			ctx.SetContext("teamHasBillableResult", result.billable())
+			ctx.SetContext("teamResultJSON", nil)
+		}
+		ctx.SetContext(CtxKeyModel, string(sku))
 	}
 	// Set first token time if not already set
 	if ctx.GetContext(CtxFirstToken) == nil {
@@ -508,7 +502,9 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config TokenUsageReportConfig, 
 	// Dedicated image routes may rewrite the provider model and also use per-call pricing.
 	// A successful image result is chargeable even when the provider omits token counts.
 	if perCallModel, err := proxywasm.GetProperty([]string{"wasm.teamBillingPerCallModel"}); err == nil {
-		if !hasBillableResult(string(perCallModel), body) {
+		result := resultJSON{search: string(perCallModel) == "deepseek-search"}
+		result.feed(body)
+		if !result.billable() {
 			return types.ActionContinue
 		}
 		ctx.SetContext(CtxKeyModel, string(perCallModel))
@@ -556,25 +552,6 @@ func convertToUInt(val interface{}) (uint64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func hasBillableResult(model string, body []byte) bool {
-	if model == "deepseek-search" {
-		return !gjson.GetBytes(body, "error").Exists() && gjson.GetBytes(body, "results").IsArray()
-	}
-	return hasBillableImage(body)
-}
-
-func hasBillableImage(body []byte) bool {
-	if gjson.GetBytes(body, "error").Exists() {
-		return false
-	}
-	for _, item := range gjson.GetBytes(body, "data").Array() {
-		if item.Get("url").String() != "" || item.Get("b64_json").String() != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, model string, inputTokens, outputTokens,

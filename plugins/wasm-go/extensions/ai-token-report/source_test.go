@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -151,6 +152,10 @@ func TestPerCallSettlement(t *testing.T) {
 			name, status, body, priceModel string
 			wantReport                     bool
 		}{
+			{"long metadata before image", "200", `{"data":[{"revised_prompt":"` + strings.Repeat("x", 70000) + `","url":"image.png"}]}`, "image", true},
+			{"late error", "200", `{"data":[{"url":"image.png"}],"error":{"message":"failed"}}`, "image", false},
+			{"truncated image", "200", `{"data":[{"b64_json":"AQ`, "image", false},
+			{"trailing garbage", "200", `{"data":[{"url":"image.png"}]}...`, "image", false},
 			{"per-call image without tokens", "200", `{"data":[{"url":"https://example.test/output.png"}]}`, "gemini-3.1-flash-image-preview-times", true},
 			{"upstream name is not the invoiced model", "200", `{"model":"gemini-3.1-flash-image-preview","usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11},"data":[{"b64_json":"AQ=="}]}`, "gemini-3.1-flash-image-preview-times", true},
 			{"unsuccessful provider response", "503", `{"error":{"message":"unavailable"}}`, "gemini-3.1-flash-image-preview-times", false},
@@ -171,7 +176,14 @@ func TestPerCallSettlement(t *testing.T) {
 				host.CallOnRequestHeaders(id, [][2]string{{":authority", "model.test"}, {":method", "POST"}, {":path", "/team/v1/images/generations"}, {"request-id", "wjat-fixture"}, {"x-original-api-key", "fixture-key"}}, false)
 				host.CallOnResponseHeaders(id, [][2]string{{":status", tc.status}, {"content-type", "application/json"}}, false)
 				require.NoError(t, proxywasm.RemoveHttpResponseHeader(":status"))
-				host.CallOnResponseBody(id, []byte(tc.body), true)
+				body := []byte(tc.body)
+				for len(body) > 0 {
+					size := min(13, len(body))
+					host.CallOnResponseBody(id, body[:size], false)
+					body = body[size:]
+				}
+				require.Empty(t, host.GetCalloutAttributesFromContext(id))
+				host.CallOnResponseBody(id, nil, true)
 				calls := host.GetCalloutAttributesFromContext(id)
 				if tc.wantReport {
 					require.Len(t, calls, 1)
