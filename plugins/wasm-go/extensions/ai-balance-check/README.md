@@ -240,10 +240,12 @@ For issues and questions, please refer to the Higress documentation and communit
 | 配置 | 行为 |
 | --- | --- |
 | `teamRouteMode: strict` | 新入口要求有效的 `X-Wujie-Team-Id`。 |
-| `teamRouteMode: compat` | 旧入口有团队头时使用该团队，省略时由 Claw 解析调用者自己的默认团队。 |
+| `teamRouteMode: compat` | 原 URL 有团队头时校验该团队。版本头 X-Wujie-Billing-Version 为 2 的请求必须带团队头，旧版省略两头时由 Claw 解析默认团队。 |
 | `teamSettlement: usage` | 聊天将准入确认的内部团队 ID 交给用量上报插件。 |
 | `teamSettlement: forward` | Banana 建单将已确认的公开团队 UUID 转交 Open Platform，由其使用原 API Key 再次校验。 |
 | `teamSettlement: image` | 实际出图路由通过 `teamImageBillingModel` 指定 Account 定价使用的模型。 |
 
 首批聊天和 Banana 使用上述三种结算配置，无需新增签名密钥。仅在实际聊天和出图路由启用用量上报。
 成员或余额校验失败分别返回 HTTP 422 的 `team_access_denied` 或 `team_credits_unavailable`。
+
+采用原 URL 的网关可在模型前缀规则上设置 `teamPaidPaths` 精确路径列表。名单外的新版请求在进入上游前被拒绝。迁移已有前缀时，将旧余额规则的有效配置保存在 `teamUnlistedPathConfig`（原先关闭时为 `{}`），并在上报插件保存其自身的旧配置。旧请求按原规则处理，原规则无法识别显式团队时拒绝请求。未提供旧余额配置时沿用现有 `apiUrl` 做旧余额检查。原来未启用余额检查的入口可启用 `teamVersionGuardOnly: true`，仅拒绝带计费版本的未迁移请求，保留旧请求的直通行为。
