@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "repository": "higress-group/higress",
+  "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+  "catalog": {
+    "path": "plugins/release/imports/cpp-defaults-2.0.1/source-catalog.json",
+    "sha256": "ca8fadef2ebc3001aa664c7f11ce7f1f6dc42c2f5f7baf47b6d6a878747d9151"
+  },
+  "plan": {
+    "path": "plugins/release/imports/cpp-defaults-2.0.1/source-plan.json",
+    "sha256": "5edfed66ebe73a11d51461365cc88d69c86bc24aa3988c897980f43034620ec5"
+  },
+  "snapshot": {
+    "path": "plugins/release/imports/cpp-defaults-2.0.1/source-snapshot.json",
+    "sha256": "5eafd408f3257954f247154718e086bd67321a01102d2341e8eaccc3aa8d9853"
+  },
+  "evidence": {
+    "path": "plugins/release/imports/cpp-defaults-2.0.1/source-evidence.json",
+    "sha256": "b3aea46f427224934e31916fc789f68264861c34d0257c49637caa105071596d"
+  }
+}
