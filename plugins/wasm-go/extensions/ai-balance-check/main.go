@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -15,7 +16,7 @@ import (
 )
 
 const (
-	defaultAPITimeout int32 = 5000
+	defaultAPITimeout int32  = 5000
 	OriginalAPIKey    string = "X-Original-Api-Key"
 )
 
@@ -33,12 +34,18 @@ type OpenAIError struct {
 }
 
 type BalanceCheckConfig struct {
-	checkClient  wrapper.HttpClient
-	apiUrl      string
-	serviceName string
-	apiTimeout   int32
-	failMessage  string
-	failCode     int32
+	checkClient           wrapper.HttpClient
+	apiUrl                string
+	serviceName           string
+	apiTimeout            int32
+	failMessage           string
+	failCode              int32
+	teamEndpoint          *url.URL
+	teamRouteMode         string
+	teamSettlement        string
+	teamFallback          string
+	teamSigningKey        string
+	teamImageBillingModel string
 }
 
 func main() {}
@@ -52,8 +59,54 @@ func init() {
 }
 
 func parseConfig(json gjson.Result, config *BalanceCheckConfig) error {
+	teamBilling := json.Get("teamBilling").Bool()
+	config.teamRouteMode = json.Get("teamRouteMode").String()
+	config.teamSettlement = json.Get("teamSettlement").String()
+	config.teamFallback = json.Get("teamFallback").String()
+	if config.teamFallback != "" {
+		if (config.teamFallback != "source" && config.teamFallback != "target") || config.teamRouteMode == "" || config.teamSettlement != "usage" {
+			return fmt.Errorf("native team fallback requires a migrated usage source or target")
+		}
+	}
+	if signedOperation(config.teamSettlement) || config.teamFallback != "" {
+		config.teamSigningKey = os.Getenv("WUJIE_TEAM_SIGNING_KEY")
+		if config.teamSigningKey == "" {
+			config.teamSigningKey = json.Get("teamSigningKey").String()
+		}
+		if len(config.teamSigningKey) < 32 {
+			return fmt.Errorf("signed operations require a team signing key of at least 32 bytes")
+		}
+	}
+	switch config.teamRouteMode {
+	case "":
+		if config.teamSettlement != "" {
+			return fmt.Errorf("teamSettlement requires a migrated team route")
+		}
+	case "strict", "compat":
+		if !teamBilling {
+			return fmt.Errorf("teamRouteMode requires teamBilling")
+		}
+		switch config.teamSettlement {
+		case "usage", "forward", "unavailable":
+		case "image":
+			config.teamImageBillingModel = json.Get("teamImageBillingModel").String()
+			if config.teamImageBillingModel == "" {
+				return fmt.Errorf("image settlement requires the route's price catalog model")
+			}
+		case "search":
+			config.teamImageBillingModel = "deepseek-search"
+		case "task_create", "task_create_sync", "mirror_create":
+		default:
+			return fmt.Errorf("migrated team routes require explicit teamSettlement")
+		}
+	default:
+		return fmt.Errorf("invalid teamRouteMode")
+	}
 	config.apiUrl = json.Get("apiUrl").String()
 	if config.apiUrl == "" {
+		if teamBilling {
+			return fmt.Errorf("the legacy apiUrl is required when team billing is enabled")
+		}
 		log.Infof("ai-balance-check: apiUrl not configured, plugin will be disabled")
 		return nil
 	}
@@ -99,6 +152,14 @@ func parseConfig(json gjson.Result, config *BalanceCheckConfig) error {
 		if p, err := strconv.Atoi(actualPort); err == nil {
 			port = int64(p)
 		}
+	}
+
+	if teamBilling {
+		endpoint, err := url.Parse(json.Get("teamApiUrl").String())
+		if err != nil || endpoint.Host != parsedUrl.Host || endpoint.Scheme != parsedUrl.Scheme || endpoint.Path == "" {
+			return fmt.Errorf("teamApiUrl must be an admission URL on the existing balance API origin")
+		}
+		config.teamEndpoint = endpoint
 	}
 
 	// Create HTTP client for balance check API
@@ -152,6 +213,49 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config BalanceCheckConfig) ty
 	// Check if already validated to avoid duplicate checks
 	if ctx.GetContext(CtxKeyBalanceChecked) != nil {
 		return types.ActionContinue
+	}
+
+	if config.teamEndpoint != nil {
+		if config.teamSettlement == "unavailable" {
+			return teamAdmissionError(http.StatusServiceUnavailable)
+		}
+		for _, header := range []string{admittedTeamHeader, admittedTeamUUIDHeader, signatureHeader, timestampHeader} {
+			if err := proxywasm.RemoveHttpRequestHeader(header); err != nil && err != types.ErrorStatusNotFound {
+				return teamAdmissionError(http.StatusServiceUnavailable)
+			}
+		}
+		proof, _ := proxywasm.GetHttpRequestHeader(fallbackProofHeader)
+		if err := proxywasm.RemoveHttpRequestHeader(fallbackProofHeader); err != nil && err != types.ErrorStatusNotFound {
+			return teamAdmissionError(http.StatusServiceUnavailable)
+		}
+		redirectOrigin, _ := proxywasm.GetHttpRequestHeader("x-higress-fallback-from")
+		if config.teamRouteMode != "" && config.teamFallback != "target" && (proof != "" || redirectOrigin != "") {
+			return teamAdmissionError(http.StatusServiceUnavailable)
+		}
+		if config.teamFallback == "target" {
+			team, _ := proxywasm.GetHttpRequestHeader(teamUUIDHeader)
+			key, _ := proxywasm.GetHttpRequestHeader(OriginalAPIKey)
+			requestID, _ := proxywasm.GetHttpRequestHeader("request-id")
+			model, _ := proxywasm.GetHttpRequestHeader("x-higress-llm-model")
+			if !validFallbackProof(config.teamSigningKey, requestID, team, key, model, proof) {
+				return teamAdmissionError(http.StatusServiceUnavailable)
+			}
+			return checkTeamAdmission(ctx, config, &team)
+		}
+		teamUUID, err := proxywasm.GetHttpRequestHeader(teamUUIDHeader)
+		switch err {
+		case nil:
+			return checkTeamAdmission(ctx, config, &teamUUID)
+		case types.ErrorStatusNotFound:
+			switch config.teamRouteMode {
+			case "strict":
+				return teamAdmissionError(http.StatusBadRequest)
+			case "compat":
+				return checkTeamAdmission(ctx, config, nil)
+			}
+		default:
+			return teamAdmissionError(http.StatusServiceUnavailable)
+		}
 	}
 
 	// Get API key from X-Original-Api-Key header

@@ -41,6 +41,7 @@ const (
 
 	// HTTP headers
 	OriginalAPIKey = "X-Original-Api-Key"
+	teamUUIDHeader = "X-Wujie-Team-Id"
 
 	// WujieTaskID is the business task id header (OPE-8474): forwarded by wujie backend,
 	// a plain-numeric task id (e.g. "999"). Deliberately NOT x-request-id, which Envoy overwrites.
@@ -69,7 +70,9 @@ type TokenUsageReportRequest struct {
 	TokenUsage    string `json:"tokenUsage"`
 	// Wujie business task id (OPE-8474), plain numeric string read from wujie_task_id header.
 	// omitempty: header absent/empty -> field not sent (Onepiece falls back to requestId dedup).
-	TaskId string `json:"taskId,omitempty"`
+	TaskId           string `json:"taskId,omitempty"`
+	TeamID           int64  `json:"teamId,omitempty"`
+	PersonalOwnerUID int64  `json:"personalOwnerUid,omitempty"`
 }
 
 // TokenUsageReportConfig holds the configuration for token usage reporting
@@ -79,6 +82,8 @@ type TokenUsageReportConfig struct {
 	reportServiceName  string
 	reportTimeout      int32
 	disableOpenaiUsage bool
+	teamReportCluster  *wrapper.FQDNCluster
+	requireTeamID      bool
 	source             sourceConfig
 }
 
@@ -99,6 +104,16 @@ func init() {
 func parseConfig(json gjson.Result, config *TokenUsageReportConfig) error {
 	// Parse reportApiUrl (required)
 	config.reportApiUrl = json.Get("reportApiUrl").String()
+	config.requireTeamID = json.Get("requireTeamId").Bool()
+	if service := json.Get("teamReportService").String(); service != "" {
+		if !strings.HasSuffix(service, ".dns") {
+			return fmt.Errorf("teamReportService must be a Higress DNS upstream name ending in .dns")
+		}
+		config.teamReportCluster = &wrapper.FQDNCluster{FQDN: service, Port: 8080}
+	}
+	if config.requireTeamID && (config.reportApiUrl == "" || config.teamReportCluster == nil) {
+		return fmt.Errorf("reportApiUrl and teamReportService are required on team billing routes")
+	}
 	if config.reportApiUrl == "" {
 		log.Infof("ai-token-report: reportApiUrl not configured, plugin will be disabled")
 		return nil
@@ -189,8 +204,9 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfig
 	ctx.SetContext(CtxProductSource, config.source.normalize(source))
 
 	// 检查 providerType，如果为空则跳过本插件（非 AI 路由）
+	perCallModel, _ := proxywasm.GetProperty([]string{"wasm.teamBillingPerCallModel"})
 	providerType := getProviderType()
-	if providerType == "" {
+	if providerType == "" && len(perCallModel) == 0 {
 		log.Debugf("ai-token-report: providerType is empty, skipping (not an AI route)")
 		ctx.DontReadRequestBody()
 		ctx.DontReadResponseBody()
@@ -209,6 +225,9 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfig
 	ctx.SetContext(CtxRequestStart, time.Now().UnixMilli())
 
 	requestModel := getRequestModel()
+	if len(perCallModel) != 0 {
+		requestModel = string(perCallModel)
+	}
 	ctx.SetContext(CtxKeyModel, requestModel)
 
 	log.Debugf("ai-token-report: processing AI request, providerType=%s, requestModel=%s", providerType, requestModel)
@@ -342,6 +361,25 @@ func onHttpStreamingBody(ctx wrapper.HttpContext, config TokenUsageReportConfig,
 		return data
 	}
 
+	// Image JSON can span many large base64 chunks. Keep just enough prefix to
+	// recognize a returned image, without buffering the image in the gateway.
+	if perCallModel, err := proxywasm.GetProperty([]string{"wasm.teamBillingPerCallModel"}); err == nil {
+		if !ctx.GetBoolContext("teamHasBillableResult", false) {
+			const maxPrefix = 32 << 10
+			prefix := ctx.GetByteSliceContext("teamResultPrefix", nil)
+			if len(prefix) < maxPrefix {
+				prefix = append(prefix, data[:min(len(data), maxPrefix-len(prefix))]...)
+				// Terminate a truncated base64 value for bounded JSON inspection.
+				if hasBillableResult(string(perCallModel), append(append([]byte(nil), prefix...), []byte(`"}]}`)...)) {
+					ctx.SetContext("teamHasBillableResult", true)
+					ctx.SetContext("teamResultPrefix", nil)
+				} else {
+					ctx.SetContext("teamResultPrefix", prefix)
+				}
+			}
+		}
+		ctx.SetContext(CtxKeyModel, string(perCallModel))
+	}
 	// Set first token time if not already set
 	if ctx.GetContext(CtxFirstToken) == nil {
 		ctx.SetContext(CtxFirstToken, time.Now().UnixMilli())
@@ -467,6 +505,15 @@ func onHttpResponseBody(ctx wrapper.HttpContext, config TokenUsageReportConfig, 
 		}
 	}
 
+	// Dedicated image routes may rewrite the provider model and also use per-call pricing.
+	// A successful image result is chargeable even when the provider omits token counts.
+	if perCallModel, err := proxywasm.GetProperty([]string{"wasm.teamBillingPerCallModel"}); err == nil {
+		if !hasBillableResult(string(perCallModel), body) {
+			return types.ActionContinue
+		}
+		ctx.SetContext(CtxKeyModel, string(perCallModel))
+		ctx.SetContext("teamHasBillableResult", true)
+	}
 	// Report token usage
 	reportTokenUsageFromContext(ctx, config, body)
 
@@ -511,6 +558,25 @@ func convertToUInt(val interface{}) (uint64, bool) {
 	}
 }
 
+func hasBillableResult(model string, body []byte) bool {
+	if model == "deepseek-search" {
+		return !gjson.GetBytes(body, "error").Exists() && gjson.GetBytes(body, "results").IsArray()
+	}
+	return hasBillableImage(body)
+}
+
+func hasBillableImage(body []byte) bool {
+	if gjson.GetBytes(body, "error").Exists() {
+		return false
+	}
+	for _, item := range gjson.GetBytes(body, "data").Array() {
+		if item.Get("url").String() != "" || item.Get("b64_json").String() != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, model string, inputTokens, outputTokens,
 	totalTokens uint64, duration int64, startTime, endTime int64, tokenUsage string) {
 	// Add panic recovery to ensure reporting never crashes the main flow
@@ -520,6 +586,16 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 		}
 	}()
 
+	if sku, err := proxywasm.GetProperty([]string{"wasm.teamBillingPerCallModel"}); err == nil {
+		if !ctx.GetBoolContext("teamHasBillableResult", false) {
+			return
+		}
+		model = string(sku)
+	}
+	// Task submission is admitted once; its execution owns the billable event.
+	if settlement, err := proxywasm.GetProperty([]string{"wasm.teamBillingSettlement"}); err == nil && len(settlement) != 0 {
+		return
+	}
 	// Skip if report API client is not configured
 	if config.reportClient == nil {
 		log.Debugf("reportClient not configured, skipping token usage report")
@@ -569,21 +645,47 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 		log.Debugf("reportTokenUsage using generated ID: %s", requestID)
 	}
 
+	// Only the admission plugin sets this stream property.
+	var teamID, personalOwnerUID int64
+	if value, err := proxywasm.GetProperty([]string{"wasm.teamId"}); err == nil {
+		teamID, err = strconv.ParseInt(string(value), 10, 64)
+		if err != nil || teamID <= 0 || config.teamReportCluster == nil {
+			log.Errorf("Team usage report is invalid or not configured, requestId=%s", requestID)
+			return
+		}
+		if owner, ownerErr := proxywasm.GetProperty([]string{"wasm.teamPersonalOwnerUid"}); ownerErr == nil {
+			personalOwnerUID, ownerErr = strconv.ParseInt(string(owner), 10, 64)
+			if ownerErr != nil || personalOwnerUID <= 0 {
+				log.Errorf("Team usage report has an invalid personal owner, requestId=%s", requestID)
+				return
+			}
+		}
+	} else {
+		// Admission strips the selector after it has set the team ID. A
+		// selector left on a team route belongs to an unadmitted request.
+		_, selectorErr := proxywasm.GetHttpRequestHeader(teamUUIDHeader)
+		if config.requireTeamID || (config.teamReportCluster != nil && selectorErr == nil) {
+			return
+		}
+	}
+
 	// Build request body
 	reportReq := TokenUsageReportRequest{
-		ProductSource: ctx.GetStringContext(CtxProductSource, config.source.fallbackValue),
-		RequestId:     requestID,
-		Model:         model,
-		UserKey:       userKey,
-		InputToken:    int64(inputTokens),
-		OutputToken:   int64(outputTokens),
-		TotalToken:    int64(totalTokens),
-		Duration:      duration,
-		Timestamp:     timestamp,
-		StartTime:     startTime,
-		EndTime:       endTime,
-		TokenUsage:    tokenUsage,
-		TaskId:        taskId,
+		ProductSource:    ctx.GetStringContext(CtxProductSource, config.source.fallbackValue),
+		RequestId:        requestID,
+		Model:            model,
+		UserKey:          userKey,
+		InputToken:       int64(inputTokens),
+		OutputToken:      int64(outputTokens),
+		TotalToken:       int64(totalTokens),
+		Duration:         duration,
+		Timestamp:        timestamp,
+		StartTime:        startTime,
+		EndTime:          endTime,
+		TokenUsage:       tokenUsage,
+		TaskId:           taskId,
+		TeamID:           teamID,
+		PersonalOwnerUID: personalOwnerUID,
 	}
 
 	// Marshal request body
@@ -606,21 +708,22 @@ func reportTokenUsage(config TokenUsageReportConfig, ctx wrapper.HttpContext, mo
 	}
 
 	// Call the reporting API asynchronously
-	log.Infof("Reporting token usage to %s: requestId=%s, model=%s, userKey=%s, inputToken=%d, outputToken=%d, totalToken=%d, duration=%d",
-		config.reportApiUrl, requestID, model, userKey, inputTokens, outputTokens, totalTokens, duration)
+	log.Infof("Reporting token usage to %s: requestId=%s, model=%s, inputToken=%d, outputToken=%d, totalToken=%d, duration=%d",
+		config.reportApiUrl, requestID, model, inputTokens, outputTokens, totalTokens, duration)
 
-	// Use a simple callback that doesn't capture large variables
-	err = config.reportClient.Post(
-		requestPath,
-		[][2]string{
-			{"Content-Type", "application/json"},
-		},
-		jsonData,
-		func(statusCode int, responseHeaders http.Header, responseBody []byte) {
-			log.Debugf("Token usage report callback: status=%d", statusCode)
-		},
-		uint32(config.reportTimeout),
-	)
+	if teamID > 0 {
+		err = dispatchTeamReport(config, requestID, jsonData)
+	} else {
+		err = config.reportClient.Post(
+			requestPath,
+			[][2]string{{"Content-Type", "application/json"}},
+			jsonData,
+			func(statusCode int, _ http.Header, _ []byte) {
+				log.Debugf("Token usage report callback: status=%d", statusCode)
+			},
+			uint32(config.reportTimeout),
+		)
+	}
 
 	if err != nil {
 		log.Errorf("Failed to dispatch token usage report call: %v", err)
@@ -635,6 +738,29 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config TokenUsageReportConfi
 		ctx.SetContext(CtxResponseStatus, status)
 	}
 	return types.ActionContinue
+}
+
+func dispatchTeamReport(config TokenUsageReportConfig, requestID string, body []byte) error {
+	// Dispatch directly to the cluster service and keep the report body out of logs.
+	_, err := proxywasm.DispatchHttpCall(config.teamReportCluster.ClusterName(), [][2]string{
+		{":method", http.MethodPost},
+		{":authority", config.teamReportCluster.HostName()},
+		{":path", "/internal/model/usage/team-report"},
+		{"Content-Type", "application/json"},
+	}, body, nil, uint32(config.reportTimeout), func(_, _, _ int) {
+		headers, _ := proxywasm.GetHttpCallResponseHeaders()
+		status := http.StatusBadGateway
+		for _, h := range headers {
+			if h[0] == ":status" {
+				status, _ = strconv.Atoi(h[1])
+				break
+			}
+		}
+		if status < http.StatusOK || status >= http.StatusMultipleChoices {
+			log.Errorf("Team usage report rejected, requestId=%s, status=%d", requestID, status)
+		}
+	})
+	return err
 }
 
 func reportTokenUsageFromContext(ctx wrapper.HttpContext, config TokenUsageReportConfig, responseBody []byte) {
