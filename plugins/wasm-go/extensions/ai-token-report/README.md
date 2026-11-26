@@ -284,3 +284,10 @@ spec:
 如有问题，请提交 Issue 到 Higress 项目：
 - GitHub: https://github.com/alibaba/higress
 - 官方文档: https://higress.io/
+
+## 团队用量上报
+
+在迁移后的聊天和实际出图路由设置 `requireTeamId: true`，并将 `teamReportService`
+设为已在 Higress 注册的 Open Platform 内部服务（例如 `onepiece-open-platform-internal.dns`，端口 8080）。
+插件从同一请求的 `wasm.teamId` 读取已准入的内部团队 ID，向 `/internal/model/usage/team-report` 上报。
+缺少团队归属或 HTTP 响应失败时跳过上报。Banana 使用出图路由配置的价格模型，成功返回图片且没有 token 时也会产生用量事件。
