@@ -14,12 +14,20 @@ Plugin Execution Priority: `320`
 ## Configuration Fields
 | Name               | Data Type          | Fill Requirement                                         | Default Value | Description                                                |
 |--------------------|--------------------|---------------------------------------------------------|---------------|------------------------------------------------------------|
-| block_urls         | array of string     | Optional, at least one of `block_urls`, `block_headers`, `block_bodies` must be filled | -             | Configure strings for matching URLs that need to be blocked |
-| block_headers      | array of string     | Optional, at least one of `block_urls`, `block_headers`, `block_bodies` must be filled | -             | Configure strings for matching request headers that need to be blocked |
-| block_bodies       | array of string     | Optional, at least one of `block_urls`, `block_headers`, `block_bodies` must be filled | -             | Configure strings for matching request bodies that need to be blocked |
+| block_urls         | array of string     | Optional, at least one of `block_urls`, `block_exact_urls`, `block_regexp_urls`, `block_headers`, `block_bodies` must be filled | -             | Configure strings for matching URLs that need to be blocked |
+| block_exact_urls   | array of string     | Optional, at least one of `block_urls`, `block_exact_urls`, `block_regexp_urls`, `block_headers`, `block_bodies` must be filled | -             | Configure strings for exactly matching the complete `:path`, including the query string |
+| block_regexp_urls  | array of string     | Optional, at least one of `block_urls`, `block_exact_urls`, `block_regexp_urls`, `block_headers`, `block_bodies` must be filled | -             | Configure RE2 regular expressions for full-string URL matching |
+| block_headers      | array of string     | Optional, at least one of `block_urls`, `block_exact_urls`, `block_regexp_urls`, `block_headers`, `block_bodies` must be filled | -             | Configure strings for matching request headers that need to be blocked |
+| block_bodies       | array of string     | Optional, at least one of `block_urls`, `block_exact_urls`, `block_regexp_urls`, `block_headers`, `block_bodies` must be filled | -             | Configure strings for matching request bodies that need to be blocked |
 | blocked_code       | number             | Optional                                                | 403           | Configure the HTTP status code returned when a request is blocked |
 | blocked_message    | string             | Optional                                                | -             | Configure the HTTP response body returned when a request is blocked |
 | case_sensitive      | bool               | Optional                                                | true          | Configure whether matching is case-sensitive, default is case-sensitive |
+
+## URL Matching Semantics
+
+- `:path` includes the query string. `block_exact_urls` matches the complete `:path`, so `/debian/` does not match `/debian/?x=1`. To block the same path with any query string, use `block_urls` or the full-string regular expression `^/debian/(\?.*)?$`.
+- `block_regexp_urls` uses RE2 full-string matching. Prefix expressions must explicitly include the remainder, for example `^/anolis/.*`; `^/anolis/` matches only `/anolis/` itself.
+- For `block_urls`, `block_exact_urls`, and `block_regexp_urls`, the plugin matches both the original `:path` and a form in which only the path portion has been strictly percent-decoded once. The query string is not decoded. Malformed percent encodings in the path are matched only in their original form; `%3F` and `%23` are not converted into new URL delimiters, and decoding is not repeated.
 
 ## Configuration Example
 ### Blocking Request URL Paths

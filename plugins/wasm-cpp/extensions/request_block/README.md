@@ -6,13 +6,19 @@
 | 名称              | 数据类型        | 填写要求                                                                                                | 默认值   | 描述                                     |
 | --------          | --------        | --------                                                                                                | -------- | --------                                 |
 | block_urls        | array of string | 选填，`block_urls`,`block_exact_urls`,`block_regexp_urls`,`block_headers`,`block_bodies` 中至少必填一项 | -        | 配置用于匹配需要屏蔽 URL 的字符串        |
-| block_exact_urls  | array of string | 选填，`block_urls`,`block_exact_urls`,`block_regexp_urls`,`block_headers`,`block_bodies` 中至少必填一项 | -        | 配置用于匹配需要精确屏蔽 URL 的字符串    |
-| block_regexp_urls | array of string | 选填，`block_urls`,`block_exact_urls`,`block_regexp_urls`,`block_headers`,`block_bodies` 中至少必填一项 | -        | 配置用于匹配需要屏蔽 URL 的正则表达式    |
+| block_exact_urls  | array of string | 选填，`block_urls`,`block_exact_urls`,`block_regexp_urls`,`block_headers`,`block_bodies` 中至少必填一项 | -        | 配置用于精确匹配完整 `:path`（含 Query）的字符串    |
+| block_regexp_urls | array of string | 选填，`block_urls`,`block_exact_urls`,`block_regexp_urls`,`block_headers`,`block_bodies` 中至少必填一项 | -        | 配置用于全串匹配需要屏蔽 URL 的 RE2 正则表达式    |
 | block_headers     | array of string | 选填，`block_urls`,`block_exact_urls`,`block_regexp_urls`,`block_headers`,`block_bodies` 中至少必填一项 | -        | 配置用于匹配需要屏蔽请求 Header 的字符串 |
 | block_bodies      | array of string | 选填，`block_urls`,`block_exact_urls`,`block_regexp_urls`,`block_headers`,`block_bodies` 中至少必填一项 | -        | 配置用于匹配需要屏蔽请求 Body 的字符串   |
 | blocked_code      | number          | 选填                                                                                                    | 403      | 配置请求被屏蔽时返回的 HTTP 状态码       |
 | blocked_message   | string          | 选填                                                                                                    | -        | 配置请求被屏蔽时返回的 HTTP 应答 Body    |
 | case_sensitive    | bool            | 选填                                                                                                    | true     | 配置匹配时是否区分大小写，默认区分       |
+
+# URL 匹配说明
+
+- `:path` 包含 Query 参数。`block_exact_urls` 精确匹配完整 `:path`，因此 `/debian/` 不匹配 `/debian/?x=1`。如需屏蔽同一路径的任意 Query，可使用 `block_urls`，或使用全串正则 `^/debian/(\?.*)?$`。
+- `block_regexp_urls` 使用 RE2 全串匹配。前缀规则需要显式包含后续部分，例如 `^/anolis/.*`；`^/anolis/` 只匹配 `/anolis/` 本身。
+- 对 `block_urls`、`block_exact_urls` 和 `block_regexp_urls`，插件除匹配原始 `:path` 外，还会对路径部分严格百分号解码一次后再匹配。Query 不参与解码，路径部分的非法百分号编码仅按原始形式匹配，`%3F` 和 `%23` 不会被转换为新的 URL 分隔符，也不会进行重复解码。
 
 # 配置示例
 
