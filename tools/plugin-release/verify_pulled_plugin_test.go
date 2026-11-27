@@ -496,6 +496,10 @@ func proxyWasmModule(exportMemory bool, typeOverrides map[string]uint32, names .
 	if exportMemory {
 		module = appendWasmSection(module, 5, []byte{0x01, 0x00, 0x01})
 	}
+	// Exception-handling tag section (id 13) is emitted by the pinned C++
+	// toolchain for oauth. It must be accepted without weakening the proxy ABI
+	// checks on the surrounding sections.
+	module = appendWasmSection(module, 13, []byte{0x00})
 	exportCount := len(names)
 	if exportMemory {
 		exportCount++

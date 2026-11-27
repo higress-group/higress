@@ -20,6 +20,7 @@ import (
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental"
 )
 
 const (
@@ -247,7 +248,8 @@ func verifyInlineData(name string, encoded string, digest string, size int64) er
 
 func validateProxyWasmModule(data []byte) error {
 	ctx := context.Background()
-	runtime := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfigInterpreter())
+	features := api.CoreFeaturesV2 | experimental.CoreFeaturesExceptionHandling
+	runtime := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfigInterpreter().WithCoreFeatures(features))
 	defer runtime.Close(ctx)
 
 	module, err := runtime.CompileModule(ctx, data)
