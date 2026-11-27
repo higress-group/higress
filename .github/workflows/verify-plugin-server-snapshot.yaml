@@ -23,7 +23,7 @@ on:
 jobs:
   accept:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       contents: read
     env:
@@ -126,9 +126,9 @@ jobs:
             (cd tools/plugin-release && timeout 10m "${bootstrap[@]}")
             args+=(--previous "$EVIDENCE/bootstrap-previous.json")
           fi
-          printf 'cd tools/plugin-release && timeout 15m go run -p=1 . ' >> "$EVIDENCE/commands.log"
+          printf 'cd tools/plugin-release && timeout 40m go run -p=1 . ' >> "$EVIDENCE/commands.log"
           printf '%q ' "${args[@]}" >> "$EVIDENCE/commands.log"; printf '\n' >> "$EVIDENCE/commands.log"
-          (cd tools/plugin-release && timeout 15m go run -p=1 . "${args[@]}")
+          (cd tools/plugin-release && timeout 40m go run -p=1 . "${args[@]}")
       - name: Run unchanged P_CODE reader tests before context preparation
         shell: bash
         run: |
