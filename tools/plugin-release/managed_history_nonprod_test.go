@@ -28,11 +28,11 @@ func TestManagedHistoryNonprodWorkflowContract(t *testing.T) {
 		t.Fatal("acceptance must expose exactly four pinned inputs")
 	}
 	for _, required := range []string{
-		"runs-on: ubuntu-22.04", "timeout-minutes: 90", "contents: read", "persist-credentials: false",
+		"runs-on: ubuntu-22.04", "timeout-minutes: 120", "contents: read", "persist-credentials: false",
 		"ref: ${{ github.workflow_sha }}", "fetch-depth: 0", "go-version: '1.24.0'", "version: 1.2.3",
 		"platforms: arm64,amd64", "name: nonprod-plugin-server", "driver: docker-container",
 		"--committed-source \"$HIGRESS_COMMIT\" --resolve --oci-source candidate", "--plan", "--previous",
-		"timeout 10m python3 -m unittest test_pull_plugins.py", "nonprod_plugin_server.py prepare",
+		"timeout 10m python3 -m unittest test_pull_plugins.py", "timeout 40m go run -p=1 .", "nonprod_plugin_server.py prepare",
 		"--snapshot-sha256 \"$SNAPSHOT_SHA256\" --out \"$CTX\"", "--load", "USE_LOCAL_PLUGINS=true",
 		"docker buildx build --platform linux/amd64", "docker buildx build --platform linux/arm64",
 		"higress-plugin-server-nonprod:amd64", "higress-plugin-server-nonprod:arm64",
