@@ -42,6 +42,39 @@ func TestPluginServerWorkflowFailsClosedBeforeCandidateMutation(t *testing.T) {
 	}
 }
 
+func TestPluginServerWorkflowUsesGenericHistoryAcceptance(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/build-plugin-server-from-snapshot.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(data)
+	server := strings.Index(workflow, `container=$(docker run -d --rm -p 127.0.0.1:18080:8080`)
+	verify := strings.Index(workflow, "python3 tools/plugin-release/verify_snapshot_http.py")
+	publish := strings.Index(workflow, `docker buildx imagetools create --tag "$image"`)
+	if server < 0 || verify < 0 || publish < 0 || !(server < verify && verify < publish) {
+		t.Fatal("generic HTTP acceptance must run after the server starts and before public tag creation")
+	}
+	if strings.Contains(workflow, `.plugins["basic-auth"]`) {
+		t.Fatal("plugin-server HTTP acceptance must not single out basic-auth")
+	}
+	for _, required := range []string{
+		`--snapshot "$SNAPSHOT_PATH"`,
+		`--inventory /tmp/snapshot-inventory.json`,
+		`--lock plugin-server/unmanaged-plugins.lock.json`,
+		`--base-url http://127.0.0.1:18080`,
+		`--summary /tmp/plugin-http-summary.json`,
+		`compatibility_versions="1.0.0 2.0.0"`,
+		`cp /tmp/managed-oci.wasm "plugin-server/plugins/$managed_path/$version/plugin.wasm"`,
+		`fetch_wasm "$managed_path" "$managed_version" /tmp/managed.wasm`,
+		`cmp "/tmp/managed-$version.wasm" /tmp/managed-oci.wasm`,
+		`fetch_wasm jsonrpc-converter "$json_version" /tmp/jsonrpc.wasm`,
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("generic history acceptance must preserve %q", required)
+		}
+	}
+}
+
 func TestPluginServerIndexContractAcceptsOnlyTwoRunnablePlatformsAndPairedAttestations(t *testing.T) {
 	workflows := []string{
 		"build-plugin-server-from-snapshot.yaml",
