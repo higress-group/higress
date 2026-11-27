@@ -52,6 +52,7 @@ jobs:
           repository: higress-group/plugin-server
           ref: ${{ inputs.plugin_server_commit }}
           path: plugin-server
+          fetch-depth: 0
           persist-credentials: false
       - name: Checkout the dispatch revision's acceptance tools
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
