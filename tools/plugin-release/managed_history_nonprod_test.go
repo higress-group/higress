@@ -24,7 +24,7 @@ func TestManagedHistoryNonprodWorkflowContract(t *testing.T) {
 			t.Fatalf("missing required string input %s", input)
 		}
 	}
-	if len(regexp.MustCompile(`(?m)^      [a-z_]+:`).FindAllString(trigger, -1)) != 4 {
+	if len(regexp.MustCompile(`(?m)^      [a-z0-9_]+:`).FindAllString(trigger, -1)) != 4 {
 		t.Fatal("acceptance must expose exactly four pinned inputs")
 	}
 	for _, required := range []string{
