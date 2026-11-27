@@ -53,6 +53,9 @@ jobs:
       - name: Snapshot HTTP acceptance tests
         shell: bash
         run: timeout 5m python3 -B -m unittest discover -s tools/plugin-release -p 'test_verify_snapshot_http.py' -v
+      - name: Non-production plugin-server context tests
+        shell: bash
+        run: timeout 5m python3 -B -m unittest discover -s tools/plugin-release -p 'test_nonprod_plugin_server.py' -v
       - name: Prove negative tests ran and failures propagate
         shell: bash
         run: |

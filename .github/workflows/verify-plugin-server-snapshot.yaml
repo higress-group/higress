@@ -1,0 +1,320 @@
+name: Non-production Plugin Server Snapshot Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      higress_commit:
+        description: "Exact 40-hex preparation Q head"
+        required: true
+        type: string
+      snapshot_path:
+        description: "plugins/release/snapshots/<version>.json at Q"
+        required: true
+        type: string
+      snapshot_sha256:
+        description: "SHA-256 of the external snapshot bytes"
+        required: true
+        type: string
+      plugin_server_commit:
+        description: "Exact 40-hex P_CODE reader head"
+        required: true
+        type: string
+
+jobs:
+  accept:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      GOMAXPROCS: '1'
+      HIGRESS_COMMIT: ${{ inputs.higress_commit }}
+      PLUGIN_SERVER_COMMIT: ${{ inputs.plugin_server_commit }}
+      SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+      SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
+      CTX: ${{ runner.temp }}/nonprod-context
+      EVIDENCE: ${{ runner.temp }}/nonprod-evidence
+    steps:
+      - name: Checkout exact preparation Q
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.higress_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact P_CODE
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: higress-group/plugin-server
+          ref: ${{ inputs.plugin_server_commit }}
+          path: plugin-server
+          persist-credentials: false
+      - name: Checkout the dispatch revision's acceptance tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .nonprod-harness
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.24.0'
+      - uses: oras-project/setup-oras@8d34698a59f5ffe24821f0b48ab62a3de8b64b20
+        with:
+          version: 1.2.3
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+        with:
+          platforms: arm64,amd64
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+        with:
+          name: nonprod-plugin-server
+          driver: docker-container
+      - name: Validate exact inputs and resolve Q's snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          exec > >(tee "$EVIDENCE/verify-snapshot.log") 2>&1
+          [[ "$HIGRESS_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PLUGIN_SERVER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SNAPSHOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SNAPSHOT_PATH" =~ ^plugins/release/snapshots/[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?\.json$ ]]
+          test "$(git rev-parse HEAD)" = "$HIGRESS_COMMIT"
+          test "$(git -C plugin-server rev-parse HEAD)" = "$PLUGIN_SERVER_COMMIT"
+          test "$(git -C .nonprod-harness rev-parse HEAD)" = "${{ github.workflow_sha }}"
+          test -f "$SNAPSHOT_PATH" && test ! -L "$SNAPSHOT_PATH"
+          test "$(sha256sum "$SNAPSHOT_PATH" | awk '{print $1}')" = "$SNAPSHOT_SHA256"
+          GATEWAY_VERSION=$(jq -er '.gatewayVersion | select(type == "string")' "$SNAPSHOT_PATH")
+          [[ "$GATEWAY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]
+          test "$SNAPSHOT_PATH" = "plugins/release/snapshots/$GATEWAY_VERSION.json"
+          snapshot_source=$(jq -er .sourceCommit "$SNAPSHOT_PATH")
+          [[ "$snapshot_source" =~ ^[0-9a-f]{40}$ ]]
+          printf 'GATEWAY_VERSION=%s\n' "$GATEWAY_VERSION" >> "$GITHUB_ENV"
+          plan="plugins/release/plans/$GATEWAY_VERSION.json"
+          test -f "$plan"
+          test "$(jq -er .gatewayVersion "$plan")" = "$GATEWAY_VERSION"
+          test "$(jq -er .sourceCommit "$plan")" = "$snapshot_source"
+          for file in Dockerfile pull_plugins.py test_pull_plugins.py plugins.properties unmanaged-plugins.lock.json; do
+            test -f "plugin-server/$file"
+          done
+          jq -n --arg version "$GATEWAY_VERSION" --arg source "$snapshot_source" \
+            --arg harness "${{ github.workflow_sha }}" \
+            '{higressCommit: env.HIGRESS_COMMIT, pluginServerCommit: env.PLUGIN_SERVER_COMMIT,
+              snapshotPath: env.SNAPSHOT_PATH, snapshotSha256: env.SNAPSHOT_SHA256,
+              gatewayVersion: $version, sourceCommit: $source, harnessCommit: $harness}' > "$EVIDENCE/inputs.json"
+          previous=$(jq -er .previousRelease "$SNAPSHOT_PATH")
+          [[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          args=(verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json
+            --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan"
+            --committed-source "$HIGRESS_COMMIT" --resolve --oci-source candidate)
+          marker=$(jq -r '.bootstrapEvidence.path // empty' "$SNAPSHOT_PATH")
+          if [ -z "$marker" ]; then
+            previous_path="plugins/release/snapshots/$previous.json"
+            test -f "$previous_path"
+            args+=(--previous "../../$previous_path")
+          else
+            [[ "$marker" =~ ^plugins/release/bootstrap-evidence/[0-9]+\.[0-9]+\.[0-9]+\.json$ ]]
+            test -f "$marker"
+            bootstrap=(go run -p=1 . bootstrap-snapshot --root ../.. --catalog ../../plugins/release/catalog.json
+              --gateway-version "$previous" --source "$snapshot_source" --existing-evidence "../../$marker"
+              --output "$EVIDENCE/bootstrap-previous.json")
+            printf 'cd tools/plugin-release && timeout 10m ' >> "$EVIDENCE/commands.log"
+            printf '%q ' "${bootstrap[@]}" >> "$EVIDENCE/commands.log"; printf '\n' >> "$EVIDENCE/commands.log"
+            (cd tools/plugin-release && timeout 10m "${bootstrap[@]}")
+            args+=(--previous "$EVIDENCE/bootstrap-previous.json")
+          fi
+          printf 'cd tools/plugin-release && timeout 15m go run -p=1 . ' >> "$EVIDENCE/commands.log"
+          printf '%q ' "${args[@]}" >> "$EVIDENCE/commands.log"; printf '\n' >> "$EVIDENCE/commands.log"
+          (cd tools/plugin-release && timeout 15m go run -p=1 . "${args[@]}")
+      - name: Run unchanged P_CODE reader tests before context preparation
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'cd plugin-server && timeout 10m python3 -m unittest test_pull_plugins.py' >> "$EVIDENCE/commands.log"
+          (cd plugin-server && timeout 10m python3 -m unittest test_pull_plugins.py) 2>&1 | tee "$EVIDENCE/reader-tests.log"
+      - name: Prepare isolated local-OCI context
+        shell: bash
+        run: |
+          set -euo pipefail
+          command=(python3 .nonprod-harness/tools/plugin-release/nonprod_plugin_server.py prepare
+            --higress-root "$GITHUB_WORKSPACE" --plugin-server-root "$GITHUB_WORKSPACE/plugin-server"
+            --snapshot "$SNAPSHOT_PATH" --snapshot-sha256 "$SNAPSHOT_SHA256" --out "$CTX")
+          printf '%q ' "${command[@]}" >> "$EVIDENCE/commands.log"; printf '\n' >> "$EVIDENCE/commands.log"
+          "${command[@]}" 2>&1 | tee "$EVIDENCE/prepare.log"
+          cmp plugin-server/pull_plugins.py "$CTX/pull_plugins.py"
+          cmp plugin-server/plugins.properties "$CTX/plugins.properties"
+          cmp "$SNAPSHOT_PATH" "$CTX/snapshot.json"
+          git -C plugin-server diff --exit-code
+          cp "$CTX/nonprod-context.json" "$EVIDENCE/nonprod-context.json"
+      - name: Load both local platform images
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_args=(--builder nonprod-plugin-server --load --provenance=false
+            --build-arg "SNAPSHOT_SHA256=$SNAPSHOT_SHA256"
+            --build-arg "HIGRESS_SOURCE_COMMIT=$HIGRESS_COMMIT"
+            --build-arg "PLUGIN_SERVER_SOURCE_COMMIT=$PLUGIN_SERVER_COMMIT"
+            --build-arg "GATEWAY_VERSION=$GATEWAY_VERSION" --build-arg USE_LOCAL_PLUGINS=true)
+          command=(docker buildx build --platform linux/amd64 "${build_args[@]}"
+            --tag higress-plugin-server-nonprod:amd64 --metadata-file "$EVIDENCE/build-amd64.json" "$CTX")
+          printf '%q ' "${command[@]}" >> "$EVIDENCE/commands.log"; printf '\n' >> "$EVIDENCE/commands.log"
+          "${command[@]}" 2>&1 | tee "$EVIDENCE/build-amd64.log"
+          command=(docker buildx build --platform linux/arm64 "${build_args[@]}"
+            --tag higress-plugin-server-nonprod:arm64 --metadata-file "$EVIDENCE/build-arm64.json" "$CTX")
+          printf '%q ' "${command[@]}" >> "$EVIDENCE/commands.log"; printf '\n' >> "$EVIDENCE/commands.log"
+          "${command[@]}" 2>&1 | tee "$EVIDENCE/build-arm64.log"
+      - name: Verify labels, all managed URLs, history, and MCP on each platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec > >(tee "$EVIDENCE/accept.log") 2>&1
+          SNAPSHOT_PATH="$GITHUB_WORKSPACE/$SNAPSHOT_PATH"
+          cd "$GITHUB_WORKSPACE/.nonprod-harness"
+          container=""
+          cleanup() {
+            if [ -n "$container" ]; then
+              docker logs "$container" > "$EVIDENCE/container-$architecture.log" 2>&1 || true
+              docker rm -f "$container" >/dev/null || true
+              container=""
+            fi
+          }
+          trap cleanup EXIT
+          for architecture in amd64 arm64; do
+            image="higress-plugin-server-nonprod:$architecture"
+            docker inspect --type image "$image" > "$EVIDENCE/image-$architecture.json"
+            python3 - "$EVIDENCE/image-$architecture.json" "$architecture" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          image = json.loads(Path(sys.argv[1]).read_bytes())[0]
+          labels = image["Config"]["Labels"]
+          expected = {
+              "org.opencontainers.image.revision": os.environ["PLUGIN_SERVER_COMMIT"],
+              "io.higress.higress-source-commit": os.environ["HIGRESS_COMMIT"],
+              "io.higress.plugin-snapshot-sha256": os.environ["SNAPSHOT_SHA256"],
+              "io.higress.gateway-version": os.environ["GATEWAY_VERSION"],
+          }
+          if any(labels.get(key) != value for key, value in expected.items()):
+              raise SystemExit("image provenance labels differ from exact inputs")
+          if image["Os"] != "linux" or image["Architecture"] != sys.argv[2]:
+              raise SystemExit("loaded image has the wrong platform")
+          PY
+            port=18080
+            if [ "$architecture" = arm64 ]; then port=18081; fi
+            command=(docker run -d --rm --platform "linux/$architecture" -p "127.0.0.1:$port:8080" "$image")
+            printf '%q ' "${command[@]}" >> "$EVIDENCE/commands.log"; printf '\n' >> "$EVIDENCE/commands.log"
+            container=$("${command[@]}")
+            base_url="http://127.0.0.1:$port"
+            ready=false
+            for attempt in $(seq 1 90); do
+              if curl --silent --show-error --fail --max-time 5 "$base_url/plugins/snapshot-inventory.json" \
+                -o "$EVIDENCE/inventory-$architecture.json"; then
+                ready=true
+                break
+              fi
+              sleep 2
+            done
+            test "$ready" = true
+            command=(python3 tools/plugin-release/verify_snapshot_http.py --snapshot "$SNAPSHOT_PATH"
+              --inventory "$EVIDENCE/inventory-$architecture.json" --lock "$CTX/unmanaged-plugins.lock.json"
+              --base-url "$base_url" --summary "$EVIDENCE/summary-$architecture.json"
+              --current-source candidate --all-managed)
+            printf 'timeout 25m ' >> "$EVIDENCE/commands.log"
+            printf '%q ' "${command[@]}" >> "$EVIDENCE/commands.log"; printf '\n' >> "$EVIDENCE/commands.log"
+            timeout 25m "${command[@]}" 2>&1 | tee "$EVIDENCE/verifier-$architecture.log"
+            for version in 1.0.0 2.0.0; do
+              status=$(curl --silent --show-error --fail --max-time 30 \
+                "$base_url/plugins/mcp-server/$version/plugin.wasm" \
+                -o "$EVIDENCE/mcp-$version-$architecture.wasm" --write-out '%{http_code}')
+              test "$status" = 200
+              cmp "$EVIDENCE/mcp-$version-$architecture.wasm" "$CTX/plugins/mcp-server/1.0.0/plugin.wasm"
+              printf '%s %s\n' "$version" "$status" >> "$EVIDENCE/mcp-$architecture.txt"
+            done
+            python3 - "$SNAPSHOT_PATH" "$architecture" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          snapshot = json.loads(Path(sys.argv[1]).read_bytes())
+          architecture = sys.argv[2]
+          evidence = Path(os.environ["EVIDENCE"])
+          context = Path(os.environ["CTX"])
+          summary = json.loads((evidence / ("summary-" + architecture + ".json")).read_bytes())
+          managed = [entry for entry in snapshot["plugins"] if entry.get("consumers", {}).get("pluginServer")]
+          history_entries = [entry for entry in managed if entry.get("history")]
+          cpp_entries = [entry for entry in managed if entry.get("implementation") == "cpp"]
+          if len(history_entries) != 9 or len(cpp_entries) != 9:
+              raise SystemExit("Q must contain nine managed C++ entries and nine history-bearing entries")
+          if any(len(entry.get("history", [])) != 1 for entry in cpp_entries):
+              raise SystemExit("each C++ entry must have exactly one history artifact")
+          expected = set()
+          canonical_cpp = set()
+          for entry in managed:
+              mapping = entry["consumers"]["pluginServer"]
+              paths = set([mapping["httpPath"], mapping["inventoryKey"], *mapping.get("aliases", [])])
+              for index, artifact in enumerate([entry, *entry.get("history", [])]):
+                  role = "managed-history" if index else "managed-current"
+                  for path in paths:
+                      expected.add((role, entry["logicalId"], path, artifact["version"]))
+                  if entry.get("implementation") == "cpp":
+                      canonical_cpp.add((role, entry["logicalId"], mapping["httpPath"], artifact["version"]))
+          rows = summary["results"]
+          managed_rows = [row for row in rows if row["role"] in ("managed-current", "managed-history")]
+          identity = lambda row: (row["role"], row["logicalId"], row["path"], row["version"])
+          if summary["status"] != "ok" or any(row["status"] != "ok" for row in rows):
+              raise SystemExit("not all verifier rows passed")
+          if len(managed_rows) != len(expected) or {identity(row) for row in managed_rows} != expected:
+              raise SystemExit("missing, duplicate, or extra managed current/history/alias rows")
+          canonical_cpp_rows = [row for row in managed_rows if identity(row) in canonical_cpp]
+          if len(canonical_cpp_rows) != 18 or len(canonical_cpp) != 18:
+              raise SystemExit("expected exactly 18 canonical C++ rows")
+          seed = (context / "plugins/mcp-server/1.0.0/plugin.wasm").read_bytes()
+          mcp_results = []
+          statuses = dict(line.split() for line in (evidence / ("mcp-" + architecture + ".txt")).read_text().splitlines())
+          for version in ("1.0.0", "2.0.0"):
+              body = (evidence / ("mcp-" + version + "-" + architecture + ".wasm")).read_bytes()
+              if statuses.get(version) != "200" or len(body) < 8 or not body.startswith(b"\0asm") or body != seed:
+                  raise SystemExit("MCP compatibility path status, magic, or seed mismatch")
+              mcp_results.append({"version": version, "httpStatus": 200, "wasmSha256": hashlib.sha256(body).hexdigest()})
+          image = json.loads((evidence / ("image-" + architecture + ".json")).read_bytes())[0]
+          report = {
+              "schemaVersion": 1, "status": "ok", "platform": "linux/" + architecture, "imageId": image["Id"],
+              "labels": image["Config"]["Labels"], "higressCommit": os.environ["HIGRESS_COMMIT"],
+              "pluginServerCommit": os.environ["PLUGIN_SERVER_COMMIT"],
+              "snapshotSha256": os.environ["SNAPSHOT_SHA256"],
+              "inventorySha256": hashlib.sha256((evidence / ("inventory-" + architecture + ".json")).read_bytes()).hexdigest(),
+              "verifierSummary": summary, "canonicalCPPRows": canonical_cpp_rows, "mcpResults": mcp_results,
+          }
+          (context / ("report-" + architecture + ".json")).write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
+          PY
+            cleanup
+          done
+      - name: Collect and hash scratch evidence
+        if: always()
+        shell: bash
+        env:
+          ACCEPT_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$CTX" "$EVIDENCE"
+          cp -a "$EVIDENCE/." "$CTX/"
+          jq -n '{status: env.ACCEPT_STATUS}' > "$CTX/job-status.json"
+          cd "$CTX"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+      - name: Upload non-production context and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: nonprod-managed-history-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CTX }}
+          if-no-files-found: error
+      - name: Confirm both platform reports passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          for architecture in amd64 arm64; do
+            jq -e --arg platform "linux/$architecture" '.status == "ok" and .platform == $platform' "$CTX/report-$architecture.json" >/dev/null
+          done
+          echo NONPROD_MANAGED_HISTORY_OK
