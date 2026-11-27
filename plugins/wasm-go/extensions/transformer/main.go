@@ -924,6 +924,9 @@ func (h kvHandler) handle(host, path string, kvs map[string][]string, mapSourceD
 			// rename: 若指定 oldKey 不存在则无操作；否则将 oldKey 的值追加给 newKey，并删除 oldKey:value
 			for _, rename := range kvtOp.renameKvtGroup {
 				oldKey, newKey := rename.oldKey, rename.newKey
+				if oldKey == newKey {
+					continue
+				}
 				if ovs, ok := kvs[oldKey]; ok {
 					kvs[newKey] = append(kvs[newKey], ovs...)
 					delete(kvs, oldKey)
@@ -1067,6 +1070,9 @@ func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map
 			// rename: 若指定 oldKey 不存在则无操作；否则将 oldKey 的值追加给 newKey，并删除 oldKey:value
 			for _, rename := range kvtOp.renameKvtGroup {
 				oldKey, newKey := rename.oldKey, rename.newKey
+				if oldKey == newKey {
+					continue
+				}
 				value := gjson.GetBytes(data, oldKey)
 				if !value.Exists() {
 					continue
