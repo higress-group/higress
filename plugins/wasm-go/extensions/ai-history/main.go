@@ -181,6 +181,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.
 	identityKey, _ := proxywasm.GetHttpRequestHeader(config.IdentityHeader)
 	if identityKey == "" {
 		log.Warnf("identity key is empty")
+		ctx.DontReadRequestBody()
 		return types.ActionContinue
 	}
 	identityKey = strings.ReplaceAll(identityKey, " ", "")

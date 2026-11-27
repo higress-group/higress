@@ -36,6 +36,7 @@ func (m *mapCtx) GetUserAttributeMap() map[string]interface{}       { return nil
 func (m *mapCtx) WriteUserAttributeToLog() error                    { return nil }
 func (m *mapCtx) WriteUserAttributeToLogWithKey(key string) error   { return nil }
 func (m *mapCtx) WriteUserAttributeToTrace() error                  { return nil }
+func (m *mapCtx) RequireRequestBody()                               {}
 func (m *mapCtx) DontReadRequestBody()                              {}
 func (m *mapCtx) DontReadResponseBody()                             {}
 func (m *mapCtx) BufferRequestBody()                                {}

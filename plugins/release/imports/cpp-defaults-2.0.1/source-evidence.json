@@ -1,0 +1,58 @@
+{
+  "plugins": {
+    "basic-auth": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/basic-auth:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912bea7848d6002e7d618109162ebcfb3134775e59ecda2c48127b4649bc905c3d90@sha256:7468c86a179071549d0971ab0dccc1cac0649038613b1e4e3751d3eef3b80015",
+      "digest": "sha256:7468c86a179071549d0971ab0dccc1cac0649038613b1e4e3751d3eef3b80015",
+      "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+      "inputHash": "sha256:ea7848d6002e7d618109162ebcfb3134775e59ecda2c48127b4649bc905c3d90"
+    },
+    "bot-detect": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/bot-detect:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912b46c6415d0bb6b90329265408430bd6ecb58b51168f06b61c5c4acbb72eb5f616@sha256:ef47afe1d7da65c28b9377f1f3b1b944d7a7825c540fba4ec9b9a7ece04e4922",
+      "digest": "sha256:ef47afe1d7da65c28b9377f1f3b1b944d7a7825c540fba4ec9b9a7ece04e4922",
+      "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+      "inputHash": "sha256:46c6415d0bb6b90329265408430bd6ecb58b51168f06b61c5c4acbb72eb5f616"
+    },
+    "custom-response": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/custom-response:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912b46f91a66c73d5a84ee71c61ff7abab2be42c83a9d350abc6218d1151062b50ca@sha256:852400bacfef1ddb3032fcfe62927333594e36be1a475069b1823f5fd442c252",
+      "digest": "sha256:852400bacfef1ddb3032fcfe62927333594e36be1a475069b1823f5fd442c252",
+      "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+      "inputHash": "sha256:46f91a66c73d5a84ee71c61ff7abab2be42c83a9d350abc6218d1151062b50ca"
+    },
+    "hmac-auth": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/hmac-auth:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912b83d8c1e80a9779cf3a40ac239260e071456185bfdba2004f3c36a4ef3540cf7a@sha256:b59ea54c46b67de70cd8c89400e052f1999f4a97da3187dabb952138ef4fd1e9",
+      "digest": "sha256:b59ea54c46b67de70cd8c89400e052f1999f4a97da3187dabb952138ef4fd1e9",
+      "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+      "inputHash": "sha256:83d8c1e80a9779cf3a40ac239260e071456185bfdba2004f3c36a4ef3540cf7a"
+    },
+    "jwt-auth": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/jwt-auth:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912b70962a86f71b00b939672397ce9e1ccce543a470df5018decf2a23e5cb864cc4@sha256:a0d818ea5f9c5db522ce9ce7bf1a46a496629062b554f7f7f0a5d77f66372f41",
+      "digest": "sha256:a0d818ea5f9c5db522ce9ce7bf1a46a496629062b554f7f7f0a5d77f66372f41",
+      "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+      "inputHash": "sha256:70962a86f71b00b939672397ce9e1ccce543a470df5018decf2a23e5cb864cc4"
+    },
+    "key-auth": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/key-auth:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912b35bcbc0c2b86077f26f59229189202e60108f2085004e2d0e318ef72a8574f12@sha256:1907a792330293521b4dd288efd86a49f0872cbc6834e7d3b38c46084d0c8605",
+      "digest": "sha256:1907a792330293521b4dd288efd86a49f0872cbc6834e7d3b38c46084d0c8605",
+      "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+      "inputHash": "sha256:35bcbc0c2b86077f26f59229189202e60108f2085004e2d0e318ef72a8574f12"
+    },
+    "key-rate-limit": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/key-rate-limit:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912b6e2d6883ef47bcfacf03bfb93e2e265075bdf3a092758370a5fb63fe698c7cf4@sha256:756658fecfc2fca5563d3c10f0dda93b1b45fdc0b1fe921616d1ea6ef3f67564",
+      "digest": "sha256:756658fecfc2fca5563d3c10f0dda93b1b45fdc0b1fe921616d1ea6ef3f67564",
+      "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+      "inputHash": "sha256:6e2d6883ef47bcfacf03bfb93e2e265075bdf3a092758370a5fb63fe698c7cf4"
+    },
+    "oauth": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/oauth:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912b1703c9aea078392bf18ce6178e6eedc56f3cc62d1edb85833b87381de0bbc751@sha256:5df6e611554cc505fe24de45b658ee269e8e5ff961fb188e0cea810d6cec6450",
+      "digest": "sha256:5df6e611554cc505fe24de45b658ee269e8e5ff961fb188e0cea810d6cec6450",
+      "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+      "inputHash": "sha256:1703c9aea078392bf18ce6178e6eedc56f3cc62d1edb85833b87381de0bbc751"
+    },
+    "request-block": {
+      "candidateRef": "higress-registry.cn-hangzhou.cr.aliyuncs.com/candidates/request-block:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912bc19ae0dcf34d9b2276b215124e1b48987248650cedd796bacac92ec62bebc407@sha256:b971a1b1b8c6f3c6951902a4fcb3d4258cc8fc2065a49ec169fc81f81ccff9cd",
+      "digest": "sha256:b971a1b1b8c6f3c6951902a4fcb3d4258cc8fc2065a49ec169fc81f81ccff9cd",
+      "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+      "inputHash": "sha256:c19ae0dcf34d9b2276b215124e1b48987248650cedd796bacac92ec62bebc407"
+    }
+  }
+}

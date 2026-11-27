@@ -114,6 +114,13 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "random_util",
+    srcs = ["random.c"],
+    visibility = ["//visibility:public"],
+    deps = ["@boringssl//:ssl"],
+)
+
 # genrule(
 #     name = "nlohmann_json_hpp",
 #     srcs = ["@com_github_nlohmann_json_single_header//file"],

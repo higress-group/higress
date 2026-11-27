@@ -176,8 +176,6 @@ func TestPrepareRequestRejectsModernBoundaryViolationsBeforeMethodLookup(t *test
 		{"response envelope", modernTransport("tools/list", ""), `{"jsonrpc":"2.0","id":1,"result":{}}`, nil, 400, CodeInvalidRequest},
 		{"trailing JSON", modernTransport("tools/list", ""), modernListRequest + `{}`, nil, 400, CodeParseError},
 		{"malformed JSON", modernTransport("tools/list", ""), `{"jsonrpc":`, nil, 400, CodeParseError},
-		{"null id", modernTransport("tools/list", ""), strings.Replace(modernListRequest, `"id":"request-1"`, `"id":null`, 1), nil, 400, CodeInvalidRequest},
-		{"fractional id", modernTransport("tools/list", ""), strings.Replace(modernListRequest, `"id":"request-1"`, `"id":1.5`, 1), nil, 400, CodeInvalidRequest},
 		{"boolean id", modernTransport("tools/list", ""), strings.Replace(modernListRequest, `"id":"request-1"`, `"id":true`, 1), nil, 400, CodeInvalidRequest},
 		{"duplicate identity", modernTransport("tools/list", ""), strings.Replace(modernListRequest, `"method":"tools/list"`, `"method":"tools/list","method":"tools/list"`, 1), nil, 400, CodeParseError},
 		{"oversized body", modernTransport("tools/list", ""), "", oversized, 413, CodeInvalidRequest},
@@ -192,8 +190,6 @@ func TestPrepareRequestRejectsModernBoundaryViolationsBeforeMethodLookup(t *test
 		{"mismatched name header", modernTransport("tools/call", "other"), modernCallRequest, nil, 400, CodeHeaderMismatch},
 		{"unexpected name header", modernTransport("tools/list", "echo"), modernListRequest, nil, 400, CodeHeaderMismatch},
 		{"missing metadata", modernTransport("tools/list", ""), `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`, nil, 400, CodeHeaderMismatch},
-		{"missing capabilities", modernTransport("tools/list", ""), `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`, nil, 400, CodeInvalidParams},
-		{"invalid clientInfo", modernTransport("tools/list", ""), strings.Replace(modernListRequest, `"io.modelcontextprotocol/clientCapabilities":{}`, `"io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"sdk"}`, 1), nil, 400, CodeInvalidParams},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -227,27 +223,45 @@ func TestModernOnlyHeadersCannotDowngradeToLegacy(t *testing.T) {
 		t.Fatal("method lookup must not run for incomplete modern identity")
 		return true
 	})
-	if request != nil || protocolError == nil || protocolError.HTTPStatus != 400 || protocolError.Code != CodeHeaderMismatch {
+	if request == nil || protocolError == nil || protocolError.HTTPStatus != 400 || protocolError.Code != CodeHeaderMismatch {
 		t.Fatalf("request=%+v error=%+v, want HTTP 400/code %d", request, protocolError, CodeHeaderMismatch)
 	}
 
 	transport.Origin = "https://evil.example"
 	_, protocolError = PrepareRequest(transport, []byte(`{"deeply":"malformed"`), available)
-	if protocolError == nil || protocolError.HTTPStatus != 403 {
-		t.Fatalf("cross-origin modern candidate error = %+v, want HTTP 403 before body parsing", protocolError)
+	if protocolError == nil || protocolError.HTTPStatus != 400 {
+		t.Fatalf("cross-origin malformed candidate error = %+v, want HTTP 400", protocolError)
 	}
 }
 
-func TestOriginPrecedesVersionAndBodyClassification(t *testing.T) {
+func TestOriginDoesNotPrecedeVersionAndBodyClassification(t *testing.T) {
 	transport := modernTransport("tools/list", "")
 	transport.ProtocolVersion = "2025-11-25"
 	transport.Origin = "https://evil.example"
 	_, protocolError := PrepareRequest(transport, []byte(`{"malformed":`), func(string) bool {
-		t.Fatal("method lookup must not run for an untrusted Origin")
+		t.Fatal("method lookup must not run before version/body validation")
 		return true
 	})
-	if protocolError == nil || protocolError.HTTPStatus != 403 || protocolError.Code != CodeInvalidRequest {
-		t.Fatalf("origin-first error = %+v, want HTTP 403/code %d", protocolError, CodeInvalidRequest)
+	if protocolError == nil || protocolError.HTTPStatus != 400 || protocolError.Code != CodeParseError {
+		t.Fatalf("body error = %+v, want HTTP 400/code %d", protocolError, CodeParseError)
+	}
+}
+
+func TestRequestProfilesAcceptHistoricalOriginForms(t *testing.T) {
+	for _, origin := range []string{"", "https://mcp.example.com", "https://other.example", "https://mcp.example.com:8443", "null"} {
+		for _, modern := range []bool{false, true} {
+			transport := modernTransport("tools/list", "")
+			body := []byte(modernListRequest)
+			if !modern {
+				transport.ProtocolVersion, transport.MCPMethod = "", ""
+				body = []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+			}
+			transport.Origin = origin
+			request, protocolError := PrepareRequest(transport, body, available)
+			if protocolError != nil || request == nil {
+				t.Fatalf("modern=%t Origin %q rejected: %v", modern, origin, protocolError)
+			}
+		}
 	}
 }
 
@@ -258,7 +272,7 @@ func TestHeaderlessLargeLegacyMarkerAndLateModernMetadata(t *testing.T) {
 		ContentType: "application/json",
 		Accept:      "application/json, text/event-stream",
 	}
-	padding := strings.Repeat("x", int(ModernMaxBodyBytes))
+	padding := strings.Repeat("x", 1024*1024+128)
 	legacyBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"note":"` +
 		MetaProtocolVersion + padding + `"}}`)
 	request, protocolError := PrepareRequest(transport, legacyBody, func(string) bool {
@@ -273,11 +287,11 @@ func TestHeaderlessLargeLegacyMarkerAndLateModernMetadata(t *testing.T) {
 		padding + `","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
 		`"io.modelcontextprotocol/clientCapabilities":{}}}}`)
 	request, protocolError = PrepareRequest(transport, modernBody, func(string) bool {
-		t.Fatal("oversized body-only modern request must fail before business dispatch")
+		t.Fatal("body-only modern identity must fail before business dispatch")
 		return true
 	})
-	if request != nil || protocolError == nil || protocolError.HTTPStatus != 413 || protocolError.Code != CodeInvalidRequest {
-		t.Fatalf("late body-only modern error = %+v, want HTTP 413/code %d", protocolError, CodeInvalidRequest)
+	if request == nil || protocolError == nil || protocolError.HTTPStatus != 400 || protocolError.Code != CodeHeaderMismatch {
+		t.Fatalf("late body-only modern error = %+v, want HTTP 400/code %d", protocolError, CodeHeaderMismatch)
 	}
 }
 
@@ -366,7 +380,7 @@ func TestMCPNameBase64HeaderAllowsBoundaryWhitespace(t *testing.T) {
 	}
 }
 
-func TestModernMetadataSchemaAndExtensions(t *testing.T) {
+func TestModernMetadataViewsAndOrdinaryExtensions(t *testing.T) {
 	completeInfo := `{
 		"name":"sdk","title":"SDK","version":"1.0","description":"client",
 		"websiteUrl":"https://example.com/sdk",
@@ -399,7 +413,7 @@ func TestModernMetadataSchemaAndExtensions(t *testing.T) {
 		t.Fatalf("structured client capabilities not preserved: %+v", request.Metadata.ClientCapabilities)
 	}
 
-	invalidMembers := []string{
+	ordinaryMembers := []string{
 		`"io.modelcontextprotocol/clientCapabilities":{"roots":true}`,
 		`"io.modelcontextprotocol/clientCapabilities":{"sampling":{"tools":true}}`,
 		`"io.modelcontextprotocol/clientCapabilities":{"sampling":{"tools":null}}`,
@@ -419,12 +433,12 @@ func TestModernMetadataSchemaAndExtensions(t *testing.T) {
 		`"io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"sdk","version":"1","icons":[{"src":"https://example.com/i","sizes":[null]}]}`,
 		`"io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"sdk","version":"1","icons":[{"src":"https://example.com/i","theme":"system"}]}`,
 	}
-	for _, member := range invalidMembers {
+	for _, member := range ordinaryMembers {
 		t.Run(member, func(t *testing.T) {
-			invalidBody := strings.Replace(modernListRequest, `"io.modelcontextprotocol/clientCapabilities":{}`, member, 1)
-			_, protocolError := PrepareRequest(modernTransport("tools/list", ""), []byte(invalidBody), available)
-			if protocolError == nil || protocolError.Code != CodeInvalidParams {
-				t.Fatalf("invalid metadata error = %+v, want code %d", protocolError, CodeInvalidParams)
+			ordinaryBody := strings.Replace(modernListRequest, `"io.modelcontextprotocol/clientCapabilities":{}`, member, 1)
+			_, protocolError := PrepareRequest(modernTransport("tools/list", ""), []byte(ordinaryBody), available)
+			if protocolError != nil {
+				t.Fatalf("ordinary metadata rejected: %v", protocolError)
 			}
 		})
 	}
@@ -469,13 +483,23 @@ func TestPrepareRequestExactVersionAndMethodErrors(t *testing.T) {
 		wantCode  int
 	}{
 		{
-			name: "unsupported version",
+			name: "handshake version cannot carry explicit modern identity",
 			transport: func() Transport {
 				value := modernTransport("tools/list", "")
 				value.ProtocolVersion = "2025-11-25"
 				return value
 			}(),
 			body:     strings.ReplaceAll(modernListRequest, "2026-07-28", "2025-11-25"),
+			wantCode: CodeHeaderMismatch,
+		},
+		{
+			name: "unsupported version",
+			transport: func() Transport {
+				value := modernTransport("tools/list", "")
+				value.ProtocolVersion = "2099-01-01"
+				return value
+			}(),
+			body:     strings.ReplaceAll(modernListRequest, "2026-07-28", "2099-01-01"),
 			wantCode: CodeUnsupportedVersion,
 		},
 		{

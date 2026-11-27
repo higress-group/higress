@@ -188,11 +188,17 @@ func (c *eurekaHttpClient) request(urlPath string) ([]byte, int, error) {
 
 	retryConfig := []retry.Option{
 		retry.Attempts(uint(c.Retries)),
-		retry.Delay(time.Duration(c.RetryDelayTime)),
+		// RetryDelayTime is documented in milliseconds.
+		retry.Delay(time.Duration(c.RetryDelayTime) * time.Millisecond),
 	}
 
 	resp := &http.Response{}
 	err = retry.Do(func() error {
+		// Drop the previous attempt's body before it is replaced, and let callers
+		// of a successful request close the one that is returned.
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		resp, err = httpClient.Do(req)
 		return err
 	}, retryConfig...)
@@ -201,6 +207,7 @@ func (c *eurekaHttpClient) request(urlPath string) ([]byte, int, error) {
 		log.Errorf("Failed to get response from eureka-server, error : %v", err)
 		return nil, -1, err
 	}
+	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

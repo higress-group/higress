@@ -150,7 +150,9 @@ func TestModernToModernProxyUsesSingleStatelessCallAndPreservesOpaqueResult(t *t
 	require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(body))
 
 	call := routedRequest(t, host)
-	assert.Equal(t, string(body), string(call.Body), "modern envelope and metadata bytes must be unchanged")
+	assert.Equal(t, "7", gjson.GetBytes(call.Body, "id").Raw)
+	assert.Equal(t, "Higress-mcp-proxy", gjson.GetBytes(call.Body, `params._meta.io\.modelcontextprotocol/clientInfo.name`).String())
+	assert.True(t, gjson.GetBytes(call.Body, `params._meta.x\.example/opaque.keep`).Bool())
 	assert.Equal(t, string(protocol.Version20260728), mustHeaderValue(t, call.Headers, protocol.HeaderProtocolVersion))
 	assert.Equal(t, "tools/list", mustHeaderValue(t, call.Headers, protocol.HeaderMethod))
 	_, param := findHeader(call.Headers, "Mcp-Param-Future")

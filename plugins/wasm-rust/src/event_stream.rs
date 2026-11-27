@@ -24,40 +24,26 @@
 /// |field   |= 1*name-char [ colon [ space ] *any-char ] eol |
 /// |eol     |= ( cr lf / cr / lf )      |
 ///
-/// According to spec, we must judge EOL twice before we can identify a complete event.
-/// However, in the rules of event and field, there is an ambiguous grammar in the judgment of eol,
-/// and it will bring ambiguity (whether the field ends). In order to eliminate this ambiguity,
-/// we believe that CRLF as CR+LF belongs to event and field respectively.
+/// CRLF is one logical line ending. An empty line, formed by two consecutive
+/// logical line endings, terminates an event.
 
 #[derive(Default)]
 pub struct EventStream {
     buffer: Vec<u8>,
     processed_offset: usize,
+    skip_lf: bool,
 }
 
 impl Iterator for EventStream {
     type Item = Vec<u8>;
     /// Get the next event from the event stream. Return the event data if available, otherwise return None.
-    /// Next will consume all the data in the current buffer. However, if there is a valid event at the end of the buffer,
-    /// it will return the event directly even if the data after the next `update` could be considered part of the same event
-    /// (especially in cases where CRLF hits an ambiguous grammar).
-    /// When this happens, the next call to next may return an empty event.
+    /// CRLF pairs are consumed together, including pairs split across updates.
     ///
-    /// ```
-    /// let mut parser = EventStream::new();
-    /// parser.update(...);
-    /// loop {
-    ///     match parser.next() {
-    ///         None => {}
-    ///         Some(event) => {
-    ///             if !event.is_empty() {
-    ///                 ...
-    ///             }
-    ///         }
-    ///     }
-    /// }
-    /// ```
-    ///
+    /// A delimiter ending in CR at the buffer boundary completes the event
+    /// immediately. Waiting for the next byte to distinguish CR from CRLF
+    /// would delay dispatch when that byte is not LF, or never arrives.
+    /// `update` skips an optional following LF using `skip_lf`, so it does not
+    /// become an extra line ending.
     fn next(&mut self) -> Option<Self::Item> {
         let mut i = self.processed_offset;
 
@@ -65,10 +51,12 @@ impl Iterator for EventStream {
             if let Some(size) = self.is_2eol(i) {
                 let event = self.buffer[self.processed_offset..i].to_vec();
                 self.processed_offset = i + size;
+                self.skip_lf = self.processed_offset == self.buffer.len()
+                    && self.buffer.last() == Some(&b'\r');
                 return Some(event);
             }
 
-            i += 1;
+            i += self.is_eol(i).unwrap_or(1);
         }
 
         None
@@ -83,7 +71,14 @@ impl EventStream {
             self.processed_offset = 0;
         }
 
-        self.buffer.extend(data);
+        let mut start = 0;
+        if self.skip_lf && !data.is_empty() {
+            if data[0] == b'\n' {
+                start = 1;
+            }
+            self.skip_lf = false;
+        }
+        self.buffer.extend_from_slice(&data[start..]);
     }
 
     /// Flush the event stream and return any remaining unprocessed event data. Return None if there is none.
@@ -110,18 +105,7 @@ impl EventStream {
     fn is_2eol(&self, i: usize) -> Option<usize> {
         let size1 = self.is_eol(i)?;
         if i + size1 < self.buffer.len() {
-            match self.is_eol(i + size1) {
-                None => {
-                    if size1 == 2 {
-                        Some(2)
-                    } else {
-                        None
-                    }
-                }
-                Some(size2) => Some(size1 + size2),
-            }
-        } else if size1 == 2 {
-            Some(2)
+            self.is_eol(i + size1).map(|size2| size1 + size2)
         } else {
             None
         }
@@ -144,7 +128,7 @@ mod tests {
     #[test]
     fn test_lf_events() {
         let mut parser = EventStream::default();
-        parser.update(b"event3\n\r\nevent4\r\n".to_vec());
+        parser.update(b"event3\n\r\nevent4\r\n\r\n".to_vec());
 
         assert_eq!(parser.next(), Some(b"event3".to_vec()));
         assert_eq!(parser.next(), Some(b"event4".to_vec()));
@@ -166,20 +150,20 @@ mod tests {
         let mut parser = EventStream::default();
         parser.update(b"event5\r\nevent6\r\n\r\nevent7\r\n".to_vec());
 
-        assert_eq!(parser.next(), Some(b"event5".to_vec()));
-        assert_eq!(parser.next(), Some(b"event6".to_vec()));
-        assert_eq!(parser.next(), Some(b"event7".to_vec()));
+        assert_eq!(parser.next(), Some(b"event5\r\nevent6".to_vec()));
+        assert_eq!(parser.next(), None);
+        assert_eq!(parser.flush(), Some(b"event7\r\n".to_vec()));
     }
 
     #[test]
     fn test_mixed2_eol_events() {
         let mut parser = EventStream::default();
         parser.update(b"event5\r\nevent6\r\n".to_vec());
-        assert_eq!(parser.next(), Some(b"event5".to_vec()));
-        assert_eq!(parser.next(), Some(b"event6".to_vec()));
+        assert_eq!(parser.next(), None);
         parser.update(b"\r\nevent7\r\n".to_vec());
-        assert_eq!(parser.next(), Some(b"".to_vec()));
-        assert_eq!(parser.next(), Some(b"event7".to_vec()));
+        assert_eq!(parser.next(), Some(b"event5\r\nevent6".to_vec()));
+        assert_eq!(parser.next(), None);
+        assert_eq!(parser.flush(), Some(b"event7\r\n".to_vec()));
     }
 
     #[test]
@@ -189,5 +173,43 @@ mod tests {
 
         assert_eq!(parser.next(), None);
         assert_eq!(parser.flush(), Some(b"no_eol_in_this_string".to_vec()));
+    }
+    #[test]
+    fn test_crlf_is_one_line_ending() {
+        let mut parser = EventStream::default();
+        parser.update(b"event: custom\r\ndata: {}\r\n\r\n".to_vec());
+        assert_eq!(parser.next(), Some(b"event: custom\r\ndata: {}".to_vec()));
+        assert_eq!(parser.next(), None);
+    }
+
+    #[test]
+    fn test_line_endings_across_all_splits() {
+        for eol in ["\n", "\r", "\r\n"] {
+            for separator in ["\n\n", "\r\r", "\r\n\r\n", "\n\r", "\r\n\n", "\n\r\n"] {
+                let first = format!("event: custom{eol}data: {{}}");
+                let wire = format!("{first}{separator}data: second{separator}");
+                let expected = vec![first.as_bytes().to_vec(), b"data: second".to_vec()];
+                for split in 0..=wire.len() {
+                    let mut parser = EventStream::default();
+                    parser.update(wire.as_bytes()[..split].to_vec());
+                    let mut events: Vec<_> = parser.by_ref().collect();
+                    parser.update(wire.as_bytes()[split..].to_vec());
+                    events.extend(parser.by_ref());
+                    assert_eq!(
+                        events, expected,
+                        "eol={eol:?}, separator={separator:?}, split={split}"
+                    );
+                    assert_eq!(parser.flush(), None);
+                }
+                let mut parser = EventStream::default();
+                let mut events = Vec::new();
+                for byte in wire.as_bytes() {
+                    parser.update(vec![*byte]);
+                    events.extend(parser.by_ref());
+                }
+                assert_eq!(events, expected);
+                assert_eq!(parser.flush(), None);
+            }
+        }
     }
 }

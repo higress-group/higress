@@ -56,16 +56,6 @@ type SecretKeyReference struct {
 	Key string `json:"key,omitempty"`
 }
 
-// MCPRatelimitConfig defines the configuration for rate limit
-type MCPRatelimitConfig struct {
-	// The limit of the rate limit
-	Limit int64 `json:"limit,omitempty"`
-	// The window of the rate limit
-	Window int64 `json:"window,omitempty"`
-	// The white list of the rate limit
-	WhiteList []string `json:"white_list,omitempty"`
-}
-
 // SSEServer defines the configuration for Server-Sent Events (SSE) server
 type SSEServer struct {
 	// The name of the SSE server
@@ -82,6 +72,9 @@ type SSEServer struct {
 
 // MatchRule defines a rule for matching requests
 type MatchRule struct {
+	// Name of the MCP server that owns this rule. When empty, mcp-session
+	// binds sessions to the rule's own match key.
+	ServerName string `json:"server_name,omitempty"`
 	// Domain pattern, supports wildcards
 	MatchRuleDomain string `json:"match_rule_domain,omitempty"`
 	// Path pattern to match
@@ -108,18 +101,13 @@ type McpServer struct {
 	Servers []*SSEServer `json:"servers,omitempty"`
 	// List of match rules for filtering requests
 	MatchList []*MatchRule `json:"match_list,omitempty"`
-	// Flag to control whether user level server is enabled
-	EnableUserLevelServer bool `json:"enable_user_level_server,omitempty"`
-	// Rate limit config for MCP server
-	Ratelimit *MCPRatelimitConfig `json:"rate_limit,omitempty"`
 }
 
 func NewDefaultMcpServer() *McpServer {
 	return &McpServer{
-		Enable:                false,
-		Servers:               make([]*SSEServer, 0),
-		MatchList:             make([]*MatchRule, 0),
-		EnableUserLevelServer: false,
+		Enable:    false,
+		Servers:   make([]*SSEServer, 0),
+		MatchList: make([]*MatchRule, 0),
 	}
 }
 
@@ -171,9 +159,11 @@ type golangPluginConfig struct {
 	Value interface{} `json:"value"`
 }
 
-// mcpSessionMatchRule is the wire form of a match_list entry. Every field is
-// always emitted, matching what mcp-session's ParseMatchList expects.
+// mcpSessionMatchRule is the wire form of a match_list entry. Match fields are
+// always emitted, matching what mcp-session's ParseMatchList expects;
+// server_name is omitted when the rule has no server identity.
 type mcpSessionMatchRule struct {
+	ServerName        string `json:"server_name,omitempty"`
 	MatchRuleDomain   string `json:"match_rule_domain"`
 	MatchRulePath     string `json:"match_rule_path"`
 	MatchRuleType     string `json:"match_rule_type"`
@@ -189,18 +179,10 @@ type mcpSessionRedisConfig struct {
 	DB       int    `json:"db"`
 }
 
-type mcpSessionRateLimitConfig struct {
-	Limit     int64    `json:"limit"`
-	Window    int64    `json:"window"`
-	WhiteList []string `json:"white_list"`
-}
-
 type mcpSessionPluginValue struct {
-	Redis                 *mcpSessionRedisConfig     `json:"redis"`
-	RateLimit             *mcpSessionRateLimitConfig `json:"rate_limit"`
-	SSEPathSuffix         string                     `json:"sse_path_suffix"`
-	MatchList             []mcpSessionMatchRule      `json:"match_list"`
-	EnableUserLevelServer bool                       `json:"enable_user_level_server"`
+	Redis         *mcpSessionRedisConfig `json:"redis"`
+	SSEPathSuffix string                 `json:"sse_path_suffix"`
+	MatchList     []mcpSessionMatchRule  `json:"match_list"`
 }
 
 // mcpServerEntry is the wire form of a servers entry. domain_list and config
@@ -232,6 +214,7 @@ func newGolangFilterConfig(pluginName string, value interface{}) golangFilterCon
 
 func newMcpSessionMatchRule(rule *MatchRule) mcpSessionMatchRule {
 	return mcpSessionMatchRule{
+		ServerName:        rule.ServerName,
 		MatchRuleDomain:   rule.MatchRuleDomain,
 		MatchRulePath:     rule.MatchRulePath,
 		MatchRuleType:     rule.MatchRuleType,
@@ -307,6 +290,9 @@ func validMatchRule(rule *MatchRule) error {
 	if rule.EnablePathRewrite && rule.UpstreamType != "sse" {
 		return errors.New("path rewrite is only supported for SSE upstream type")
 	}
+	if err := mcpserver.ValidateRuleValue("server_name", rule.ServerName); err != nil {
+		return err
+	}
 	// An empty domain is allowed and matches any host, so only the character
 	// constraints are enforced here.
 	return mcpserver.ValidateRuleContent([]string{rule.MatchRuleDomain}, rule.MatchRulePath, rule.PathRewritePrefix)
@@ -324,10 +310,6 @@ func validMcpServer(m *McpServer) error {
 		if m.Redis.PasswordSecret.Key == "" {
 			return errors.New("redis passwordSecret.key cannot be empty")
 		}
-	}
-
-	if m.EnableUserLevelServer && m.Redis == nil {
-		return errors.New("redis config cannot be empty when user level server is enabled")
 	}
 
 	// Validate match rule types
@@ -375,16 +357,7 @@ func deepCopyMcpServer(mcp *McpServer) (*McpServer, error) {
 			}
 		}
 	}
-	if mcp.Ratelimit != nil {
-		newMcp.Ratelimit = &MCPRatelimitConfig{
-			Limit:     mcp.Ratelimit.Limit,
-			Window:    mcp.Ratelimit.Window,
-			WhiteList: mcp.Ratelimit.WhiteList,
-		}
-	}
 	newMcp.SSEPathSuffix = mcp.SSEPathSuffix
-
-	newMcp.EnableUserLevelServer = mcp.EnableUserLevelServer
 
 	if len(mcp.Servers) > 0 {
 		newMcp.Servers = make([]*SSEServer, len(mcp.Servers))
@@ -409,6 +382,7 @@ func deepCopyMcpServer(mcp *McpServer) (*McpServer, error) {
 		newMcp.MatchList = make([]*MatchRule, len(mcp.MatchList))
 		for i, rule := range mcp.MatchList {
 			newMcp.MatchList[i] = &MatchRule{
+				ServerName:        rule.ServerName,
 				MatchRuleDomain:   rule.MatchRuleDomain,
 				MatchRulePath:     rule.MatchRulePath,
 				MatchRuleType:     rule.MatchRuleType,
@@ -656,6 +630,7 @@ func (m *McpServerController) constructMcpSessionStruct(mcp *McpServer) (string,
 			}
 			for _, domain := range domains {
 				matchList = append(matchList, mcpSessionMatchRule{
+					ServerName:        server.Name,
 					MatchRuleDomain:   domain,
 					MatchRulePath:     server.PathMatchValue,
 					MatchRuleType:     server.PathMatchType,
@@ -668,9 +643,8 @@ func (m *McpServerController) constructMcpSessionStruct(mcp *McpServer) (string,
 	}
 
 	value := mcpSessionPluginValue{
-		SSEPathSuffix:         mcp.SSEPathSuffix,
-		MatchList:             matchList,
-		EnableUserLevelServer: mcp.EnableUserLevelServer,
+		SSEPathSuffix: mcp.SSEPathSuffix,
+		MatchList:     matchList,
 	}
 
 	// Build redis configuration
@@ -680,19 +654,6 @@ func (m *McpServerController) constructMcpSessionStruct(mcp *McpServer) (string,
 			Username: mcp.Redis.Username,
 			Password: m.redisPasswordValue(mcp.Redis),
 			DB:       mcp.Redis.DB,
-		}
-	}
-
-	// Build rate limit configuration
-	if mcp.Ratelimit != nil {
-		whiteList := mcp.Ratelimit.WhiteList
-		if whiteList == nil {
-			whiteList = []string{}
-		}
-		value.RateLimit = &mcpSessionRateLimitConfig{
-			Limit:     mcp.Ratelimit.Limit,
-			Window:    mcp.Ratelimit.Window,
-			WhiteList: whiteList,
 		}
 	}
 

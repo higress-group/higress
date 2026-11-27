@@ -350,6 +350,7 @@ TEST_F(JwtAuthTest, CustomHeader) {
   EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
       .WillOnce([&buffer](WasmBufferType) { return &buffer; });
   EXPECT_TRUE(root_context_->configure(configuration.size()));
+  current_time_ = 1665673819 * 1e9;
   custom_header_ =
       R"(token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjEyMyJ9.eyJpc3MiOiJhYmNkIiwic3ViIjoidGVzdCIsImlhdCI6MTY2NTY2MDUyNywiZXhwIjoxNjY1NjczODE5fQ.7BVJOAobz_xYjsenu_CsYhYbgF1gMcqZSpaeQ8HwKmc)";
   EXPECT_EQ(context_->onRequestHeaders(0, false),

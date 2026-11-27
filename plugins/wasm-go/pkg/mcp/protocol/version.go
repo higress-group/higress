@@ -31,6 +31,7 @@ const (
 	Version20241105 Version = "2024-11-05"
 	Version20250326 Version = "2025-03-26"
 	Version20250618 Version = "2025-06-18"
+	Version20251125 Version = "2025-11-25"
 	Version20260728 Version = "2026-07-28"
 )
 
@@ -38,6 +39,7 @@ var legacyVersions = []Version{
 	Version20241105,
 	Version20250326,
 	Version20250618,
+	Version20251125,
 }
 
 // LegacyVersions returns a copy of the versions negotiated by legacy

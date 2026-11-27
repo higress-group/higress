@@ -126,17 +126,20 @@ type Plan struct {
 	PlanID          string           `json:"planId"`
 	Plugins         []PlanEntry      `json:"plugins"`
 	Deferred        []DeferredPlugin `json:"deferred,omitempty"`
+	HistoryImport   *ProofRef        `json:"historyImport,omitempty"`
 }
 
 type PlanEntry struct {
-	LogicalID       string   `json:"logicalId"`
-	Implementation  string   `json:"implementation"`
-	SourceDir       string   `json:"sourceDir"`
-	Image           string   `json:"image"`
-	PreviousVersion string   `json:"previousVersion,omitempty"`
-	Version         string   `json:"version"`
-	InputHash       string   `json:"inputHash"`
-	ChangedPaths    []string `json:"changedPaths"`
+	CandidateImport      *ProofRef `json:"candidateImport,omitempty"`
+	ArtifactSourceCommit string    `json:"artifactSourceCommit,omitempty"`
+	LogicalID            string    `json:"logicalId"`
+	Implementation       string    `json:"implementation"`
+	SourceDir            string    `json:"sourceDir"`
+	Image                string    `json:"image"`
+	PreviousVersion      string    `json:"previousVersion,omitempty"`
+	Version              string    `json:"version"`
+	InputHash            string    `json:"inputHash"`
+	ChangedPaths         []string  `json:"changedPaths"`
 	// Backfill marks a bootstrap release entry whose stable public tag was
 	// absent from the reviewed baseline: promotion creates the tag from this
 	// candidate. The marker is bootstrap-only provenance and migration state;
@@ -155,10 +158,12 @@ type DeferredPlugin struct {
 }
 
 type CandidateEvidenceFile struct {
-	Plugins map[string]CandidateEvidence `json:"plugins"`
+	Plugins         map[string]CandidateEvidence `json:"plugins"`
+	HistoryEvidence *HistoryEvidence             `json:"historyEvidence,omitempty"`
 }
 
 type CandidateEvidence struct {
+	WasmSHA256   string             `json:"wasmSha256,omitempty"`
 	CandidateRef string             `json:"candidateRef"`
 	Digest       string             `json:"digest"`
 	SourceCommit string             `json:"sourceCommit"`
@@ -216,28 +221,30 @@ type MigrationReportFile struct {
 // only mode that reports State "suspected"; a suspected entry never blocks a
 // plugin and never enters a snapshot.
 type MigrationReportEntry struct {
-	LogicalID         string `json:"logicalId"`
-	Version           string `json:"version"`
-	OCIRef            string `json:"ociRef"`
-	ExistingDigest    string `json:"existingDigest"`
-	PlannedDigest     string `json:"plannedDigest,omitempty"`
-	InputHash         string `json:"inputHash"`
-	ExistingVersion   string `json:"existingVersion,omitempty"`
-	ExistingRevision  string `json:"existingRevision,omitempty"`
-	ExistingInputHash string `json:"existingInputHash,omitempty"`
-	SourceComparison  string `json:"sourceComparison"`
-	State             string `json:"state"`
-	Recommendation    string `json:"recommendation,omitempty"`
+	ArtifactSourceCommit string `json:"artifactSourceCommit,omitempty"`
+	LogicalID            string `json:"logicalId"`
+	Version              string `json:"version"`
+	OCIRef               string `json:"ociRef"`
+	ExistingDigest       string `json:"existingDigest"`
+	PlannedDigest        string `json:"plannedDigest,omitempty"`
+	InputHash            string `json:"inputHash"`
+	ExistingVersion      string `json:"existingVersion,omitempty"`
+	ExistingRevision     string `json:"existingRevision,omitempty"`
+	ExistingInputHash    string `json:"existingInputHash,omitempty"`
+	SourceComparison     string `json:"sourceComparison"`
+	State                string `json:"state"`
+	Recommendation       string `json:"recommendation,omitempty"`
 }
 
 type Snapshot struct {
-	SchemaVersion   int    `json:"schemaVersion"`
-	GatewayVersion  string `json:"gatewayVersion"`
-	SourceCommit    string `json:"sourceCommit"`
-	PreviousRelease string `json:"previousRelease,omitempty"`
-	CatalogSHA256   string `json:"catalogSha256"`
-	PlanID          string `json:"planId"`
-	ProvenanceMode  string `json:"provenanceMode"`
+	HistoryImport   *ProofRef `json:"historyImport,omitempty"`
+	SchemaVersion   int       `json:"schemaVersion"`
+	GatewayVersion  string    `json:"gatewayVersion"`
+	SourceCommit    string    `json:"sourceCommit"`
+	PreviousRelease string    `json:"previousRelease,omitempty"`
+	CatalogSHA256   string    `json:"catalogSha256"`
+	PlanID          string    `json:"planId"`
+	ProvenanceMode  string    `json:"provenanceMode"`
 	// BootstrapEvidence declares that this snapshot is the first managed
 	// release rendered from the one-time bootstrap baseline and names the
 	// committed bootstrap evidence the preparation PR must carry. Validation
@@ -295,17 +302,20 @@ type SnapshotBootstrapEvidence struct {
 }
 
 type SnapshotEntry struct {
-	LogicalID      string `json:"logicalId"`
-	Implementation string `json:"implementation"`
-	SourceDir      string `json:"sourceDir"`
-	Image          string `json:"image"`
-	Version        string `json:"version"`
-	OCIRef         string `json:"ociRef"`
-	Digest         string `json:"digest"`
-	InputHash      string `json:"inputHash"`
-	SourceCommit   string `json:"sourceCommit"`
-	CandidateRef   string `json:"candidateRef"`
-	ProvenanceMode string `json:"provenanceMode"`
+	CandidateImport *ProofRef         `json:"candidateImport,omitempty"`
+	WasmSHA256      string            `json:"wasmSha256,omitempty"`
+	History         []HistoryArtifact `json:"history,omitempty"`
+	LogicalID       string            `json:"logicalId"`
+	Implementation  string            `json:"implementation"`
+	SourceDir       string            `json:"sourceDir"`
+	Image           string            `json:"image"`
+	Version         string            `json:"version"`
+	OCIRef          string            `json:"ociRef"`
+	Digest          string            `json:"digest"`
+	InputHash       string            `json:"inputHash"`
+	SourceCommit    string            `json:"sourceCommit"`
+	CandidateRef    string            `json:"candidateRef"`
+	ProvenanceMode  string            `json:"provenanceMode"`
 	// Backfill marks an entry imported by building a candidate for a stable
 	// VERSION whose public tag was absent at bootstrap. Promotion creates the
 	// version tag from the candidate; the marker records bootstrap provenance

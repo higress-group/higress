@@ -18,6 +18,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -270,32 +271,48 @@ bool PluginRootContext::checkPlugin(
     auto start = pos + BearerPrefix.size();
     token_str =
         std::string{auth_header.c_str() + start, auth_header.size() - start};
-    auto token = jwt::decode(token_str);
-    CLAIM_CHECK(token, client_id, jwt::json::type::string);
-    CLAIM_CHECK(token, iss, jwt::json::type::string);
-    CLAIM_CHECK(token, sub, jwt::json::type::string);
-    CLAIM_CHECK(token, aud, jwt::json::type::string);
-    CLAIM_CHECK(token, exp, jwt::json::type::integer);
-    CLAIM_CHECK(token, iat, jwt::json::type::integer);
-    auto client_id = token.get_payload_claim("client_id").as_string();
-    auto it = rule.consumers.find(client_id);
-    if (it == rule.consumers.end()) {
-      LOG_DEBUG(absl::StrFormat("client_id not found:%s", client_id));
+    Consumer consumer;
+    std::string audience;
+    try {
+      auto token = jwt::decode(token_str);
+      CLAIM_CHECK(token, client_id, jwt::json::type::string);
+      CLAIM_CHECK(token, iss, jwt::json::type::string);
+      CLAIM_CHECK(token, sub, jwt::json::type::string);
+      CLAIM_CHECK(token, aud, jwt::json::type::string);
+      CLAIM_CHECK(token, exp, jwt::json::type::integer);
+      CLAIM_CHECK(token, iat, jwt::json::type::integer);
+      auto client_id = token.get_payload_claim("client_id").as_string();
+      auto it = rule.consumers.find(client_id);
+      if (it == rule.consumers.end()) {
+        LOG_DEBUG(absl::StrFormat("client_id not found:%s", client_id));
+        goto failed;
+      }
+      consumer = it->second;
+      auto verifier =
+          jwt::verify()
+              .allow_algorithm(jwt::algorithm::hs256{consumer.client_secret})
+              .with_issuer(rule.issuer)
+              .with_subject(consumer.name)
+              .with_type(TypeHeader)
+              .leeway(rule.clock_skew);
+      std::error_code ec;
+      verifier.verify(token, ec);
+      if (ec) {
+        LOG_INFO(absl::StrFormat("token verify failed, token:%s, reason:%s",
+                                 token_str, ec.message()));
+        goto failed;
+      }
+      if (!rule.global_credentials) {
+        auto audience_json = token.get_payload_claim("aud");
+        if (audience_json.get_type() != jwt::json::type::string) {
+          LOG_DEBUG(absl::StrFormat("invalid audience, token:%s", token_str));
+          goto failed;
+        }
+        audience = audience_json.as_string();
+      }
+    } catch (const std::exception&) {
       goto failed;
-    }
-    auto consumer = it->second;
-    auto verifier =
-        jwt::verify()
-            .allow_algorithm(jwt::algorithm::hs256{consumer.client_secret})
-            .with_issuer(rule.issuer)
-            .with_subject(consumer.name)
-            .with_type(TypeHeader)
-            .leeway(rule.clock_skew);
-    std::error_code ec;
-    verifier.verify(token, ec);
-    if (ec) {
-      LOG_INFO(absl::StrFormat("token verify failed, token:%s, reason:%s",
-                               token_str, ec.message()));
+    } catch (...) {
       goto failed;
     }
     verified = true;
@@ -306,12 +323,6 @@ bool PluginRootContext::checkPlugin(
       goto failed;
     }
     if (!rule.global_credentials) {
-      auto audience_json = token.get_payload_claim("aud");
-      if (audience_json.get_type() != jwt::json::type::string) {
-        LOG_DEBUG(absl::StrFormat("invalid audience, token:%s", token_str));
-        goto failed;
-      }
-      auto audience = audience_json.as_string();
       if (audience != route_name) {
         LOG_DEBUG(absl::StrFormat("audience:%s not match this route:%s",
                                   audience, route_name));

@@ -46,24 +46,50 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, cfg config.ReplayProtectionCo
 
 	redisKey := fmt.Sprintf("%s:%s", cfg.Redis.KeyPrefix, nonce)
 
+	if err := cfg.Redis.EnsureReady(); err != nil {
+		return handleRedisDispatchError(cfg, err)
+	}
+
 	// Check if the nonce already exists
 	err := cfg.Redis.Client.SetNX(redisKey, "1", cfg.NonceTTL, func(response resp.Value) {
-		if response.Error() != nil {
-			log.Errorf("redis call error: %v", response.Error())
-			proxywasm.ResumeHttpRequest()
-		} else if response.String() != "OK" {
+		if err := response.Error(); err != nil {
+			log.Errorf("redis call error: %v", err)
+			handleRedisFailure(cfg, true)
+			return
+		}
+		if response.Type() == resp.BulkString && response.IsNull() {
 			log.Warnf("duplicate nonce detected: %s", nonce)
 			proxywasm.SendHttpResponse(cfg.RejectCode, nil, []byte(cfg.RejectMsg), -1)
-		} else {
-			proxywasm.ResumeHttpRequest()
+			return
 		}
+		if response.Type() == resp.SimpleString && response.String() == "OK" {
+			proxywasm.ResumeHttpRequest()
+			return
+		}
+		log.Errorf("unexpected redis response type %s", response.Type())
+		handleRedisFailure(cfg, true)
 	})
 
 	if err != nil {
-		log.Errorf("redis call failed: %v", err)
-		return types.ActionContinue
+		return handleRedisDispatchError(cfg, err)
 	}
 	return types.ActionPause
+}
+
+func handleRedisDispatchError(cfg config.ReplayProtectionConfig, err error) types.Action {
+	log.Errorf("redis call failed: %v", err)
+	return handleRedisFailure(cfg, false)
+}
+
+func handleRedisFailure(cfg config.ReplayProtectionConfig, resumeOnOpen bool) types.Action {
+	if cfg.FailureMode == config.FailureModeFailClosed {
+		proxywasm.SendHttpResponse(503, nil, []byte("Service Unavailable"), -1)
+		return types.ActionPause
+	}
+	if resumeOnOpen {
+		proxywasm.ResumeHttpRequest()
+	}
+	return types.ActionContinue
 }
 
 func validateNonce(nonce string, cfg *config.ReplayProtectionConfig) error {

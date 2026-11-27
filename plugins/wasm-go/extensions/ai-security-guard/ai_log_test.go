@@ -411,6 +411,7 @@ func (ctx *stubHTTPContext) WriteUserAttributeToLogWithKey(key string) error {
 }
 
 func (ctx *stubHTTPContext) WriteUserAttributeToTrace() error { return nil }
+func (ctx *stubHTTPContext) RequireRequestBody()              {}
 func (ctx *stubHTTPContext) DontReadRequestBody()             {}
 func (ctx *stubHTTPContext) DontReadResponseBody()            {}
 func (ctx *stubHTTPContext) BufferRequestBody()               {}
