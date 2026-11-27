@@ -34,6 +34,13 @@ header:
     - 'test/gateway/reports/**'
     - 'test/inference-extension/reports/**'
     - 'hgctl/cmd/hgctl/config/testdata/config'
+    # Generated verification evidence has no source-code license header.
+    - 'hgctl/pkg/plugin/install/testdata/SHA256SUMS'
+    - 'hgctl/pkg/plugin/install/testdata/baseline-regression.log'
+    - 'hgctl/pkg/plugin/install/testdata/kind-cleanup.log'
+    - 'hgctl/pkg/plugin/install/testdata/kubernetes-version.json'
+    - 'hgctl/pkg/plugin/install/testdata/node-image-digests.json'
+    - 'hgctl/pkg/plugin/install/testdata/runtime-comparison.json'
     - 'hgctl/pkg/manifests'
     - 'pkg/ingress/kube/gateway/istio/testdata'
     - 'release-notes/**'
