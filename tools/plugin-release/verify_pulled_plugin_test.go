@@ -37,7 +37,10 @@ func TestValidateProxyWasmModuleAcceptsLegacyExceptionHandling(t *testing.T) {
 
 func TestValidateProxyWasmModuleRejectsSpoofedLegacyError(t *testing.T) {
 	module := proxyWasmModule(true, nil, "proxy_on_vm_start", "proxy_on_configure", "proxy_abi_version_0_2_1", "legacy exception handling instruction")
-	module[len(module)-1] = 0xff
+	// Corrupt an interior instruction while keeping the final OpcodeEnd, so
+	// wazero produces the export-name-bearing diagnostic the old substring
+	// check would have accepted.
+	module[len(module)-3] = 0xff
 	if err := validateProxyWasmModule(module); err == nil {
 		t.Fatal("malformed module with a spoofed legacy error export name was accepted")
 	}
