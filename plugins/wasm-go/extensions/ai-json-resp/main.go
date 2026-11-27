@@ -228,7 +228,7 @@ func parseConfig(result gjson.Result, config *PluginConfig, log log.Log) error {
 		config.enableContentDisposition = enableContentDispositionValue.Bool()
 	}
 
-	config.enableJsonSchemaValidation = true
+	config.enableJsonSchemaValidation = config.jsonSchema != nil
 
 	jsonSchemaBytes, err := json.Marshal(config.jsonSchema)
 	if err != nil {
@@ -465,6 +465,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config PluginConfig, log log.
 		}
 		if fromThisPlugin {
 			ctx.SetContext(FROM_THIS_PLUGIN_KEY, true)
+			ctx.DontReadRequestBody()
 			return types.ActionContinue
 		}
 	} else {

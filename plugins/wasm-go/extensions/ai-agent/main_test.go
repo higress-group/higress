@@ -88,6 +88,12 @@ func (c *messageStoreTestContext) GetUserAttributeMap() map[string]interface{} {
 func (c *messageStoreTestContext) WriteUserAttributeToLog() error              { return nil }
 func (c *messageStoreTestContext) WriteUserAttributeToLogWithKey(string) error { return nil }
 func (c *messageStoreTestContext) WriteUserAttributeToTrace() error            { return nil }
+func (c *messageStoreTestContext) RequireRequestBody()                         {}
+func (c *messageStoreTestContext) HasRequestBody() bool                        { return false }
+func (c *messageStoreTestContext) HasResponseBody() bool                       { return false }
+func (c *messageStoreTestContext) IsWebsocket() bool                           { return false }
+func (c *messageStoreTestContext) IsBinaryRequestBody() bool                   { return false }
+func (c *messageStoreTestContext) IsBinaryResponseBody() bool                  { return false }
 func (c *messageStoreTestContext) DontReadRequestBody()                        {}
 func (c *messageStoreTestContext) DontReadResponseBody()                       {}
 func (c *messageStoreTestContext) BufferRequestBody()                          {}
@@ -514,8 +520,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"content-type", "application/json"},
 			})
 
-			// onHttpRequestHeaders应该返回ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取并处理请求体，因此暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 		})
 	})
 }

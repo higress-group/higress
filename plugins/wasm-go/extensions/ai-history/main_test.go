@@ -169,6 +169,7 @@ func (c *fakeHttpContext) GetUserAttributeMap() map[string]interface{}       { r
 func (c *fakeHttpContext) WriteUserAttributeToLog() error                    { return nil }
 func (c *fakeHttpContext) WriteUserAttributeToLogWithKey(key string) error   { return nil }
 func (c *fakeHttpContext) WriteUserAttributeToTrace() error                  { return nil }
+func (c *fakeHttpContext) RequireRequestBody()                               {}
 func (c *fakeHttpContext) DontReadRequestBody()                              {}
 func (c *fakeHttpContext) DontReadResponseBody()                             {}
 func (c *fakeHttpContext) BufferRequestBody()                                {}

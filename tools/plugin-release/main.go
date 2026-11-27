@@ -22,6 +22,8 @@ func main() {
 		err = commandPlan(os.Args[2:])
 	case "capture-bootstrap-evidence":
 		err = commandCaptureBootstrapEvidence(os.Args[2:])
+	case "capture-history-evidence":
+		err = commandCaptureHistoryEvidence(os.Args[2:])
 	case "bootstrap-snapshot":
 		err = commandBootstrap(os.Args[2:])
 	case "apply-plan":

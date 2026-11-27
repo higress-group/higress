@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "repository": "higress-group/plugin-server",
+  "sourceCommit": "0585c6489976c743b912d955ae03905d12739b85",
+  "lock": {
+    "path": "plugins/release/imports/cpp-defaults-2.0.1/legacy-lock.json",
+    "sha256": "c2993e1a68e75980b650fed0bcd7e7d340bb040157e6a8e42e033b7b6372e285"
+  },
+  "logicalIds": [
+    "basic-auth",
+    "bot-detect",
+    "custom-response",
+    "hmac-auth",
+    "jwt-auth",
+    "key-auth",
+    "key-rate-limit",
+    "oauth",
+    "request-block"
+  ]
+}

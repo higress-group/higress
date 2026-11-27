@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	template "github.com/higress-group/gjson_template"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1059,12 +1060,12 @@ func TestParseTemplates_HeaderWithEmptyKeySkipped(t *testing.T) {
 
 func TestParseTemplates_PopulatesArgPositions(t *testing.T) {
 	tool := RestTool{
-		RequestTemplate: RestToolRequestTemplate{URL: "http://x", Method: "GET"},
+		RequestTemplate:  RestToolRequestTemplate{URL: "http://x", Method: "GET"},
 		ResponseTemplate: RestToolResponseTemplate{Body: "{{.}}"},
 		Args: []RestToolArg{
-			{Name: "q", Position: "QUERY"},  // lower-cased in argPositions
+			{Name: "q", Position: "QUERY"}, // lower-cased in argPositions
 			{Name: "h", Position: "Header"},
-			{Name: "noPos"},                   // no position → not stored
+			{Name: "noPos"}, // no position → not stored
 		},
 	}
 	require := assert.New(t)
@@ -1289,6 +1290,457 @@ func TestHasContentType_CaseAndCharsetSuffix(t *testing.T) {
 
 	emptyHeaders := [][2]string{}
 	assert.False(t, hasContentType(emptyHeaders, "application/json"))
+}
+
+func newURLRenderTestTool(t *testing.T, rawURL string, allowUnsafe bool, args ...RestToolArg) *RestTool {
+	t.Helper()
+	tool := &RestTool{
+		Name: "url-test",
+		Args: args,
+		RequestTemplate: RestToolRequestTemplate{
+			URL:                 rawURL,
+			Method:              "GET",
+			AllowUnsafePathArgs: allowUnsafe,
+		},
+	}
+	require.NoError(t, tool.parseTemplates())
+	return tool
+}
+
+func TestRestToolRenderURL_PathArgumentEscaping(t *testing.T) {
+	tests := []struct {
+		name       string
+		rawURL     string
+		args       map[string]interface{}
+		pathArgs   map[string]interface{}
+		config     map[string]interface{}
+		wantURL    string
+		wantPath   string
+		checkQuery func(t *testing.T, rawURL string)
+	}{
+		{
+			name:     "normal id with braces placeholder",
+			rawURL:   "http://api.example.com/users/{id}",
+			args:     map[string]interface{}{"id": "user-123"},
+			pathArgs: map[string]interface{}{"id": "user-123"},
+			wantURL:  "http://api.example.com/users/user-123",
+			wantPath: "/users/user-123",
+		},
+		{
+			name:     "normal id with template reference",
+			rawURL:   "http://api.example.com/users/{{.args.id}}",
+			args:     map[string]interface{}{"id": "user-123"},
+			pathArgs: map[string]interface{}{"id": "user-123"},
+			wantURL:  "http://api.example.com/users/user-123",
+			wantPath: "/users/user-123",
+		},
+		{
+			name:     "unicode value round trips through path escape",
+			rawURL:   "http://api.example.com/users/{id}",
+			args:     map[string]interface{}{"id": "中文 用户"},
+			pathArgs: map[string]interface{}{"id": "中文 用户"},
+			wantURL:  "http://api.example.com/users/" + url.PathEscape("中文 用户"),
+			wantPath: "/users/中文 用户",
+		},
+		{
+			name:     "slash stays inside one segment",
+			rawURL:   "http://api.example.com/users/{id}",
+			args:     map[string]interface{}{"id": "team/user"},
+			pathArgs: map[string]interface{}{"id": "team/user"},
+			wantURL:  "http://api.example.com/users/team%2Fuser",
+			wantPath: "/users/team/user",
+		},
+		{
+			name:     "question and hash are escaped in the path",
+			rawURL:   "http://api.example.com/users/{id}?active=true#profile",
+			args:     map[string]interface{}{"id": "a?b#c"},
+			pathArgs: map[string]interface{}{"id": "a?b#c"},
+			wantURL:  "http://api.example.com/users/a%3Fb%23c?active=true#profile",
+			wantPath: "/users/a?b#c",
+		},
+		{
+			name:     "path argument referenced in query keeps raw query behavior",
+			rawURL:   "http://api.example.com/users/{id}?mirror={{.args.id}}",
+			args:     map[string]interface{}{"id": "a b"},
+			pathArgs: map[string]interface{}{"id": "a b"},
+			wantURL:  "http://api.example.com/users/a%20b?mirror=a b",
+			wantPath: "/users/a b",
+		},
+		{
+			name:     "amap style query args are not escaped by the path fix",
+			rawURL:   "https://restapi.amap.com/v3/geocode/geo?key={{.config.apiKey}}&address={{.args.address}}&city={{.args.city}}",
+			args:     map[string]interface{}{"address": "北京市朝阳区阜通东大街6号", "city": "北京"},
+			pathArgs: map[string]interface{}{},
+			config:   map[string]interface{}{"apiKey": "test-api-key"},
+			wantURL:  "https://restapi.amap.com/v3/geocode/geo?key=test-api-key&address=北京市朝阳区阜通东大街6号&city=北京",
+			wantPath: "/v3/geocode/geo",
+			checkQuery: func(t *testing.T, rawURL string) {
+				parsed, err := url.Parse(rawURL)
+				require.NoError(t, err)
+				query := parsed.Query()
+				assert.Equal(t, "test-api-key", query.Get("key"))
+				assert.Equal(t, "北京市朝阳区阜通东大街6号", query.Get("address"))
+				assert.Equal(t, "北京", query.Get("city"))
+			},
+		},
+		{
+			name:     "pre-encoded spaces are treated as raw and escaped once",
+			rawURL:   "http://api.example.com/users/{id}",
+			args:     map[string]interface{}{"id": "alice%20smith"},
+			pathArgs: map[string]interface{}{"id": "alice%20smith"},
+			wantURL:  "http://api.example.com/users/alice%2520smith",
+			wantPath: "/users/alice%20smith",
+		},
+		{
+			name:     "explicit template escape functions",
+			rawURL:   "http://api.example.com/users/{{pathescape .args.id}}?q={{queryescape .args.q}}",
+			args:     map[string]interface{}{"id": "a/b", "q": "a b&c"},
+			pathArgs: map[string]interface{}{},
+			wantURL:  "http://api.example.com/users/a%2Fb?q=a+b%26c",
+			wantPath: "/users/a/b",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool := newURLRenderTestTool(t, tt.rawURL, false)
+			got, err := tool.renderURL(tt.config, tt.args, tt.pathArgs)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantURL, got)
+
+			parsed, err := url.Parse(got)
+			require.NoError(t, err)
+			unescapedPath, err := url.PathUnescape(parsed.EscapedPath())
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantPath, unescapedPath)
+			if tt.checkQuery != nil {
+				tt.checkQuery(t, got)
+			}
+		})
+	}
+}
+
+func TestRestToolRenderURL_RejectsUnsafePathArgs(t *testing.T) {
+	unsafeValues := []string{
+		"..",
+		"../..",
+		"x/../../internal",
+		"%2e%2e",
+		"%2E%2E",
+		".%2e",
+		"..%2f",
+		"%252e%252e",
+		"..%5c..",
+		"a/./b",
+		"%2f..%2f",
+		"..%2f%zz",
+		"%2e%2e%2f%zz",
+		"%252525252e%252525252e",
+	}
+	templates := []string{
+		"http://api.example.com/users/{id}",
+		"http://api.example.com/users/{{.args.id}}",
+	}
+
+	for _, rawURL := range templates {
+		for _, value := range unsafeValues {
+			t.Run(rawURL+" "+value, func(t *testing.T) {
+				tool := newURLRenderTestTool(t, rawURL, false)
+				_, err := tool.renderURL(nil, map[string]interface{}{"id": value}, map[string]interface{}{"id": value})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "path argument")
+			})
+		}
+	}
+}
+
+func TestRestToolParseTemplates_RejectsDynamicAuthority(t *testing.T) {
+	templates := []string{
+		"{id}://api.example.com/users",
+		"http://{id}/users",
+		"http://{{.args.id}}/users",
+		"http://user:{id}@api.example.com/users",
+		"http://user:{{pathescape .args.id}}@api.example.com/users",
+		"http://api.example.com:{id}/users",
+		"//{id}/users",
+		"//{{.args.host}}/users",
+		"http:{id}",
+		"http:{{queryescape .args.id}}",
+	}
+	for _, rawURL := range templates {
+		t.Run(rawURL, func(t *testing.T) {
+			tool := &RestTool{
+				Name: "dynamic-authority",
+				RequestTemplate: RestToolRequestTemplate{
+					URL:    rawURL,
+					Method: "GET",
+				},
+			}
+			err := tool.parseTemplates()
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestRestToolParseTemplates_AllowsStaticAuthorityAndRelativeURLs(t *testing.T) {
+	templates := []string{
+		"http://api.example.com/users/{id}",
+		"https://api.example.com:8443/users/{{.args.id}}?q={{queryescape .args.q}}",
+		"https://user:pass@api.example.com/users/{id}",
+		"//api.example.com/users/{id}",
+		"/users/{id}",
+		"users/{id}",
+		"http:static-opaque",
+	}
+	for _, rawURL := range templates {
+		t.Run(rawURL, func(t *testing.T) {
+			tool := &RestTool{
+				Name: "static-authority",
+				RequestTemplate: RestToolRequestTemplate{
+					URL:    rawURL,
+					Method: "GET",
+				},
+			}
+			require.NoError(t, tool.parseTemplates())
+		})
+	}
+}
+
+func TestRestMCPAddRestToolRejectsDynamicAuthority(t *testing.T) {
+	server := NewRestMCPServer("authority-test")
+	err := server.AddRestTool(RestTool{
+		Name: "dynamic-authority",
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "http://{{.args.host}}/users",
+			Method: "GET",
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "static")
+
+	require.NoError(t, server.AddRestTool(RestTool{
+		Name: "static-authority",
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "http://api.example.com/users/{id}",
+			Method: "GET",
+		},
+	}))
+}
+
+func TestRestToolRenderURL_RejectsAuthorityChanges(t *testing.T) {
+	tests := []struct {
+		name     string
+		rawURL   string
+		args     map[string]interface{}
+		pathArgs map[string]interface{}
+	}{
+		{
+			name:     "explicit pathescape cannot rewrite scheme and host",
+			rawURL:   "{{pathescape .args.scheme}}//{{pathescape .args.host}}/users",
+			args:     map[string]interface{}{"scheme": "http:", "host": "127.0.0.1:8080"},
+			pathArgs: map[string]interface{}{"scheme": "http:", "host": "127.0.0.1:8080"},
+		},
+		{
+			name:     "relative template cannot gain a non-default port",
+			rawURL:   "{{pathescape .args.scheme}}//api.example.com:{{pathescape .args.port}}/users",
+			args:     map[string]interface{}{"scheme": "http:", "port": "8443"},
+			pathArgs: map[string]interface{}{"scheme": "http:", "port": "8443"},
+		},
+		{
+			name:     "relative template cannot gain userinfo",
+			rawURL:   "{{pathescape .args.scheme}}{{pathescape .args.separator}}//user:{{pathescape .args.password}}@{{pathescape .args.host}}/users",
+			args:     map[string]interface{}{"scheme": "https", "separator": ":", "password": "secret", "host": "api.example.com"},
+			pathArgs: map[string]interface{}{"scheme": "https", "separator": ":", "password": "secret", "host": "api.example.com"},
+		},
+		{
+			name:     "relative template cannot gain an opaque component",
+			rawURL:   "{{pathescape .args.scheme}}{{pathescape .args.separator}}{{pathescape .args.rest}}",
+			args:     map[string]interface{}{"scheme": "http", "separator": ":", "rest": "evil.example"},
+			pathArgs: map[string]interface{}{"scheme": "http", "separator": ":", "rest": "evil.example"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool := newURLRenderTestTool(t, tt.rawURL, false)
+			_, err := tool.renderURL(nil, tt.args, tt.pathArgs)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "authority")
+		})
+	}
+}
+
+func TestRestToolRenderURL_AutomaticSubstitutionKeepsRelativeTemplateRelative(t *testing.T) {
+	tool := newURLRenderTestTool(t, "{{.args.scheme}}//{{.args.host}}/users", false)
+	got, err := tool.renderURL(nil,
+		map[string]interface{}{"scheme": "http:", "host": "127.0.0.1:8080"},
+		map[string]interface{}{"scheme": "http:", "host": "127.0.0.1:8080"})
+	require.NoError(t, err)
+	parsed, err := url.Parse(got)
+	require.NoError(t, err)
+	assert.Empty(t, parsed.Scheme)
+	assert.Empty(t, parsed.Host)
+}
+
+func TestRestToolRenderURL_RelativeTemplates(t *testing.T) {
+	tests := []struct {
+		rawURL  string
+		wantURL string
+	}{
+		{rawURL: "/users/{id}", wantURL: "/users/a%20b"},
+		{rawURL: "users/{id}", wantURL: "users/a%20b"},
+		{rawURL: "//api.example.com/users/{id}", wantURL: "//api.example.com/users/a%20b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.rawURL, func(t *testing.T) {
+			tool := newURLRenderTestTool(t, tt.rawURL, false)
+			got, err := tool.renderURL(nil, map[string]interface{}{"id": "a b"}, map[string]interface{}{"id": "a b"})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantURL, got)
+		})
+	}
+}
+
+func TestRestToolVerifyRenderedURLAuthority(t *testing.T) {
+	tests := []struct {
+		name     string
+		rawURL   string
+		rendered string
+		wantErr  bool
+	}{
+		{name: "same authority", rawURL: "https://api.example.com/users/{id}", rendered: "https://api.example.com/users/alice"},
+		{name: "host comparison is case insensitive", rawURL: "https://api.example.com/users/{id}", rendered: "https://API.EXAMPLE.COM/users/alice"},
+		{name: "default https port is equivalent", rawURL: "https://api.example.com/users/{id}", rendered: "https://api.example.com:443/users/alice"},
+		{name: "default http port is equivalent", rawURL: "http://api.example.com/users/{id}", rendered: "http://api.example.com:80/users/alice"},
+		{name: "relative template stays relative", rawURL: "/users/{id}", rendered: "/users/alice"},
+		{name: "scheme tampering", rawURL: "https://api.example.com/users/{id}", rendered: "http://api.example.com/users/alice", wantErr: true},
+		{name: "host tampering", rawURL: "https://api.example.com/users/{id}", rendered: "https://evil.example/users/alice", wantErr: true},
+		{name: "non-default port tampering", rawURL: "https://api.example.com/users/{id}", rendered: "https://api.example.com:8443/users/alice", wantErr: true},
+		{name: "userinfo addition", rawURL: "https://api.example.com/users/{id}", rendered: "https://user:pass@api.example.com/users/alice", wantErr: true},
+		{name: "userinfo tampering", rawURL: "https://user:pass@api.example.com/users/{id}", rendered: "https://user:other@api.example.com/users/alice", wantErr: true},
+		{name: "opaque tampering", rawURL: "http:static", rendered: "http:evil", wantErr: true},
+		{name: "relative template cannot become absolute", rawURL: "/users/{id}", rendered: "https://evil.example/users/alice", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool := newURLRenderTestTool(t, tt.rawURL, false)
+			err := tool.verifyRenderedURLAuthority(tt.rendered)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "authority")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestRestToolRenderURL_ExplicitEscapeFunctionsAreAuthoritative(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		value  string
+	}{
+		{
+			name:   "queryescape cannot be overwritten by automatic restoration",
+			rawURL: "http://api.example.com/users/{id}?q={{queryescape .args.id}}",
+			value:  "a b&admin=true",
+		},
+		{
+			name:   "pathescape and queryescape receive the original path argument",
+			rawURL: "http://api.example.com/users/{{pathescape .args.id}}?q={{queryescape .args.id}}",
+			value:  "a/b &admin=true",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool := newURLRenderTestTool(t, tt.rawURL, false)
+			got, err := tool.renderURL(nil, map[string]interface{}{"id": tt.value}, map[string]interface{}{"id": tt.value})
+			require.NoError(t, err)
+			assert.Equal(t, "http://api.example.com/users/"+url.PathEscape(tt.value)+"?q="+url.QueryEscape(tt.value), got)
+
+			parsed, err := url.Parse(got)
+			require.NoError(t, err)
+			query := parsed.Query()
+			assert.Equal(t, tt.value, query.Get("q"))
+			assert.NotContains(t, query, "admin")
+		})
+	}
+}
+
+func TestValidatePathArgValueDecodeLimit(t *testing.T) {
+	require.NoError(t, validatePathArgValue("%25252541"))
+	require.Error(t, validatePathArgValue("%252525252e%252525252e"))
+}
+
+func TestRestToolRenderURL_AllowsSafePercentSequencesAsRaw(t *testing.T) {
+	tests := []struct {
+		value    string
+		wantPath string
+	}{
+		{value: "%20", wantPath: "%2520"},
+		{value: "100%", wantPath: "100%25"},
+		{value: "a%2fb", wantPath: "a%252fb"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			tool := newURLRenderTestTool(t, "http://api.example.com/users/{id}", false)
+			got, err := tool.renderURL(nil, map[string]interface{}{"id": tt.value}, map[string]interface{}{"id": tt.value})
+			require.NoError(t, err)
+			assert.Equal(t, "http://api.example.com/users/"+tt.wantPath, got)
+		})
+	}
+}
+
+func TestRestToolRenderURL_AllowUnsafePathArgsRestoresLegacyBehavior(t *testing.T) {
+	for _, rawURL := range []string{
+		"http://api.example.com/users/{id}",
+		"http://api.example.com/users/{{.args.id}}",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			safeTool := newURLRenderTestTool(t, rawURL, false)
+			_, err := safeTool.renderURL(nil, map[string]interface{}{"id": "../admin"}, map[string]interface{}{"id": "../admin"})
+			require.Error(t, err)
+
+			legacyTool := newURLRenderTestTool(t, rawURL, true)
+			got, err := legacyTool.renderURL(nil, map[string]interface{}{"id": "../admin"}, map[string]interface{}{"id": "../admin"})
+			require.NoError(t, err)
+			assert.Equal(t, "http://api.example.com/users/../admin", got)
+		})
+	}
+}
+
+func TestTemplateFuncs_PathEscapeAndQueryEscape(t *testing.T) {
+	pathEscape, ok := templateFuncs()["pathescape"].(func(interface{}) (string, error))
+	require.True(t, ok)
+	queryEscape, ok := templateFuncs()["queryescape"].(func(interface{}) string)
+	require.True(t, ok)
+
+	got, err := pathEscape("a/b 中文")
+	require.NoError(t, err)
+	assert.Equal(t, url.PathEscape("a/b 中文"), got)
+	assert.Equal(t, "a%2Fb%20%E4%B8%AD%E6%96%87", got)
+
+	assert.Equal(t, "a+b%26c", queryEscape("a b&c"))
+
+	_, err = pathEscape("..")
+	require.Error(t, err)
+	_, err = pathEscape("%2e%2e")
+	require.Error(t, err)
+
+	tmpl, err := template.New("escape").Funcs(templateFuncs()).Parse(`{{pathescape .args.id}}|{{queryescape .args.q}}`)
+	require.NoError(t, err)
+	result, err := executeTemplate(tmpl, []byte(`{"args":{"id":"a/b","q":"a b&c"}}`))
+	require.NoError(t, err)
+	assert.Equal(t, "a%2Fb|a+b%26c", result)
+}
+
+func TestBuildPathArgTokenAvoidsArgumentCollisions(t *testing.T) {
+	args := map[string]interface{}{
+		"id": "__HIGRESS_REST_PATH_ARG_0__",
+	}
+	token := buildPathArgToken("", args, 0)
+	assert.NotEqual(t, "__HIGRESS_REST_PATH_ARG_0__", token)
+	assert.NotContains(t, args["id"], token)
 }
 
 // pull in `require` for newer tests above without disturbing existing imports.

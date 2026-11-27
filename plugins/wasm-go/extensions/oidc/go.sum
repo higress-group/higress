@@ -18,8 +18,12 @@ github.com/higress-group/oauth2-proxy v1.0.1-0.20260605094027-396b01ca2ca4 h1:P7
 github.com/higress-group/oauth2-proxy v1.0.1-0.20260605094027-396b01ca2ca4/go.mod h1:sDlsoo4dx+Cx56vI5kegeXZAoQ4nnd7xWL7Oc4/4hLI=
 github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250822030947-8345453fddd0 h1:YGdj8KBzVjabU3STUfwMZghB+VlX6YLfJtLbrsWaOD0=
 github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250822030947-8345453fddd0/go.mod h1:tRI2LfMudSkKHhyv1uex3BWzcice2s/l8Ah8axporfA=
+github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20251103120604-77e9cce339d2 h1:NY33OrWCJJ+DFiLc+lsBY4Ywor2Ik61ssk6qkGF8Ypo=
+github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20251103120604-77e9cce339d2/go.mod h1:tRI2LfMudSkKHhyv1uex3BWzcice2s/l8Ah8axporfA=
 github.com/higress-group/wasm-go v1.0.2-0.20250911113549-cbf1cfcce774 h1:3nzDlUZ8+Nc0c2f8y0wUiw6mnyu1+ZYT0mK7x9Oitro=
 github.com/higress-group/wasm-go v1.0.2-0.20250911113549-cbf1cfcce774/go.mod h1:882/J8ccU4i+LeyFKmeicbHWAYLj8y7YZr60zk0OOCI=
+github.com/higress-group/wasm-go v1.2.1 h1:G/PX3waSXQGhHXr94a6K+m2Ugi5pH8LEa+Vv7ZobGAs=
+github.com/higress-group/wasm-go v1.2.1/go.mod h1:uKVYICbRaxTlKqdm8E0dpjbysxM8uCPb9LV26hF3Km8=
 github.com/justinas/alice v1.2.0 h1:+MHSA/vccVCF4Uq37S42jwlkvI2Xzl7zTPCN5BnZNVo=
 github.com/justinas/alice v1.2.0/go.mod h1:fN5HRH/reO/zrUflLfTN43t3vXvKzvZIENsNEe7i7qA=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=

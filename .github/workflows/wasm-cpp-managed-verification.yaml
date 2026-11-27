@@ -1,0 +1,247 @@
+name: Managed C++ verification
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/wasm-cpp/**'
+      - 'plugins/release/**'
+      - 'tools/plugin-release/**'
+      - 'tools/hack/**'
+      - 'tools/*.mk'
+      - 'Makefile*'
+      - 'test/e2e/**'
+      - 'helm/core/**'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/wasm-cpp/**'
+      - 'plugins/release/**'
+      - 'tools/plugin-release/**'
+      - 'tools/hack/**'
+      - 'tools/*.mk'
+      - 'Makefile*'
+      - 'test/e2e/**'
+      - 'helm/core/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp-managed-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  matrix:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      entries: ${{ steps.matrix.outputs.entries }}
+      count: ${{ steps.matrix.outputs.count }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Derive the complete fixed-nine matrix, regardless of releaseEligible
+        id: matrix
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          mkdir -p out/matrix
+          python3 tools/hack/cpp-managed-matrix.py > out/matrix/matrix.json
+          test "$(jq length out/matrix/matrix.json)" -eq 9
+          echo "entries=$(cat out/matrix/matrix.json)" >> "$GITHUB_OUTPUT"
+          echo 'count=9' >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$EXPECTED_HEAD" > out/matrix/verification-head.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: cpp-managed-matrix-${{ env.EXPECTED_HEAD }}
+          path: out/matrix
+          if-no-files-found: error
+
+  build-native:
+    name: Managed ${{ matrix.plugin.source }} native and Wasm
+    needs: matrix
+    if: needs.matrix.outputs.count == '9'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.matrix.outputs.entries) }}
+    env:
+      SOURCE: ${{ matrix.plugin.source }}
+      BUILDER: ${{ matrix.plugin.builder }}
+      BAZEL_VERSION: ${{ matrix.plugin.bazelVersion }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind artifact source separately from verification tooling
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          mkdir -p "plugins/wasm-cpp/out/$SOURCE"
+          printf '%s\n' "$EXPECTED_HEAD" > "plugins/wasm-cpp/out/$SOURCE/source-head.txt"
+          git rev-parse HEAD > "plugins/wasm-cpp/out/$SOURCE/verification-head.txt"
+          printf 'native_target=//extensions/%s:%s_test\nwasm_target=//extensions/%s:%s.wasm\n' "$SOURCE" "$SOURCE" "$SOURCE" "$SOURCE" > "plugins/wasm-cpp/out/$SOURCE/targets.txt"
+      - name: Pull the digest-pinned builder
+        run: |
+          set -euo pipefail
+          test "$BUILDER" = "$(sed -n 's/^ARG BUILDER=//p' plugins/wasm-cpp/Dockerfile)"
+          [[ "$BUILDER" =~ @sha256:[0-9a-f]{64}$ ]]
+          test "$BAZEL_VERSION" = "$(cat plugins/wasm-cpp/.bazelversion)"
+          docker pull "$BUILDER"
+          docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$BUILDER" > "plugins/wasm-cpp/out/$SOURCE/toolchain.txt"
+          grep -F "@${BUILDER##*@}" "plugins/wasm-cpp/out/$SOURCE/toolchain.txt"
+      - name: Run native target before any Wasm build
+        id: native
+        working-directory: plugins/wasm-cpp
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$GITHUB_WORKSPACE/plugins/wasm-cpp:/workspace" -w /workspace "$BUILDER" bash -euo pipefail -c '
+            bazel --version | tee "out/$1/bazel-version.txt"
+            test "$(bazel --version)" = "bazel $2"
+            bazel test --jobs=1 --test_output=errors "//extensions/$1:${1}_test" 2>&1 | tee "out/$1/native.log"
+          ' -- "$SOURCE" "$BAZEL_VERSION"
+      - name: Record mandatory native outcome
+        if: always()
+        run: printf '%s\n' '${{ steps.native.outcome }}' > "plugins/wasm-cpp/out/$SOURCE/native-result.txt"
+      - name: Build and audit final Wasm bytes
+        if: steps.native.outcome == 'success'
+        working-directory: plugins/wasm-cpp
+        run: |
+          set -euo pipefail
+          test "$(cat "out/$SOURCE/native-result.txt")" = success
+          docker run --rm -v "$GITHUB_WORKSPACE/plugins/wasm-cpp:/workspace" -w /workspace "$BUILDER" bash -euo pipefail -c '
+            bazel build --jobs=1 "//extensions/$1:$1.wasm" 2>&1 | tee "out/$1/build.log"
+            cp "bazel-bin/extensions/$1/$1.wasm" "out/$1/plugin.wasm"
+          ' -- "$SOURCE"
+          python3 "$GITHUB_WORKSPACE/tools/hack/cpp201_wasm_imports.py" "out/$SOURCE/plugin.wasm" --output "out/$SOURCE/imports.json"
+          hash=$(sha256sum "out/$SOURCE/plugin.wasm" | awk '{print $1}')
+          jq -n --arg source "$SOURCE" --arg artifactSourceCommit "$EXPECTED_HEAD" --arg verificationHead "$(git rev-parse HEAD)" --arg runId "$GITHUB_RUN_ID" --arg runAttempt "$GITHUB_RUN_ATTEMPT" --arg wasmSha256 "$hash" '{source:$source,artifactSourceCommit:$artifactSourceCommit,verificationHead:$verificationHead,runId:$runId,runAttempt:$runAttempt,wasmSha256:$wasmSha256}' > "out/$SOURCE/metadata.json"
+          (cd "out/$SOURCE" && sha256sum plugin.wasm source-head.txt verification-head.txt metadata.json targets.txt toolchain.txt native.log native-result.txt build.log bazel-version.txt imports.json > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: cpp-managed-${{ matrix.plugin.source }}-${{ env.EXPECTED_HEAD }}
+          path: plugins/wasm-cpp/out/${{ matrix.plugin.source }}
+          if-no-files-found: error
+          retention-days: 14
+
+  build-evidence:
+    needs: [matrix, build-native]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          pattern: cpp-managed-*-${{ env.EXPECTED_HEAD }}
+          path: downloaded
+      - name: Reject skipped matrices, incomplete native tests and missing final bytes
+        env:
+          MATRIX_RESULT: ${{ needs.matrix.result }}
+          BUILD_RESULT: ${{ needs.build-native.result }}
+          MATRIX_COUNT: ${{ needs.matrix.outputs.count }}
+        run: |
+          set -euo pipefail
+          test "$MATRIX_RESULT" = success
+          test "$BUILD_RESULT" = success
+          test "$MATRIX_COUNT" = 9
+          rm -rf "downloaded/cpp-managed-matrix-$EXPECTED_HEAD"
+          python3 tools/hack/cpp-managed-evidence.py --artifact-dir downloaded --head "$EXPECTED_HEAD" --verification-head "$EXPECTED_HEAD" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --output-dir out/build-index
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: cpp-managed-build-index-${{ env.EXPECTED_HEAD }}
+          path: out/build-index
+          if-no-files-found: error
+
+  cpp-e2e:
+    name: Three managed final-byte C++ e2e cases
+    needs: [matrix, build-native, build-evidence]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      VERIFICATION_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      ARTIFACT_DIR: ${{ github.workspace }}/downloaded
+      NATIVE_RESULTS: ${{ github.workspace }}/downloaded/build-index/native-results.txt
+      EVIDENCE_DIR: ${{ github.workspace }}/out/cpp-managed-e2e
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.26'
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          pattern: cpp-managed-*-${{ env.EXPECTED_HEAD }}
+          path: downloaded
+      - name: Verify and arrange exact-run evidence
+        run: |
+          set -euo pipefail
+          mv "downloaded/cpp-managed-build-index-$EXPECTED_HEAD" downloaded/build-index
+          rm -rf "downloaded/cpp-managed-matrix-$EXPECTED_HEAD"
+      - name: Run three existing cases without rebuilding Wasm
+        run: timeout 85m bash tools/hack/cpp-managed-run-e2e.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: cpp-managed-e2e-${{ env.EXPECTED_HEAD }}
+          path: out/cpp-managed-e2e
+          if-no-files-found: error
+          retention-days: 14
+
+  complete:
+    name: Managed C++ verification complete
+    needs: [matrix, build-native, build-evidence, cpp-e2e]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Require every gate, never accept skipped jobs
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -e 'all(.[]; .result == "success") and .matrix.outputs.count == "9"' <<< "$RESULTS"
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: cpp-managed-e2e-${{ env.EXPECTED_HEAD }}
+          path: evidence
+      - name: Account for actual native/Wasm/e2e evidence
+        run: |
+          set -euo pipefail
+          test "$(wc -l < evidence/native-results.txt)" -eq 9
+          test "$(wc -l < evidence/gateway-wasm-hashes.txt)" -eq 9
+          for name in CPPWasmPluginsBasicAuth CPPWasmPluginsKeyAuth CPPWasmPluginsRequestBlock; do
+            test "$(cat "evidence/$name.exit")" = 0
+            test "$(grep -c -- "--- PASS: TestHigressConformanceTests/$name " "evidence/$name.log")" -eq 1
+          done
+          grep -Fx 'kind_cluster_deleted=true' evidence/cleanup.txt
+          test "$(jq -r .artifactSourceCommit evidence/identity.json)" = "$EXPECTED_HEAD"
+          test "$(jq -r .verificationHead evidence/identity.json)" = "$EXPECTED_HEAD"
+          find evidence -type f -print0 | sort -z | xargs -0 sha256sum > final-evidence-sha256.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cpp-managed-final-index-${{ env.EXPECTED_HEAD }}
+          path: final-evidence-sha256.txt
+          if-no-files-found: error

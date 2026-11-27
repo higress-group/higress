@@ -55,7 +55,7 @@ jobs:
           PY
       - name: Translate non-English content
         id: translate
-        uses: lizheming/github-translate-action@b657888aa452
+        uses: lizheming/github-translate-action@b657888aa452b4b40f493836fa4477f6b66a23e5
         if: steps.translation-needed.outputs.needed == 'true'
         continue-on-error: true
         env:

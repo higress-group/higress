@@ -41,6 +41,36 @@ func TestFirstManagedReleasePlansExactlyFromV223DespiteMissingVersions(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	currentCatalog, _, err := loadCatalog(filepath.Join(repository, "plugins/release/catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SharedInputGroups["cpp-workspace"] = currentCatalog.SharedInputGroups["cpp-workspace"]
+	for _, plugin := range currentCatalog.Plugins {
+		if plugin.Implementation == "cpp" {
+			plugin.ReleaseEligible = false
+			plugin.UnmanagedReason = "historical fixture classification only"
+			plugin.Consumers = PluginConsumers{}
+			c.Plugins = append(c.Plugins, plugin)
+		}
+	}
+	for consumer, inventory := range currentCatalog.ConsumerInventories {
+		seen := map[string]bool{}
+		for _, item := range c.ConsumerInventories[consumer] {
+			seen[item.Key] = true
+		}
+		for _, item := range inventory {
+			if _, cpp := managedCPPSources[item.Key]; cpp && !seen[item.Key] {
+				item = ConsumerInventory{Key: item.Key, Classification: "unmanaged", Reason: "historical fixture classification only"}
+				c.ConsumerInventories[consumer] = append(c.ConsumerInventories[consumer], item)
+			}
+		}
+	}
+	catalogPath = filepath.Join(root, "classified-historical-catalog.json")
+	if err := writeCanonical(catalogPath, c); err != nil {
+		t.Fatal(err)
+	}
+	catalogData = mustRead(t, catalogPath)
 	plugins := append([]Plugin(nil), c.Plugins...)
 	sort.Slice(plugins, func(i, j int) bool { return plugins[i].LogicalID < plugins[j].LogicalID })
 	dummyDigest := "sha256:" + strings.Repeat("a", 64)

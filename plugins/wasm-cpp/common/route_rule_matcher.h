@@ -570,21 +570,21 @@ class RouteRuleMatcher {
       const auto& host = host_match.second;
       switch (host_match.first) {
         case MATCH_TYPE::Suffix:
-          if (absl::EndsWith(
+          if (absl::EndsWithIgnoreCase(
                   absl::string_view(request_host.data(), request_host.size()),
                   absl::string_view(host.data(), host.size()))) {
             return true;
           }
           break;
         case MATCH_TYPE::Prefix:
-          if (absl::StartsWith(
+          if (absl::StartsWithIgnoreCase(
                   absl::string_view(request_host.data(), request_host.size()),
                   absl::string_view(host.data(), host.size()))) {
             return true;
           }
           break;
         case MATCH_TYPE::Exact:
-          if (request_host == host_match.second) {
+          if (absl::EqualsIgnoreCase(request_host, host_match.second)) {
             return true;
           }
           break;

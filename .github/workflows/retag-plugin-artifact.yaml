@@ -1,0 +1,141 @@
+name: Retag Plugin Artifact
+
+# Manual, maintainer-triggered helper for creating additional tags on an
+# already-published plugin image in the public registry. Used to restore legacy
+# version aliases so existing WasmPlugin references keep resolving after a
+# plugin version line moves forward.
+#
+# Safety properties:
+# - never builds or uploads blobs; it only creates new tag references pointing
+#   at the source manifest digest;
+# - resolving an existing target tag distinguishes "absent" from
+#   "authorization failure" and never treats an auth error as absence;
+# - an existing target tag with a different digest is refused unless
+#   allow_overwrite is explicitly enabled;
+# - digest equality is verified after every write.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Repository path under the public registry"
+        required: true
+        default: "plugins/mcp-server"
+        type: string
+      source_tag:
+        description: "Existing tag whose manifest digest will be reused"
+        required: true
+        default: "2.0.3"
+        type: string
+      target_tags:
+        description: "Comma-separated tags to create (e.g. 1.0.0,2.0.0)"
+        required: true
+        default: "1.0.0,2.0.0"
+        type: string
+      dry_run:
+        description: "Resolve and compare only; never write"
+        required: true
+        default: true
+        type: boolean
+      allow_overwrite:
+        description: "Permit moving an existing target tag to the source digest"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+run-name: retag ${{ inputs.repository }}:${{ inputs.source_tag }} -> ${{ inputs.target_tags }}
+
+jobs:
+  retag:
+    name: Retag plugin artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: plugin-release-production
+    steps:
+      - name: Harden runner
+        run: |
+          sudo rm -rf /usr/local/bin/gsutil /usr/local/bin/gh /usr/local/bin/docker-credential-* || true
+      - uses: oras-project/setup-oras@v1
+      - name: Validate inputs
+        env:
+          INPUT_REPOSITORY: ${{ inputs.repository }}
+          INPUT_SOURCE_TAG: ${{ inputs.source_tag }}
+          INPUT_TARGET_TAGS: ${{ inputs.target_tags }}
+        run: |
+          set -euo pipefail
+          [[ "$INPUT_REPOSITORY" =~ ^[a-z0-9][a-z0-9./_-]*$ ]]
+          [[ "$INPUT_SOURCE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]
+          IFS=',' read -r -a targets <<<"$INPUT_TARGET_TAGS"
+          test "${#targets[@]}" -gt 0
+          for tag in "${targets[@]}"; do
+            [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]
+            test "$tag" != "$INPUT_SOURCE_TAG"
+          done
+      - name: Retag
+        env:
+          REGISTRY: ${{ vars.PLUGIN_PUBLIC_REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.PRODUCTION_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.PRODUCTION_REGISTRY_PASSWORD }}
+          INPUT_REPOSITORY: ${{ inputs.repository }}
+          INPUT_SOURCE_TAG: ${{ inputs.source_tag }}
+          INPUT_TARGET_TAGS: ${{ inputs.target_tags }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          ALLOW_OVERWRITE: ${{ inputs.allow_overwrite }}
+        run: |
+          set -euo pipefail
+          test -n "$REGISTRY"; test -n "$REGISTRY_USERNAME"; test -n "$REGISTRY_PASSWORD"
+          echo "$REGISTRY_PASSWORD" | oras login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+
+          source_ref="$REGISTRY/$INPUT_REPOSITORY:$INPUT_SOURCE_TAG"
+          source_json=$(oras manifest fetch --descriptor "$source_ref")
+          source_digest=$(jq -er .digest <<<"$source_json")
+          [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          IFS=',' read -r -a targets <<<"$INPUT_TARGET_TAGS"
+          {
+            echo "| target tag | existing digest | action |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for tag in "${targets[@]}"; do
+            target_ref="$REGISTRY/$INPUT_REPOSITORY:$tag"
+            lookup_error=/tmp/tag-lookup.err
+            existing=""
+            if existing_json=$(oras manifest fetch --descriptor "$target_ref" 2>"$lookup_error"); then
+              existing=$(jq -er .digest <<<"$existing_json")
+            elif grep -Eqi '401|403|unauthorized|forbidden|denied|authentication required|authorization required' "$lookup_error"; then
+              echo "tag lookup was refused; authorization failure is never absence" >&2
+              cat "$lookup_error" >&2
+              exit 1
+            elif grep -Eqi '404|manifest unknown|name unknown|repository does not exist|not found' "$lookup_error"; then
+              existing=""
+            else
+              echo "tag lookup failed; refusing to mutate" >&2
+              cat "$lookup_error" >&2
+              exit 1
+            fi
+
+            if [ -n "$existing" ] && [ "$existing" = "$source_digest" ]; then
+              echo "| $tag | $existing | already points at source digest; nothing to do |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            if [ -n "$existing" ] && [ "$ALLOW_OVERWRITE" != "true" ]; then
+              echo "| $tag | $existing | REFUSED: tag exists with a different digest; set allow_overwrite to move it |" >> "$GITHUB_STEP_SUMMARY"
+              echo "target tag $tag already exists with a different digest; refusing to move it" >&2
+              exit 1
+            fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "| $tag | ${existing:-<absent>} | dry run: would point at $source_digest |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            oras tag "$source_ref" "$tag"
+            written=$(oras manifest fetch --descriptor "$target_ref" | jq -er .digest)
+            if [ "$written" != "$source_digest" ]; then
+              echo "post-write digest mismatch for $tag: $written != $source_digest" >&2
+              exit 1
+            fi
+            echo "| $tag | $written | tagged |" >> "$GITHUB_STEP_SUMMARY"
+          done

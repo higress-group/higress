@@ -29,11 +29,11 @@ func TestModernErrorDataSerialization(t *testing.T) {
 	}{
 		{
 			name:          "unsupported version",
-			protocolError: UnsupportedVersion(Version("2025-11-25"), SupportedVersions()),
+			protocolError: UnsupportedVersion(Version("2099-01-01"), SupportedVersions()),
 			wantCode:      CodeUnsupportedVersion,
 			wantData: ErrorData{
 				Supported: SupportedVersions(),
-				Requested: Version("2025-11-25"),
+				Requested: Version("2099-01-01"),
 			},
 		},
 		{
@@ -45,12 +45,6 @@ func TestModernErrorDataSerialization(t *testing.T) {
 			wantData: ErrorData{RequiredCapabilities: &ClientCapabilities{
 				Sampling: &SamplingCapabilities{Tools: &JSONObject{}},
 			}},
-		},
-		{
-			name:          "schema validation unavailable",
-			protocolError: SchemaValidationUnavailable(),
-			wantCode:      CodeInternalError,
-			wantData:      ErrorData{Reason: "schema_validation_unavailable"},
 		},
 	}
 	for _, test := range tests {

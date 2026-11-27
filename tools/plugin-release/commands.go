@@ -133,11 +133,16 @@ func validateCatalog(root, path string) error {
 		}
 		seenImage[p.Image] = true
 		expectedPrefix := "plugins/wasm-" + p.Implementation + "/extensions/"
-		if p.Implementation != "go" && p.Implementation != "rust" {
-			return fmt.Errorf("%s: implementation must be go or rust", p.LogicalID)
+		if p.Implementation != "go" && p.Implementation != "rust" && p.Implementation != "cpp" {
+			return fmt.Errorf("%s: implementation must be go, rust, or cpp", p.LogicalID)
 		}
 		if !strings.HasPrefix(p.SourceDir, expectedPrefix) || strings.Contains(p.SourceDir, "/examples/") || strings.Contains(p.SourceDir, "/example/") {
 			return fmt.Errorf("%s: sourceDir %q is outside the official %s extension root", p.LogicalID, p.SourceDir, p.Implementation)
+		}
+		if p.Implementation == "cpp" {
+			if _, ok := cppHotfixSources[p.LogicalID]; !ok {
+				return fmt.Errorf("%s: C++ catalog entries are restricted to the approved cpp-hotfix set", p.LogicalID)
+			}
 		}
 		if _, err := os.Stat(filepath.Join(root, p.SourceDir)); err != nil {
 			return fmt.Errorf("%s: sourceDir: %w", p.LogicalID, err)
@@ -285,7 +290,7 @@ func validateCatalog(root, path string) error {
 			}
 		}
 	}
-	return nil
+	return validateManagedCPPCatalog(root, c)
 }
 
 func validateConsoleMarketplaceBundle(root string, p Plugin, bundle ConsoleMarketplaceBundle) error {
@@ -415,13 +420,31 @@ func safeRepositoryPath(path string) bool {
 }
 
 func buildPlan(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersion, overridesPath string) (Plan, error) {
+	return buildPlanWithMode(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersion, overridesPath, releaseModeDefault)
+}
+
+func buildPlanWithMode(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersion, overridesPath, mode string) (Plan, error) {
+	return buildPlanWithImports(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersion, overridesPath, mode, "", "")
+}
+
+func buildPlanWithImports(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersion, overridesPath, mode, candidateImportPath, historyImportPath string) (Plan, error) {
+	if err := validateReleaseMode(mode); err != nil {
+		return Plan{}, err
+	}
 	if _, err := parseSemver(gatewayVersion); err != nil {
 		return Plan{}, fmt.Errorf("gateway version: %w", err)
 	}
 	if err := validateCatalog(root, catalogPath); err != nil {
 		return Plan{}, err
 	}
-	if previousPath == "" {
+	if isCPPHotfix(mode) {
+		if candidateImportPath != "" || historyImportPath != "" {
+			return Plan{}, errors.New("cpp-hotfix forbids import flags")
+		}
+		if previousPath != "" || overridesPath != "" || !commitPattern.MatchString(baseRef) {
+			return Plan{}, errors.New("cpp-hotfix requires one exact --base and forbids --previous and --overrides")
+		}
+	} else if previousPath == "" {
 		return Plan{}, errors.New("no previous snapshot: import a reviewed digest baseline with bootstrap-snapshot before planning; bootstrap never rebuilds existing public tags")
 	}
 	c, catalogData, err := loadCatalog(catalogPath)
@@ -486,7 +509,7 @@ func buildPlan(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersi
 		// iteration over .plugins[] fails on null.
 		Plugins: []PlanEntry{}, Deferred: []DeferredPlugin{}}
 	for _, p := range plugins {
-		if !p.ReleaseEligible {
+		if !pluginSelectedForMode(p, mode) {
 			continue
 		}
 		currentRaw, err := fileAtCommit(root, target, p.SourceDir+"/VERSION")
@@ -498,10 +521,13 @@ func buildPlan(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersi
 		if err != nil {
 			return Plan{}, fmt.Errorf("%s: %w", p.LogicalID, err)
 		}
+		if isCPPHotfix(mode) && current != cppHotfixVersion {
+			return Plan{}, fmt.Errorf("%s: cpp-hotfix VERSION must be %s at the prepared source, got %q", p.LogicalID, cppHotfixVersion, current)
+		}
 		// An alpha VERSION is a development build: it is deferred from release
 		// selection and never creates candidates, public tags, latest movement,
 		// or a new snapshot entry.
-		if isAlphaPrerelease(currentVersion.prerelease) {
+		if !isCPPHotfix(mode) && isAlphaPrerelease(currentVersion.prerelease) {
 			plan.Deferred = append(plan.Deferred, DeferredPlugin{LogicalID: p.LogicalID, Version: current, Reason: "alpha-prerelease"})
 			continue
 		}
@@ -522,7 +548,7 @@ func buildPlan(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersi
 		// A hand-edited VERSION (differing from the recorded version) and
 		// bootstrap-public baselines keep the historical behavior.
 		restatePrevious := hasPrevious && previous.ProvenanceMode != "bootstrap-public" && current == prev.Version
-		affected := base == "" || hasOverride
+		affected := isCPPHotfix(mode) || base == "" || hasOverride
 		for _, path := range changed {
 			if restatePrevious && path == p.SourceDir+"/VERSION" {
 				continue
@@ -598,6 +624,23 @@ func buildPlan(root, catalogPath, previousPath, baseRef, targetRef, gatewayVersi
 			return Plan{}, fmt.Errorf("override references unknown or release-ineligible plugin %q", id)
 		}
 	}
+	if isCPPHotfix(mode) {
+		if err := validateCPPHotfixCatalog(c); err != nil {
+			return Plan{}, err
+		}
+		if err := validateCPPHotfixPlan(plan); err != nil {
+			return Plan{}, err
+		}
+	} else {
+		for id := range overrides {
+			if _, cpp := managedCPPSources[id]; cpp && candidateImportPath != "" {
+				return Plan{}, errors.New("first C++ import forbids version overrides")
+			}
+		}
+		if err := bindPlanImports(root, c, &plan, previous, candidateImportPath, historyImportPath); err != nil {
+			return Plan{}, err
+		}
+	}
 	plan.PlanID = "sha256:" + canonicalObjectHash(plan, true)
 	return plan, nil
 }
@@ -624,6 +667,20 @@ func applyPlan(root string, plan Plan) error {
 }
 
 func renderSnapshot(catalogPath, planPath, previousPath, evidencePath, bootstrapEvidencePath string) (Snapshot, error) {
+	return renderSnapshotWithMode(catalogPath, planPath, previousPath, evidencePath, bootstrapEvidencePath, releaseModeDefault)
+}
+
+func renderSnapshotWithMode(catalogPath, planPath, previousPath, evidencePath, bootstrapEvidencePath, mode string) (Snapshot, error) {
+	return renderSnapshotAtRoot(".", catalogPath, planPath, previousPath, evidencePath, bootstrapEvidencePath, mode)
+}
+
+func renderSnapshotAtRoot(root, catalogPath, planPath, previousPath, evidencePath, bootstrapEvidencePath, mode string) (Snapshot, error) {
+	if err := validateReleaseMode(mode); err != nil {
+		return Snapshot{}, err
+	}
+	if isCPPHotfix(mode) && (previousPath != "" || bootstrapEvidencePath != "") {
+		return Snapshot{}, errors.New("cpp-hotfix does not accept previous or bootstrap snapshots")
+	}
 	c, catalogData, err := loadCatalog(catalogPath)
 	if err != nil {
 		return Snapshot{}, err
@@ -714,23 +771,28 @@ func renderSnapshot(catalogPath, planPath, previousPath, evidencePath, bootstrap
 	}
 	eligible := map[string]bool{}
 	for _, p := range plugins {
-		if !p.ReleaseEligible {
+		if !pluginSelectedForMode(p, mode) {
 			continue
 		}
 		eligible[p.LogicalID] = true
 		if planned, ok := planEntries[p.LogicalID]; ok {
+			artifactSource, err := effectiveArtifactSource(plan, planned)
+			if err != nil {
+				return Snapshot{}, err
+			}
 			e, ok := evidence.Plugins[p.LogicalID]
 			if !ok {
 				return Snapshot{}, fmt.Errorf("missing candidate evidence for %s", p.LogicalID)
 			}
-			if !digestPattern.MatchString(e.Digest) || e.SourceCommit != plan.SourceCommit || e.InputHash != planned.InputHash || !strings.HasSuffix(e.CandidateRef, "@"+e.Digest) {
+			if !digestPattern.MatchString(e.Digest) || e.SourceCommit != artifactSource || e.InputHash != planned.InputHash || !strings.HasSuffix(e.CandidateRef, "@"+e.Digest) {
 				return Snapshot{}, fmt.Errorf("candidate evidence for %s does not match plan provenance", p.LogicalID)
 			}
 			snapshot.Plugins = append(snapshot.Plugins, SnapshotEntry{LogicalID: p.LogicalID, Implementation: p.Implementation,
 				SourceDir: p.SourceDir, Image: p.Image, Version: planned.Version,
 				OCIRef: c.Registry + "/" + p.Image + ":" + planned.Version, Digest: e.Digest,
-				InputHash: planned.InputHash, SourceCommit: plan.SourceCommit, CandidateRef: e.CandidateRef,
-				ProvenanceMode: "candidate", Backfill: planned.Backfill, Consumers: catalogConsumers(c, p)})
+				InputHash: planned.InputHash, SourceCommit: artifactSource, CandidateRef: e.CandidateRef,
+				CandidateImport: planned.CandidateImport, WasmSHA256: e.WasmSHA256,
+				ProvenanceMode: "candidate", Backfill: planned.Backfill, Consumers: consumersForMode(c, p, mode)})
 			continue
 		}
 		old, ok := previousEntries[p.LogicalID]
@@ -742,7 +804,7 @@ func renderSnapshot(catalogPath, planPath, previousPath, evidencePath, bootstrap
 			}
 			return Snapshot{}, fmt.Errorf("release-eligible plugin %s is neither planned nor present in previous snapshot", p.LogicalID)
 		}
-		old.Consumers = catalogConsumers(c, p)
+		old.Consumers = consumersForMode(c, p, mode)
 		if old.ProvenanceMode == "" {
 			old.ProvenanceMode = entryProvenance(old)
 		}
@@ -758,6 +820,19 @@ func renderSnapshot(catalogPath, planPath, previousPath, evidencePath, bootstrap
 	}
 	if bootstrap {
 		if err := bindBootstrapEvidence(snapshot, bootstrapEvidence); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	if isCPPHotfix(mode) {
+		if err := validateCPPHotfixPlan(plan); err != nil {
+			return Snapshot{}, err
+		}
+		if err := validateCPPHotfixSnapshot(snapshot); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	if !isCPPHotfix(mode) {
+		if err := renderManagedBindings(root, c, plan, previous, evidence, &snapshot); err != nil {
 			return Snapshot{}, err
 		}
 	}
@@ -811,6 +886,16 @@ func verifySnapshot(root, catalogPath, snapshotPath, expectedSource, committedSo
 }
 
 func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousPath, expectedSource, committedSource string, resolve bool, ociSource string) error {
+	return verifySnapshotBindingsWithMode(root, catalogPath, snapshotPath, planPath, previousPath, expectedSource, committedSource, resolve, ociSource, releaseModeDefault)
+}
+
+func verifySnapshotBindingsWithMode(root, catalogPath, snapshotPath, planPath, previousPath, expectedSource, committedSource string, resolve bool, ociSource, mode string) error {
+	if err := validateReleaseMode(mode); err != nil {
+		return err
+	}
+	if isCPPHotfix(mode) && previousPath != "" {
+		return errors.New("cpp-hotfix does not accept a previous snapshot")
+	}
 	if err := validateCatalog(root, catalogPath); err != nil {
 		return err
 	}
@@ -840,6 +925,9 @@ func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousP
 	if err := validateSnapshotMigration(snapshot); err != nil {
 		return err
 	}
+	if err := validateSnapshotHistory(c, snapshot); err != nil {
+		return err
+	}
 	if expectedSource != "" {
 		commit, err := resolveCommit(root, expectedSource)
 		if err != nil || commit != snapshot.SourceCommit {
@@ -858,7 +946,7 @@ func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousP
 	deferred := map[string]string{}
 	for _, p := range c.Plugins {
 		plugins[p.LogicalID] = p
-		if !p.ReleaseEligible {
+		if !pluginSelectedForMode(p, mode) {
 			continue
 		}
 		// Deferral is recomputed independently from the exact snapshot source
@@ -872,6 +960,12 @@ func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousP
 		if err != nil {
 			return fmt.Errorf("%s: %w", p.LogicalID, err)
 		}
+		if isCPPHotfix(mode) {
+			if version != cppHotfixVersion {
+				return fmt.Errorf("%s VERSION at snapshot source must be %s, got %q", p.LogicalID, cppHotfixVersion, version)
+			}
+			continue
+		}
 		if isAlphaPrerelease(parsed.prerelease) {
 			deferred[p.LogicalID] = version
 		}
@@ -880,7 +974,7 @@ func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousP
 	last := ""
 	for _, entry := range snapshot.Plugins {
 		p, ok := plugins[entry.LogicalID]
-		if !ok || !p.ReleaseEligible || seen[entry.LogicalID] {
+		if !ok || !pluginSelectedForMode(p, mode) || seen[entry.LogicalID] {
 			return fmt.Errorf("snapshot has unknown, ineligible, or duplicate plugin %q", entry.LogicalID)
 		}
 		if last != "" && entry.LogicalID < last {
@@ -890,11 +984,14 @@ func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousP
 		if entry.Image != p.Image || entry.SourceDir != p.SourceDir || entry.Implementation != p.Implementation {
 			return fmt.Errorf("%s snapshot identity differs from catalog", entry.LogicalID)
 		}
-		if !reflect.DeepEqual(entry.Consumers, catalogConsumers(c, p)) {
+		if !reflect.DeepEqual(entry.Consumers, consumersForMode(c, p, mode)) {
 			return fmt.Errorf("%s snapshot consumer mappings differ from catalog", entry.LogicalID)
 		}
 		if _, err := parseSemver(entry.Version); err != nil {
 			return fmt.Errorf("%s: %w", entry.LogicalID, err)
+		}
+		if isCPPHotfix(mode) && entry.Version != cppHotfixVersion {
+			return fmt.Errorf("%s: cpp-hotfix snapshot version must be %s", entry.LogicalID, cppHotfixVersion)
 		}
 		if _, isDeferred := deferred[entry.LogicalID]; isDeferred {
 			// A deferred alpha plugin may only carry an earlier stable release
@@ -953,10 +1050,19 @@ func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousP
 			if err := verifyOCI(entry, provenance, snapshot.ProvenanceMode, ociSource); err != nil {
 				return fmt.Errorf("%s: %w", entry.LogicalID, err)
 			}
+			if entry.WasmSHA256 != "" {
+				ref := entry.OCIRef
+				if ociSource == "candidate" {
+					ref = entry.CandidateRef
+				}
+				if _, err := ociWasmHashResolver(root, entry, ref); err != nil {
+					return fmt.Errorf("%s: %w", entry.LogicalID, err)
+				}
+			}
 		}
 	}
 	for _, p := range c.Plugins {
-		if !p.ReleaseEligible {
+		if !pluginSelectedForMode(p, mode) {
 			continue
 		}
 		if _, isDeferred := deferred[p.LogicalID]; isDeferred {
@@ -966,7 +1072,18 @@ func verifySnapshotBindings(root, catalogPath, snapshotPath, planPath, previousP
 			return fmt.Errorf("release-eligible plugin %s is missing from snapshot", p.LogicalID)
 		}
 	}
-	return verifySnapshotProvenanceBindings(root, snapshot, planPath, previousPath, deferred)
+	if isCPPHotfix(mode) {
+		if err := validateCPPHotfixCatalog(c); err != nil {
+			return err
+		}
+		if err := validateCPPHotfixSnapshot(snapshot); err != nil {
+			return err
+		}
+	}
+	if err := verifySnapshotProvenanceBindings(root, snapshot, planPath, previousPath, deferred); err != nil {
+		return err
+	}
+	return verifyManagedBindings(root, c, snapshot, planPath, previousPath, committed, resolve)
 }
 
 // verifySnapshotProvenanceBindings binds the snapshot to the exact plan and
@@ -1066,10 +1183,14 @@ func verifySnapshotProvenanceBindings(root string, snapshot Snapshot, planPath, 
 	if planEntries != nil || previousEntries != nil {
 		for _, entry := range snapshot.Plugins {
 			if planned, ok := planEntries[entry.LogicalID]; ok {
+				source, err := effectiveArtifactSource(Plan{SourceCommit: snapshot.SourceCommit}, planned)
+				if err != nil {
+					return err
+				}
 				if planned.LogicalID != entry.LogicalID || planned.Implementation != entry.Implementation ||
 					planned.SourceDir != entry.SourceDir || planned.Image != entry.Image || planned.Version != entry.Version ||
 					planned.InputHash != entry.InputHash || planned.Backfill != entry.Backfill ||
-					entry.SourceCommit != snapshot.SourceCommit {
+					entry.SourceCommit != source || !reflect.DeepEqual(entry.CandidateImport, planned.CandidateImport) {
 					return fmt.Errorf("%s snapshot entry differs from its plan entry", entry.LogicalID)
 				}
 				continue
@@ -1088,7 +1209,8 @@ func verifySnapshotProvenanceBindings(root string, snapshot Snapshot, planPath, 
 				if old.Version != entry.Version || old.OCIRef != entry.OCIRef || old.Digest != entry.Digest ||
 					old.InputHash != entry.InputHash || old.SourceCommit != entry.SourceCommit ||
 					old.CandidateRef != entry.CandidateRef || old.ProvenanceMode != entry.ProvenanceMode ||
-					old.Backfill != entry.Backfill || !reflect.DeepEqual(old.Migration, entry.Migration) {
+					old.Backfill != entry.Backfill || !reflect.DeepEqual(old.Migration, entry.Migration) || old.WasmSHA256 != entry.WasmSHA256 ||
+					!reflect.DeepEqual(old.CandidateImport, entry.CandidateImport) || !reflect.DeepEqual(old.History, entry.History) {
 					return fmt.Errorf("%s carried snapshot entry differs from the previous snapshot", entry.LogicalID)
 				}
 				continue
@@ -1361,16 +1483,19 @@ func validateConsoleRecovery(root, catalogPath, manifestPath string) error {
 
 func commandPlan(args []string) error {
 	fs, root, catalog := parseCommon("plan", args)
+	mode := fs.String("mode", releaseModeDefault, "release selection mode")
 	previous := fs.String("previous", "", "previous snapshot")
 	base := fs.String("base", "", "base Git ref (defaults to previous sourceCommit)")
 	target := fs.String("target", "HEAD", "exact target Git ref")
 	gateway := fs.String("gateway-version", "", "target gateway version")
 	overrides := fs.String("overrides", "", "reviewed logicalId-to-version JSON")
+	candidateImport := fs.String("candidate-import", "", "hash-bound candidate import manifest below --root")
+	historyImport := fs.String("history-import", "", "hash-bound history import manifest below --root")
 	output := fs.String("output", "-", "plan output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	plan, err := buildPlan(*root, *catalog, *previous, *base, *target, *gateway, *overrides)
+	plan, err := buildPlanWithImports(*root, *catalog, *previous, *base, *target, *gateway, *overrides, *mode, *candidateImport, *historyImport)
 	if err != nil {
 		return err
 	}
@@ -1583,7 +1708,8 @@ func commandApply(args []string) error {
 }
 
 func commandRender(args []string) error {
-	fs, _, catalog := parseCommon("render-snapshot", args)
+	fs, root, catalog := parseCommon("render-snapshot", args)
+	mode := fs.String("mode", releaseModeDefault, "release selection mode")
 	plan := fs.String("plan", "", "plan path")
 	previous := fs.String("previous", "", "previous snapshot")
 	evidence := fs.String("candidate-evidence", "", "candidate evidence path")
@@ -1596,9 +1722,12 @@ func commandRender(args []string) error {
 	if *plan == "" || *evidence == "" {
 		return errors.New("--plan and --candidate-evidence are required")
 	}
-	snapshot, err := renderSnapshot(*catalog, *plan, *previous, *evidence, *bootstrapEvidence)
+	snapshot, err := renderSnapshotAtRoot(*root, *catalog, *plan, *previous, *evidence, *bootstrapEvidence, *mode)
 	if err != nil {
 		return err
+	}
+	if isCPPHotfix(*mode) && *migrationReport != "" {
+		return errors.New("cpp-hotfix cannot exclude a conflicting plugin; all conflicts fail the whole batch")
 	}
 	if *migrationReport != "" {
 		snapshot, err = applyMigrationReport(snapshot, *migrationReport)
@@ -1613,6 +1742,7 @@ func commandRender(args []string) error {
 
 func commandVerify(args []string) error {
 	fs, root, catalog := parseCommon("verify-snapshot", args)
+	mode := fs.String("mode", releaseModeDefault, "release selection mode")
 	snapshot := fs.String("snapshot", "", "snapshot path")
 	plan := fs.String("plan", "", "plan path for exact plan-to-snapshot binding")
 	previous := fs.String("previous", "", "previous snapshot path for carried-entry binding")
@@ -1626,7 +1756,7 @@ func commandVerify(args []string) error {
 	if *snapshot == "" {
 		return errors.New("--snapshot is required")
 	}
-	return verifySnapshotBindings(*root, *catalog, *snapshot, *plan, *previous, *expected, *committed, *resolve, *ociSource)
+	return verifySnapshotBindingsWithMode(*root, *catalog, *snapshot, *plan, *previous, *expected, *committed, *resolve, *ociSource, *mode)
 }
 
 func commandCompare(args []string) error {

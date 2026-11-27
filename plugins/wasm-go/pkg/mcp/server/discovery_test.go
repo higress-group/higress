@@ -29,7 +29,7 @@ import (
 func TestDiscoveryResultAdvertisesOnlyEffectiveProfilesAndCapabilities(t *testing.T) {
 	semantic := DiscoveryResult(true)
 	value := semantic.Value.(map[string]any)
-	wantVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18", "2026-07-28"}
+	wantVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"}
 	if got := value["supportedVersions"]; !reflect.DeepEqual(got, wantVersions) {
 		t.Fatalf("supportedVersions = %#v, want %#v", got, wantVersions)
 	}
@@ -111,7 +111,7 @@ func TestProductionDiscoveryAndToolsListResultContracts(t *testing.T) {
 	t.Run("modern discovery", func(t *testing.T) {
 		result := modernExchange(t, "server/discover", modernBody("server/discover"))
 		assertModernCompleteResult(t, result, "catalog", true)
-		if got, want := stringSlice(result["supportedVersions"]), []string{"2024-11-05", "2025-03-26", "2025-06-18", "2026-07-28"}; !reflect.DeepEqual(got, want) {
+		if got, want := stringSlice(result["supportedVersions"]), []string{"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("supportedVersions = %v, want %v", got, want)
 		}
 		capabilities := result["capabilities"].(map[string]any)
@@ -132,8 +132,8 @@ func TestProductionDiscoveryAndToolsListResultContracts(t *testing.T) {
 			t.Fatalf("tool order = %v, want %v", got, want)
 		}
 		for _, tool := range tools {
-			if _, exists := tool.(map[string]any)["outputSchema"]; exists {
-				t.Fatalf("modern descriptor exposed unvalidated outputSchema: %#v", tool)
+			if _, exists := tool.(map[string]any)["outputSchema"]; exists != (tool.(map[string]any)["name"] == "alpha") {
+				t.Fatalf("tool descriptor changed its outputSchema: %#v", tool)
 			}
 		}
 	})
@@ -167,6 +167,21 @@ func TestProductionDiscoveryAndToolsListResultContracts(t *testing.T) {
 		if !ok || len(tools) != 0 {
 			t.Fatalf("proxy omitted implemented tools capability: %#v", capabilities)
 		}
+	})
+
+	t.Run("composed discovery does not advertise tool execution", func(t *testing.T) {
+		host, status := wasmtest.NewTestHost(json.RawMessage(`{"toolSet":{"name":"composed","serverTools":[]}}`))
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+		t.Cleanup(host.Reset)
+		headers := append(commonHeaders(),
+			[2]string{protocol.HeaderProtocolVersion, string(protocol.Version20260728)},
+			[2]string{protocol.HeaderMethod, "server/discover"},
+		)
+		require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(headers))
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte(modernBody("server/discover"))))
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		require.False(t, gjson.GetBytes(response.Data, "result.capabilities.tools").Exists())
 	})
 
 	t.Run("legacy shapes unchanged", func(t *testing.T) {

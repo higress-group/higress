@@ -111,6 +111,13 @@ func opaCall(ctx wrapper.HttpContext, config OpaConfig, body []byte, log log.Log
 		[][2]string{{"Content-Type", "application/json"}},
 		data, rspCall, config.timeout); err != nil {
 		log.Errorf("client opa fail %v", err)
+		proxywasm.SendHttpResponseWithDetail(
+			http.StatusServiceUnavailable,
+			"opa.dispatch_fail",
+			nil,
+			[]byte("opa dispatch failed"),
+			-1,
+		)
 		return types.ActionPause
 	}
 	return types.ActionPause

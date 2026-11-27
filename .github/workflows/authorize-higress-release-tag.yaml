@@ -132,7 +132,25 @@ jobs:
           fi
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           test "$(sha256sum "$SNAPSHOT_PATH" | awk '{print $1}')" = "$SNAPSHOT_SHA256"
-          (cd tools/plugin-release && go run . verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --committed-source "$RELEASE_COMMIT" --resolve --oci-source public)
+          test "$(jq -er .gatewayVersion "$SNAPSHOT_PATH")" = "$GATEWAY_VERSION"
+          plan="plugins/release/plans/$GATEWAY_VERSION.json"
+          test -f "$plan"
+          snapshot_source=$(jq -er .sourceCommit "$SNAPSHOT_PATH")
+          test "$(jq -er .gatewayVersion "$plan")" = "$GATEWAY_VERSION"
+          test "$(jq -er .sourceCommit "$plan")" = "$snapshot_source"
+          previous=$(jq -er .previousRelease "$SNAPSHOT_PATH")
+          [[ "$previous" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          marker=$(jq -r '.bootstrapEvidence.path // empty' "$SNAPSHOT_PATH")
+          if [ -n "$marker" ]; then
+            [[ "$marker" =~ ^plugins/release/bootstrap-evidence/[0-9]+\.[0-9]+\.[0-9]+\.json$ ]]
+            test -f "$marker"
+            previous_path=/tmp/release-bootstrap-previous.json
+            (cd tools/plugin-release && go run . bootstrap-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --gateway-version "$previous" --source "$snapshot_source" --existing-evidence "../../$marker" --output "$previous_path")
+          else
+            previous_path="$GITHUB_WORKSPACE/plugins/release/snapshots/$previous.json"
+          fi
+          test -f "$previous_path"
+          (cd tools/plugin-release && go run . verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan" --previous "$previous_path" --committed-source "$RELEASE_COMMIT" --resolve --oci-source public)
 
           # Resolve all Console evidence from one immutable GitHub release ID.
           # Operators never assemble a cross-system JSON document by hand.
@@ -152,7 +170,6 @@ jobs:
           CONSOLE_CHART_OCI_REF=$(jq -er .chart.ref /tmp/console-provenance.json)
           CONSOLE_CHART_DIGEST=$(jq -er .chart.digest /tmp/console-provenance.json)
           [[ "$CONSOLE_CHART_OCI_REF" =~ ^[^@[:space:]]+$ ]]; [[ "$CONSOLE_CHART_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          snapshot_source=$(jq -er .sourceCommit "$SNAPSHOT_PATH")
           jq -e --arg source "$snapshot_source" --arg snapshot "$SNAPSHOT_SHA256" --arg chart "$CONSOLE_CHART_DIGEST" --arg chartRef "$CONSOLE_CHART_OCI_REF" --arg commit "$CONSOLE_RELEASE_COMMIT" --arg tag "$CONSOLE_RELEASE_TAG" '.schemaVersion == 1 and .tag == $tag and .commit == $commit and .pluginLock.sourceCommit == $source and .pluginLock.snapshotSha256 == $snapshot and .chart.ref == $chartRef and .chart.digest == $chart' /tmp/console-provenance.json >/dev/null
           jq -cS '[.plugins[] | select(.consumers.console != null) | {key:.consumers.console.propertyKey,resourceDir:.consumers.console.resourceDir,version,ociRef:("oci://" + .ociRef),digest}] | sort_by(.key)' "$SNAPSHOT_PATH" >/tmp/snapshot-console-map.json
           jq -cS '[.pluginLock.plugins | to_entries[] | {key:.key,resourceDir:.value.resourceDir,version:.value.version,ociRef:.value.ociRef,digest:.value.digest}] | sort_by(.key)' /tmp/console-provenance.json >/tmp/console-map.json
@@ -212,7 +229,7 @@ jobs:
           git show "$PLUGIN_SERVER_HIGRESS_COMMIT:$SNAPSHOT_PATH" > /tmp/plugin-server-source-snapshot.json
           test "$(sha256sum /tmp/plugin-server-source-snapshot.json | awk '{print $1}')" = "$SNAPSHOT_SHA256"
           cmp /tmp/plugin-server-source-snapshot.json "$SNAPSHOT_PATH"
-          (cd tools/plugin-release && go run . verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --committed-source "$PLUGIN_SERVER_HIGRESS_COMMIT" --oci-source public)
+          (cd tools/plugin-release && go run . verify-snapshot --root ../.. --catalog ../../plugins/release/catalog.json --snapshot "../../$SNAPSHOT_PATH" --plan "../../$plan" --previous "$previous_path" --committed-source "$PLUGIN_SERVER_HIGRESS_COMMIT" --oci-source public)
 
           jq -cnS --arg gatewayVersion "$GATEWAY_VERSION" --arg releaseCommit "$RELEASE_COMMIT" --arg snapshotPath "$SNAPSHOT_PATH" --arg snapshotSha256 "$SNAPSHOT_SHA256" --argjson consoleReleaseId "$CONSOLE_RELEASE_ID" --arg consoleReleaseTag "$CONSOLE_RELEASE_TAG" --arg consoleReleaseCommit "$CONSOLE_RELEASE_COMMIT" --arg consoleChartOciRef "$CONSOLE_CHART_OCI_REF" --arg consoleChartDigest "$CONSOLE_CHART_DIGEST" --arg consoleHelmRepository "$CONSOLE_HELM_REPOSITORY" --arg consoleChartPackageSha256 "$CONSOLE_CHART_PACKAGE_SHA256" --argjson consoleProvenanceAssetId "$ASSET_ID" --arg consoleProvenanceAssetSha256 "$ASSET_SHA" --arg pluginServerCommit "$PLUGIN_SERVER_COMMIT" --arg pluginServerHigressCommit "$PLUGIN_SERVER_HIGRESS_COMMIT" --arg pluginServerImage "$PLUGIN_SERVER_IMAGE" '{schemaVersion:1,gatewayVersion:$gatewayVersion,releaseCommit:$releaseCommit,snapshotPath:$snapshotPath,snapshotSha256:$snapshotSha256,consoleReleaseId:$consoleReleaseId,consoleReleaseTag:$consoleReleaseTag,consoleReleaseCommit:$consoleReleaseCommit,consoleChartOciRef:$consoleChartOciRef,consoleChartDigest:$consoleChartDigest,consoleHelmRepository:$consoleHelmRepository,consoleChartPackageSha256:$consoleChartPackageSha256,consoleProvenanceAssetId:$consoleProvenanceAssetId,consoleProvenanceAssetSha256:$consoleProvenanceAssetSha256,pluginServerCommit:$pluginServerCommit,pluginServerHigressCommit:$pluginServerHigressCommit,pluginServerImage:$pluginServerImage}' >/tmp/release-evidence.json
           jq -e 'type == "object" and .schemaVersion == 1 and (keys | sort == ["consoleChartDigest","consoleChartOciRef","consoleChartPackageSha256","consoleHelmRepository","consoleProvenanceAssetId","consoleProvenanceAssetSha256","consoleReleaseCommit","consoleReleaseId","consoleReleaseTag","gatewayVersion","pluginServerCommit","pluginServerHigressCommit","pluginServerImage","releaseCommit","schemaVersion","snapshotPath","snapshotSha256"])' /tmp/release-evidence.json >/dev/null

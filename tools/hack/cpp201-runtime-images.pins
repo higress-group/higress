@@ -1,0 +1,31 @@
+# Copyright (c) 2026 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# local reference|immutable pull reference|load into kind
+higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/higress:2.2.6|higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/higress@sha256:7fe8bb4d4a2e83d1ef31c1a7e6dcf86d1a1a0f37c6058b6b662d920ab6d10310|true
+higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/pilot:2.2.6|higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/pilot@sha256:901ff203f9faa10c50eaf13c44f3e4d12e6b9b5dce381eccb7595207c69ce209|true
+higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway:2.2.6|higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/gateway@sha256:5d0618399fa98b9f4ad3c34b58f084b51624e3cc4eccdde72554b636d16b5da4|true
+docker.io/hashicorp/consul:1.16.0|docker.io/hashicorp/consul@sha256:31818010adabea72f1263552270c436113415ecdf856b2020f81e809d0f987e6|true
+registry.cn-hangzhou.aliyuncs.com/2456868764/httpbin:1.0.2|registry.cn-hangzhou.aliyuncs.com/2456868764/httpbin@sha256:70e3072843c6a954356bcf5de9a8d82903613c57440569648bccae7c8de026af|true
+higress-registry.us-west-1.cr.aliyuncs.com/higress/dubbo-provider-demo:0.0.3-x86|higress-registry.us-west-1.cr.aliyuncs.com/higress/dubbo-provider-demo@sha256:20cfe40bc8792bd95a88930570e1e48973cf5197b6a42f67f926a0b9fc806187|true
+docker.io/bitinit/eureka:cpp201-pinned|docker.io/bitinit/eureka@sha256:de501051899e1867d6c760bdf09fc5407674c22b03cab3ef28d815a1795ca718|true
+docker.io/charlie1380/eureka-registry-provider:v0.3.0|docker.io/charlie1380/eureka-registry-provider@sha256:43bc2e8300162949ecafcc68392c5a0d3886b1421edbf10ac97cbe57943f02de|true
+higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/llm-mock-server:cpp201-pinned|higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/llm-mock-server@sha256:94190753184df44450f2d30665f5c7f8245093d0f0bac8153989955a0bba2e58|true
+higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/echo-body:1.0.0|higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/echo-body@sha256:48f0660a6684e3ab62afcb9303d939a86215123a6f7397dd261f102b552449d3|true
+higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/echo-server:1.3.0|higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/echo-server@sha256:3b63248522e9fec0d7732578f0dd9ebcff2c2d091eb42b3bfe8e00a9513d5678|true
+higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/echo-server:v1.0|higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/echo-server@sha256:6bdcad06010902e81f64e58858b27cc3e9a2cc9a3b634e0c8eda159d7323db76|true
+registry.cn-hangzhou.aliyuncs.com/hinsteny/nacos-standlone-rc3:1.0.0-RC3|registry.cn-hangzhou.aliyuncs.com/hinsteny/nacos-standlone-rc3@sha256:f789c83553d1cc47702d4a01d90b329c934b3abc673e4dbce191704a191e72c5|true
+docker.io/curlimages/curl:cpp201-pinned|docker.io/curlimages/curl@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93|true
+docker.io/openpolicyagent/opa:0.61.0|docker.io/openpolicyagent/opa@sha256:a95f428397caa271b861fab52016fbd1a318a3052253569ee5d2d8f9f16e6ca2|true
+docker.io/mccutchen/go-httpbin:v2.17.0|docker.io/mccutchen/go-httpbin@sha256:d13433bdac3654c43ff1bef441f38973bfe13513a6f9fbe843a2a49c1787d41e|false

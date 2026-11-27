@@ -156,8 +156,12 @@ repository source alone.
    plugin-server commit and snapshot. Its dry run checks out and tests that
    exact plugin-server source, binds the gateway version/path/plan/previous
    snapshot, and resolves candidate provenance before any image tooling or
-   registry write is enabled. Verify image platforms, labels, response content
-   hashes, and the snapshot hash before downstream dispatch.
+   registry write is enabled. The build also serves the snapshot-managed
+   `mcp-server` artifact at the legacy plugin-server paths
+   `mcp-server/1.0.0` and `mcp-server/2.0.0`, so WasmPlugin CRs created before
+   the snapshot layout keep resolving after an upgrade. Verify image platforms,
+   labels, response content hashes, and the snapshot hash before downstream
+   dispatch.
 7. Dispatch Console from the exact snapshot-carrying Higress commit, then merge
    its generated PR and wait for the Console chart containing that lock to be
    released. Only now create or update the normal #4019-style release PR from
