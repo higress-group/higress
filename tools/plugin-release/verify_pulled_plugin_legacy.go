@@ -26,6 +26,7 @@ func validateLegacyProxyWasmModule(data []byte) error {
 	var definedFuncTypes []uint32
 	var importedMemories uint32
 	var definedMemories uint32
+	var codeFunctions uint32
 	var exports []wasmExport
 
 	offset := 8
@@ -41,8 +42,22 @@ func validateLegacyProxyWasmModule(data []byte) error {
 			return fmt.Errorf("section %d payload: %w", sectionID, err)
 		}
 		offset = cursor.offset
-		if err := parseLegacyWasmSection(sectionID, payload, &types, &importedFuncTypes, &definedFuncTypes, &importedMemories, &definedMemories, &exports); err != nil {
+		if err := parseLegacyWasmSection(sectionID, payload, &types, &importedFuncTypes, &definedFuncTypes, &importedMemories, &definedMemories, &codeFunctions, &exports); err != nil {
 			return err
+		}
+	}
+
+	if codeFunctions != uint32(len(definedFuncTypes)) {
+		return fmt.Errorf("function and code section counts differ: %d functions, %d bodies", len(definedFuncTypes), codeFunctions)
+	}
+	for _, typeIndex := range importedFuncTypes {
+		if typeIndex >= uint32(len(types)) {
+			return errors.New("imported function type index is out of range")
+		}
+	}
+	for _, typeIndex := range definedFuncTypes {
+		if typeIndex >= uint32(len(types)) {
+			return errors.New("defined function type index is out of range")
 		}
 	}
 
@@ -194,7 +209,7 @@ func (c *wasmCursor) limits() error {
 	return nil
 }
 
-func parseLegacyWasmSection(id byte, payload []byte, types *[]wasmFuncType, importedFuncTypes, definedFuncTypes *[]uint32, importedMemories, definedMemories *uint32, exports *[]wasmExport) error {
+func parseLegacyWasmSection(id byte, payload []byte, types *[]wasmFuncType, importedFuncTypes, definedFuncTypes *[]uint32, importedMemories, definedMemories, codeFunctions *uint32, exports *[]wasmExport) error {
 	cursor := &wasmCursor{data: payload}
 	switch id {
 	case 0:
@@ -318,6 +333,21 @@ func parseLegacyWasmSection(id byte, payload []byte, types *[]wasmFuncType, impo
 			}
 			*exports = append(*exports, wasmExport{name: name, kind: kind, index: index})
 		}
+	case 10:
+		count, err := cursor.uleb()
+		if err != nil {
+			return fmt.Errorf("code section: %w", err)
+		}
+		for i := uint32(0); i < count; i++ {
+			bodySize, err := cursor.uleb()
+			if err != nil {
+				return fmt.Errorf("code section body size: %w", err)
+			}
+			if _, err := cursor.bytes(bodySize); err != nil {
+				return fmt.Errorf("code section body: %w", err)
+			}
+		}
+		*codeFunctions = count
 	}
 	return nil
 }

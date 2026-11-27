@@ -254,7 +254,8 @@ func validateProxyWasmModule(data []byte) error {
 
 	module, err := runtime.CompileModule(ctx, data)
 	if err != nil {
-		if strings.Contains(err.Error(), "legacy exception handling instruction") {
+		const legacyExceptionHandlingError = "legacy exception handling instruction 0x6 not supported; recompile with wasm-opt --translate-to-exnref"
+		if strings.HasSuffix(err.Error(), legacyExceptionHandlingError) {
 			if legacyErr := validateLegacyProxyWasmModule(data); legacyErr != nil {
 				return fmt.Errorf("invalid WebAssembly module: %w", legacyErr)
 			}

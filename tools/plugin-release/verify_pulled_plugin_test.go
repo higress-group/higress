@@ -35,6 +35,21 @@ func TestValidateProxyWasmModuleAcceptsLegacyExceptionHandling(t *testing.T) {
 	}
 }
 
+func TestValidateProxyWasmModuleRejectsSpoofedLegacyError(t *testing.T) {
+	module := proxyWasmModule(true, nil, "proxy_on_vm_start", "proxy_on_configure", "proxy_abi_version_0_2_1", "legacy exception handling instruction")
+	module[len(module)-1] = 0xff
+	if err := validateProxyWasmModule(module); err == nil {
+		t.Fatal("malformed module with a spoofed legacy error export name was accepted")
+	}
+}
+
+func TestValidateProxyWasmModuleRejectsLegacyModuleWithInvalidFunctionType(t *testing.T) {
+	module := legacyExceptionProxyWasmModuleWithFunctionTypes([]byte{0x00, 0x00, 0x01, 0x7f})
+	if err := validateProxyWasmModule(module); err == nil || !strings.Contains(err.Error(), "type index") {
+		t.Fatalf("legacy module with an out-of-range function type was accepted or returned the wrong error: %v", err)
+	}
+}
+
 func TestVerifyPulledPluginAcceptsUnknownArtifactType(t *testing.T) {
 	manifest, config, wasm, _ := writePulledPluginFixture(t)
 	mutatePulledManifest(t, manifest, func(m map[string]any) {
@@ -480,10 +495,16 @@ func proxyWasmFixture() []byte {
 }
 
 func legacyExceptionProxyWasmModule() []byte {
+	return legacyExceptionProxyWasmModuleWithFunctionTypes([]byte{0x00, 0x00, 0x01})
+}
+
+func legacyExceptionProxyWasmModuleWithFunctionTypes(functionTypes []byte) []byte {
 	module := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 	typePayload := []byte{0x02, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x00}
 	module = appendWasmSection(module, 1, typePayload)
-	module = appendWasmSection(module, 3, []byte{0x03, 0x00, 0x00, 0x01})
+	functionPayload := wasmVarUint(uint32(len(functionTypes)))
+	functionPayload = append(functionPayload, functionTypes...)
+	module = appendWasmSection(module, 3, functionPayload)
 	module = appendWasmSection(module, 5, []byte{0x01, 0x00, 0x01})
 	// One tag with attribute 0 and function type 0, matching the pinned C++
 	// toolchain's legacy exception-handling encoding.
@@ -498,9 +519,19 @@ func legacyExceptionProxyWasmModule() []byte {
 		exportPayload = append(exportPayload, wasmVarUint(uint32(index))...)
 	}
 	module = appendWasmSection(module, 7, exportPayload)
-	// The callback body uses the legacy try/catch_all opcodes that wazero
-	// v1.12 decodes but refuses to compile.
-	codePayload := []byte{0x03, 0x0a, 0x00, 0x06, 0x7f, 0x41, 0x01, 0x19, 0x41, 0x00, 0x0b, 0x0b, 0x04, 0x00, 0x41, 0x01, 0x0b, 0x02, 0x00, 0x0b}
+	codePayload := wasmVarUint(uint32(len(functionTypes)))
+	for index, typeIndex := range functionTypes {
+		switch {
+		case index == 0:
+			// The callback body uses the legacy try/catch_all opcodes that
+			// wazero v1.12 decodes but refuses to compile.
+			codePayload = append(codePayload, 0x0a, 0x00, 0x06, 0x7f, 0x41, 0x01, 0x19, 0x41, 0x00, 0x0b, 0x0b)
+		case typeIndex == 0x01:
+			codePayload = append(codePayload, 0x02, 0x00, 0x0b)
+		default:
+			codePayload = append(codePayload, 0x04, 0x00, 0x41, 0x01, 0x0b)
+		}
+	}
 	return appendWasmSection(module, 10, codePayload)
 }
 
