@@ -1217,9 +1217,13 @@ func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map
 				var dedupedVal interface{}
 				switch strings.ToUpper(strategy) {
 				case "RETAIN_UNIQUE":
-					uniSet, uniques := make(map[string]struct{}), make([]interface{}, 0)
+					type uniqueKey struct {
+						typ   gjson.Type
+						value string
+					}
+					uniSet, uniques := make(map[uniqueKey]struct{}), make([]interface{}, 0)
 					for _, v := range values {
-						vstr := v.String()
+						vstr := uniqueKey{typ: v.Type, value: v.String()}
 						if _, ok := uniSet[vstr]; !ok {
 							uniSet[vstr] = struct{}{}
 							uniques = append(uniques, v.Value())
