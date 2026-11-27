@@ -254,6 +254,12 @@ func validateProxyWasmModule(data []byte) error {
 
 	module, err := runtime.CompileModule(ctx, data)
 	if err != nil {
+		if strings.Contains(err.Error(), "legacy exception handling instruction") {
+			if legacyErr := validateLegacyProxyWasmModule(data); legacyErr != nil {
+				return fmt.Errorf("invalid WebAssembly module: %w", legacyErr)
+			}
+			return nil
+		}
 		return fmt.Errorf("invalid WebAssembly module: %w", err)
 	}
 	defer module.Close(ctx)
