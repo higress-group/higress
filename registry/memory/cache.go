@@ -239,10 +239,10 @@ func (s *store) UpdateProxyWrapper(name string, data *ingress.ProxyWrapper) {
 	log.Debugf("mcp proxy entry update, name: %s, data: %v", name, data)
 
 	s.pw[name] = data
-	// service is updated, should not be deleted
-	if _, ok := s.deferredDeleteServices[name]; ok {
-		delete(s.deferredDeleteServices, name)
-		log.Debugf("proxy in deferredDeleteProxies updated, na: %s", name)
+	// proxy is updated, should not be deleted
+	if _, ok := s.deferredDeleteProxies[name]; ok {
+		delete(s.deferredDeleteProxies, name)
+		log.Debugf("proxy in deferredDeleteProxies updated, name: %s", name)
 	}
 	log.Infof("ProxyWrapper updated, name: %s", name)
 }
