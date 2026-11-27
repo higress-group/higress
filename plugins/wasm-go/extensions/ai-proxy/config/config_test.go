@@ -576,6 +576,7 @@ func (m *configTestContext) GetUserAttributeMap() map[string]interface{}       {
 func (m *configTestContext) WriteUserAttributeToLog() error                    { return nil }
 func (m *configTestContext) WriteUserAttributeToLogWithKey(key string) error   { return nil }
 func (m *configTestContext) WriteUserAttributeToTrace() error                  { return nil }
+func (m *configTestContext) RequireRequestBody()                               {}
 func (m *configTestContext) DontReadRequestBody()                              {}
 func (m *configTestContext) DontReadResponseBody()                             {}
 func (m *configTestContext) BufferRequestBody()                                {}

@@ -41,6 +41,10 @@ func TestClusterHashRuntime(t *testing.T) {
 				{":method", "POST"},
 				{"x-session-id", "session-a"},
 			})
+			// The host leaves the stream open, so the SDK holds headers for the body handler.
+			requireEqual(t, types.HeaderStopIteration, action)
+			requireTargetCluster(t, host)
+			action = host.CallOnHttpRequestBody([]byte(`{"model":"test-model"}`))
 			requireEqual(t, types.ActionContinue, action)
 			requireTargetCluster(t, host)
 		})
@@ -59,6 +63,10 @@ func TestClusterHashRuntime(t *testing.T) {
 				{":method", "POST"},
 				{"cookie", "theme=dark; llm_session=session-b"},
 			})
+			// The host leaves the stream open, so the SDK holds headers for the body handler.
+			requireEqual(t, types.HeaderStopIteration, action)
+			requireTargetCluster(t, host)
+			action = host.CallOnHttpRequestBody([]byte(`{"model":"test-model"}`))
 			requireEqual(t, types.ActionContinue, action)
 			requireTargetCluster(t, host)
 		})
@@ -127,6 +135,10 @@ func TestClusterHashRuntime(t *testing.T) {
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 			})
+			// The host leaves the stream open, so the SDK holds headers for the body handler.
+			requireEqual(t, types.HeaderStopIteration, action)
+			requireTargetCluster(t, host)
+			action = host.CallOnHttpRequestBody([]byte(`{"model":"test-model"}`))
 			requireEqual(t, types.ActionContinue, action)
 			requireTargetCluster(t, host)
 		})
