@@ -32,9 +32,14 @@ jobs:
       PLUGIN_SERVER_COMMIT: ${{ inputs.plugin_server_commit }}
       SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
       SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
-      CTX: ${{ runner.temp }}/nonprod-context
-      EVIDENCE: ${{ runner.temp }}/nonprod-evidence
     steps:
+      - name: Initialize isolated scratch paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'CTX=%s\n' "$RUNNER_TEMP/nonprod-context" >> "$GITHUB_ENV"
+          printf 'EVIDENCE=%s\n' "$RUNNER_TEMP/nonprod-evidence" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/nonprod-context" "$RUNNER_TEMP/nonprod-evidence"
       - name: Checkout exact preparation Q
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
