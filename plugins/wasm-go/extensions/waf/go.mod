@@ -7,12 +7,15 @@ toolchain go1.24.4
 require (
 	github.com/corazawaf/coraza-wasilibs v0.0.0-20230408002644-e2e3af21f503
 	github.com/corazawaf/coraza/v3 v3.0.0-rc.1.0.20230407165813-a18681b1ec28
-	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250611100342-5654e89a7a80
-	github.com/higress-group/wasm-go v1.0.0
+	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20251103120604-77e9cce339d2
+	github.com/higress-group/wasm-go v1.2.1
 	github.com/tidwall/gjson v1.18.0
 )
 
-require github.com/wasilibs/go-re2 v1.0.0 // indirect
+require (
+	github.com/tidwall/sjson v1.2.5 // indirect
+	github.com/wasilibs/go-re2 v1.0.0 // indirect
+)
 
 require (
 	github.com/corazawaf/libinjection-go v0.1.2 // indirect

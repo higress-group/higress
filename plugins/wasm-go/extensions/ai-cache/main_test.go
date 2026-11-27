@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/cache"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/config"
+	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/vector"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 	"github.com/stretchr/testify/require"
@@ -52,12 +54,14 @@ var completeConfig = func() json.RawMessage {
 			"apiKey":      "test-dashscope-key",
 		},
 		"vector": map[string]interface{}{
-			"type":         "dashvector",
-			"serviceName":  "dashvector-service",
-			"serviceHost":  "dashvector.example.com",
-			"servicePort":  8081,
-			"apiKey":       "test-dashvector-key",
-			"collectionID": "test-collection",
+			"type":              "dashvector",
+			"serviceName":       "dashvector-service",
+			"serviceHost":       "dashvector.example.com",
+			"servicePort":       8081,
+			"apiKey":            "test-dashvector-key",
+			"collectionID":      "test-collection",
+			"threshold":         0.8,
+			"thresholdRelation": "gt",
 		},
 		"cacheKeyStrategy":       "lastQuestion",
 		"cacheKeyFrom":           "messages.@reverse.0.content",
@@ -192,6 +196,34 @@ var redisAdvancedConfig = func() json.RawMessage {
 	})
 	return data
 }()
+
+func TestBuildCacheKey(t *testing.T) {
+	const question = "question"
+	consumerAKey := cache.BuildCacheKey("custom:", "consumer-a", question)
+	require.Equal(t, "custom:v2:4f8e654226d0279fcc77b4f078dc95b1533071bc574ca784b203bc4bfb46ccd8", consumerAKey)
+	require.Equal(t, consumerAKey, cache.BuildCacheKey("custom:", "consumer-a", question))
+	require.Equal(t, "custom:v2:7786dd57fa20422b1a5f8d3f87f2e59eb817d2e49b8b730aff7c865e444b926e", cache.BuildCacheKey("custom:", "consumer-b", question))
+	require.NotContains(t, consumerAKey, question)
+	require.NotContains(t, consumerAKey, "custom:question")
+}
+
+func TestFirstResultForConsumer(t *testing.T) {
+	results := []vector.QueryResult{
+		{Text: "old", Answer: "old-answer"},
+		{Text: "other", Answer: "other-answer", Consumer: "consumer-b"},
+		{Text: "match", Answer: "matching-answer", Consumer: "consumer-a"},
+	}
+	result, ok := firstResultForConsumer(results, "consumer-a")
+	require.True(t, ok)
+	require.Equal(t, "matching-answer", result.Answer)
+
+	for _, consumer := range []string{"", "consumer-c"} {
+		_, ok = firstResultForConsumer(results, consumer)
+		require.False(t, ok)
+	}
+	_, ok = firstResultForConsumer(results[:1], "consumer-a")
+	require.False(t, ok)
+}
 
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
@@ -376,6 +408,42 @@ func TestParseConfig(t *testing.T) {
 	})
 }
 
+func TestSemanticConfigContract(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		for _, tc := range []struct {
+			name          string
+			config        string
+			wantStatus    types.OnPluginStartStatus
+			wantEnabled   bool
+			wantThreshold float64
+		}{
+			{name: "disabled without threshold fields", config: `{"vector":{"type":"chroma","serviceName":"chroma","collectionID":"c"},"enableSemanticCache":false}`, wantStatus: types.OnPluginStartStatusOK},
+			{name: "omitted without threshold fields", config: `{"vector":{"type":"chroma","serviceName":"chroma","collectionID":"c"}}`, wantStatus: types.OnPluginStartStatusOK},
+			{name: "enabled missing threshold", config: `{"vector":{"type":"chroma","serviceName":"chroma","collectionID":"c","thresholdRelation":"lt"},"enableSemanticCache":true}`, wantStatus: types.OnPluginStartStatusFailed},
+			{name: "enabled null threshold", config: `{"vector":{"type":"chroma","serviceName":"chroma","collectionID":"c","threshold":null,"thresholdRelation":"lt"},"enableSemanticCache":true}`, wantStatus: types.OnPluginStartStatusFailed},
+			{name: "enabled missing relation", config: `{"vector":{"type":"chroma","serviceName":"chroma","collectionID":"c","threshold":0.5},"enableSemanticCache":true}`, wantStatus: types.OnPluginStartStatusFailed},
+			{name: "enabled empty relation", config: `{"vector":{"type":"chroma","serviceName":"chroma","collectionID":"c","threshold":0.5,"thresholdRelation":""},"enableSemanticCache":true}`, wantStatus: types.OnPluginStartStatusFailed},
+			{name: "enabled invalid relation", config: `{"vector":{"type":"chroma","serviceName":"chroma","collectionID":"c","threshold":0.5,"thresholdRelation":"eq"},"enableSemanticCache":true}`, wantStatus: types.OnPluginStartStatusFailed},
+			{name: "enabled explicit zero threshold", config: `{"vector":{"type":"chroma","serviceName":"chroma","collectionID":"c","threshold":0,"thresholdRelation":"gte"},"enableSemanticCache":true}`, wantStatus: types.OnPluginStartStatusOK, wantEnabled: true, wantThreshold: 0},
+			{name: "enabled explicit threshold and relation", config: `{"vector":{"type":"chroma","serviceName":"chroma","collectionID":"c","threshold":0.75,"thresholdRelation":"gt"},"enableSemanticCache":true}`, wantStatus: types.OnPluginStartStatusOK, wantEnabled: true, wantThreshold: 0.75},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				host, status := test.NewTestHost(json.RawMessage(tc.config))
+				defer host.Reset()
+				require.Equal(t, tc.wantStatus, status)
+				if status != types.OnPluginStartStatusOK {
+					return
+				}
+				configRaw, err := host.GetMatchConfig()
+				require.NoError(t, err)
+				pluginConfig := configRaw.(*config.PluginConfig)
+				require.Equal(t, tc.wantEnabled, pluginConfig.EnableSemanticCache)
+				require.Equal(t, tc.wantThreshold, pluginConfig.GetVectorProviderConfig().Threshold)
+			})
+		}
+	})
+}
+
 func TestOnHttpRequestHeaders(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试基本请求头处理
@@ -390,6 +458,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 应该返回HeaderStopIteration，因为需要等待请求体
@@ -408,6 +477,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 				{"x-higress-skip-ai-cache", "on"},
 			})
 
@@ -426,6 +496,7 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{":authority", "example.com"},
 				{":path", "/api/chat"},
 				{":method", "POST"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 应该返回ActionContinue，因为没有内容类型
@@ -444,11 +515,55 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "text/plain"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 应该返回ActionContinue，因为内容类型不是JSON
 			require.Equal(t, types.ActionContinue, action)
 		})
+	})
+}
+
+func TestVectorProviderDoesNotEnableSemanticCache(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(vectorOnlyConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+		host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/chat"},
+			{":method", "POST"},
+			{"content-type", "application/json"},
+			{"x-mse-consumer", "consumer-a"},
+		})
+		action := host.CallOnHttpRequestBody([]byte(`{"messages":[{"role":"user","content":"question"}]}`))
+		require.Equal(t, types.ActionContinue, action)
+		require.Empty(t, host.GetRedisCalloutAttributes())
+		require.Empty(t, host.GetHttpCalloutAttributes())
+	})
+}
+
+func TestNoConsumerSkipsExternalCacheWork(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(completeConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "example.com"},
+			{":path", "/api/chat"},
+			{":method", "POST"},
+			{"content-type", "application/json"},
+		})
+		require.Equal(t, types.ActionContinue, action)
+
+		host.CallOnHttpResponseHeaders([][2]string{
+			{":status", "200"},
+			{"content-type", "application/json"},
+		})
+		host.CallOnHttpResponseBody([]byte(`{"choices":[{"message":{"content":"answer"}}]}`))
+		require.Empty(t, host.GetRedisCalloutAttributes())
+		require.Empty(t, host.GetHttpCalloutAttributes())
 	})
 }
 
@@ -466,6 +581,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 构造请求体
@@ -521,6 +637,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 构造请求体
@@ -562,6 +679,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 构造请求体
@@ -595,6 +713,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 构造流式请求体
@@ -628,6 +747,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 构造完全无效的请求体（无法解析为JSON）
@@ -652,6 +772,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 构造空内容的请求体
@@ -675,6 +796,30 @@ func TestOnHttpRequestBody(t *testing.T) {
 	})
 }
 
+func TestRequestCacheKeyConsumerIsolation(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, consumer := range []string{"consumer-a", "consumer-b"} {
+			t.Run(consumer, func(t *testing.T) {
+				host, status := test.NewTestHost(basicRedisConfig)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", "example.com"},
+					{":path", "/api/chat"},
+					{":method", "POST"},
+					{"content-type", "application/json"},
+					{"x-mse-consumer", consumer},
+				})
+				action := host.CallOnHttpRequestBody([]byte(`{"messages":[{"role":"user","content":"question"}]}`))
+				require.Equal(t, types.ActionPause, action)
+				calls := host.GetRedisCalloutAttributes()
+				require.Len(t, calls, 1)
+				require.Contains(t, string(calls[0].Query), cache.BuildCacheKey("higress-ai-cache:", consumer, "question"))
+			})
+		}
+	})
+}
+
 func TestOnHttpResponseHeaders(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// 测试基本响应头处理
@@ -689,6 +834,7 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置请求体
@@ -726,6 +872,7 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 				{"x-higress-skip-ai-cache", "on"},
 			})
 
@@ -751,6 +898,7 @@ func TestOnHttpResponseHeaders(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置流式请求体
@@ -792,6 +940,7 @@ func TestOnHttpResponseBody(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置请求体
@@ -851,6 +1000,7 @@ func TestOnHttpResponseBody(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置流式请求体
@@ -908,6 +1058,7 @@ data: [DONE]`
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置流式请求体
@@ -977,7 +1128,7 @@ data: {"id":"0b8ed3c9-3710-920b-abd9-581a0a77fd28","object":"chat.completion.chu
 			// 且写入的值是前面 content chunk 累积出的完整文本。
 			setCall := redisCalls[len(redisCalls)-1]
 			setQuery := string(setCall.Query)
-			require.Contains(t, setQuery, "higress-ai-cache:介绍天津",
+			require.Contains(t, setQuery, cache.BuildCacheKey("higress-ai-cache:", "test-consumer", "介绍天津"),
 				"SET command should target the cache key derived from the request, got query: %q", setQuery)
 			require.Contains(t, setQuery, "天津是历史文化名城",
 				"SET command should contain the accumulated value, got query: %q", setQuery)
@@ -1000,6 +1151,7 @@ data: {"id":"0b8ed3c9-3710-920b-abd9-581a0a77fd28","object":"chat.completion.chu
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置流式请求体
@@ -1053,7 +1205,7 @@ data: [DONE]
 			// 断言 SET value 必须是完整累积文本，而非被 [DONE] 截断后的 "天津"
 			setCall := redisCalls[len(redisCalls)-1]
 			setQuery := string(setCall.Query)
-			require.Contains(t, setQuery, "higress-ai-cache:介绍天津",
+			require.Contains(t, setQuery, cache.BuildCacheKey("higress-ai-cache:", "test-consumer", "介绍天津"),
 				"SET command should target the cache key derived from the request, got query: %q", setQuery)
 			require.Contains(t, setQuery, "天津是历史文化名城",
 				"SET command should contain the full accumulated value (final chunk content must not be dropped by [DONE]), got query: %q", setQuery)
@@ -1116,6 +1268,7 @@ func TestExternalServiceCalls(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置请求体
@@ -1182,6 +1335,7 @@ func TestExternalServiceCalls(t *testing.T) {
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置请求体
@@ -1226,7 +1380,8 @@ func TestExternalServiceCalls(t *testing.T) {
 						"id": "1",
 						"fields": {
 							"query": "今天天气怎么样？",
-							"answer": "今天北京天气晴朗，温度25度，湿度60%"
+							"answer": "今天北京天气晴朗，温度25度，湿度60%",
+							"consumer": "test-consumer"
 						},
 						"score": 0.95
 					}
@@ -1236,6 +1391,10 @@ func TestExternalServiceCalls(t *testing.T) {
 				{"Content-Type", "application/json"},
 				{":status", "200"},
 			}, []byte(vectorQueryResponse))
+			localResponse := host.GetLocalResponse()
+			require.NotNil(t, localResponse)
+			require.Equal(t, uint32(200), localResponse.StatusCode)
+			require.Contains(t, string(localResponse.Data), "今天北京天气晴朗，温度25度，湿度60%")
 
 			// 完成HTTP请求
 			host.CompleteHttp()
@@ -1270,6 +1429,7 @@ data: [DONE]`,
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置流式请求体
@@ -1305,6 +1465,7 @@ data: [DONE]`,
 				{":path", "/api/chat"},
 				{":method", "POST"},
 				{"content-type", "application/json"},
+				{"x-mse-consumer", "test-consumer"},
 			})
 
 			// 设置请求体

@@ -1,0 +1,106 @@
+# Copyright 2026 Higress Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: C++ Hotfix Release Contract
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/cpp-hotfix-release-contract.yaml
+      - .github/workflows/prepare-plugin-release.yaml
+      - .github/workflows/promote-plugin-release.yaml
+      - .github/workflows/validate-plugin-preparation-pr.yaml
+      - plugins/release/catalog.json
+      - tools/plugin-release/**
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Exact Higress commit to verify; defaults to the selected workflow branch head"
+        required: false
+        type: string
+      plugin_server_ref:
+        description: "Exact plugin-server commit or ref for the history contract"
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp-hotfix-release-contract-${{ github.event.pull_request.head.sha || inputs.target_ref || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out exact Higress source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.target_ref || github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record exact source identities
+        env:
+          EXPECTED_HEAD: ${{ inputs.target_ref || github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cpp-hotfix-contract
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          printf 'higress=%s\n' "$EXPECTED_HEAD" | tee /tmp/cpp-hotfix-contract/source-commits.txt
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.24.0"
+      - name: Verify formatting and release contracts
+        run: |
+          set -euo pipefail
+          cd tools/plugin-release
+          unformatted=$(gofmt -l .)
+          test -z "$unformatted" || { printf 'gofmt required:\n%s\n' "$unformatted"; exit 1; }
+          GOMAXPROCS=1 go test -p 1 -count=1 ./... 2>&1 | tee /tmp/cpp-hotfix-contract/go-test.log
+          go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json 2>&1 | tee /tmp/cpp-hotfix-contract/validate-catalog.log
+      - name: Check out requested plugin-server source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: higress-group/plugin-server
+          ref: ${{ inputs.plugin_server_ref }}
+          path: plugin-server
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify plugin-server history contract
+        env:
+          PLUGIN_SERVER_REF: ${{ inputs.plugin_server_ref }}
+        run: |
+          set -euo pipefail
+          cd plugin-server
+          if [[ "$PLUGIN_SERVER_REF" =~ ^[0-9a-f]{40}$ ]]; then test "$(git rev-parse HEAD)" = "$PLUGIN_SERVER_REF"; fi
+          printf 'plugin-server=%s\n' "$(git rev-parse HEAD)" | tee -a /tmp/cpp-hotfix-contract/source-commits.txt
+          python3 -m unittest -v test_pull_plugins.py 2>&1 | tee /tmp/cpp-hotfix-contract/plugin-server-test.log
+      - name: Record non-production boundaries
+        run: |
+          set -euo pipefail
+          {
+            echo "Contract tests only: no OCI candidate was created and no public tag was mutated."
+            echo "plugin-server real HTTP 18/18: pending a real candidate and prepared non-production image."
+            echo "Console and all-in-one production pins: pending real candidate/public and image identities."
+          } | tee /tmp/cpp-hotfix-contract/pending.txt
+      - name: Upload contract evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpp-hotfix-release-contract-${{ github.event.pull_request.head.sha || inputs.target_ref || github.sha }}
+          if-no-files-found: error
+          path: /tmp/cpp-hotfix-contract/

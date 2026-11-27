@@ -217,6 +217,34 @@ func TestSSEResponseRemainsStreaming(t *testing.T) {
 	})
 }
 
+// TestSSESplitUsageEventAccountsAfterFraming covers a usage SSE event split
+// across host callbacks (same class as ai-statistics TestStreamingSplitUsageEventRecovery).
+// Without framing, GetTokenUsage sees neither half and Redis never INCRBY; with
+// the sseFramer, the reassembled event accounts the same 25 as intact delivery.
+func TestSSESplitUsageEventAccountsAfterFraming(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		usage := []byte("data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":15,\"total_tokens\":25}}\n\n")
+		require.Greater(t, len(usage), 20)
+
+		// Split inside the "usage" field name.
+		split := bytes.Index(usage, []byte(`"usage"`)) + 4
+		require.Greater(t, split, 0)
+		require.Less(t, split, len(usage))
+
+		host := startResponseTest(t, globalThresholdConfig, "text/event-stream")
+		defer host.Reset()
+
+		require.Equal(t, types.ActionContinue, host.CallOnHttpStreamingResponseBody(usage[:split], false))
+		require.Empty(t, host.GetRedisCalloutAttributes())
+		require.Equal(t, types.ActionContinue, host.CallOnHttpStreamingResponseBody(usage[split:], false))
+		require.Empty(t, host.GetRedisCalloutAttributes())
+		require.Equal(t, types.ActionContinue, host.CallOnHttpStreamingResponseBody([]byte("data: [DONE]\n\n"), true))
+
+		assertResponseIncrement(t, host, 25, 1)
+		host.CompleteHttp()
+	})
+}
+
 func TestNonJSONMediaTypesRemainStreaming(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		for _, contentType := range []string{"application/jsonp", ""} {

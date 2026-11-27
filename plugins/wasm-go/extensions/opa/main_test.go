@@ -107,6 +107,18 @@ var invalidConfigInvalidTimeout = func() json.RawMessage {
 	return data
 }()
 
+var synchronousCallErrorConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"policy":        "%zz",
+		"timeout":       "5s",
+		"serviceSource": "k8s",
+		"serviceName":   "opa",
+		"servicePort":   "8181",
+		"namespace":     "higress-backend",
+	})
+	return data
+}()
+
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
 		// 测试基本配置解析
@@ -178,6 +190,29 @@ func TestParseConfig(t *testing.T) {
 
 func TestOnHttpRequestHeaders(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
+		t.Run("synchronous opa call error fails closed", func(t *testing.T) {
+			host, status := test.NewTestHost(synchronousCallErrorConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/test"},
+				{":method", "GET"},
+				{"Content-Type", "application/json"},
+			})
+
+			require.Equal(t, types.HeaderStopAllIterationAndWatermark, action)
+
+			response := host.GetLocalResponse()
+			require.NotNil(t, response)
+			require.Equal(t, uint32(http.StatusServiceUnavailable), response.StatusCode)
+			require.Equal(t, "opa.dispatch_fail", response.StatusCodeDetail)
+			require.Equal(t, "opa dispatch failed", string(response.Data))
+
+			host.CompleteHttp()
+		})
+
 		// 测试基本请求头处理
 		t.Run("basic request headers", func(t *testing.T) {
 			host, status := test.NewTestHost(basicConfig)

@@ -229,6 +229,7 @@ func runPromotionVersionContractState(t *testing.T, snapshot, registry map[strin
 	writeExecutableFixture(t, filepath.Join(bin, "oras"), `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$ORAS_LOG"
+if [ "$1" = login ]; then cat >/dev/null; exit 0; fi
 if [ "$1 $2" = "manifest fetch" ]; then
   ref=$3
   if ! record=$(jq -cer --arg ref "$ref" '.[$ref]' "$ORAS_STATE" 2>/dev/null); then
@@ -274,6 +275,11 @@ exit 2
 		"ORAS_LOG="+logPath,
 		"ORAS_STATE="+statePath,
 		"REGISTRY=registry.example.invalid",
+		"REGISTRY_USERNAME=fixture-user",
+		"REGISTRY_PASSWORD=fixture-password",
+		"CANDIDATE_REGISTRY=registry.example.invalid",
+		"CANDIDATE_USERNAME=fixture-user",
+		"CANDIDATE_PASSWORD=fixture-password",
 		"SNAPSHOT_PATH="+snapshotPath,
 		"SNAPSHOT_SHA256="+snapshotSHAHex,
 		"GITHUB_STEP_SUMMARY="+summaryPath,

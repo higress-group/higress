@@ -53,4 +53,4 @@ spec:
       configDisable: false
       ingress:
         - higress-conformance-infra/wasmplugin-cpp-basic-auth
-  url: file:///opt/plugins/wasm-cpp/extensions/basic-auth/plugin.wasm
+  url: file:///opt/plugins/wasm-cpp/extensions/basic_auth/plugin.wasm

@@ -518,6 +518,37 @@ func TestAdaptiveScoreStreamDoneRecordsMetricsWhenGlobalInflightKeyMissing(t *te
 	}
 }
 
+func TestClusterMetricsRejectsInvalidMode(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "missing mode",
+			body: `{"service_list":["svc-a","svc-b"]}`,
+		},
+		{
+			name: "wrong case mode",
+			body: `{"mode":"adaptivescore","service_list":["svc-a","svc-b"]}`,
+		},
+		{
+			name: "unknown mode",
+			body: `{"mode":"UnknownMode","service_list":["svc-a","svc-b"]}`,
+		},
+		{
+			name: "misspelled mode with trailing space",
+			body: `{"mode":"LeastBusy ","service_list":["svc-a","svc-b"]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := NewClusterEndpointLoadBalancer(gjson.Parse(tt.body)); err == nil {
+				t.Fatalf("expected config error for body %q", tt.body)
+			}
+		})
+	}
+}
+
 func newAdaptiveScoreLB(t *testing.T) ClusterEndpointLoadBalancer {
 	return newClusterMetricsLB(t, ModeAdaptiveScore)
 }
@@ -599,6 +630,12 @@ func (f *fakeHTTPContext) GetUserAttributeMap() map[string]interface{}      { re
 func (f *fakeHTTPContext) WriteUserAttributeToLog() error                   { return nil }
 func (f *fakeHTTPContext) WriteUserAttributeToLogWithKey(key string) error  { return nil }
 func (f *fakeHTTPContext) WriteUserAttributeToTrace() error                 { return nil }
+func (f *fakeHTTPContext) RequireRequestBody()                              {}
+func (f *fakeHTTPContext) HasRequestBody() bool                             { return false }
+func (f *fakeHTTPContext) HasResponseBody() bool                            { return false }
+func (f *fakeHTTPContext) IsWebsocket() bool                                { return false }
+func (f *fakeHTTPContext) IsBinaryRequestBody() bool                        { return false }
+func (f *fakeHTTPContext) IsBinaryResponseBody() bool                       { return false }
 func (f *fakeHTTPContext) DontReadRequestBody()                             {}
 func (f *fakeHTTPContext) DontReadResponseBody()                            {}
 func (f *fakeHTTPContext) BufferRequestBody()                               {}
