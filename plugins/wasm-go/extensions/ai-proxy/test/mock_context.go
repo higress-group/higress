@@ -28,6 +28,7 @@ func (m *MockHttpContext) GetUserAttributeMap() map[string]interface{}       { r
 func (m *MockHttpContext) WriteUserAttributeToLog() error                    { return nil }
 func (m *MockHttpContext) WriteUserAttributeToLogWithKey(key string) error   { return nil }
 func (m *MockHttpContext) WriteUserAttributeToTrace() error                  { return nil }
+func (m *MockHttpContext) RequireRequestBody()                               {}
 func (m *MockHttpContext) DontReadRequestBody()                              {}
 func (m *MockHttpContext) DontReadResponseBody()                             {}
 func (m *MockHttpContext) BufferRequestBody()                                {}

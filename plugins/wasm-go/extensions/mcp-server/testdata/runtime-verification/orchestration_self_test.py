@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """Focused fault-injection checks for runtime lifecycle polling and fixtures."""
 
+import io
 import json
+import os
+import subprocess
+import sys
 import socket
 import tempfile
 import threading
 import urllib.request
+from http.client import parse_headers
 from pathlib import Path
 
 import backend
+import generate_envoy
+from instructions_self_test import valid_evidence
 import verify
 
 
@@ -131,9 +138,124 @@ def check_partial_corpus_diagnostic():
     ) = original
 
 
+
+def check_instructions_disconnect_request():
+    head, separator, body = verify.instructions_disconnect_request().partition(b"\r\n\r\n")
+    require(separator, "disconnect request lacks the HTTP header/body delimiter")
+    request_line, _, header_lines = head.partition(b"\r\n")
+    require(request_line == b"POST /mcp HTTP/1.1", "disconnect request does not enter the MCP endpoint")
+    headers = parse_headers(io.BytesIO(header_lines + b"\r\n\r\n"))
+    # Missing Accept caused real Envoy to return 406 before reaching RouteCall.
+    # Guard protocol negotiation rather than relaxing the backend assertion.
+    require({"application/json", "text/event-stream"}.issubset(
+        {value.strip() for value in headers.get("Accept", "").split(",")}),
+        "disconnect request cannot negotiate the normal modern media types")
+    require(headers.get("Content-Type") == "application/json" and
+            headers.get("MCP-Protocol-Version") == verify.MODERN and
+            headers.get("Mcp-Method") == "server/discover", "disconnect request fails modern protocol admission")
+    require(headers.get("Origin") == "http://" + headers.get("Host", ""), "disconnect origin does not match the fixture host")
+    require(int(headers["Content-Length"]) == len(body), "disconnect body framing is incomplete")
+    request = json.loads(body)
+    require(request["id"] == "disconnect" and request["method"] == "server/discover" and
+            request["params"]["_meta"] == verify.modern_meta(), "disconnect request changed the validated envelope")
+
+
+def check_instructions_fixture():
+    with tempfile.TemporaryDirectory() as directory:
+        original_out = generate_envoy.OUT
+        generate_envoy.OUT = Path(directory)
+        try:
+            generate_envoy.instructions_configs()
+        finally:
+            generate_envoy.OUT = original_out
+        baseline = (Path(directory) / "envoy-instructions-baseline.yaml").read_text()
+        candidate = (Path(directory) / "envoy-instructions-candidate.yaml").read_text()
+        require("passthroughInstructions" not in baseline, "baseline depends on new flag support")
+        require(candidate.count('"passthroughInstructions":true') == 8 and
+                candidate.count('"passthroughInstructions":false') == 1, "focused flag coverage changed")
+        for marker in ("retry_policy: {retry_on: 5xx, num_retries: 1}", "timeout: 0.2s", "envoy.filters.http.lua"):
+            require(marker in candidate, f"missing main-route fixture: {marker}")
+    original_getfqdn = socket.getfqdn
+    socket.getfqdn = lambda _name: "localhost"
+    try:
+        server = backend.ThreadingHTTPServer(("127.0.0.1", 0), backend.Handler)
+    finally:
+        socket.getfqdn = original_getfqdn
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request_body = {"jsonrpc": "2.0", "id": "original-id", "method": "server/discover", "params": {"_meta": verify.modern_meta()}}
+        for mode in ("normal", "limit", "oversize", "missing", "rpc-error", "incomplete", "sse"):
+            request = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/instructions",
+                                             data=json.dumps(request_body).encode(),
+                                             headers={"X-Instructions-Mode": mode, "Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=2) as response:
+                raw = response.read()
+                if mode == "sse":
+                    require(response.headers["Content-Type"] == "text/event-stream", "SSE fixture lost its content type")
+                    raw = raw.removeprefix(b"data: ").strip()
+                value = json.loads(raw)
+            require(value["id"] == "original-id", "fixture rewrote original RPC ID")
+            result = value["result"]
+            require(result["ttlMs"] == 0.5, "unrelated-schema compatibility control disappeared")
+            if mode in ("limit", "oversize"):
+                require(len(result["instructions"].encode()) == (32768 if mode == "limit" else 32769), "decoded byte boundary changed")
+            if mode == "missing":
+                require("instructions" not in result, "missing-field control includes instructions")
+            if mode == "rpc-error":
+                require("error" in value and "instructions" in result, "error/result exclusion control lost")
+            if mode == "incomplete":
+                require(result["resultType"] == "input_required", "incomplete result control lost")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+
+def check_instructions_evidence_rejects_incomplete_runs():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment = dict(os.environ, RUNTIME_EVIDENCE=directory, RUNTIME_VERIFY_INSTRUCTIONS="1",
+                           SOURCE_SHA="1" * 40, SOURCE_TREE_CLEAN="true", INSTRUCTIONS_BASELINE_SHA="2" * 40,
+                           PLUGIN_SHA256="3" * 64, INSTRUCTIONS_BASELINE_PLUGIN_SHA256="4" * 64)
+        snapshots = {}
+        for variant in ("baseline", "candidate"):
+            snapshots[variant], log = valid_evidence(variant)
+            (root / f"instructions-{variant}.json").write_text(json.dumps(snapshots[variant]))
+            (root / f"gateway-instructions-{variant}.log").write_text(log)
+        (root / "cleanup-proof.txt").write_text("PASS no containers remain")
+        def finalize():
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("finalize_evidence.py"))],
+                                    env=environment, capture_output=True, text=True)
+            manifest = json.loads((root / "instructions-manifest.json").read_text())
+            require(manifest["historicalFullMatrixVerified"] is False, "focused evidence certified full regressions")
+            return result.returncode, manifest["passed"]
+        require(finalize() == (0, True), "complete focused evidence was rejected")
+        access_path = root / "gateway-instructions-candidate.log"
+        single_access = access_path.read_text()
+        access_path.write_text(single_access * 2)
+        require(finalize() == (1, False), "reused request correlation accepted despite repeated access records")
+        access_path.write_text(single_access)
+        candidate = snapshots["candidate"]
+        candidate["cases"].pop()
+        (root / "instructions-candidate.json").write_text(json.dumps(candidate))
+        require(finalize() == (1, False), "missing focused case accepted")
+        (root / "instructions-candidate.json").write_text(json.dumps(snapshots["baseline"]))
+        require(finalize() == (1, False), "baseline-only evidence accepted as candidate matrix")
+        (root / "instructions-candidate.json").write_text(json.dumps({**candidate, "cases": candidate["cases"] + [{"case": "disconnect-late-callback", "status": "PASS"}]}))
+        (root / "gateway-instructions-candidate.log").write_text("")
+        require(finalize() == (1, False), "missing route access evidence accepted")
+
+
 if __name__ == "__main__":
+    from compat_self_test import main as compatibility_self_tests
+    compatibility_self_tests()
     check_transient_lds_publish_timeout()
     check_rejection_poll_classification()
     check_corpus_get_fixture()
     check_partial_corpus_diagnostic()
+    check_instructions_disconnect_request()
+    check_instructions_fixture()
+    check_instructions_evidence_rejects_incomplete_runs()
     print("runtime orchestration fault-injection self-tests passed")

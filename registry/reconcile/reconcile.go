@@ -363,7 +363,11 @@ func (r *Reconciler) reconcileProxies(proxies []*apiv1.ProxyConfig) error {
 		needNotify = true
 	}
 	for k, v := range toBeUpdated {
-		proxyWrapper := proxy.BuildProxyWrapper(v)
+		proxyWrapper, err := proxy.BuildProxyWrapper(v)
+		if err != nil {
+			log.Errorf("Failed to build proxy wrapper for %s, skipping it: %v", k, err)
+			continue
+		}
 		if proxyWrapper == nil {
 			continue
 		}

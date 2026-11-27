@@ -60,6 +60,7 @@ spec:
           {{- end }}
           - --enableAutomaticHttps={{ .Values.controller.automaticHttps.enabled }}
           - --automaticHttpsEmail={{ .Values.controller.automaticHttps.email }}
+          - --grpcAddress=127.0.0.1:15051
           env:
           - name: POD_NAME
             valueFrom:
@@ -138,10 +139,9 @@ spec:
 {{- end }}
           - --keepaliveMaxServerConnectionAge
           - "{{ .Values.pilot.keepaliveMaxServerConnectionAge }}"
+          - --grpcAddr=127.0.0.1:15010
           ports:
           - containerPort: 8080
-            protocol: TCP
-          - containerPort: 15010
             protocol: TCP
           - containerPort: 15017
             protocol: TCP

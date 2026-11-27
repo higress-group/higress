@@ -320,13 +320,19 @@ func (g *GlobalOptionController) ConstructEnvoyFilters() ([]*config.Config, erro
 
 	if global.AddXRealIpHeader {
 		addXRealIpStruct := g.constructAddXRealIpHeader()
-		addXRealIpHeaderConfig := g.generateAddXRealIpHeaderEnvoyFilter(addXRealIpStruct, namespace)
+		addXRealIpHeaderConfig, err := g.generateAddXRealIpHeaderEnvoyFilter(addXRealIpStruct, namespace)
+		if err != nil {
+			return nil, err
+		}
 		configPatch = append(configPatch, addXRealIpHeaderConfig...)
 	}
 
 	if global.DisableXEnvoyHeaders {
 		disableXEnvoyHeadersStruct := g.constructDisableXEnvoyHeaders()
-		disableXEnvoyHeadersConfig := g.generateDisableXEnvoyHeadersEnvoyFilter(disableXEnvoyHeadersStruct, namespace)
+		disableXEnvoyHeadersConfig, err := g.generateDisableXEnvoyHeadersEnvoyFilter(disableXEnvoyHeadersStruct, namespace)
+		if err != nil {
+			return nil, err
+		}
 		configPatch = append(configPatch, disableXEnvoyHeadersConfig...)
 	}
 
@@ -334,7 +340,10 @@ func (g *GlobalOptionController) ConstructEnvoyFilters() ([]*config.Config, erro
 		downstreamStruct := g.constructDownstream(global.Downstream)
 		bufferLimitStruct := g.constructBufferLimit(global.Downstream)
 		routeTimeoutStruct := g.constructRouteTimeout(global.Downstream)
-		downstreamConfig := g.generateDownstreamEnvoyFilter(downstreamStruct, bufferLimitStruct, routeTimeoutStruct, namespace)
+		downstreamConfig, err := g.generateDownstreamEnvoyFilter(downstreamStruct, bufferLimitStruct, routeTimeoutStruct, namespace)
+		if err != nil {
+			return nil, err
+		}
 		if downstreamConfig != nil {
 			configPatch = append(configPatch, downstreamConfig...)
 		}
@@ -343,7 +352,10 @@ func (g *GlobalOptionController) ConstructEnvoyFilters() ([]*config.Config, erro
 	if global.Upstream != nil {
 		upstreamStruct := g.constructUpstream(global.Upstream)
 		bufferLimitStruct := g.constructUpstreamBufferLimit(global.Upstream)
-		upstreamConfig := g.generateUpstreamEnvoyFilter(upstreamStruct, bufferLimitStruct, namespace)
+		upstreamConfig, err := g.generateUpstreamEnvoyFilter(upstreamStruct, bufferLimitStruct, namespace)
+		if err != nil {
+			return nil, err
+		}
 		if upstreamConfig != nil {
 			configPatch = append(configPatch, upstreamConfig...)
 		}
@@ -377,10 +389,14 @@ func (g *GlobalOptionController) RegisterItemEventHandler(eventHandler ItemEvent
 }
 
 // generateDownstreamEnvoyFilter generates the downstream envoy filter.
-func (g *GlobalOptionController) generateDownstreamEnvoyFilter(downstreamValueStruct string, bufferLimitStruct string, routeTimeoutStruct string, namespace string) []*networking.EnvoyFilter_EnvoyConfigObjectPatch {
+func (g *GlobalOptionController) generateDownstreamEnvoyFilter(downstreamValueStruct string, bufferLimitStruct string, routeTimeoutStruct string, namespace string) ([]*networking.EnvoyFilter_EnvoyConfigObjectPatch, error) {
 	var downstreamConfig []*networking.EnvoyFilter_EnvoyConfigObjectPatch
 
 	if len(downstreamValueStruct) != 0 {
+		downstreamValue, err := util.BuildPatchStruct(downstreamValueStruct)
+		if err != nil {
+			return nil, err
+		}
 		downstreamConfig = append(downstreamConfig, &networking.EnvoyFilter_EnvoyConfigObjectPatch{
 			ApplyTo: networking.EnvoyFilter_NETWORK_FILTER,
 			Match: &networking.EnvoyFilter_EnvoyConfigObjectMatch{
@@ -397,12 +413,16 @@ func (g *GlobalOptionController) generateDownstreamEnvoyFilter(downstreamValueSt
 			},
 			Patch: &networking.EnvoyFilter_Patch{
 				Operation: networking.EnvoyFilter_Patch_MERGE,
-				Value:     util.BuildPatchStruct(downstreamValueStruct),
+				Value:     downstreamValue,
 			},
 		})
 	}
 
 	if len(bufferLimitStruct) != 0 {
+		bufferLimitValue, err := util.BuildPatchStruct(bufferLimitStruct)
+		if err != nil {
+			return nil, err
+		}
 		downstreamConfig = append(downstreamConfig, &networking.EnvoyFilter_EnvoyConfigObjectPatch{
 			ApplyTo: networking.EnvoyFilter_LISTENER,
 			Match: &networking.EnvoyFilter_EnvoyConfigObjectMatch{
@@ -410,12 +430,16 @@ func (g *GlobalOptionController) generateDownstreamEnvoyFilter(downstreamValueSt
 			},
 			Patch: &networking.EnvoyFilter_Patch{
 				Operation: networking.EnvoyFilter_Patch_MERGE,
-				Value:     util.BuildPatchStruct(bufferLimitStruct),
+				Value:     bufferLimitValue,
 			},
 		})
 	}
 
 	if len(routeTimeoutStruct) != 0 {
+		routeTimeoutValue, err := util.BuildPatchStruct(routeTimeoutStruct)
+		if err != nil {
+			return nil, err
+		}
 		downstreamConfig = append(downstreamConfig, &networking.EnvoyFilter_EnvoyConfigObjectPatch{
 			ApplyTo: networking.EnvoyFilter_HTTP_ROUTE,
 			Match: &networking.EnvoyFilter_EnvoyConfigObjectMatch{
@@ -432,18 +456,22 @@ func (g *GlobalOptionController) generateDownstreamEnvoyFilter(downstreamValueSt
 			},
 			Patch: &networking.EnvoyFilter_Patch{
 				Operation: networking.EnvoyFilter_Patch_MERGE,
-				Value:     util.BuildPatchStruct(routeTimeoutStruct),
+				Value:     routeTimeoutValue,
 			},
 		})
 	}
 
-	return downstreamConfig
+	return downstreamConfig, nil
 }
 
-func (g *GlobalOptionController) generateUpstreamEnvoyFilter(upstreamValueStruct string, bufferLimit string, namespace string) []*networking.EnvoyFilter_EnvoyConfigObjectPatch {
+func (g *GlobalOptionController) generateUpstreamEnvoyFilter(upstreamValueStruct string, bufferLimit string, namespace string) ([]*networking.EnvoyFilter_EnvoyConfigObjectPatch, error) {
 	var upstreamConfig []*networking.EnvoyFilter_EnvoyConfigObjectPatch
 
 	if len(upstreamValueStruct) != 0 {
+		upstreamValue, err := util.BuildPatchStruct(upstreamValueStruct)
+		if err != nil {
+			return nil, err
+		}
 		upstreamConfig = append(upstreamConfig, &networking.EnvoyFilter_EnvoyConfigObjectPatch{
 			ApplyTo: networking.EnvoyFilter_CLUSTER,
 			Match: &networking.EnvoyFilter_EnvoyConfigObjectMatch{
@@ -451,12 +479,16 @@ func (g *GlobalOptionController) generateUpstreamEnvoyFilter(upstreamValueStruct
 			},
 			Patch: &networking.EnvoyFilter_Patch{
 				Operation: networking.EnvoyFilter_Patch_MERGE,
-				Value:     util.BuildPatchStruct(upstreamValueStruct),
+				Value:     upstreamValue,
 			},
 		})
 	}
 
 	if len(bufferLimit) != 0 {
+		bufferLimitValue, err := util.BuildPatchStruct(bufferLimit)
+		if err != nil {
+			return nil, err
+		}
 		upstreamConfig = append(upstreamConfig, &networking.EnvoyFilter_EnvoyConfigObjectPatch{
 			ApplyTo: networking.EnvoyFilter_CLUSTER,
 			Match: &networking.EnvoyFilter_EnvoyConfigObjectMatch{
@@ -464,16 +496,22 @@ func (g *GlobalOptionController) generateUpstreamEnvoyFilter(upstreamValueStruct
 			},
 			Patch: &networking.EnvoyFilter_Patch{
 				Operation: networking.EnvoyFilter_Patch_MERGE,
-				Value:     util.BuildPatchStruct(bufferLimit),
+				Value:     bufferLimitValue,
 			},
 		})
 	}
 
-	return upstreamConfig
+	return upstreamConfig, nil
 }
 
 // generateAddXRealIpHeaderEnvoyFilter generates the add x-real-ip header envoy filter.
-func (g *GlobalOptionController) generateAddXRealIpHeaderEnvoyFilter(addXRealIpHeaderStruct string, namespace string) []*networking.EnvoyFilter_EnvoyConfigObjectPatch {
+func (g *GlobalOptionController) generateAddXRealIpHeaderEnvoyFilter(addXRealIpHeaderStruct string, namespace string) ([]*networking.EnvoyFilter_EnvoyConfigObjectPatch, error) {
+	// Internal-only patch: addXRealIpHeaderStruct is generated by this controller,
+	// so an error here indicates a programming mistake rather than bad user input.
+	addXRealIpHeaderValue, err := util.BuildPatchStruct(addXRealIpHeaderStruct)
+	if err != nil {
+		return nil, err
+	}
 	addXRealIpHeaderConfig := []*networking.EnvoyFilter_EnvoyConfigObjectPatch{
 		{
 			ApplyTo: networking.EnvoyFilter_ROUTE_CONFIGURATION,
@@ -482,15 +520,21 @@ func (g *GlobalOptionController) generateAddXRealIpHeaderEnvoyFilter(addXRealIpH
 			},
 			Patch: &networking.EnvoyFilter_Patch{
 				Operation: networking.EnvoyFilter_Patch_MERGE,
-				Value:     util.BuildPatchStruct(addXRealIpHeaderStruct),
+				Value:     addXRealIpHeaderValue,
 			},
 		},
 	}
-	return addXRealIpHeaderConfig
+	return addXRealIpHeaderConfig, nil
 }
 
 // generateDisableXEnvoyHeadersEnvoyFilter generates the disable x-envoy headers envoy filter.
-func (g *GlobalOptionController) generateDisableXEnvoyHeadersEnvoyFilter(disableXEnvoyStruct string, namespace string) []*networking.EnvoyFilter_EnvoyConfigObjectPatch {
+func (g *GlobalOptionController) generateDisableXEnvoyHeadersEnvoyFilter(disableXEnvoyStruct string, namespace string) ([]*networking.EnvoyFilter_EnvoyConfigObjectPatch, error) {
+	// Internal-only patch: disableXEnvoyStruct is generated by this controller,
+	// so an error here indicates a programming mistake rather than bad user input.
+	disableXEnvoyValue, err := util.BuildPatchStruct(disableXEnvoyStruct)
+	if err != nil {
+		return nil, err
+	}
 	disableXEnvoyHeadersConfig := []*networking.EnvoyFilter_EnvoyConfigObjectPatch{
 		{
 			ApplyTo: networking.EnvoyFilter_HTTP_FILTER,
@@ -511,11 +555,11 @@ func (g *GlobalOptionController) generateDisableXEnvoyHeadersEnvoyFilter(disable
 			},
 			Patch: &networking.EnvoyFilter_Patch{
 				Operation: networking.EnvoyFilter_Patch_REPLACE,
-				Value:     util.BuildPatchStruct(disableXEnvoyStruct),
+				Value:     disableXEnvoyValue,
 			},
 		},
 	}
-	return disableXEnvoyHeadersConfig
+	return disableXEnvoyHeadersConfig, nil
 }
 
 // constructDownstream constructs the downstream config.

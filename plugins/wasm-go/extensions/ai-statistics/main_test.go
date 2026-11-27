@@ -308,8 +308,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"x-mse-consumer", "consumer1"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -329,8 +329,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"x-mse-consumer", "consumer2"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -349,8 +349,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{"x-request-id", "req-789"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -594,7 +594,7 @@ func TestOnHttpStreamingBody(t *testing.T) {
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			action = host.CallOnHttpResponseHeaders([][2]string{
 				{":status", "200"},
@@ -626,7 +626,7 @@ func TestOnHttpStreamingBody(t *testing.T) {
 				{":path", "/v1/chat/completions"},
 				{":method", "POST"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			action = host.CallOnHttpResponseHeaders([][2]string{
 				{":status", "200"},
@@ -958,8 +958,8 @@ func TestCompleteFlow(t *testing.T) {
 				{"x-mse-consumer", "consumer1"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			// 2. 处理请求体
 			requestBody := []byte(`{
@@ -1049,8 +1049,8 @@ func TestCompleteFlow(t *testing.T) {
 				{"x-mse-consumer", "consumer2"},
 			})
 
-			// 应该返回 ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取请求体，暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			// 2. 处理请求体
 			requestBody := []byte(`{
@@ -1549,7 +1549,7 @@ func TestSessionIdExtraction(t *testing.T) {
 				{":method", "POST"},
 				{"x-custom-session", "sess_custom_123"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -1569,7 +1569,7 @@ func TestSessionIdExtraction(t *testing.T) {
 				{"x-clawdbot-session-key", "sess_clawdbot_789"},
 				{"x-openclaw-session-key", "sess_openclaw_123"}, // 最高优先级
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -1587,7 +1587,7 @@ func TestSessionIdExtraction(t *testing.T) {
 				{":method", "POST"},
 				{"x-agent-session", "sess_agent_only"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			host.CompleteHttp()
 		})
@@ -1855,7 +1855,7 @@ func TestTokenDetails(t *testing.T) {
 			{":path", "/v1/chat/completions"},
 			{":method", "POST"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		// 2. 处理请求体
 		requestBody := []byte(`{
@@ -1991,7 +1991,7 @@ func TestSetSpanAttributeAndLoggingEdgeCases(t *testing.T) {
 				{":authority", "example.com"},
 				{":path", "/api/chat"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 			host.CompleteHttp()
 		})
 	})
@@ -2458,7 +2458,7 @@ func setupStreamingHost(t *testing.T, config json.RawMessage) test.TestHost {
 		{":method", "POST"},
 		{"x-mse-consumer", "user1"},
 	})
-	require.Equal(t, types.ActionContinue, action)
+	require.Equal(t, types.HeaderStopIteration, action)
 
 	action = host.CallOnHttpRequestBody([]byte(`{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}`))
 	require.Equal(t, types.ActionContinue, action)

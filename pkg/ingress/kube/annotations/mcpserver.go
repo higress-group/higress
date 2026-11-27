@@ -55,33 +55,24 @@ func (a mcpServer) Parse(annotations Annotations, config *Ingress, globalContext
 	if rawMatchRuleDomains == "" || rawMatchRuleDomains == "*" {
 		// Use wildcard to match all domains so we don't rely on the default behavior of empty domain list
 		matchRuleDomains = []string{"*"}
-	} else if strings.Contains(rawMatchRuleDomains, ",") {
-		matchRuleDomains = strings.Split(rawMatchRuleDomains, ",")
 	} else {
-		matchRuleDomains = []string{rawMatchRuleDomains}
+		for _, domain := range strings.Split(rawMatchRuleDomains, ",") {
+			domain = strings.TrimSpace(domain)
+			if domain == "" {
+				log.IngressLog.Errorf("ingress %s: mcp-server-match-rule-domains %q contains an empty entry", ingressKey, rawMatchRuleDomains)
+				return nil
+			}
+			matchRuleDomains = append(matchRuleDomains, domain)
+		}
 	}
 
 	matchRuleType, _ := annotations.ParseStringASAP(mcpServerMatchRuleType)
-	if matchRuleType == "" {
-		log.IngressLog.Errorf("ingress %s: mcp-server-match-rule-path-type is empty", ingressKey)
-		return nil
-	} else if !mcpserver.ValidPathMatchTypes[matchRuleType] {
-		log.IngressLog.Errorf("ingress %s: mcp-server-match-rule-path-type %s is not supported", ingressKey, matchRuleType)
-		return nil
-	}
-
 	matchRuleValue, _ := annotations.ParseStringASAP(mcpServerMatchRuleValue)
-
 	upstreamType, _ := annotations.ParseStringASAP(mcpServerUpstreamType)
-	if upstreamType != "" && !mcpserver.ValidUpstreamTypes[upstreamType] {
-		log.IngressLog.Errorf("mcp-server-upstream-type %s is not supported", upstreamType)
-		return nil
-	}
-
 	enablePathRewrite, _ := annotations.ParseBoolASAP(mcpServerEnablePathRewrite)
 	pathRewritePrefix, _ := annotations.ParseStringASAP(mcpServerPathRewritePrefix)
 
-	globalContext.McpServers = append(globalContext.McpServers, &mcpserver.McpServer{
+	server := &mcpserver.McpServer{
 		Name:              ingressKey,
 		Domains:           matchRuleDomains,
 		PathMatchType:     matchRuleType,
@@ -89,7 +80,17 @@ func (a mcpServer) Parse(annotations Annotations, config *Ingress, globalContext
 		UpstreamType:      upstreamType,
 		EnablePathRewrite: enablePathRewrite,
 		PathRewritePrefix: pathRewritePrefix,
-	})
+	}
+
+	// Hold annotation-derived rules to the same constraints as ConfigMap
+	// MatchList entries, so a malformed value is rejected here instead of
+	// flowing into the mcp-session filter config.
+	if err := mcpserver.ValidateMatchRule(server); err != nil {
+		log.IngressLog.Errorf("ingress %s: invalid mcp-server annotation: %v", ingressKey, err)
+		return nil
+	}
+
+	globalContext.McpServers = append(globalContext.McpServers, server)
 
 	return nil
 }

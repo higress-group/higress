@@ -15,6 +15,12 @@ const Version = "1.0.0"
 
 type RAGConfig struct {
 	config *config.Config
+	// username/password are the HTTP Basic credentials a caller must present to
+	// reach this server. They live here rather than in config.Config because
+	// that struct is dumped with %+v by several debug logs, which would write
+	// the credential to the gateway log.
+	username string
+	password string
 }
 
 func init() {
@@ -101,22 +107,45 @@ func init() {
 
 func (c *RAGConfig) Clone() common.Server {
 	if c.config == nil {
-		return &RAGConfig{}
+		return &RAGConfig{username: c.username, password: c.password}
 	}
 	configBytes, err := json.Marshal(c.config)
 	if err != nil {
 		clonedConfig := *c.config
-		return &RAGConfig{config: &clonedConfig}
+		return &RAGConfig{config: &clonedConfig, username: c.username, password: c.password}
 	}
 	var clonedConfig config.Config
 	if err := json.Unmarshal(configBytes, &clonedConfig); err != nil {
 		clonedConfig = *c.config
 	}
-	return &RAGConfig{config: &clonedConfig}
+	return &RAGConfig{config: &clonedConfig, username: c.username, password: c.password}
+}
+
+// GetBasicAuthCredentials implements common.BasicAuthProvider. The RAG server
+// exposes tools that write to and delete from a shared vector store, so callers
+// must always present HTTP Basic credentials. ParseConfig rejects a config that
+// leaves them empty, which is what keeps this gate from being silently disabled.
+func (c *RAGConfig) GetBasicAuthCredentials() (string, string) {
+	return c.username, c.password
 }
 
 func (c *RAGConfig) ParseConfig(cfg map[string]any) error {
 	api.LogDebugf("RAG start to parse config: %+v", cfg)
+	// Basic auth credentials are mandatory and validated first: the RAG server
+	// writes to a shared vector store, so it must never load unauthenticated.
+	username, _ := cfg["username"].(string)
+	if username == "" {
+		api.LogErrorf("RAG server rejected config: missing username. The RAG MCP server exposes write tools (create-chunks-from-text, delete-chunk) against a shared vector store and requires basic auth credentials (username and password).")
+		return errors.New("missing username: rag requires basic auth credentials (username and password)")
+	}
+	password, _ := cfg["password"].(string)
+	if password == "" {
+		api.LogErrorf("RAG server rejected config: missing password. The RAG MCP server exposes write tools (create-chunks-from-text, delete-chunk) against a shared vector store and requires basic auth credentials (username and password).")
+		return errors.New("missing password: rag requires basic auth credentials (username and password)")
+	}
+	c.username = username
+	c.password = password
+
 	// Parse RAG con
 	api.LogDebugf("RAG parse rag config")
 	if ragConfig, ok := cfg["rag"].(map[string]any); ok {

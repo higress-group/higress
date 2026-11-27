@@ -21,6 +21,13 @@ proxy_wasm_cc_binary(
         "plugin.cc",
         "plugin.h",
     ],
+    features = ["exceptions"],
+    copts = ["-fwasm-exceptions"],
+    linkopts = [
+        "-fwasm-exceptions",
+        "-sASSERTIONS=0",
+        "-sEXCEPTION_STACK_TRACES=0",
+    ],
     deps = [
         "//common:random_util",
         "@com_github_thalhammer_jwt_cpp//:lib",

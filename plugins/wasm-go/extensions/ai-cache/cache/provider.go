@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -13,6 +15,14 @@ const (
 	PROVIDER_TYPE_REDIS  = "redis"
 	DEFAULT_CACHE_PREFIX = "higress-ai-cache:"
 )
+
+// BuildCacheKey is the single key constructor for exact reads, writes, and
+// Redis lookups after a semantic hit. The authenticated consumer is part of
+// the digest input, while the configured prefix is applied exactly once.
+func BuildCacheKey(prefix, consumer, rawQuestionKey string) string {
+	digest := sha256.Sum256([]byte(consumer + "\x00" + rawQuestionKey))
+	return prefix + "v2:" + hex.EncodeToString(digest[:])
+}
 
 type providerInitializer interface {
 	ValidateConfig(ProviderConfig) error

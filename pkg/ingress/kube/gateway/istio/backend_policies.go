@@ -44,6 +44,8 @@ import (
 	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/slices"
 	"istio.io/istio/pkg/util/sets"
+
+	"github.com/alibaba/higress/v2/pkg/ingress/kube/util"
 )
 
 type TypedNamespacedName struct {
@@ -263,6 +265,16 @@ func DestinationRuleCollection(
 				spec.TrafficPolicy.PortLevelSettings = append(spec.TrafficPolicy.PortLevelSettings, portPolicy)
 			}
 
+			// Start - Added by Higress
+			// A rule that cannot be inspected has to be dropped: it is about to be stamped
+			// with target.Namespace while carrying values written by whichever policies won
+			// the merge, so anything left unchecked would be resolved as if target.Namespace
+			// had written it.
+			if err := defuseBackendPolicySecretTemplates(spec, target); err != nil {
+				return nil
+			}
+			// End - Added by Higress
+
 			cfg := &config.Config{
 				Meta: config.Meta{
 					GroupVersionKind: gvk.DestinationRule,
@@ -278,6 +290,24 @@ func DestinationRuleCollection(
 		}, opts.WithName("BackendPolicyMerged")...)
 	return merged
 }
+
+// Start - Added by Higress
+
+// defuseBackendPolicySecretTemplates restricts the secret references in a DestinationRule
+// merged from backend policies to the namespace of the policy target. Every policy merged
+// under one target is a local policy attached to it, so they all come from that namespace,
+// and it is the namespace the generated rule is stamped with.
+//
+// The restriction has to happen here because the merge discards the identities of the
+// policies that supplied each setting, keeping them only in an annotation that template
+// resolution never reads.
+func defuseBackendPolicySecretTemplates(spec *networking.DestinationRule, target TypedNamespacedName) error {
+	_, err := util.DefuseSpecTemplates(spec, target.Namespace,
+		fmt.Sprintf("DestinationRule for %s", target))
+	return err
+}
+
+// End - Added by Higress
 
 func BackendTLSPolicyCollection(
 	tlsPolicies krt.Collection[*gw.BackendTLSPolicy],

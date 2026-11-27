@@ -49,6 +49,7 @@ jobs:
           STANDALONE_BASE_COMMIT: ${{ vars.STANDALONE_RELEASE_BASE_COMMIT }}
         run: |
           set -euo pipefail
+          source tools/hack/oras-retry.sh
           # BEGIN plugin-server-index-contract
           verify_plugin_server_index() {
             jq -e '

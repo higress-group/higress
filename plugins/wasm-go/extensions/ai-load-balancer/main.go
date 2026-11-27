@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 
@@ -12,6 +15,7 @@ import (
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/endpoint_metrics"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/global_least_request"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-load-balancer/prefix_cache"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 )
 
 func main() {}
@@ -97,6 +101,24 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config Config) types.Action {
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config Config, body []byte) types.Action {
+	// Runs before the load balancing policy reads the model to pick an endpoint:
+	// gjson keeps the first occurrence of a duplicated member while the upstream
+	// parser keeps the last, so the endpoint would otherwise be selected for a
+	// different model than the one the upstream serves.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "model"); err != nil {
+		log.Debugf("skip duplicate model member check: %v", err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage("model")
+		log.Warnf("rejecting request: %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(
+			http.StatusBadRequest,
+			"duplicate_model_member",
+			[][2]string{{"content-type", "text/plain"}},
+			[]byte(message),
+			-1,
+		)
+		return types.ActionPause
+	}
 	return config.lb.HandleHttpRequestBody(ctx, body)
 }
 

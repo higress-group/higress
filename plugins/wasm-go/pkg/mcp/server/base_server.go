@@ -15,7 +15,6 @@ package server
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"sort"
 	"sync"
@@ -79,23 +78,13 @@ func (s *BaseMCPServer) SetConfig(config []byte) {
 	}
 }
 
-// GetConfig gets the server configuration
-// It first tries to get the config from the request header, then falls back to the stored config
+// GetConfig gets the stored server configuration, which is the single source
+// of configuration. Request-header injection is never honored; the headers are
+// stripped defensively because older deployed plugin versions may still read them.
 func (s *BaseMCPServer) GetConfig(v any) {
-	var config []byte
-	serverConfigBase64, _ := proxywasm.GetHttpRequestHeader("x-higress-mcpserver-config")
+	proxywasm.RemoveHttpRequestHeader("x-envoy-internal-mcpserver-config")
 	proxywasm.RemoveHttpRequestHeader("x-higress-mcpserver-config")
-	if serverConfigBase64 != "" {
-		serverConfig, err := base64.StdEncoding.DecodeString(serverConfigBase64)
-		if err != nil {
-			log.Errorf("base64 decode mcp server config failed:%s, bytes:%s", err, serverConfigBase64)
-		} else {
-			config = serverConfig
-		}
-		log.Infof("parse server config from request, config:%s", serverConfig)
-	} else {
-		config = bytes.Clone(s.snapshot().config)
-	}
+	config := bytes.Clone(s.snapshot().config)
 	if len(config) == 0 {
 		return
 	}

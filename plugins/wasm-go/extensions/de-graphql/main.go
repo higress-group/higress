@@ -62,6 +62,7 @@ func parseConfig(json gjson.Result, config *config.DeGraphQLConfig, log log.Log)
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.DeGraphQLConfig, log log.Log) types.Action {
 	ctx.DisableReroute()
+	ctx.DontReadRequestBody()
 	log.Debug("onHttpRequestHeaders()")
 	log.Debugf("schema:%s host:%s path:%s", ctx.Scheme(), ctx.Host(), ctx.Path())
 	requestUrl, _ := proxywasm.GetHttpRequestHeader(":path")
@@ -72,7 +73,12 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config config.DeGraphQLConfig
 	}
 	replaceBody, err := config.ParseGqlFromUrl(requestUrl)
 	if err != nil {
+		// Reject the request instead of forwarding a hand built body that may
+		// be malformed or may carry variables the client was not allowed to
+		// set, and let the caller know which variable was rejected.
 		log.Warnf("failed to parse request url %s : %v", requestUrl, err)
+		proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "de-graphql.invalid_variable", nil, []byte(err.Error()), -1)
+		return types.ActionContinue
 	}
 	log.Debugf("replace body:%s", replaceBody)
 

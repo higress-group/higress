@@ -19,6 +19,8 @@ description: APISIX HMAC 认证插件配置参考
 
 - 在一个规则里，鉴权配置和认证配置不可同时存在
 - 对于通过认证鉴权的请求，请求的 header 会被添加一个 `X-Mse-Consumer` 字段，用以标识调用者的名称
+  该字段由网关**覆盖写入**而非追加：客户端请求中自带的 `X-Mse-Consumer` 会先被移除，再写入本次认证得到的 Consumer 名称。
+  因此下游读取到的始终是网关的认证结果，调用方无法通过自带该请求头伪造身份。
 
 ### 认证配置
 
@@ -28,10 +30,12 @@ description: APISIX HMAC 认证插件配置参考
 | `consumers`             | array of object | 必填                       | -                                           | 配置服务的调用者，用于对请求进行认证                         |
 | `allowed_algorithms`    | array of string | 选填                       | ["hmac-sha1", "hmac-sha256", "hmac-sha512"] | 允许的 HMAC 算法列表。有效值为 "hmac-sha1"、"hmac-sha256" 和 "hmac-sha512" 的组合 |
 | `clock_skew`            | number          | 选填                       | 300                                         | 客户端请求的时间戳与 Higress 服务器当前时间之间允许的最大时间差（以秒为单位）。这有助于解决客户端和服务器之间的时间同步差异，并防止重放攻击。时间戳将根据 Date 头中的时间（必须为 GMT 格式）进行计算。如果配置为0，会跳过该校验 |
-| `signed_headers`        | array of string | 选填                       | -                                           | 客户端请求的 HMAC 签名中应包含的 HMAC 签名头列表             |
+| `signed_headers`        | array of string | 选填                       | ["date"]                                    | 客户端请求的 HMAC 签名中应包含的签名头列表。列表中的每个请求头都必须同时出现在 `Authorization` 的 `headers` 字段和实际请求中，否则返回 `401`；`@request-target` 由请求方法和路径生成。未配置时默认要求签署并携带 `Date`；显式配置为 `[]` 可在迁移期间保留不要求签名头的旧行为 |
 | `validate_request_body` | boolean         | 选填                       | false                                       | 如果为 true，则验证请求正文的完整性，以确保在传输过程中没有被篡改。具体来说，插件会创建一个 SHA-256 的 base64 编码 digest，并将其与 `Digest` 头进行比较。如果 `Digest` 头丢失或 digest 不匹配，验证将失败 |
 | `hide_credentials`      | boolean         | 选填                       | false                                       | 如果为 true，则不会将授权请求头传递给上游服务                |
 | `anonymous_consumer`    | string          | 选填                       | -                                           | 匿名消费者名称。如果已配置，则允许匿名用户绕过身份验证       |
+
+**`signed_headers` 迁移说明：** 未配置时默认要求签署并携带 `date`。显式空列表 `[]` 仅是临时兼容路径；新配置应省略该字段并签署 `date`，或显式配置所需的非空签名头列表。`clock_skew: 0` 只跳过时间偏差检查，不会取消默认的 `date` 签名及请求头存在性要求。显式配置的非空列表也执行请求头存在性校验：如果列表中的请求头已在 `Authorization` 的 `headers` 字段中声明，但实际请求未携带该请求头，请求将返回 `401`；客户端必须同时签署并携带列表中的每个请求头。
 
 
 `consumers`中每一项的配置字段说明如下：
@@ -46,7 +50,14 @@ description: APISIX HMAC 认证插件配置参考
 
 | 名称    | 数据类型        | 填写要求                 | 默认值 | 描述                                                         |
 | ------- | --------------- | ------------------------ | ------ | ------------------------------------------------------------ |
-| `allow` | array of string | 选填(**非实例级别配置**) | -      | 只能在路由或域名等细粒度规则上配置，对于符合匹配条件的请求，配置允许访问的 consumer，从而实现细粒度的权限控制 |
+| `allow` | array of string | 选填(**非实例级别配置**) | -      | 只能在路由或域名等细粒度规则上配置，对于符合匹配条件的请求，配置允许访问的 consumer，从而实现细粒度的权限控制。**在规则上启用了本插件却未配置 `allow`（或配置为空列表）时，视为没有任何 consumer 被授权，匹配该规则的请求会被直接拒绝（fail closed）** |
+
+**关于 `allow` 的 fail closed 语义：**
+
+- 细粒度规则（`_rules_`）一旦命中当前请求，就表示插件已在该域名或路由上生效。此时 `allow` 缺失或为空列表**不再表示“插件未生效”**，而是表示没有任何 consumer 被授权，所有匹配该规则的请求都会返回 `401`，错误信息为 `{"message":"client request can't be validated: no consumer is allowed"}`，不会跳过认证直接放行。
+- 配置了 `anonymous_consumer` 时同样如此：匿名身份也不能绕过上述拒绝。
+- `global_auth: true` 时认证全局生效，`allow` 只是附加的细粒度限制，因此规则上未配置 `allow` 表示不做额外限制，请求仍需通过签名校验后才能访问。
+- `global_auth: false` 时，只有命中规则的域名或路由才会认证；未命中任何规则的请求直接放行。
 
 ## 配置示例
 
@@ -85,6 +96,7 @@ allow:
 - 路由名称（如 route-a、route-b）对应网关路由创建时定义的名称，匹配时仅允许consumer1访问
 - 域名匹配（如 `*.example.com`、`test.com`）用于过滤请求域名，匹配时仅允许consumer2访问
 - 未在allow列表中的调用者将被拒绝访问
+- 如果在某个路由或域名上启用了本插件，却没有配置 `allow`（或配置为空列表），则该路由或域名上的**所有**请求都会被拒绝（返回 `401`），即“失败关闭”（fail closed），不会跳过认证直接放行
 
 **生成签名，可以使用以下 Go 代码片段或其他技术栈**：
 

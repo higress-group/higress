@@ -324,6 +324,9 @@ Status PluginRootContext::consumerVerify(
 bool PluginRootContext::checkPlugin(
     const JwtAuthConfigRule& rule,
     const std::optional<std::unordered_set<std::string>>& allow_set) {
+  // Drop any client-supplied value so only this gateway's assertion survives,
+  // including on the enable_headers skip-auth path below.
+  removeRequestHeader("X-Mse-Consumer");
   if (!rule.enable_headers.empty()) {
     bool skip_auth = true;
     for (const auto& enable_header : rule.enable_headers) {

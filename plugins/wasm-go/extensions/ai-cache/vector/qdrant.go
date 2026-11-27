@@ -47,6 +47,7 @@ func (c *qdrantProvider) GetProviderType() string {
 type qdrantPayload struct {
 	Question string `json:"question"`
 	Answer   string `json:"answer"`
+	Consumer string `json:"consumer"`
 }
 
 type qdrantPoint struct {
@@ -66,6 +67,10 @@ func (d *qdrantProvider) UploadAnswerAndEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 	// 最少需要填写的参数为 id 和 vector. payload 可选
 	// 下面是一个例子
 	// {
@@ -89,7 +94,7 @@ func (d *qdrantProvider) UploadAnswerAndEmbedding(
 			{
 				ID:      uuid.New().String(),
 				Vector:  queryEmb,
-				Payload: qdrantPayload{Question: queryString, Answer: queryAnswer},
+				Payload: qdrantPayload{Question: queryString, Answer: queryAnswer, Consumer: consumer},
 			},
 		},
 	})
@@ -115,9 +120,23 @@ func (d *qdrantProvider) UploadAnswerAndEmbedding(
 }
 
 type qdrantQueryRequest struct {
-	Vector      []float64 `json:"vector"`
-	Limit       int       `json:"limit"`
-	WithPayload bool      `json:"with_payload"`
+	Vector      []float64    `json:"vector"`
+	Limit       int          `json:"limit"`
+	WithPayload bool         `json:"with_payload"`
+	Filter      qdrantFilter `json:"filter"`
+}
+
+type qdrantFilter struct {
+	Must []qdrantCondition `json:"must"`
+}
+
+type qdrantCondition struct {
+	Key   string      `json:"key"`
+	Match qdrantMatch `json:"match"`
+}
+
+type qdrantMatch struct {
+	Value string `json:"value"`
 }
 
 func (d *qdrantProvider) QueryEmbedding(
@@ -125,6 +144,10 @@ func (d *qdrantProvider) QueryEmbedding(
 	ctx wrapper.HttpContext,
 	log log.Log,
 	callback func(results []QueryResult, ctx wrapper.HttpContext, log log.Log, err error)) error {
+	consumer := ConsumerFromContext(ctx)
+	if consumer == "" {
+		return ErrConsumerRequired
+	}
 	// 最少需要填写的参数为 vector 和 limit. with_payload 可选，为了直接得到问题答案，所以这里需要
 	// 下面是一个例子
 	// {
@@ -140,6 +163,9 @@ func (d *qdrantProvider) QueryEmbedding(
 		Vector:      emb,
 		Limit:       d.config.topK,
 		WithPayload: true,
+		Filter: qdrantFilter{Must: []qdrantCondition{{
+			Key: TenantField, Match: qdrantMatch{Value: consumer},
+		}}},
 	})
 	if err != nil {
 		log.Errorf("[Qdrant] Failed to marshal query embedding: %v", err)
@@ -198,9 +224,10 @@ func (d *qdrantProvider) parseQueryResponse(responseBody []byte, log log.Log) ([
 	results := make([]QueryResult, 0, resultNum)
 	for i := 0; i < int(resultNum); i++ {
 		result := QueryResult{
-			Text:   gjson.GetBytes(responseBody, fmt.Sprintf("result.%d.payload.question", i)).String(),
-			Score:  gjson.GetBytes(responseBody, fmt.Sprintf("result.%d.score", i)).Float(),
-			Answer: gjson.GetBytes(responseBody, fmt.Sprintf("result.%d.payload.answer", i)).String(),
+			Text:     gjson.GetBytes(responseBody, fmt.Sprintf("result.%d.payload.question", i)).String(),
+			Score:    gjson.GetBytes(responseBody, fmt.Sprintf("result.%d.score", i)).Float(),
+			Answer:   gjson.GetBytes(responseBody, fmt.Sprintf("result.%d.payload.answer", i)).String(),
+			Consumer: gjson.GetBytes(responseBody, fmt.Sprintf("result.%d.payload.consumer", i)).String(),
 		}
 		results = append(results, result)
 	}

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "plugins": {
+    "basic-auth": {
+      "logicalKey": "basic-auth",
+      "servedPath": "basic-auth",
+      "servedVersion": "2.0.0",
+      "repository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/basic-auth",
+      "tag": "2.0.0",
+      "digest": "sha256:f6eca46f214f54737bb0fa9075cce88f8a35465373526a265a9a4f7e13809806",
+      "wasmSha256": "6d16d0dc50aae8ba7e6f5b47f531dd4395ab64b3f424e3ab8ba74b9825f04258"
+    },
+    "bot-detect": {
+      "logicalKey": "bot-detect",
+      "servedPath": "bot-detect",
+      "servedVersion": "2.0.0",
+      "repository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/bot-detect",
+      "tag": "2.0.0",
+      "digest": "sha256:b53f2fb3802419bbec5959eafeda9e3a70aa8e290bc323667ccfcfc8b045ab22",
+      "wasmSha256": "b452cd5a41d7679acffbe255deee34ad20db6ad20ae67fe288777e73f08c7a07"
+    },
+    "custom-response": {
+      "logicalKey": "custom-response",
+      "servedPath": "custom-response",
+      "servedVersion": "2.0.0",
+      "repository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/custom-response",
+      "tag": "2.0.0",
+      "digest": "sha256:25fef1380fc8f22d0bcaeddc53ef1cf980946d150954c27b67a37675e86910eb",
+      "wasmSha256": "6367d27db56f8d4a742c61ce9512faebbe715160658f1a708248b0d7f6229299"
+    },
+    "hmac-auth": {
+      "logicalKey": "hmac-auth",
+      "servedPath": "hmac-auth",
+      "servedVersion": "2.0.0",
+      "repository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/hmac-auth",
+      "tag": "2.0.0",
+      "digest": "sha256:0914d43d0a283f8670b9ee784cac96c09318c15a06b44ff2ed8055e5d421aa7a",
+      "wasmSha256": "137ae603047beab51a614fb683d0581eb0aede22250003d9139fb39a5315adfe"
+    },
+    "jwt-auth": {
+      "logicalKey": "jwt-auth",
+      "servedPath": "jwt-auth",
+      "servedVersion": "2.0.0",
+      "repository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/jwt-auth",
+      "tag": "2.0.0",
+      "digest": "sha256:f080c7b2af4cef01009da5992732e01210a11a4535e2179eccc6f8281832160d",
+      "wasmSha256": "a5f02f0f7036a4a8c167498c506d5e924f9ea1545d9b13e0b559963798e3f1ce"
+    },
+    "key-auth": {
+      "logicalKey": "key-auth",
+      "servedPath": "key-auth",
+      "servedVersion": "2.0.0",
+      "repository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/key-auth",
+      "tag": "2.0.0",
+      "digest": "sha256:c9cddda9b7dc36b8260afd10d12a089556a070dba28b0b17691e18efc0ca545c",
+      "wasmSha256": "19ec6a090a2515bbb8df50bbf3786c056a217352647793f6a185fb381f4b4df9"
+    },
+    "key-rate-limit": {
+      "logicalKey": "key-rate-limit",
+      "servedPath": "key-rate-limit",
+      "servedVersion": "2.0.0",
+      "repository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/key-rate-limit",
+      "tag": "2.0.0",
+      "digest": "sha256:367bd28d56034a987f3265b3ef3d84343820dcb7d70c5d44f97db9585e6b0bf4",
+      "wasmSha256": "094192da73ede867eac11edf3f2bd2d4463d05d1cbfb1976f9b062ece809d998"
+    },
+    "oauth": {
+      "logicalKey": "oauth",
+      "servedPath": "oauth",
+      "servedVersion": "2.0.0",
+      "repository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/oauth",
+      "tag": "2.0.0",
+      "digest": "sha256:05166e398b1c94d95b43eea8e4936e108b38deb2fc9871a3a856c3c23b18b36c",
+      "wasmSha256": "99671c07ee2978dab95c17280321e608b4832eb251b1b63a95b39bf187b4f1ec"
+    },
+    "request-block": {
+      "logicalKey": "request-block",
+      "servedPath": "request-block",
+      "servedVersion": "2.0.0",
+      "repository": "higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/request-block",
+      "tag": "2.0.0",
+      "digest": "sha256:9ac8e3766a40a5415d0a41f282e8d040295804883917439d47235f5efe7c0db7",
+      "wasmSha256": "d6f92128712592f456d3381169b128fa00ae971c7f34b1531dbf1f619c3d12bd"
+    }
+  }
+}

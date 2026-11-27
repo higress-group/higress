@@ -37,18 +37,38 @@ func migrationPreflight(catalogPath, planPath, previousPath, candidateEvidencePa
 	if err := validatePlanProvenance(plan, catalogData); err != nil {
 		return MigrationReportFile{}, err
 	}
-	controlRef, controlDigest, err := migrationControlTag(previousPath)
+	controlCandidates, err := migrationControlTags(previousPath)
 	if err != nil {
 		return MigrationReportFile{}, err
 	}
-	control, err := ociManifestResolver(controlRef)
-	if err != nil {
+	var controlRef, controlDigest string
+	var control ociManifest
+	calibrated := false
+	for _, candidate := range controlCandidates {
+		controlRef, controlDigest = candidate.ref, candidate.digest
+		resolved, err := ociManifestResolver(controlRef)
+		if err == nil {
+			control = resolved
+			calibrated = true
+			break
+		}
 		switch classifyOCIFailure(err, controlRef) {
+		case ociFailureNotFound:
+			// The previous snapshot was prepared but its promote never ran, so
+			// its pipeline-published tag is legitimately absent from the public
+			// registry yet. Fall through to the next calibration candidate; a
+			// re-prepared snapshot carries identical digests for every
+			// unaffected plugin, so a published tag of any provenance still
+			// calibrates the probe.
+			continue
 		case ociFailureUnauthorized:
 			return MigrationReportFile{}, fmt.Errorf("migration preflight control tag %s: registry authorization failed; authorization failure is never absence: %w", controlRef, err)
 		default:
 			return MigrationReportFile{}, fmt.Errorf("migration preflight cannot calibrate its probe against control tag %s: %w", controlRef, err)
 		}
+	}
+	if !calibrated {
+		return MigrationReportFile{}, fmt.Errorf("migration preflight has no calibratable control tag: %s is unpublished and no published candidate remains", controlRef)
 	}
 	if control.Digest != controlDigest {
 		return MigrationReportFile{}, fmt.Errorf("migration preflight probe is not trustworthy: control tag %s resolved to %s, expected the reviewed %s", controlRef, control.Digest, controlDigest)
@@ -73,11 +93,15 @@ func migrationPreflight(catalogPath, planPath, previousPath, candidateEvidencePa
 		Entries:        []MigrationReportEntry{},
 	}
 	for _, entry := range plan.Plugins {
+		artifactSource, err := effectiveArtifactSource(plan, entry)
+		if err != nil {
+			return MigrationReportFile{}, err
+		}
 		ociRef := c.Registry + "/" + entry.Image + ":" + entry.Version
 		planned := ""
 		if probeMode == migrationProbeCandidateDigest {
 			proof, ok := evidence.Plugins[entry.LogicalID]
-			if !ok || !digestPattern.MatchString(proof.Digest) || proof.InputHash != entry.InputHash {
+			if !ok || !digestPattern.MatchString(proof.Digest) || proof.InputHash != entry.InputHash || proof.SourceCommit != artifactSource {
 				return MigrationReportFile{}, fmt.Errorf("migration preflight needs candidate evidence for every planned plugin; %s has no matching candidate digest", entry.LogicalID)
 			}
 			planned = proof.Digest
@@ -100,21 +124,33 @@ func migrationPreflight(catalogPath, planPath, previousPath, candidateEvidencePa
 			continue
 		}
 		report.Entries = append(report.Entries, MigrationReportEntry{
-			LogicalID:         entry.LogicalID,
-			Version:           entry.Version,
-			OCIRef:            ociRef,
-			ExistingDigest:    manifest.Digest,
-			PlannedDigest:     planned,
-			InputHash:         entry.InputHash,
-			ExistingVersion:   manifest.Annotations["org.opencontainers.image.version"],
-			ExistingRevision:  manifest.Annotations["org.opencontainers.image.revision"],
-			ExistingInputHash: manifest.Annotations["io.higress.plugin.input-hash"],
-			SourceComparison:  migrationSourceComparison(manifest, plan.SourceCommit),
-			State:             migrationEntryState(planned),
-			Recommendation:    migrationEntryRecommendation(manifest, entry, plan.SourceCommit, planned),
+			ArtifactSourceCommit: entry.ArtifactSourceCommit,
+			LogicalID:            entry.LogicalID,
+			Version:              entry.Version,
+			OCIRef:               ociRef,
+			ExistingDigest:       manifest.Digest,
+			PlannedDigest:        planned,
+			InputHash:            entry.InputHash,
+			ExistingVersion:      manifest.Annotations["org.opencontainers.image.version"],
+			ExistingRevision:     manifest.Annotations["org.opencontainers.image.revision"],
+			ExistingInputHash:    manifest.Annotations["io.higress.plugin.input-hash"],
+			SourceComparison:     migrationSourceComparison(manifest, artifactSource),
+			State:                migrationEntryState(planned),
+			Recommendation:       migrationEntryRecommendation(manifest, entry, artifactSource, planned),
 		})
 	}
+	for _, entry := range report.Entries {
+		if entry.ArtifactSourceCommit != "" && report.ProbeMode == migrationProbeCandidateDigest {
+			return report, &managedImportConflictError{logicalID: entry.LogicalID}
+		}
+	}
 	return report, nil
+}
+
+type managedImportConflictError struct{ logicalID string }
+
+func (err *managedImportConflictError) Error() string {
+	return "first C++ import has an occupied-different public tag: " + err.logicalID + "; no partial migration or automatic exclusion is allowed"
 }
 
 func migrationEntryState(plannedDigest string) string {
@@ -131,26 +167,41 @@ func migrationEntryRecommendation(manifest ociManifest, planned PlanEntry, sourc
 	return migrationRecommendation(manifest, planned, sourceCommit)
 }
 
-// migrationControlTag selects the known-good public artifact the probe is
-// validated against: a pipeline-published tag of the previous snapshot that this
-// release's batch is not excluding, preferring an entry this pipeline built over
-// one adopted from a pre-existing public artifact. Those tags are immutable
-// published artifacts, so a probe that cannot reproduce the reviewed digest is
-// measuring the registry incorrectly.
+// migrationControlCandidate is one calibratable public artifact of the previous
+// snapshot, in preference order: pipeline-published (candidate) entries first,
+// then tags adopted from pre-existing public artifacts.
+type migrationControlCandidate struct {
+	ref    string
+	digest string
+}
+
+// migrationControlTags selects the known-good public artifacts the probe can be
+// validated against: pipeline-published tags of the previous snapshot first,
+// then tags adopted from pre-existing public artifacts, none of which this
+// release's batch is excluding. Those tags are immutable published artifacts,
+// so a probe that cannot reproduce the reviewed digest is measuring the
+// registry incorrectly. The resolver falls back down the list only on explicit
+// absence: a prepared-but-not-promoted previous snapshot has no pipeline tag
+// published yet.
 //
 // An entry carrying a migration exclusion is never eligible: its public tag
 // still serves the legacy artifact that caused the exclusion, not the digest its
 // snapshot records, so calibrating against it would fail every later prepare.
-func migrationControlTag(previousPath string) (string, string, error) {
+func migrationControlTags(previousPath string) ([]migrationControlCandidate, error) {
 	if previousPath == "" {
-		return "", "", errors.New("migration preflight requires the reviewed previous snapshot to calibrate its registry probe")
+		return nil, errors.New("migration preflight requires the reviewed previous snapshot to calibrate its registry probe")
 	}
 	var previous Snapshot
 	if _, err := readJSON(previousPath, &previous); err != nil {
-		return "", "", err
+		return nil, err
 	}
-	adoptedRef, adoptedDigest := "", ""
+	var built, adopted, historical []migrationControlCandidate
 	for _, entry := range previous.Plugins {
+		for _, artifact := range entry.History {
+			if artifact.OCIRef != "" && digestPattern.MatchString(artifact.Digest) {
+				historical = append(historical, migrationControlCandidate{ref: artifact.OCIRef, digest: artifact.Digest})
+			}
+		}
 		if entry.Migration != nil {
 			continue
 		}
@@ -159,17 +210,16 @@ func migrationControlTag(previousPath string) (string, string, error) {
 		}
 		switch entryProvenance(entry) {
 		case "candidate":
-			return entry.OCIRef, entry.Digest, nil
+			built = append(built, migrationControlCandidate{ref: entry.OCIRef, digest: entry.Digest})
 		case "public":
-			if adoptedRef == "" {
-				adoptedRef, adoptedDigest = entry.OCIRef, entry.Digest
-			}
+			adopted = append(adopted, migrationControlCandidate{ref: entry.OCIRef, digest: entry.Digest})
 		}
 	}
-	if adoptedRef != "" {
-		return adoptedRef, adoptedDigest, nil
+	candidates := append(append(built, adopted...), historical...)
+	if len(candidates) == 0 {
+		return nil, errors.New("previous snapshot carries no published, non-excluded public control tag; migration preflight cannot calibrate its probe")
 	}
-	return "", "", errors.New("previous snapshot carries no published, non-excluded public control tag; migration preflight cannot calibrate its probe")
+	return candidates, nil
 }
 
 // validatePlanProvenance re-checks the immutable plan identity the sweep binds
@@ -380,6 +430,16 @@ func validateMigrationReport(report MigrationReportFile, snapshot Snapshot) erro
 		if !ok {
 			return fmt.Errorf("migration report names %s, which the snapshot does not carry", entry.LogicalID)
 		}
+		if snapshotEntry.CandidateImport != nil {
+			return errors.New("first C++ import cannot use migration exclusions")
+		}
+		artifactSource := report.SourceCommit
+		if entry.ArtifactSourceCommit != "" {
+			if entry.ArtifactSourceCommit != snapshotEntry.SourceCommit {
+				return errors.New("migration artifact source mismatch")
+			}
+			artifactSource = entry.ArtifactSourceCommit
+		}
 		if entry.OCIRef != snapshotEntry.OCIRef || entry.OCIRef != report.Registry+"/"+snapshotEntry.Image+":"+entry.Version {
 			return fmt.Errorf("migration report reference for %s does not match its planned snapshot reference", entry.LogicalID)
 		}
@@ -389,10 +449,10 @@ func validateMigrationReport(report MigrationReportFile, snapshot Snapshot) erro
 		if entry.ExistingDigest == entry.PlannedDigest {
 			return fmt.Errorf("migration report blocks %s although the public tag already serves the planned digest", entry.LogicalID)
 		}
-		if want := migrationRecommendationFromRecord(entry.ExistingVersion, entry.ExistingRevision, entry.ExistingInputHash, entry.InputHash, entry.Version, report.SourceCommit); entry.Recommendation != want {
+		if want := migrationRecommendationFromRecord(entry.ExistingVersion, entry.ExistingRevision, entry.ExistingInputHash, entry.InputHash, entry.Version, artifactSource); entry.Recommendation != want {
 			return fmt.Errorf("migration report recommendation for %s is %q, but its recorded annotations require %q", entry.LogicalID, entry.Recommendation, want)
 		}
-		if want := migrationSourceComparisonFromRecord(entry.ExistingVersion, entry.ExistingRevision, entry.ExistingInputHash, report.SourceCommit); entry.SourceComparison != want {
+		if want := migrationSourceComparisonFromRecord(entry.ExistingVersion, entry.ExistingRevision, entry.ExistingInputHash, artifactSource); entry.SourceComparison != want {
 			return fmt.Errorf("migration report source comparison for %s is %q, but its recorded annotations require %q", entry.LogicalID, entry.SourceComparison, want)
 		}
 	}
@@ -430,6 +490,9 @@ func validateSnapshotMigration(snapshot Snapshot) error {
 			continue
 		}
 		migration := *entry.Migration
+		if entry.CandidateImport != nil {
+			return errors.New("imported C++ current cannot carry a migration exclusion")
+		}
 		if migration.State != migrationStateBlocked {
 			return fmt.Errorf("%s has unsupported migration state %q", entry.LogicalID, migration.State)
 		}
@@ -556,6 +619,17 @@ func commandMigrationPreflight(args []string) error {
 	}
 	report, err := migrationPreflight(*catalog, *plan, *previous, *candidateEvidence)
 	if err != nil {
+		var conflict *managedImportConflictError
+		if errors.As(err, &conflict) {
+			if writeErr := writeCanonical(*output, report); writeErr != nil {
+				return writeErr
+			}
+			if *markdown != "" {
+				if writeErr := writeText(*markdown, renderMigrationMarkdown(report)); writeErr != nil {
+					return writeErr
+				}
+			}
+		}
 		return err
 	}
 	if *markdown != "" {

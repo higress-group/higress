@@ -95,6 +95,47 @@ var weightGrayConfig = func() json.RawMessage {
 	return data
 }()
 
+// rewriteHostWithSkippedHeadersConfig 同时配置 rewrite.host 与 skippedByHeaders，
+// 用于验证 header 跳过判断优先于 host 重写（见 issue #5268）。
+var rewriteHostWithSkippedHeadersConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"grayKey": "userid",
+		"rules": []map[string]interface{}{
+			{
+				"name": "inner-user",
+				"grayKeyValue": []string{
+					"00000001",
+				},
+			},
+		},
+		"skippedByHeaders": map[string]string{
+			"x-skip-gray": "true",
+		},
+		"rewrite": map[string]interface{}{
+			"host": "frontend-gray.example.com",
+			"indexRouting": map[string]interface{}{
+				"/": "/mfe/app1/{version}/index.html",
+			},
+			"fileRouting": map[string]interface{}{
+				"/": "/mfe/app1/{version}",
+			},
+		},
+		"baseDeployment": map[string]interface{}{
+			"version":        "base",
+			"backendVersion": "base-backend",
+		},
+		"grayDeployments": []map[string]interface{}{
+			{
+				"name":           "inner-user",
+				"version":        "gray",
+				"enabled":        true,
+				"backendVersion": "gray-backend",
+			},
+		},
+	})
+	return data
+}()
+
 // 测试配置：带重写的配置
 var rewriteConfig = func() json.RawMessage {
 	data, _ := json.Marshal(map[string]interface{}{
@@ -428,6 +469,74 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			// 非 HTML 请求也应该添加版本标签头
+			requestHeaders := host.GetRequestHeaders()
+			require.True(t, test.HasHeader(requestHeaders, "x-higress-tag"))
+
+			host.CompleteHttp()
+		})
+
+		// 回归 #5268：配置了 rewrite.host 时，匹配 skippedByHeaders 的非 HTML 请求
+		// 仍必须被跳过，不能被 host 重写分支抢先放行。
+		t.Run("skippedByHeaders wins over rewrite.host", func(t *testing.T) {
+			host, status := test.NewTestHost(rewriteHostWithSkippedHeadersConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/data.json"},
+				{":method", "GET"},
+				{"x-skip-gray", "true"},
+				{"cookie", "userid=00000001"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			// 命中 skippedByHeaders：不注入版本标签，也不改写 :authority
+			require.False(t, test.HasHeader(requestHeaders, "x-higress-tag"))
+			require.False(t, test.HasHeaderWithValue(requestHeaders, ":authority", "frontend-gray.example.com"))
+
+			host.CompleteHttp()
+		})
+
+		// 对照：同样配置下不带头部的非 HTML 请求仍应被 host 重写
+		t.Run("rewrite.host still applies without skip header", func(t *testing.T) {
+			host, status := test.NewTestHost(rewriteHostWithSkippedHeadersConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/api/data.json"},
+				{":method", "GET"},
+				{"cookie", "userid=00000001"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+
+			requestHeaders := host.GetRequestHeaders()
+			require.True(t, test.HasHeaderWithValue(requestHeaders, ":authority", "frontend-gray.example.com"))
+
+			host.CompleteHttp()
+		})
+
+		// 对照：HTML 请求不受 skippedByHeaders 影响（README 约定）
+		t.Run("html request ignores skippedByHeaders", func(t *testing.T) {
+			host, status := test.NewTestHost(rewriteHostWithSkippedHeadersConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "example.com"},
+				{":path", "/"},
+				{":method", "GET"},
+				{"x-skip-gray", "true"},
+				{"cookie", "userid=00000001"},
+			})
+
+			require.Equal(t, types.ActionContinue, action)
+
 			requestHeaders := host.GetRequestHeaders()
 			require.True(t, test.HasHeader(requestHeaders, "x-higress-tag"))
 

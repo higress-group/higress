@@ -2,6 +2,8 @@ package util
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"sort"
 	"strings"
 
@@ -21,17 +23,60 @@ func ParseIPNet(key string) (*iptree.IPTree, error) {
 	return tree, nil
 }
 
-// ParseIP 解析IP
+// ParseIP parses a client IP from a value that may be a bare address, an
+// address with a port, or a bracketed IPv6 address with an optional port. It
+// accepts IPv4, IPv6 and IPv4-mapped IPv6 (for example "::ffff:192.0.2.1"),
+// strips brackets, port and IPv6 zone, and returns the canonical address.
+// Invalid or malformed values return an empty string so callers can fail
+// closed instead of silently skipping the rate-limit rule.
 func ParseIP(source string) string {
-	if strings.Contains(source, ".") {
-		// parse ipv4
-		return strings.Split(source, ":")[0]
+	addr, ok := parseIP(source)
+	if !ok {
+		return ""
 	}
-	// parse ipv6
-	if strings.Contains(source, "]") {
-		return strings.Split(source, "]")[0][1:]
+	return addr.String()
+}
+
+func parseIP(source string) (netip.Addr, bool) {
+	s := strings.TrimSpace(source)
+	if s == "" {
+		return netip.Addr{}, false
 	}
-	return source
+
+	// Bare IPv4, IPv6, or IPv4-mapped IPv6. Parsing the whole value first
+	// avoids the old "contains a dot means IPv4, split on colon" heuristic,
+	// which turned "::ffff:192.0.2.1" into an empty string.
+	if addr, err := netip.ParseAddr(s); err == nil {
+		return normalizeAddr(addr), true
+	}
+
+	// Bracketed IPv6 without a port, for example "[2001:db8::1]".
+	if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
+		if addr, err := netip.ParseAddr(s[1 : len(s)-1]); err == nil {
+			return normalizeAddr(addr), true
+		}
+		return netip.Addr{}, false
+	}
+
+	// Address with a port, for example "192.0.2.1:8080" or
+	// "[2001:db8::1]:443". The port text is irrelevant to rate limiting, so
+	// only the host part is validated; this preserves the previous tolerance
+	// for values such as "[::1]:99999".
+	if host, _, err := net.SplitHostPort(s); err == nil {
+		if addr, err := netip.ParseAddr(host); err == nil {
+			return normalizeAddr(addr), true
+		}
+	}
+	return netip.Addr{}, false
+}
+
+// normalizeAddr removes an IPv6 zone and unwraps IPv4-mapped IPv6 addresses so
+// that the same client always maps to the same rate-limit key and IPv4 CIDR.
+func normalizeAddr(addr netip.Addr) netip.Addr {
+	if addr.Zone() != "" {
+		addr = addr.WithZone("")
+	}
+	return addr.Unmap()
 }
 
 // ReconvertHeaders headers: map[string][]string -> [][2]string

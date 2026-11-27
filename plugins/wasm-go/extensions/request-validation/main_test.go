@@ -299,7 +299,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 				{":path", "/api/test"},
 				{":method", "POST"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			// 测试有效的请求体
 			validBody := `{"name": "John Doe", "age": 30}`
@@ -326,7 +326,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 				{":path", "/api/test"},
 				{":method", "POST"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			// 测试无效的请求体
 			invalidBody := `{"age": 30}`
@@ -355,7 +355,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 				{":path", "/api/test"},
 				{":method", "POST"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			// 测试无效的请求体
 			invalidBody := `{"name": "John Doe", "age": -5}`
@@ -387,7 +387,7 @@ func TestOnHttpRequestBody(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 
 			// 测试任意请求体
-			anyBody := `{"invalid": "data"}`
+			anyBody := `not a json {{{`
 			action = host.CallOnHttpRequestBody([]byte(anyBody))
 
 			require.Equal(t, types.ActionContinue, action)

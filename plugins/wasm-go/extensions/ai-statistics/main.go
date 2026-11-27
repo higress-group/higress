@@ -40,11 +40,18 @@ func init() {
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingBody),
 		wrapper.ProcessResponseBody(onHttpResponseBody),
-		wrapper.WithRebuildMaxMemBytes[AIStatisticsConfig](200*1024*1024),
+		wrapper.WithRebuildMaxMemBytes[AIStatisticsConfig](vmRebuildMaxMemBytes),
 	)
 }
 
 const (
+	// vmRebuildMaxMemBytes is the wasm VM memory ceiling that triggers a VM
+	// rebuild. The buffered request body is copied into the VM, so a buffer
+	// limit above this value cannot be served without forcing a rebuild.
+	vmRebuildMaxMemBytes = 200 * 1024 * 1024
+	// maxRequestBodyBytesCeiling is the largest accepted max_request_body_bytes.
+	maxRequestBodyBytesCeiling = vmRebuildMaxMemBytes
+
 	defaultMaxBodyBytes uint32 = 100 * 1024 * 1024
 	// Context consts
 	StatisticsRequestStartTime = "ai-statistics-request-start-time"
@@ -465,6 +472,10 @@ type AIStatisticsConfig struct {
 	enableContentTypes []string
 	// Session ID header name (if configured, takes priority over default headers)
 	sessionIdHeader string
+	// Maximum request body buffer size in bytes. Configurable via
+	// `max_request_body_bytes`; supports matchRules route-level overrides.
+	// Defaults to defaultMaxBodyBytes when unset.
+	maxRequestBodyBytes uint32
 }
 
 func generateMetricName(route, cluster, model, consumer, metricName string) string {
@@ -562,6 +573,24 @@ func parseConfig(configJson gjson.Result, config *AIStatisticsConfig) error {
 	} else {
 		config.valueLengthLimit = 32000
 	}
+
+	// Set max_request_body_bytes (request body buffer limit). Supports
+	// matchRules route-level overrides. Defaults to defaultMaxBodyBytes.
+	// The value is validated as a number in (0, maxRequestBodyBytesCeiling]
+	// before narrowing to uint32, so out-of-range input is rejected instead
+	// of silently wrapping.
+	config.maxRequestBodyBytes = defaultMaxBodyBytes
+	if limitJson := configJson.Get("max_request_body_bytes"); limitJson.Exists() {
+		if limitJson.Type != gjson.Number {
+			return fmt.Errorf("max_request_body_bytes must be a number, got %s", limitJson.Raw)
+		}
+		limit := limitJson.Int()
+		if limit <= 0 || limit > maxRequestBodyBytesCeiling {
+			return fmt.Errorf("max_request_body_bytes must be in the range (0, %d], got %s", maxRequestBodyBytesCeiling, limitJson.Raw)
+		}
+		config.maxRequestBodyBytes = uint32(limit)
+	}
+	log.Infof("request body buffer limit: %d bytes", config.maxRequestBodyBytes)
 
 	// Parse attributes or use defaults
 	if useDefaultAttributes {
@@ -699,8 +728,10 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config AIStatisticsConfig) ty
 	}
 
 	// Always buffer request body to extract model field
-	// This is essential for metrics and logging
-	ctx.SetRequestBodyBufferLimit(defaultMaxBodyBytes)
+	// This is essential for metrics and logging.
+	// The limit is configurable via `max_request_body_bytes` (with matchRules
+	// route-level overrides) so large non-AI uploads are not rejected with 413.
+	ctx.SetRequestBodyBufferLimit(config.maxRequestBodyBytes)
 
 	// Extract session ID from headers
 	sessionId := extractSessionId(config.sessionIdHeader)

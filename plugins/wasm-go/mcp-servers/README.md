@@ -406,6 +406,8 @@ allowTools:
 
 > **Important**: The `name` field in the server configuration must exactly match the server name used in the `mcp.AddMCPServer()` call in your code. This is how the system identifies which MCP server should handle the request.
 
+> **Important**: `allowTools` is enforced by the plugin only on the routes where the `mcp-server` plugin is attached; it does not protect the backend service itself. If the same backend is also reachable through a plain HTTP route without the plugin, an MCP `tools/call` sent to that route is forwarded without any whitelist check. Do not attach backends that offer sensitive tools to non-MCP routes, or apply equivalent controls (authentication, authorization, network policy) on every other route that can reach them.
+
 ## Dependencies
 
 Your MCP server must use a specific version of the wasm-go SDK that supports Go 1.24's WebAssembly compilation features:
