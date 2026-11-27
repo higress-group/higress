@@ -28,6 +28,7 @@ type PluginConfig struct {
 
 	activeProviderConfig *provider.ProviderConfig `yaml:"-"`
 	activeProvider       provider.Provider        `yaml:"-"`
+	disabled             bool                     `yaml:"-"`
 }
 
 func (c *PluginConfig) FromJson(json gjson.Result) {
@@ -97,6 +98,18 @@ func (c *PluginConfig) GetProvider() provider.Provider {
 
 func (c *PluginConfig) GetProviderConfig() *provider.ProviderConfig {
 	return c.activeProviderConfig
+}
+
+// Disable marks an invalid rule as unavailable without affecting other rules.
+func (c *PluginConfig) Disable() {
+	c.providerConfigs = nil
+	c.activeProviderConfig = nil
+	c.activeProvider = nil
+	c.disabled = true
+}
+
+func (c *PluginConfig) IsDisabled() bool {
+	return c.disabled
 }
 
 // SetActiveProviderForTest replaces the runtime Provider after Complete(); intended for unit tests in package main only.
