@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reconcile managed-history inventory and served Wasm against public OCI bytes."""
+"""Reconcile managed inventory and served Wasm against public or candidate OCI bytes."""
 
 import argparse
 import hashlib
@@ -65,6 +65,26 @@ def public_repository(artifact):
     return repository
 
 
+def current_repository(artifact, current_source):
+    if current_source != "candidate" or "candidateRef" not in artifact:
+        return public_repository(artifact)
+    reference = artifact["candidateRef"]
+    if not isinstance(reference, str):
+        raise ValueError("candidateRef must be a string")
+    match = re.fullmatch(
+        r"([A-Za-z0-9][A-Za-z0-9._:/-]*):([A-Za-z0-9_][A-Za-z0-9_.-]{0,127})@(sha256:[0-9a-f]{64})",
+        reference,
+    )
+    if not match:
+        raise ValueError("invalid digest-pinned candidateRef: " + reference)
+    repository, tag, digest = match.groups()
+    if tag == "latest":
+        raise ValueError("candidateRef tag must not be latest: " + reference)
+    if digest != artifact["digest"]:
+        raise ValueError("candidateRef digest must equal snapshot digest: " + reference)
+    return repository
+
+
 def add_rows(summary, base_url, role, logical_id, paths, artifact, version_key="version"):
     version = component(artifact.get(version_key), "served version")
     digest = sha256(artifact.get("digest"), "manifest digest", "sha256:")
@@ -90,7 +110,7 @@ def add_rows(summary, base_url, role, logical_id, paths, artifact, version_key="
     return rows
 
 
-def prepare(snapshot, lock, base_url, summary):
+def prepare(snapshot, lock, base_url, summary, current_source="public", all_managed=False):
     plugins = snapshot.get("plugins")
     if not isinstance(plugins, list) or not isinstance(lock.get("plugins"), dict):
         raise ValueError("snapshot plugins must be a list and lock plugins an object")
@@ -106,7 +126,7 @@ def prepare(snapshot, lock, base_url, summary):
         history = entry.get("history", [])
         if not isinstance(history, list):
             raise ValueError("managed history must be a list")
-        if not history:
+        if not history and not all_managed:
             continue
         logical_id = component(entry.get("logicalId"), "logical id")
         aliases = mapping.get("aliases", [])
@@ -123,7 +143,10 @@ def prepare(snapshot, lock, base_url, summary):
                 raise ValueError("invalid managed artifact")
             role = "managed-history" if index else "managed-current"
             rows = add_rows(summary, base_url, role, logical_id, paths, artifact)
-            artifacts.append((public_repository(artifact), rows))
+            repository = public_repository(artifact) if index else current_repository(artifact, current_source)
+            for row in rows:
+                row["sourceRef"] = repository + "@" + row["digest"]
+            artifacts.append((repository, rows))
         managed.append((paths, artifacts))
     for logical_id, entry in lock["plugins"].items():
         component(logical_id, "lock logical id")
@@ -225,7 +248,10 @@ def verify(arguments, summary):
     snapshot = read_json(arguments.snapshot)
     inventory = read_json(arguments.inventory)
     lock = read_json(arguments.lock)
-    managed = prepare(snapshot, lock, arguments.base_url.rstrip("/"), summary)
+    managed = prepare(
+        snapshot, lock, arguments.base_url.rstrip("/"), summary,
+        current_source=arguments.current_source, all_managed=arguments.all_managed,
+    )
     for paths, artifacts in managed:
         records = []
         for repository, rows in artifacts:
@@ -242,7 +268,9 @@ def verify(arguments, summary):
             records.append({
                 "version": rows[0]["version"], "digest": rows[0]["digest"], "wasmSha256": computed,
             })
-        expected = dict(records[0], history=records[1:])
+        expected = dict(records[0])
+        if len(records) > 1:
+            expected["history"] = records[1:]
         for path in paths:
             if inventory.get(path) != expected:
                 raise ValueError("snapshot inventory mismatch for managed path: " + path)
@@ -256,6 +284,8 @@ def main():
     for name in ("snapshot", "inventory", "lock", "base-url", "summary"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--oras", default=os.environ.get("ORAS") or "oras")
+    parser.add_argument("--current-source", choices=("public", "candidate"), default="public")
+    parser.add_argument("--all-managed", action="store_true")
     arguments = parser.parse_args()
     if Path(arguments.summary).resolve() in {Path(path).resolve() for path in (
         arguments.snapshot, arguments.inventory, arguments.lock,

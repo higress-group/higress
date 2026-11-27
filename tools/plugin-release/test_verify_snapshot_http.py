@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract tests for the public-OCI, single-pass HTTP acceptance CLI."""
+"""Contract tests for the OCI-backed, single-pass HTTP acceptance CLI."""
 
 import base64
 import copy
@@ -152,7 +152,7 @@ class VerifySnapshotHTTPTest(unittest.TestCase):
             self.responses[route] = self.payloads[artifact["digest"]]
             self.expected[route] = dict(inventory_record(artifact), role=role, logicalId=logical_id, path=path)
 
-    def run_verifier(self, success, use_environment=False):
+    def run_verifier(self, success, use_environment=False, extra_arguments=()):
         self.requests.clear()
         inputs = {"snapshot": self.snapshot, "inventory": self.inventory, "lock": self.lock}
         originals = {}
@@ -173,6 +173,7 @@ class VerifySnapshotHTTPTest(unittest.TestCase):
         if not use_environment:
             environment["ORAS"] = "must-not-be-used"
             arguments.extend(["--oras", str(self.oras)])
+        arguments.extend(extra_arguments)
         result = subprocess.run(arguments, capture_output=True, text=True, env=environment, timeout=20)
         self.assertEqual(result.returncode, 0 if success else 1, result.stdout + result.stderr)
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -205,6 +206,96 @@ class VerifySnapshotHTTPTest(unittest.TestCase):
             expected_calls.extend([["manifest", "fetch", reference], ["blob", "fetch", repository(artifact) + "@" + layer]])
         self.assertEqual([call[:3] for call in calls], expected_calls)
         self.assertTrue(all(call[3] == "-o" and len(call) == 5 for call in calls if call[0] == "blob"))
+
+    def test_candidate_current_source_uses_candidate_ref(self):
+        entry = self.snapshot["plugins"][0]
+        candidate_repository = "registry.example.test:5000/candidates/traffic-filter"
+        entry["candidateRef"] = candidate_repository + ":q-preparation@" + self.current["digest"]
+        public_reference = repository(self.current) + "@" + self.current["digest"]
+        candidate_reference = candidate_repository + "@" + self.current["digest"]
+        manifest = self.oci["manifests"].pop(public_reference)
+        self.oci["manifests"][candidate_reference] = manifest
+        layer = manifest["layers"][0]["digest"]
+        public_blob = repository(self.current) + "@" + layer
+        candidate_blob = candidate_repository + "@" + layer
+        self.oci["blobs"][candidate_blob] = self.oci["blobs"].pop(public_blob)
+
+        _, summary, calls = self.run_verifier(True, extra_arguments=("--current-source", "candidate"))
+        history_reference = repository(self.history) + "@" + self.history["digest"]
+        history_layer = self.oci["manifests"][history_reference]["layers"][0]["digest"]
+        expected_calls = [
+            ["manifest", "fetch", candidate_reference],
+            ["blob", "fetch", candidate_blob],
+            ["manifest", "fetch", history_reference],
+            ["blob", "fetch", repository(self.history) + "@" + history_layer],
+        ]
+        self.assertEqual([call[:3] for call in calls], expected_calls)
+        self.assertCountEqual(self.requests, self.expected)
+        for row in summary["results"]:
+            if row["role"].startswith("managed-"):
+                expected_reference = candidate_reference if row["role"] == "managed-current" else history_reference
+                self.assertEqual(row["sourceRef"], expected_reference)
+
+        self.oci["manifests"][public_reference] = manifest
+        self.oci["blobs"][public_blob] = self.oci["blobs"][candidate_blob]
+        expected_calls[:2] = [["manifest", "fetch", public_reference], ["blob", "fetch", public_blob]]
+        for options in ((), ("--current-source", "candidate")):
+            with self.subTest(options=options):
+                if options:
+                    del entry["candidateRef"]
+                _, summary, calls = self.run_verifier(True, extra_arguments=options)
+                self.assertEqual([call[:3] for call in calls], expected_calls)
+                current_rows = [row for row in summary["results"] if row["role"] == "managed-current"]
+                self.assertTrue(all(row["sourceRef"] == public_reference for row in current_rows))
+
+    def test_candidate_ref_digest_mismatch_fails_before_http(self):
+        self.snapshot["plugins"][0]["candidateRef"] = (
+            "registry.example.test:5000/candidates/traffic-filter:q-preparation@sha256:" + "0" * 64
+        )
+        result, summary, calls = self.run_verifier(False, extra_arguments=("--current-source", "candidate"))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(summary["status"], "failed")
+        self.assertIn("candidateRef digest must equal snapshot digest", summary["error"])
+        self.assertEqual(calls, [])
+        self.assertEqual(self.requests, [])
+
+    def test_all_managed_includes_current_only_and_aliases(self):
+        current_only = self.artifact("current-only-filter", "2.3.0")
+        paths = ["current-only-bytes", "current-only-inventory", "current-only-alias"]
+        self.snapshot["plugins"].append(dict(current_only, logicalId="current-only-filter", history=[], consumers={
+            "pluginServer": {"httpPath": paths[0], "inventoryKey": paths[1], "aliases": [paths[2]]},
+        }))
+        for path in paths:
+            self.inventory[path] = inventory_record(current_only)
+        self.serve("managed-current", "current-only-filter", paths, current_only)
+
+        _, summary, calls = self.run_verifier(True, extra_arguments=("--all-managed",))
+        self.assertEqual(summary["counts"], {"managed": 2, "history": 1, "unmanaged": 1, "urls": 11})
+        self.assertCountEqual(self.requests, self.expected)
+        rows = [row for row in summary["results"] if row["logicalId"] == "current-only-filter"]
+        self.assertCountEqual([row["path"] for row in rows], paths)
+        for row in rows:
+            self.assertEqual(row["role"], "managed-current")
+            self.assertEqual(row["expectedSha256"], current_only["wasmSha256"])
+            self.assertEqual(row["actualSha256"], current_only["wasmSha256"])
+            self.assertEqual(row["status"], "ok")
+        self.assertIn(["manifest", "fetch", repository(current_only) + "@" + current_only["digest"]], calls)
+
+        _, summary, calls = self.run_verifier(True)
+        self.assertEqual(summary["counts"], {"managed": 1, "history": 1, "unmanaged": 1, "urls": 8})
+        self.assertFalse(any(row["logicalId"] == "current-only-filter" for row in summary["results"]))
+        self.assertCountEqual(self.requests, [
+            route for route, expected in self.expected.items() if expected["logicalId"] != "current-only-filter"
+        ])
+        self.assertFalse(any(call[2].startswith(repository(current_only) + "@") for call in calls))
+
+        for path in paths:
+            with self.subTest(inventory_path=path):
+                self.inventory[path]["history"] = []
+                _, summary, _ = self.run_verifier(False, extra_arguments=("--all-managed",))
+                self.assertIn("snapshot inventory mismatch for managed path: " + path, summary["error"])
+                self.assertEqual(self.requests, [])
+                del self.inventory[path]["history"]
 
     def test_malformed_plugin_server_mapping_fails_before_reads(self):
         self.snapshot["plugins"][0]["consumers"]["pluginServer"] = "invalid"
