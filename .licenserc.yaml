@@ -35,6 +35,8 @@ header:
     - 'test/inference-extension/reports/**'
     - 'hgctl/cmd/hgctl/config/testdata/config'
     - 'hgctl/pkg/manifests'
+    # Recorded regression evidence; preserve file contents and checksums.
+    - 'pkg/ingress/config/testdata/snapshot-scan/**'
     - 'pkg/ingress/kube/gateway/istio/testdata'
     - 'release-notes/**'
     - '.cursor/**'
