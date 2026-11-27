@@ -199,6 +199,30 @@ func TestSignedHeaders_AllRequiredHeadersSigned_Succeeds(t *testing.T) {
 	})
 }
 
+func TestSignedHeaders_UnrequiredMissingHeaderRemainsIgnored(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(createConfig(
+			[]map[string]interface{}{{"name": "c1", "access_key": "ak1", "secret_key": "sk1"}},
+			map[string]interface{}{
+				"global_auth":    true,
+				"signed_headers": []string{"date"},
+			},
+		))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		d := gmt()
+		ah := generateAuthorizationHeader("ak1", "sk1", "hmac-sha256", "GET", "/p",
+			[]string{"date", "x-optional"}, map[string]string{"date": d})
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "e.com"}, {":path", "/p"}, {":method", "GET"},
+			{"authorization", ah}, {"date", d},
+		})
+		require.Equal(t, types.ActionContinue, action)
+		require.Nil(t, host.GetLocalResponse())
+	})
+}
+
 // === clock_skew ==========================================================
 
 func TestClockSkew_DateMissing_Rejects(t *testing.T) {

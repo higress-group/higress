@@ -323,6 +323,9 @@ func (m *IngressConfig) List(typ config.GroupVersionKind, namespace string) []co
 		configs = append(configs, configsFromGateway...)
 	}
 
+	if typ == gvk.VirtualService {
+		stripMcpServerConfigHeaderFromConfigs(configs)
+	}
 	return configs
 }
 
@@ -552,6 +555,52 @@ func (m *IngressConfig) convertGateways(configs []common.WrapperConfig) []config
 	return out
 }
 
+const mcpServerConfigHeader = "x-higress-mcpserver-config"
+
+func stripMcpServerConfigHeader(route *networking.HTTPRoute) {
+	if route == nil {
+		return
+	}
+	if route.Headers == nil {
+		route.Headers = &networking.Headers{}
+	}
+	if route.Headers.Request == nil {
+		route.Headers.Request = &networking.Headers_HeaderOperations{}
+	}
+	requestHeaders := route.Headers.Request
+	remove := make([]string, 0, len(requestHeaders.Remove)+1)
+	for _, name := range requestHeaders.Remove {
+		if !strings.EqualFold(name, mcpServerConfigHeader) {
+			remove = append(remove, name)
+		}
+	}
+	requestHeaders.Remove = append(remove, mcpServerConfigHeader)
+
+	for name := range requestHeaders.Add {
+		if strings.EqualFold(name, mcpServerConfigHeader) {
+			delete(requestHeaders.Add, name)
+		}
+	}
+
+	for name := range requestHeaders.Set {
+		if strings.EqualFold(name, mcpServerConfigHeader) {
+			delete(requestHeaders.Set, name)
+		}
+	}
+}
+
+func stripMcpServerConfigHeaderFromConfigs(configs []config.Config) {
+	for i := range configs {
+		virtualService, ok := configs[i].Spec.(*networking.VirtualService)
+		if !ok {
+			continue
+		}
+		for _, route := range virtualService.Http {
+			stripMcpServerConfigHeader(route)
+		}
+	}
+}
+
 func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []config.Config {
 	convertOptions := common.ConvertOptions{
 		IngressRouteCache: common.NewIngressRouteCache(),
@@ -662,6 +711,7 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 		common.SortHTTPRoutes(routes)
 
 		for _, route := range routes {
+			stripMcpServerConfigHeader(route.HTTPRoute)
 			vs.Http = append(vs.Http, route.HTTPRoute)
 		}
 
@@ -686,6 +736,11 @@ func (m *IngressConfig) convertVirtualService(configs []common.WrapperConfig) []
 	if m.RegistryReconciler != nil {
 		allConfigsFromMcp := m.RegistryReconciler.GetAllConfigs(gvk.VirtualService)
 		for _, cfg := range allConfigsFromMcp {
+			if virtualService, ok := cfg.Spec.(*networking.VirtualService); ok {
+				for _, route := range virtualService.Http {
+					stripMcpServerConfigHeader(route)
+				}
+			}
 			out = append(out, *cfg)
 		}
 	}

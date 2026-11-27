@@ -7,6 +7,7 @@ import (
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/log"
 	. "github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 )
@@ -14,7 +15,7 @@ import (
 func main() {}
 
 func init() {
-	SetCtx(
+	SetCtx[MyConfig](
 		"gc-test",
 		ParseConfigBy(parseConfig),
 		ProcessRequestHeadersBy(onHttpRequestHeaders),
@@ -25,12 +26,12 @@ type MyConfig struct {
 	bytes uint64
 }
 
-func parseConfig(json gjson.Result, config *MyConfig, log Log) error {
+func parseConfig(json gjson.Result, config *MyConfig, log log.Log) error {
 	config.bytes = json.Get("bytes").Uint()
 	return nil
 }
 
-func onHttpRequestHeaders(ctx HttpContext, config MyConfig, log Log) types.Action {
+func onHttpRequestHeaders(ctx HttpContext, config MyConfig, log log.Log) types.Action {
 	b := make([]byte, int(config.bytes))
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)

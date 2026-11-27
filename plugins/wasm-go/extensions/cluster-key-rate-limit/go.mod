@@ -5,8 +5,8 @@ go 1.24.1
 toolchain go1.24.4
 
 require (
-	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250822030947-8345453fddd0
-	github.com/higress-group/wasm-go v1.0.6-0.20251103065747-41d65dbb2f9e
+	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20251103120604-77e9cce339d2
+	github.com/higress-group/wasm-go v1.2.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/resp v0.1.1

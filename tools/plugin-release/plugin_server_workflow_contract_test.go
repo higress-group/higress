@@ -42,6 +42,39 @@ func TestPluginServerWorkflowFailsClosedBeforeCandidateMutation(t *testing.T) {
 	}
 }
 
+func TestPluginServerWorkflowUsesGenericHistoryAcceptance(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/build-plugin-server-from-snapshot.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(data)
+	server := strings.Index(workflow, `container=$(docker run -d --rm -p 127.0.0.1:18080:8080`)
+	verify := strings.Index(workflow, "python3 tools/plugin-release/verify_snapshot_http.py")
+	publish := strings.Index(workflow, `docker buildx imagetools create --tag "$image"`)
+	if server < 0 || verify < 0 || publish < 0 || !(server < verify && verify < publish) {
+		t.Fatal("generic HTTP acceptance must run after the server starts and before public tag creation")
+	}
+	if strings.Contains(workflow, `.plugins["basic-auth"]`) {
+		t.Fatal("plugin-server HTTP acceptance must not single out basic-auth")
+	}
+	for _, required := range []string{
+		`--snapshot "$SNAPSHOT_PATH"`,
+		`--inventory /tmp/snapshot-inventory.json`,
+		`--lock plugin-server/unmanaged-plugins.lock.json`,
+		`--base-url http://127.0.0.1:18080`,
+		`--summary /tmp/plugin-http-summary.json`,
+		`compatibility_versions="1.0.0 2.0.0"`,
+		`cp /tmp/managed-oci.wasm "plugin-server/plugins/$managed_path/$version/plugin.wasm"`,
+		`fetch_wasm "$managed_path" "$managed_version" /tmp/managed.wasm`,
+		`cmp "/tmp/managed-$version.wasm" /tmp/managed-oci.wasm`,
+		`fetch_wasm jsonrpc-converter "$json_version" /tmp/jsonrpc.wasm`,
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("generic history acceptance must preserve %q", required)
+		}
+	}
+}
+
 func TestPluginServerIndexContractAcceptsOnlyTwoRunnablePlatformsAndPairedAttestations(t *testing.T) {
 	workflows := []string{
 		"build-plugin-server-from-snapshot.yaml",
@@ -107,6 +140,32 @@ func TestPluginServerWorkflowReusesImmutableCandidateBeforeBuild(t *testing.T) {
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("immutable candidate retry contract lacks %q", required)
+		}
+	}
+}
+
+func TestPluginServerBuildPublishesLegacyMcpServerCompatibilityPaths(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/build-plugin-server-from-snapshot.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(data)
+	seed := strings.Index(workflow, `compatibility_versions="1.0.0 2.0.0"`)
+	build := strings.Index(workflow, `docker buildx build --platform linux/amd64,linux/arm64`)
+	verify := strings.Index(workflow, `cmp "/tmp/managed-$version.wasm" /tmp/managed-oci.wasm`)
+	if seed < 0 || build < 0 || verify < 0 || !(seed < build && build < verify) {
+		t.Fatal("plugin-server build must seed legacy mcp-server paths before the image build and verify them after")
+	}
+	for _, required := range []string{
+		`test "$managed_path" = "mcp-server"`,
+		`oras blob fetch "$managed_ref@$managed_layer" -o /tmp/managed-oci.wasm`,
+		`mkdir -p "plugin-server/plugins/$managed_path/$version"`,
+		`cp /tmp/managed-oci.wasm "plugin-server/plugins/$managed_path/$version/plugin.wasm"`,
+		`--build-arg USE_LOCAL_PLUGINS=true`,
+		`fetch_wasm "$managed_path" "$version" "/tmp/managed-$version.wasm"`,
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("plugin-server legacy mcp-server compatibility contract lacks %q", required)
 		}
 	}
 }
@@ -1335,6 +1394,14 @@ func TestPromotionDryRunResolvesCandidateProvenanceWithoutMutation(t *testing.T)
 		t.Fatal("promotion must verify exact provenance before reaching its dry-run boundary")
 	}
 	verify := workflow[verifyStart:dryRunBoundary]
+	if !strings.Contains(verify, "source tools/plugin-release/promotion-verify.sh") || !strings.Contains(verify, "build_promotion_verify_args") {
+		t.Fatal("promotion dry run does not invoke the shared verification argument builder")
+	}
+	builder, err := os.ReadFile("promotion-verify.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify += string(builder)
 	for _, required := range []string{
 		`--plan "../../$plan"`, `--committed-source "$SOURCE_COMMIT"`,
 		`--resolve --oci-source candidate`, `args+=(--previous "../../$previous_path")`,

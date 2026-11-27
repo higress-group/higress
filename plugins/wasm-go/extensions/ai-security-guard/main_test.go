@@ -672,12 +672,12 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{":method", "POST"},
 			})
 
-			// 应该返回ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 需要读取并检查请求体，因此暂停后续请求头处理
+			require.Equal(t, types.HeaderStopIteration, action)
 		})
 
-		// 测试禁用请求检查的情况
-		t.Run("request checking disabled", func(t *testing.T) {
+		// 测试禁用响应检查的情况
+		t.Run("response checking disabled", func(t *testing.T) {
 			host, status := test.NewTestHost(requestOnlyConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
@@ -689,8 +689,8 @@ func TestOnHttpRequestHeaders(t *testing.T) {
 				{":method", "POST"},
 			})
 
-			// 应该返回ActionContinue
-			require.Equal(t, types.ActionContinue, action)
+			// 请求检查仍然启用，需要读取并检查请求体
+			require.Equal(t, types.HeaderStopIteration, action)
 		})
 	})
 }

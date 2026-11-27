@@ -569,7 +569,7 @@ TEST_F(HmacAuthTest, TimestampCheck) {
       {"username", "xiaoming&password=123456789"},
       {"x-ca-key", "203753385"},
       {"x-ca-signature-method", "HmacSHA256"},
-      {"x-ca-signature", "wcQC8014+HW0TumVfXy8+UXI4JDvkhjPlqp6rTE7cZo="},
+      {"x-ca-signature", "aKS8DtmSjdNns8+uk3eVFZNpY4MxhK2z4Zb7XH8NoLE="},
       {"x-ca-signature-headers",
        "x-ca-timestamp,x-ca-key,x-ca-nonce,x-ca-signature-method"},
   };
@@ -582,6 +582,9 @@ TEST_F(HmacAuthTest, TimestampCheck) {
   EXPECT_EQ(context_->onRequestBody(0, true),
             FilterDataStatus::StopIterationNoBuffer);
   current_time_ = (uint64_t)1525869029 * 1000 * 1000 * 1000;
+  EXPECT_EQ(context_->onRequestBody(0, true),
+            FilterDataStatus::StopIterationNoBuffer);
+  current_time_ = (uint64_t)1525869030 * 1000 * 1000 * 1000;
   EXPECT_EQ(context_->onRequestBody(0, true), FilterDataStatus::Continue);
 }
 
@@ -610,7 +613,7 @@ TEST_F(HmacAuthTest, TimestampSecCheck) {
       {"username", "xiaoming&password=123456789"},
       {"x-ca-key", "203753385"},
       {"x-ca-signature-method", "HmacSHA256"},
-      {"x-ca-signature", "7yl5Rba+3pnp9weLP3af1Hejz4K3RFp+BHL7N2w98/U="},
+      {"x-ca-signature", "oFlnmkAPv45BVLLajfk7avGBwDFjOu0VElMrNyCFlGs="},
       {"x-ca-signature-headers",
        "x-ca-timestamp,x-ca-key,x-ca-nonce,x-ca-signature-method"},
   };
@@ -658,7 +661,7 @@ TEST_F(HmacAuthTest, EmptyAllowSet) {
   EXPECT_CALL(*mock_context_, sendLocalResponse(403, testing::_, testing::_,
                                                 testing::_, testing::_));
   EXPECT_EQ(context_->onRequestHeaders(0, false),
-            FilterHeadersStatus::StopAllIterationAndBuffer);
+            FilterHeadersStatus::StopIteration);
 }
 
 }  // namespace hmac_auth

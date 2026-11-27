@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "gatewayVersion": "2.2.7",
+  "sourceCommit": "c4c537f37175befc375e65ba059e8df477dc52a4",
+  "baseCommit": "392b64e8cce43e63d3207f00ba5c8fe2ff8921d9",
+  "catalogSha256": "ca8fadef2ebc3001aa664c7f11ce7f1f6dc42c2f5f7baf47b6d6a878747d9151",
+  "planId": "sha256:683323360a5e0e18bf72fbd97af4371b053c0cdfe78869cc0f354bb8be8c912b",
+  "plugins": [
+    {
+      "logicalId": "basic-auth",
+      "implementation": "cpp",
+      "sourceDir": "plugins/wasm-cpp/extensions/basic_auth",
+      "image": "plugins/basic-auth",
+      "version": "2.0.1",
+      "inputHash": "sha256:ea7848d6002e7d618109162ebcfb3134775e59ecda2c48127b4649bc905c3d90",
+      "changedPaths": [
+        "plugins/wasm-cpp/Dockerfile",
+        "plugins/wasm-cpp/WORKSPACE",
+        "plugins/wasm-cpp/bazel/re2.patch",
+        "plugins/wasm-cpp/bazel/wasm.bzl",
+        "plugins/wasm-cpp/common/BUILD",
+        "plugins/wasm-cpp/common/random.c",
+        "plugins/wasm-cpp/extensions/basic_auth/VERSION",
+        "plugins/wasm-cpp/extensions/basic_auth/plugin_test.cc"
+      ]
+    },
+    {
+      "logicalId": "bot-detect",
+      "implementation": "cpp",
+      "sourceDir": "plugins/wasm-cpp/extensions/bot_detect",
+      "image": "plugins/bot-detect",
+      "version": "2.0.1",
+      "inputHash": "sha256:46c6415d0bb6b90329265408430bd6ecb58b51168f06b61c5c4acbb72eb5f616",
+      "changedPaths": [
+        "plugins/wasm-cpp/Dockerfile",
+        "plugins/wasm-cpp/WORKSPACE",
+        "plugins/wasm-cpp/bazel/re2.patch",
+        "plugins/wasm-cpp/bazel/wasm.bzl",
+        "plugins/wasm-cpp/common/BUILD",
+        "plugins/wasm-cpp/common/random.c",
+        "plugins/wasm-cpp/extensions/bot_detect/VERSION"
+      ]
+    },
+    {
+      "logicalId": "custom-response",
+      "implementation": "cpp",
+      "sourceDir": "plugins/wasm-cpp/extensions/custom_response",
+      "image": "plugins/custom-response",
+      "version": "2.0.1",
+      "inputHash": "sha256:46f91a66c73d5a84ee71c61ff7abab2be42c83a9d350abc6218d1151062b50ca",
+      "changedPaths": [
+        "plugins/wasm-cpp/Dockerfile",
+        "plugins/wasm-cpp/WORKSPACE",
+        "plugins/wasm-cpp/bazel/re2.patch",
+        "plugins/wasm-cpp/bazel/wasm.bzl",
+        "plugins/wasm-cpp/common/BUILD",
+        "plugins/wasm-cpp/common/random.c",
+        "plugins/wasm-cpp/extensions/custom_response/VERSION"
+      ]
+    },
+    {
+      "logicalId": "hmac-auth",
+      "implementation": "cpp",
+      "sourceDir": "plugins/wasm-cpp/extensions/hmac_auth",
+      "image": "plugins/hmac-auth",
+      "version": "2.0.1",
+      "inputHash": "sha256:83d8c1e80a9779cf3a40ac239260e071456185bfdba2004f3c36a4ef3540cf7a",
+      "changedPaths": [
+        "plugins/wasm-cpp/Dockerfile",
+        "plugins/wasm-cpp/WORKSPACE",
+        "plugins/wasm-cpp/bazel/re2.patch",
+        "plugins/wasm-cpp/bazel/wasm.bzl",
+        "plugins/wasm-cpp/common/BUILD",
+        "plugins/wasm-cpp/common/random.c",
+        "plugins/wasm-cpp/extensions/hmac_auth/VERSION",
+        "plugins/wasm-cpp/extensions/hmac_auth/plugin_test.cc"
+      ]
+    },
+    {
+      "logicalId": "jwt-auth",
+      "implementation": "cpp",
+      "sourceDir": "plugins/wasm-cpp/extensions/jwt_auth",
+      "image": "plugins/jwt-auth",
+      "version": "2.0.1",
+      "inputHash": "sha256:70962a86f71b00b939672397ce9e1ccce543a470df5018decf2a23e5cb864cc4",
+      "changedPaths": [
+        "plugins/wasm-cpp/Dockerfile",
+        "plugins/wasm-cpp/WORKSPACE",
+        "plugins/wasm-cpp/bazel/re2.patch",
+        "plugins/wasm-cpp/bazel/wasm.bzl",
+        "plugins/wasm-cpp/common/BUILD",
+        "plugins/wasm-cpp/common/random.c",
+        "plugins/wasm-cpp/extensions/jwt_auth/BUILD",
+        "plugins/wasm-cpp/extensions/jwt_auth/VERSION",
+        "plugins/wasm-cpp/extensions/jwt_auth/plugin_test.cc"
+      ]
+    },
+    {
+      "logicalId": "key-auth",
+      "implementation": "cpp",
+      "sourceDir": "plugins/wasm-cpp/extensions/key_auth",
+      "image": "plugins/key-auth",
+      "version": "2.0.1",
+      "inputHash": "sha256:35bcbc0c2b86077f26f59229189202e60108f2085004e2d0e318ef72a8574f12",
+      "changedPaths": [
+        "plugins/wasm-cpp/Dockerfile",
+        "plugins/wasm-cpp/WORKSPACE",
+        "plugins/wasm-cpp/bazel/re2.patch",
+        "plugins/wasm-cpp/bazel/wasm.bzl",
+        "plugins/wasm-cpp/common/BUILD",
+        "plugins/wasm-cpp/common/random.c",
+        "plugins/wasm-cpp/extensions/key_auth/VERSION"
+      ]
+    },
+    {
+      "logicalId": "key-rate-limit",
+      "implementation": "cpp",
+      "sourceDir": "plugins/wasm-cpp/extensions/key_rate_limit",
+      "image": "plugins/key-rate-limit",
+      "version": "2.0.1",
+      "inputHash": "sha256:6e2d6883ef47bcfacf03bfb93e2e265075bdf3a092758370a5fb63fe698c7cf4",
+      "changedPaths": [
+        "plugins/wasm-cpp/Dockerfile",
+        "plugins/wasm-cpp/WORKSPACE",
+        "plugins/wasm-cpp/bazel/re2.patch",
+        "plugins/wasm-cpp/bazel/wasm.bzl",
+        "plugins/wasm-cpp/common/BUILD",
+        "plugins/wasm-cpp/common/random.c",
+        "plugins/wasm-cpp/extensions/key_rate_limit/VERSION"
+      ]
+    },
+    {
+      "logicalId": "oauth",
+      "implementation": "cpp",
+      "sourceDir": "plugins/wasm-cpp/extensions/oauth",
+      "image": "plugins/oauth",
+      "version": "2.0.1",
+      "inputHash": "sha256:1703c9aea078392bf18ce6178e6eedc56f3cc62d1edb85833b87381de0bbc751",
+      "changedPaths": [
+        "plugins/wasm-cpp/Dockerfile",
+        "plugins/wasm-cpp/WORKSPACE",
+        "plugins/wasm-cpp/bazel/re2.patch",
+        "plugins/wasm-cpp/bazel/wasm.bzl",
+        "plugins/wasm-cpp/common/BUILD",
+        "plugins/wasm-cpp/common/random.c",
+        "plugins/wasm-cpp/extensions/oauth/BUILD",
+        "plugins/wasm-cpp/extensions/oauth/VERSION",
+        "plugins/wasm-cpp/extensions/oauth/plugin.cc",
+        "plugins/wasm-cpp/extensions/oauth/plugin_test.cc"
+      ]
+    },
+    {
+      "logicalId": "request-block",
+      "implementation": "cpp",
+      "sourceDir": "plugins/wasm-cpp/extensions/request_block",
+      "image": "plugins/request-block",
+      "version": "2.0.1",
+      "inputHash": "sha256:c19ae0dcf34d9b2276b215124e1b48987248650cedd796bacac92ec62bebc407",
+      "changedPaths": [
+        "plugins/wasm-cpp/Dockerfile",
+        "plugins/wasm-cpp/WORKSPACE",
+        "plugins/wasm-cpp/bazel/re2.patch",
+        "plugins/wasm-cpp/bazel/wasm.bzl",
+        "plugins/wasm-cpp/common/BUILD",
+        "plugins/wasm-cpp/common/random.c",
+        "plugins/wasm-cpp/extensions/request_block/VERSION"
+      ]
+    }
+  ]
+}

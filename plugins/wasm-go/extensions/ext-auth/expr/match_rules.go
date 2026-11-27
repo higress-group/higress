@@ -111,10 +111,29 @@ func (rule *Rule) matchesAllConditions(request RequestAttributes) bool {
 
 // matchDomain checks if the given domain matches the pattern.
 func matchDomain(domain string, pattern string) bool {
+	domain = lowerDomainASCII(domain)
+	pattern = lowerDomainASCII(pattern)
 	// Convert wildcard pattern to regex pattern
 	regexPattern := convertWildcardToRegex(pattern)
 	matched, _ := regexp.MatchString(regexPattern, domain)
 	return matched
+}
+
+func lowerDomainASCII(s string) string {
+	var lowered []byte
+	for i := 0; i < len(s); i++ {
+		if s[i] < 'A' || s[i] > 'Z' {
+			continue
+		}
+		if lowered == nil {
+			lowered = []byte(s)
+		}
+		lowered[i] = s[i] + ('a' - 'A')
+	}
+	if lowered == nil {
+		return s
+	}
+	return string(lowered)
 }
 
 // convertWildcardToRegex converts a wildcard pattern to a regex pattern.

@@ -1,0 +1,91 @@
+name: "E2E Scale Regression"
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly on Monday at 02:17 UTC (10:17 Asia/Shanghai).
+    - cron: "17 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-scale-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: 1.26
+
+jobs:
+  e2e-scale:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Disable containerd image store
+        run: |
+          sudo bash -c 'cat > /etc/docker/daemon.json << EOF
+          {
+            "features": {
+              "containerd-snapshotter": false
+            }
+          }
+          EOF'
+          sudo systemctl restart docker
+          docker info -f '{{ .DriverStatus }}'
+
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Go caches
+        uses: actions/cache@v4
+        with:
+          path: |-
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - name: Prebuild
+        run: make prebuild
+
+      - name: Run scale regression test
+        run: GOPROXY="https://proxy.golang.org,direct" make higress-scale-test
+
+      - name: Collect failure diagnostics
+        if: failure()
+        continue-on-error: true
+        run: |
+          mkdir -p out/e2e-scale-logs
+          kubectl get nodes -o wide > out/e2e-scale-logs/nodes.txt 2>&1 || true
+          kubectl -n higress-system get pods -o wide > out/e2e-scale-logs/higress-pods.txt 2>&1 || true
+          kubectl -n higress-system describe pods > out/e2e-scale-logs/higress-pods-describe.txt 2>&1 || true
+          kubectl -n higress-system logs deployment/higress-controller --all-containers --tail=5000 > out/e2e-scale-logs/higress-controller.log 2>&1 || true
+          kubectl -n higress-system logs deployment/higress-gateway --all-containers --tail=5000 > out/e2e-scale-logs/higress-gateway.log 2>&1 || true
+          kubectl -n scale-test get ingress -o yaml > out/e2e-scale-logs/scale-ingresses.yaml 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > out/e2e-scale-logs/events.txt 2>&1 || true
+          tools/bin/kind export logs out/e2e-scale-logs/kind --name higress || true
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-scale-logs-${{ github.run_id }}
+          path: out/e2e-scale-logs
+          if-no-files-found: ignore

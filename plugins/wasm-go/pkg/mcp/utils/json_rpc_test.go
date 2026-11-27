@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/mcp/protocol"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/tidwall/gjson"
 )
 
@@ -156,5 +158,33 @@ func TestJsonRpcIDMarshaling(t *testing.T) {
 				t.Errorf("ID not correctly formatted. Expected to contain %s, got %s", tt.expected, string(body))
 			}
 		})
+	}
+}
+
+type clientIDTestContext struct {
+	wrapper.HttpContext
+	values map[string]any
+}
+
+func (c *clientIDTestContext) SetContext(key string, value any) { c.values[key] = value }
+func (c *clientIDTestContext) GetContext(key string) any        { return c.values[key] }
+
+func TestClientResponseIDSurvivesInternalCorrelation(t *testing.T) {
+	for _, token := range []string{`null`, `1.50`, `1e+3`, `9223372036854775808`, `"client-id"`, ``} {
+		id, protocolError := protocol.ParseID(json.RawMessage(token))
+		if protocolError != nil {
+			t.Fatal(protocolError)
+		}
+		ctx := &clientIDTestContext{values: map[string]any{CtxJsonRpcClientID: id}}
+		internal := id.CorrelationID("internal-only")
+		ctx.SetContext(CtxJsonRpcID, NewJsonRpcIDFromGjson(gjson.ParseBytes(internal)))
+		got := string(ClientResponseID(ctx, JsonRpcID{"", 0, false}))
+		want := token
+		if want == "" {
+			want = "0" // Historical Legacy tools/list default.
+		}
+		if got != want {
+			t.Fatalf("client ID %q restored as %q", token, got)
+		}
 	}
 }

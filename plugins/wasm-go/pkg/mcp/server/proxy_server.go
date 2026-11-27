@@ -79,6 +79,7 @@ type McpProxyToolConfig struct {
 	Description     string              `json:"description"`
 	Security        SecurityRequirement `json:"security,omitempty"` // Tool-level security for MCP Client to MCP Server
 	Args            []ToolArg           `json:"args"`
+	InputSchema     json.RawMessage     `json:"inputSchema,omitempty"`
 	OutputSchema    map[string]any      `json:"outputSchema,omitempty"` // Output schema for MCP Protocol Version 2025-06-18
 	RequestTemplate RequestTemplate     `json:"requestTemplate,omitempty"`
 }
@@ -101,6 +102,7 @@ type McpProxyServer struct {
 	transport                 TransportProtocol   // Transport protocol (http or sse)
 	protocolStrategy          ProtocolStrategy    // Configured strategy, never a detected profile
 	autoDetection             AutoDetectionConfig
+	passthroughInstructions   bool // Immutable opt-in discovery field enhancement
 	passthroughAuthHeader     bool // If true, pass through Authorization header even without downstream security
 }
 
@@ -198,11 +200,21 @@ func (s *McpProxyServer) AddMCPTool(name string, tool Tool) Server {
 
 // AddProxyTool adds a proxy tool configuration
 func (s *McpProxyServer) AddProxyTool(toolConfig McpProxyToolConfig) error {
+	var inputSchema map[string]any
+	if len(toolConfig.InputSchema) > 0 {
+		var err error
+		inputSchema, err = parseProxyInputSchema(toolConfig.InputSchema)
+		if err != nil {
+			return err
+		}
+	}
+
 	s.toolsConfig[toolConfig.Name] = toolConfig
 	s.base.AddMCPTool(toolConfig.Name, &McpProxyTool{
-		serverName: s.Name,
-		name:       toolConfig.Name,
-		toolConfig: toolConfig,
+		serverName:  s.Name,
+		name:        toolConfig.Name,
+		toolConfig:  toolConfig,
+		inputSchema: inputSchema,
 	})
 	return nil
 }
@@ -225,12 +237,13 @@ func (s *McpProxyServer) GetConfig(v any) {
 // Clone implements Server interface
 func (s *McpProxyServer) Clone() Server {
 	newServer := &McpProxyServer{
-		Name:             s.Name,
-		base:             s.base.CloneBase(),
-		toolsConfig:      make(map[string]McpProxyToolConfig),
-		securitySchemes:  make(map[string]SecurityScheme),
-		protocolStrategy: s.GetProtocolStrategy(),
-		autoDetection:    s.GetAutoDetectionConfig(),
+		Name:                    s.Name,
+		base:                    s.base.CloneBase(),
+		toolsConfig:             make(map[string]McpProxyToolConfig),
+		securitySchemes:         make(map[string]SecurityScheme),
+		protocolStrategy:        s.GetProtocolStrategy(),
+		autoDetection:           s.GetAutoDetectionConfig(),
+		passthroughInstructions: s.passthroughInstructions,
 	}
 	for k, v := range s.toolsConfig {
 		newServer.toolsConfig[k] = v
@@ -260,10 +273,9 @@ func (s *McpProxyServer) GetPassthroughAuthHeader() bool {
 	return s.passthroughAuthHeader
 }
 
-// ForwardToolsList forwards tools/list request to backend MCP server
-func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error {
-	wrapperCtx := ctx.(wrapper.HttpContext)
-
+// prepareServerProxyAuth preserves the server-level policy used by tools/list.
+// Discovery has no tool context and deliberately follows this same policy.
+func (s *McpProxyServer) prepareServerProxyAuth(ctx wrapper.HttpContext) *ProxyAuthInfo {
 	// Handle default downstream security for tools/list requests
 	// tools/list requests use server-level default authentication configuration
 	passthroughCredential := ""
@@ -295,14 +307,8 @@ func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error
 			proxywasm.RemoveHttpRequestHeader("Authorization")
 		}
 	}
-	_, modernDownstream := ModernRequestContext(wrapperCtx)
-	wrapperCtx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(wrapperCtx, modernDownstream && (s.GetProtocolStrategy() == ProtocolStrategyModern || s.GetProtocolStrategy() == ProtocolStrategyAuto)))
-
-	// Create protocol handler using server fields
-	handler := NewMcpProtocolHandler(s.GetMcpServerURL(), s.GetTimeout())
-	handler.SetProtocolStrategy(s.GetProtocolStrategy())
-	handler.transport = s.GetTransport()
-	handler.autoDetection = s.GetAutoDetectionConfig()
+	_, modernDownstream := ModernRequestContext(ctx)
+	ctx.SetContext(CtxMcpProxyHeaders, captureForwardHeaders(ctx, modernDownstream && (s.GetProtocolStrategy() == ProtocolStrategyModern || s.GetProtocolStrategy() == ProtocolStrategyAuto)))
 
 	// Prepare authentication information for gateway-to-backend communication
 	var authInfo *ProxyAuthInfo
@@ -320,25 +326,42 @@ func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error
 		}
 	}
 
+	return authInfo
+}
+
+// ForwardToolsList forwards tools/list request to backend MCP server
+func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error {
+	wrapperCtx := ctx.(wrapper.HttpContext)
+
+	authInfo := s.prepareServerProxyAuth(wrapperCtx)
+
+	// Create protocol handler using server fields
+	handler := NewMcpProtocolHandler(s.GetMcpServerURL(), s.GetTimeout())
+	handler.SetProtocolStrategy(s.GetProtocolStrategy())
+	handler.transport = s.GetTransport()
+	handler.autoDetection = s.GetAutoDetectionConfig()
+
 	// This will handle initialization asynchronously if needed and use ActionPause/Resume
 	return handler.ForwardToolsList(wrapperCtx, cursor, authInfo)
 }
 
 // McpProxyTool implements Tool interface for MCP-to-MCP proxy
 type McpProxyTool struct {
-	serverName string
-	name       string
-	toolConfig McpProxyToolConfig
-	arguments  map[string]interface{}
+	serverName  string
+	name        string
+	toolConfig  McpProxyToolConfig
+	inputSchema map[string]any
+	arguments   map[string]interface{}
 }
 
 // Create implements Tool interface
 func (t *McpProxyTool) Create(params []byte) Tool {
 	newTool := &McpProxyTool{
-		serverName: t.serverName,
-		name:       t.name,
-		toolConfig: t.toolConfig,
-		arguments:  make(map[string]interface{}),
+		serverName:  t.serverName,
+		name:        t.name,
+		toolConfig:  t.toolConfig,
+		inputSchema: t.inputSchema,
+		arguments:   make(map[string]interface{}),
 	}
 
 	if len(params) > 0 {
@@ -449,13 +472,11 @@ func (t *McpProxyTool) Description() string {
 
 // InputSchema implements Tool interface
 func (t *McpProxyTool) InputSchema() map[string]any {
-	schema := map[string]any{
-		"type":       "object",
-		"properties": make(map[string]any),
-		"required":   []string{},
+	if t.inputSchema != nil {
+		return t.inputSchema
 	}
 
-	properties := schema["properties"].(map[string]any)
+	properties := make(map[string]any)
 	var required []string
 
 	for _, arg := range t.toolConfig.Args {
@@ -479,8 +500,42 @@ func (t *McpProxyTool) InputSchema() map[string]any {
 		}
 	}
 
-	schema["required"] = required
+	schema := map[string]any{"type": "object", "properties": properties}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
 	return schema
+}
+
+// parseProxyInputSchema checks the MCP tool's root fields and retains nested schemas as supplied.
+func parseProxyInputSchema(raw json.RawMessage) (map[string]any, error) {
+	schema, err := decodeBusinessJSONObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid inputSchema: %w", err)
+	}
+	if schema["type"] != "object" {
+		return nil, fmt.Errorf("inputSchema must be a JSON object with type \"object\"")
+	}
+	if value, exists := schema["properties"]; exists {
+		if _, ok := value.(map[string]any); !ok {
+			return nil, fmt.Errorf("inputSchema.properties must be an object")
+		}
+	}
+	if value, exists := schema["required"]; exists {
+		required, ok := value.([]any)
+		if !ok {
+			return nil, fmt.Errorf("inputSchema.required must be an array of strings")
+		}
+		for _, name := range required {
+			if _, ok := name.(string); !ok {
+				return nil, fmt.Errorf("inputSchema.required must be an array of strings")
+			}
+		}
+		if len(required) == 0 {
+			delete(schema, "required")
+		}
+	}
+	return schema, nil
 }
 
 // OutputSchema implements Tool interface (MCP Protocol Version 2025-06-18)

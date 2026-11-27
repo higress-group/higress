@@ -14,6 +14,8 @@
 
 #include "extensions/oauth/plugin.h"
 
+#include <vector>
+
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "include/proxy-wasm/context.h"
@@ -83,6 +85,9 @@ class OAuthTest : public ::testing::Test {
                            std::string_view* result) {
           if (header == ":authority") {
             *result = authority_;
+          }
+          if (header == ":scheme") {
+            *result = "http";
           }
           if (header == ":path") {
             *result = path_;
@@ -296,6 +301,81 @@ TEST_F(OAuthTest, invalidToken) {
                                                 testing::_, testing::_));
   EXPECT_EQ(context_->onRequestHeaders(0, false),
             FilterHeadersStatus::StopIteration);
+}
+
+TEST_F(OAuthTest, malformedMatrix) {
+  std::string configuration = R"({"issuer":"oauth-v0","consumers":[{"name":"probe","client_id":"probe-client","client_secret":"oauth-v0-test-key"}]})";
+  BufferBase buffer;
+  buffer.set({configuration.data(), configuration.size()});
+  EXPECT_CALL(*mock_context_, getBuffer(WasmBufferType::PluginConfiguration))
+      .WillOnce([&buffer](WasmBufferType) { return &buffer; });
+  ASSERT_TRUE(root_context_->configure(configuration.size()));
+  authority_ = "oauth.test";
+  path_ = "/anything/native";
+  method_ = "GET";
+  route_name_ = "v0";
+  const auto encode = [](const std::string& value) {
+    return jwt::base::trim<jwt::alphabet::base64url>(
+        jwt::base::encode<jwt::alphabet::base64url>(value));
+  };
+  const auto signed_token = [&encode](const std::string& header,
+                                       const std::string& payload) {
+    const auto input = encode(header) + "." + encode(payload);
+    std::error_code error;
+    const auto signature = jwt::algorithm::hs256{"oauth-v0-test-key"}.sign(input, error);
+    EXPECT_FALSE(error);
+    return input + "." + encode(signature);
+  };
+  const std::string header = R"({"alg":"HS256","typ":"application/at+jwt"})";
+  const std::string payload = R"({"client_id":"probe-client","iss":"oauth-v0","sub":"probe","aud":"v0","exp":4102444800,"iat":1700000000})";
+  const auto valid = signed_token(header, payload);
+  const auto first = valid.find('.');
+  const auto second = valid.find('.', first + 1);
+  const auto header_segment = valid.substr(0, first);
+  const auto payload_segment = valid.substr(first + 1, second - first - 1);
+  const auto signature_segment = valid.substr(second + 1);
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"no-separator", "alksdjf"},
+      {"one-separator", "a.b"},
+      {"extra-separator", valid + ".extra"},
+      {"header-alphabet", "%%%%." + payload_segment + "." + signature_segment},
+      {"payload-alphabet", header_segment + ".%%%%." + signature_segment},
+      {"signature-alphabet", header_segment + "." + payload_segment + ".%%%%"},
+      {"header-padding", "====." + payload_segment + "." + signature_segment},
+      {"payload-size", header_segment + ".a." + signature_segment},
+      {"signature-size", header_segment + "." + payload_segment + ".a"},
+      {"header-json", signed_token("{", payload)},
+      {"payload-json", signed_token(header, "{")},
+      {"header-array", signed_token("[]", payload)},
+      {"payload-array", signed_token(header, "[]")},
+      {"header-null", signed_token("null", payload)},
+      {"payload-null", signed_token(header, "null")},
+      {"header-overflow", signed_token(R"({"alg":"HS256","number":1e10000})", payload)},
+      {"payload-overflow", signed_token(header, payload.substr(0, payload.size() - 1) + R"(,"number":1e10000})")},
+      {"algorithm-null", signed_token(R"({"alg":null,"typ":"application/at+jwt"})", payload)},
+      {"client-null", signed_token(header, R"({"client_id":null,"iss":"oauth-v0","sub":"probe","aud":"v0","exp":4102444800,"iat":1700000000})")},
+      {"iat-wrong-type", signed_token(header, R"({"client_id":"probe-client","iss":"oauth-v0","sub":"probe","aud":"v0","exp":4102444800,"iat":"wrong"})")},
+      {"exp-null", signed_token(header, R"({"client_id":"probe-client","iss":"oauth-v0","sub":"probe","aud":"v0","exp":null,"iat":1700000000})")},
+      {"invalid-signature", header_segment + "." + payload_segment + "." + encode("wrong-signature")},
+      {"unknown-consumer", signed_token(header, R"({"client_id":"unknown","iss":"oauth-v0","sub":"probe","aud":"v0","exp":4102444800,"iat":1700000000})")},
+      {"wrong-issuer", signed_token(header, R"({"client_id":"probe-client","iss":"wrong","sub":"probe","aud":"v0","exp":4102444800,"iat":1700000000})")},
+      {"wrong-subject", signed_token(header, R"({"client_id":"probe-client","iss":"oauth-v0","sub":"wrong","aud":"v0","exp":4102444800,"iat":1700000000})")},
+  };
+  for (const auto& entry : cases) {
+    SCOPED_TRACE(entry.first);
+    jwt_header_ = "Bearer " + entry.second;
+    EXPECT_CALL(*mock_context_, sendLocalResponse(
+        401, std::string_view("Invalid Jwt token"),
+        testing::ElementsAre(testing::Pair("WWW-Authenticate", "Bearer realm=\"http://oauth.test/anything/native\"")),
+        testing::_, std::string_view("oauth_access_denied"))).Times(1);
+    EXPECT_NO_THROW({ EXPECT_EQ(context_->onRequestHeaders(0, false), FilterHeadersStatus::StopIteration); });
+    testing::Mock::VerifyAndClearExpectations(mock_context_.get());
+    jwt_header_ = "Bearer " + valid;
+    EXPECT_CALL(*mock_context_, sendLocalResponse(testing::_, testing::_, testing::_, testing::_, testing::_)).Times(0);
+    EXPECT_CALL(*mock_context_, addHeaderMapValue(WasmHeaderMapType::RequestHeaders, std::string_view("X-Mse-Consumer"), std::string_view("probe"))).Times(1);
+    EXPECT_NO_THROW({ EXPECT_EQ(context_->onRequestHeaders(0, false), FilterHeadersStatus::Continue); });
+    testing::Mock::VerifyAndClearExpectations(mock_context_.get());
+  }
 }
 
 TEST_F(OAuthTest, expire) {

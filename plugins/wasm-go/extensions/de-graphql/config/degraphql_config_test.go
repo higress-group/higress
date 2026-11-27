@@ -15,9 +15,13 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
-	"github.com/stretchr/testify/assert"
+	"net/url"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDeGraphQLConfig_SetGql(t *testing.T) {
@@ -117,7 +121,7 @@ func TestDeGraphQLConfig_ParseGqlFromUrl(t *testing.T) {
 			name:    "multi variables",
 			gql:     "query FetchSomeIDQuery($someId: String! $num: Int $price: Float! $need:Boolean!) {\n  human(id: $someId) {\n    name\n  }\n}",
 			url:     "/api?someId=a&num=10&price=12.0&need=false&hee=1",
-			want:    "{\"query\":\"query FetchSomeIDQuery($someId: String! $num: Int $price: Float! $need:Boolean!) {\\n  human(id: $someId) {\\n    name\\n  }\\n}\",\"variables\":{\"someId\":\"a\",\"num\":10,\"price\":12.0,\"need\":false}}",
+			want:    "{\"query\":\"query FetchSomeIDQuery($someId: String! $num: Int $price: Float! $need:Boolean!) {\\n  human(id: $someId) {\\n    name\\n  }\\n}\",\"variables\":{\"need\":false,\"num\":10,\"price\":12.0,\"someId\":\"a\"}}",
 			wantErr: nil,
 		},
 	}
@@ -130,7 +134,7 @@ func TestDeGraphQLConfig_ParseGqlFromUrl(t *testing.T) {
 			if err != nil {
 				return
 			}
-			assert.Equal(t, tt.want, body)
+			assert.JSONEq(t, tt.want, body)
 		})
 	}
 }
@@ -172,6 +176,278 @@ func TestDeGraphQLConfig_SetEndpoint(t *testing.T) {
 				return
 			}
 			assert.Equal(t, tt.want, d.endpoint)
+		})
+	}
+}
+
+// TestDeGraphQLConfig_ParseGqlFromUrl_CoercesDeclaredTypes checks that the value
+// supplied for each variable is rendered as the JSON scalar for the type the
+// gql operation declares, instead of being copied into the body verbatim.
+func TestDeGraphQLConfig_ParseGqlFromUrl_CoercesDeclaredTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		gql  string
+		url  string
+		want string
+	}{
+		{
+			name: "int",
+			gql:  "query ($id: Int!) { item(id: $id) { id } }",
+			url:  "/api?id=42",
+			want: "{\"query\":\"query ($id: Int!) { item(id: $id) { id } }\",\"variables\":{\"id\":42}}",
+		},
+		{
+			name: "float",
+			gql:  "query ($score: Float!) { item(score: $score) { id } }",
+			url:  "/api?score=1.5",
+			want: "{\"query\":\"query ($score: Float!) { item(score: $score) { id } }\",\"variables\":{\"score\":1.5}}",
+		},
+		{
+			name: "boolean",
+			gql:  "query ($enabled: Boolean!) { item(enabled: $enabled) { id } }",
+			url:  "/api?enabled=true",
+			want: "{\"query\":\"query ($enabled: Boolean!) { item(enabled: $enabled) { id } }\",\"variables\":{\"enabled\":true}}",
+		},
+		{
+			name: "string keeps separators as data",
+			gql:  "query ($title: String!) { item(title: $title) { id } }",
+			url:  `/api?title=x,"admin":true`,
+			want: `{"query":"query ($title: String!) { item(title: $title) { id } }","variables":{"title":"x,\"admin\":true"}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &DeGraphQLConfig{}
+			require.NoError(t, d.SetGql(tt.gql))
+			body, err := d.ParseGqlFromUrl(tt.url)
+			require.NoError(t, err)
+			assert.True(t, json.Valid([]byte(body)), "body must be valid JSON: %s", body)
+			assert.Equal(t, tt.want, body)
+		})
+	}
+}
+
+func TestDeGraphQLConfig_ParseGqlFromUrl_ScalarGrammar(t *testing.T) {
+	tests := []struct {
+		name, typ, value, want string
+		valid                  bool
+	}{
+		{"int minimum", "Int", "-2147483648", "-2147483648", true},
+		{"int maximum", "Int", "2147483647", "2147483647", true},
+		{"int below minimum", "Int", "-2147483649", "", false},
+		{"int above maximum", "Int", "2147483648", "", false},
+		{"int decimal", "Int", "1.0", "", false},
+		{"int exponent", "Int", "1e0", "", false},
+		{"int plus", "Int", "+1", "", false},
+		{"int leading zero", "Int", "01", "", false},
+		{"int object", "Int", `{"a":1}`, "", false},
+		{"int array", "Int", `[1]`, "", false},
+		{"float integer", "Float", "12", "12", true},
+		{"float decimal", "Float", "12.0", "12.0", true},
+		{"float exponent", "Float", "1.2e+3", "1.2e+3", true},
+		{"float finite boundary", "Float", "1.7976931348623157e308", "1.7976931348623157e308", true},
+		{"float overflow", "Float", "1e309", "", false},
+		{"float infinity", "Float", "Inf", "", false},
+		{"float NaN", "Float", "NaN", "", false},
+		{"float plus", "Float", "+1", "", false},
+		{"float leading dot", "Float", ".5", "", false},
+		{"float trailing dot", "Float", "1.", "", false},
+		{"float object", "Float", `{"a":1}`, "", false},
+		{"float array", "Float", `[1]`, "", false},
+		{"boolean true", "Boolean", "true", "true", true},
+		{"boolean false", "Boolean", "false", "false", true},
+		{"boolean uppercase", "Boolean", "TRUE", "", false},
+		{"boolean mixed case", "Boolean", "True", "", false},
+		{"boolean numeric", "Boolean", "1", "", false},
+		{"boolean short", "Boolean", "t", "", false},
+		{"boolean quoted", "Boolean", `"true"`, "", false},
+		{"boolean object", "Boolean", `{"a":true}`, "", false},
+		{"boolean array", "Boolean", `[true]`, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gql := "query ($value: " + tt.typ + "!) { item(value: $value) { id } }"
+			d := &DeGraphQLConfig{}
+			require.NoError(t, d.SetGql(gql))
+			body, err := d.ParseGqlFromUrl("/api?value=" + url.QueryEscape(tt.value))
+			if !tt.valid {
+				require.Error(t, err)
+				assert.Empty(t, body)
+				return
+			}
+			require.NoError(t, err)
+			var root map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal([]byte(body), &root))
+			require.Len(t, root, 2)
+			require.Contains(t, root, "query")
+			require.Contains(t, root, "variables")
+			var query string
+			require.NoError(t, json.Unmarshal(root["query"], &query))
+			assert.Equal(t, gql, query)
+			var variables map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(root["variables"], &variables))
+			require.Len(t, variables, 1)
+			require.Contains(t, variables, "value")
+			assert.Equal(t, tt.want, string(variables["value"]))
+		})
+	}
+}
+
+func TestDeGraphQLConfig_ParseGqlFromUrl_NullCompatibility(t *testing.T) {
+	for _, typ := range []string{"String", "Int", "Float", "Boolean"} {
+		for _, required := range []bool{false, true} {
+			name := typ
+			if required {
+				name += " required"
+			} else {
+				name += " nullable"
+			}
+			t.Run(name, func(t *testing.T) {
+				suffix := ""
+				if required {
+					suffix = "!"
+				}
+				d := &DeGraphQLConfig{}
+				require.NoError(t, d.SetGql("query ($value: "+typ+suffix+") { item(value: $value) { id } }"))
+				body, err := d.ParseGqlFromUrl("/api?value=null")
+				if typ != "String" && required {
+					require.Error(t, err)
+					assert.Empty(t, body)
+					return
+				}
+				require.NoError(t, err)
+				var root map[string]json.RawMessage
+				require.NoError(t, json.Unmarshal([]byte(body), &root))
+				var variables map[string]json.RawMessage
+				require.NoError(t, json.Unmarshal(root["variables"], &variables))
+				want := "null"
+				if typ == "String" {
+					want = `"null"`
+				}
+				assert.Equal(t, want, string(variables["value"]))
+				missing, err := d.ParseGqlFromUrl("/api")
+				require.NoError(t, err)
+				assert.JSONEq(t, `{"query":`+string(root["query"])+`}`, missing)
+			})
+		}
+	}
+}
+
+// TestDeGraphQLConfig_ParseGqlFromUrl_RejectsUnrepresentableValues covers the
+// values the previous implementation copied into the body unchanged. A variable
+// declared as Int, Float or Boolean must only accept a value that really is
+// that scalar, otherwise a client could append extra members to, or close, the
+// variables object and rewrite the operation the operator configured.
+func TestDeGraphQLConfig_ParseGqlFromUrl_RejectsUnrepresentableValues(t *testing.T) {
+	const intGql = "query ($id: Int! $enabled: Boolean!) { item(id: $id, enabled: $enabled) { id } }"
+	const floatGql = "query ($score: Float! $enabled: Boolean!) { item(score: $score, enabled: $enabled) { id } }"
+
+	tests := []struct {
+		name string
+		gql  string
+		url  string
+	}{
+		{name: "int carrying an extra member", gql: intGql, url: `/api?id=1,"admin":true&enabled=true`},
+		{name: "int closing the variables object", gql: intGql, url: `/api?id=1}&enabled=true`},
+		{name: "int that is not numeric", gql: intGql, url: `/api?id=abc&enabled=true`},
+		{name: "int joined from repeated parameters", gql: intGql, url: `/api?id=1&id=2&enabled=true`},
+		{name: "boolean carrying an extra member", gql: intGql, url: `/api?id=1&enabled=true,"admin":true`},
+		{name: "boolean that is not parseable", gql: intGql, url: `/api?id=1&enabled=yes`},
+		{name: "float that is not numeric", gql: floatGql, url: `/api?score=abc&enabled=true`},
+		{name: "float carrying an extra member", gql: floatGql, url: `/api?score=1.0,"admin":true&enabled=true`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &DeGraphQLConfig{}
+			require.NoError(t, d.SetGql(tt.gql))
+			body, err := d.ParseGqlFromUrl(tt.url)
+			require.Error(t, err)
+			assert.Empty(t, body)
+		})
+	}
+}
+
+// TestDeGraphQLConfig_ParseGqlFromUrl_OnlyEmitsDeclaredVariables asserts that
+// the generated document keeps exactly the declared variables. A String
+// variable accepts the bytes below, but only as string data: the quotes, commas
+// and braces stay inside the value instead of ending the string and adding
+// members to the surrounding objects.
+func TestDeGraphQLConfig_ParseGqlFromUrl_OnlyEmitsDeclaredVariables(t *testing.T) {
+	const gql = "query ($title: String!) { item(title: $title) { id } }"
+
+	d := &DeGraphQLConfig{}
+	require.NoError(t, d.SetGql(gql))
+	body, err := d.ParseGqlFromUrl(`/api?title=x","admin":true,"z":"`)
+	require.NoError(t, err)
+	require.True(t, json.Valid([]byte(body)), "body must be valid JSON: %s", body)
+
+	var top map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(body), &top))
+	require.Len(t, top, 2)
+	require.Contains(t, top, "query")
+	require.Contains(t, top, "variables")
+	var query string
+	require.NoError(t, json.Unmarshal(top["query"], &query))
+	assert.Equal(t, gql, query)
+
+	var variables map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(top["variables"], &variables))
+	require.Len(t, variables, 1)
+	require.Contains(t, variables, "title")
+
+	var title string
+	require.NoError(t, json.Unmarshal(variables["title"], &title))
+	assert.Equal(t, `x","admin":true,"z":"`, title)
+	for _, injected := range []string{`x","admin":true,"z":"`, `x"},"query":"evil","variables":{"title":"`} {
+		body, err := d.ParseGqlFromUrl("/api?title=" + url.QueryEscape(injected) + "&extra=ignored")
+		require.NoError(t, err)
+		var root map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(body), &root))
+		require.Len(t, root, 2)
+		require.NoError(t, json.Unmarshal(root["query"], &query))
+		assert.Equal(t, gql, query)
+		require.NoError(t, json.Unmarshal(root["variables"], &variables))
+		require.Len(t, variables, 1)
+		require.NoError(t, json.Unmarshal(variables["title"], &title))
+		assert.Equal(t, injected, title)
+	}
+}
+
+// TestDeGraphQLConfig_ParseGqlFromUrl_EscapesStringValues keeps a regression
+// test for the backslash case: the old getJsonStr only escaped double quotes
+// and newlines, so a value ending in a backslash turned the appended closing
+// quote into an escaped quote and produced a malformed document.
+func TestDeGraphQLConfig_ParseGqlFromUrl_EscapesStringValues(t *testing.T) {
+	const gql = "query ($title: String!) { item(title: $title) { id } }"
+
+	tests := []struct {
+		name  string
+		url   string
+		value string
+	}{
+		{name: "plain", url: "/api?title=plain", value: "plain"},
+		{name: "trailing backslash", url: `/api?title=foo\`, value: `foo\`},
+		{name: "embedded backslash and colon", url: `/api?title=C:\temp\new`, value: `C:\temp\new`},
+		{name: "double quote", url: `/api?title=a"b`, value: `a"b`},
+		{name: "newline", url: "/api?title=line1%0Aline2", value: "line1\nline2"},
+		{name: "carriage return tab and NUL", url: "/api?title=a%0D%09%00b", value: "a\r\t\x00b"},
+		{name: "unicode and HTML characters", url: "/api?title=" + url.QueryEscape("雪<>&\u2028"), value: "雪<>&\u2028"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &DeGraphQLConfig{}
+			require.NoError(t, d.SetGql(gql))
+			body, err := d.ParseGqlFromUrl(tt.url)
+			require.NoError(t, err)
+			require.True(t, json.Valid([]byte(body)), "body must be valid JSON: %s", body)
+
+			var decoded struct {
+				Query     string         `json:"query"`
+				Variables map[string]any `json:"variables"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(body), &decoded))
+			assert.Equal(t, gql, decoded.Query)
+			assert.Equal(t, map[string]any{"title": tt.value}, decoded.Variables)
 		})
 	}
 }
