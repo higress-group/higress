@@ -247,11 +247,12 @@ jobs:
           done
           json_version=$(jq -r '.plugins[] | select(.consumers.pluginServer.inventoryKey == "json-converter") | .version' "$SNAPSHOT_PATH")
           fetch_wasm jsonrpc-converter "$json_version" /tmp/jsonrpc.wasm
-          lock=plugin-server/unmanaged-plugins.lock.json
-          locked=$(jq -c '.plugins["basic-auth"]' "$lock")
-          locked_path=$(jq -r .servedPath <<<"$locked"); locked_version=$(jq -r .servedVersion <<<"$locked")
-          fetch_wasm "$locked_path" "$locked_version" /tmp/unmanaged.wasm
-          test "$(sha256sum /tmp/unmanaged.wasm | awk '{print $1}')" = "$(jq -r .wasmSha256 <<<"$locked")"
+          python3 tools/plugin-release/verify_snapshot_http.py \
+            --snapshot "$SNAPSHOT_PATH" \
+            --inventory /tmp/snapshot-inventory.json \
+            --lock plugin-server/unmanaged-plugins.lock.json \
+            --base-url http://127.0.0.1:18080 \
+            --summary /tmp/plugin-http-summary.json
           if [ -z "$existing" ]; then docker buildx imagetools create --tag "$image" "$candidate@$candidate_digest"; fi
           test "$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "$candidate_digest"
           docker buildx imagetools inspect "$image" --raw > /tmp/public-index.json

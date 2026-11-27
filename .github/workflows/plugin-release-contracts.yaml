@@ -50,6 +50,9 @@ jobs:
           cd tools/plugin-release
           timeout 20m go test -json -p 1 -parallel 1 -count=1 ./... | tee ../../out/release-contracts/tests.jsonl
           go run . validate-catalog --root ../.. --catalog ../../plugins/release/catalog.json
+      - name: Snapshot HTTP acceptance tests
+        shell: bash
+        run: timeout 5m python3 -B -m unittest discover -s tools/plugin-release -p 'test_verify_snapshot_http.py' -v
       - name: Prove negative tests ran and failures propagate
         shell: bash
         run: |
