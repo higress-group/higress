@@ -1071,7 +1071,7 @@ func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map
 				if !value.Exists() {
 					continue
 				}
-				if data, err = sjson.SetBytes(data, newKey, value.Value()); err != nil {
+				if data, err = sjson.SetRawBytes(data, newKey, []byte(value.Raw)); err != nil {
 					return nil, errors.Wrap(err, errRename.Error())
 				}
 				if data, err = sjson.DeleteBytes(data, oldKey); err != nil {
@@ -1191,7 +1191,7 @@ func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map
 						proxywasm.LogDebugf("map key:%s to key:%s success, value is: %v", fromKey, toKey, fromValue)
 					case "bodyJson":
 						if valueJson, ok := fromValue.(gjson.Result); ok {
-							if data, err = sjson.SetBytes(data, toKey, valueJson.Value()); err != nil {
+							if data, err = sjson.SetRawBytes(data, toKey, []byte(valueJson.Raw)); err != nil {
 								return nil, errors.Wrap(err, errMap.Error())
 							}
 							proxywasm.LogDebugf("map key:%s to key:%s success, value is: %v", fromKey, toKey, fromValue)
