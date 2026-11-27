@@ -206,6 +206,65 @@ class VerifySnapshotHTTPTest(unittest.TestCase):
         self.assertEqual([call[:3] for call in calls], expected_calls)
         self.assertTrue(all(call[3] == "-o" and len(call) == 5 for call in calls if call[0] == "blob"))
 
+    def test_malformed_plugin_server_mapping_fails_before_reads(self):
+        self.snapshot["plugins"][0]["consumers"]["pluginServer"] = "invalid"
+        result, summary, calls = self.run_verifier(False)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(summary["status"], "failed")
+        self.assertIn("pluginServer consumer mapping must be an object", summary["error"])
+        self.assertEqual(calls, [])
+        self.assertEqual(self.requests, [])
+
+    def test_nine_managed_entries_produce_eighteen_canonical_urls(self):
+        self.snapshot = {"plugins": []}
+        self.inventory = {}
+        self.expected.clear()
+        self.responses.clear()
+        paths = ["managed-filter-%d" % number for number in range(1, 10)]
+        for path in paths:
+            current = self.artifact(path, "7.4.0")
+            history = self.artifact(path, "6.8.0")
+            self.snapshot["plugins"].append(dict(current, logicalId=path, history=[history], consumers={
+                "pluginServer": {"httpPath": path, "inventoryKey": path, "aliases": []},
+            }))
+            self.inventory[path] = dict(inventory_record(current), history=[inventory_record(history)])
+            self.serve("managed-current", path, [path], current)
+            self.serve("managed-history", path, [path], history)
+        self.serve("unmanaged-current", "legacy-filter", ["legacy-path"], self.unmanaged)
+        self.serve("unmanaged-history", "legacy-filter", ["legacy-path"], self.unmanaged_history)
+
+        _, summary, _ = self.run_verifier(True)
+        self.assertEqual(summary["counts"], {"managed": 9, "history": 9, "unmanaged": 1, "urls": 20})
+        managed_rows = [row for row in summary["results"] if row["role"].startswith("managed-")]
+        unmanaged_rows = [row for row in summary["results"] if row["role"].startswith("unmanaged-")]
+        self.assertEqual(len(managed_rows), 18)
+        self.assertEqual(len(unmanaged_rows), 2)
+        self.assertEqual(len(summary["results"]), 20)
+        self.assertCountEqual(self.requests, self.expected)
+        for path in paths:
+            self.assertCountEqual(
+                [row["role"] for row in managed_rows if row["path"] == path],
+                ["managed-current", "managed-history"],
+            )
+        for row in summary["results"]:
+            route = row["url"].removeprefix(self.base_url)
+            expected = self.expected[route]
+            for key in ("role", "logicalId", "path", "version", "digest"):
+                self.assertEqual(row[key], expected[key])
+            self.assertEqual(row["expectedSha256"], expected["wasmSha256"])
+            self.assertEqual(row["actualSha256"], expected["wasmSha256"])
+            self.assertEqual(row["status"], "ok")
+            self.assertEqual(row["httpStatus"], 200)
+
+        with self.subTest(missing_last_history=True):
+            last = self.snapshot["plugins"][-1]
+            route = "/plugins/%s/%s/plugin.wasm" % (last["consumers"]["pluginServer"]["httpPath"], last["history"][0]["version"])
+            del self.responses[route]
+            _, summary, _ = self.run_verifier(False)
+            self.assertIn(route, self.requests)
+            self.assertIn("HTTP 404", summary["error"])
+            self.assertIn(self.base_url + route, summary["error"])
+
     def test_history_hash_and_oci_errors_fail_closed(self):
         snapshot = copy.deepcopy(self.snapshot)
         oci = copy.deepcopy(self.oci)

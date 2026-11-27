@@ -99,8 +99,10 @@ def prepare(snapshot, lock, base_url, summary):
         if not isinstance(entry, dict) or not isinstance(entry.get("consumers", {}), dict):
             raise ValueError("invalid snapshot plugin entry")
         mapping = entry.get("consumers", {}).get("pluginServer")
-        if not isinstance(mapping, dict):
+        if not mapping:
             continue
+        if not isinstance(mapping, dict):
+            raise ValueError("pluginServer consumer mapping must be an object")
         history = entry.get("history", [])
         if not isinstance(history, list):
             raise ValueError("managed history must be a list")
