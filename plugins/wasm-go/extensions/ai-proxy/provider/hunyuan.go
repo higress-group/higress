@@ -24,6 +24,7 @@ const (
 	hunyuanDomain                 = "hunyuan.tencentcloudapi.com"
 	hunyuanRequestPath            = "/"
 	hunyuanChatCompletionTCAction = "ChatCompletions"
+	hunyuanEmbeddingsTCAction     = "Embeddings"
 
 	// headers necessary for TC hunyuan api call:
 	// ref: https://cloud.tencent.com/document/api/1729/105701, https://cloud.tencent.com/document/api/1729/101842
@@ -132,6 +133,17 @@ func (m *hunyuanProvider) useOpenAICompatibleAPI() bool {
 	return len(m.config.hunyuanAuthId) == 0 && len(m.config.hunyuanAuthKey) == 0
 }
 
+// hunyuanTCActionForApiName returns the Tencent Cloud API action for the
+// request: hunyuan exposes ChatCompletions and Embeddings as separate
+// actions, and the action is covered by the TC3 signature, so the signed
+// action must match the X-TC-Action header sent upstream.
+func hunyuanTCActionForApiName(apiName ApiName) string {
+	if apiName == ApiNameEmbeddings {
+		return hunyuanEmbeddingsTCAction
+	}
+	return hunyuanChatCompletionTCAction
+}
+
 func (m *hunyuanProvider) OnRequestHeaders(ctx wrapper.HttpContext, apiName ApiName) error {
 	m.config.handleRequestHeaders(m, ctx, apiName)
 	// Delay the header processing to allow changing streaming mode in OnRequestBody
@@ -147,7 +159,7 @@ func (m *hunyuanProvider) TransformRequestHeaders(ctx wrapper.HttpContext, apiNa
 		util.OverwriteRequestHostHeader(headers, hunyuanDomain)
 		util.OverwriteRequestPathHeader(headers, hunyuanRequestPath)
 		// 添加 hunyuan 需要的自定义字段
-		headers.Set(actionKey, hunyuanChatCompletionTCAction)
+		headers.Set(actionKey, hunyuanTCActionForApiName(apiName))
 		headers.Set(versionKey, versionValue)
 	}
 }
@@ -167,6 +179,18 @@ func (m *hunyuanProvider) OnRequestBody(ctx wrapper.HttpContext, apiName ApiName
 
 	// 使用混元本身接口的协议
 	if m.config.protocol == protocolOriginal {
+		// Sign and forward the body as-is unless a context file requires
+		// parsing to insert the context message: re-marshalling through
+		// hunyuanTextGenRequest drops every native field the struct does not
+		// model (MaxTokens, Stop, ...), silently defeating protocol:original
+		// (#4876). The context file only applies to chat.
+		if m.config.context == nil || apiName == ApiNameEmbeddings {
+			authorizedValue := GetTC3Authorizationcode(m.config.hunyuanAuthId, m.config.hunyuanAuthKey, timestamp, hunyuanDomain, hunyuanTCActionForApiName(apiName), string(body))
+			_ = util.OverwriteRequestAuthorization(authorizedValue)
+			_ = proxywasm.ReplaceHttpRequestHeader("Accept", "*/*")
+			return types.ActionContinue, nil
+		}
+
 		request := &hunyuanTextGenRequest{}
 
 		if err := json.Unmarshal(body, request); err != nil {
@@ -175,7 +199,7 @@ func (m *hunyuanProvider) OnRequestBody(ctx wrapper.HttpContext, apiName ApiName
 
 		// 根据确定好的payload进行签名
 		hunyuanBody, _ := json.Marshal(request)
-		authorizedValueNew := GetTC3Authorizationcode(m.config.hunyuanAuthId, m.config.hunyuanAuthKey, timestamp, hunyuanDomain, hunyuanChatCompletionTCAction, string(hunyuanBody))
+		authorizedValueNew := GetTC3Authorizationcode(m.config.hunyuanAuthId, m.config.hunyuanAuthKey, timestamp, hunyuanDomain, hunyuanTCActionForApiName(apiName), string(hunyuanBody))
 		_ = util.OverwriteRequestAuthorization(authorizedValueNew)
 		_ = proxywasm.ReplaceHttpRequestHeader("Accept", "*/*")
 		// log.Debugf("#debug nash5# OnRequestBody call hunyuan api using original api! signature computation done!")
@@ -198,7 +222,7 @@ func (m *hunyuanProvider) OnRequestBody(ctx wrapper.HttpContext, apiName ApiName
 
 			// 因为手动插入了context内容，这里需要重新计算签名
 			hunyuanBody, _ := json.Marshal(request)
-			authorizedValueNew := GetTC3Authorizationcode(m.config.hunyuanAuthId, m.config.hunyuanAuthKey, timestamp, hunyuanDomain, hunyuanChatCompletionTCAction, string(hunyuanBody))
+			authorizedValueNew := GetTC3Authorizationcode(m.config.hunyuanAuthId, m.config.hunyuanAuthKey, timestamp, hunyuanDomain, hunyuanTCActionForApiName(apiName), string(hunyuanBody))
 			_ = util.OverwriteRequestAuthorization(authorizedValueNew)
 
 			if err := replaceJsonRequestBody(request); err != nil {
@@ -272,7 +296,7 @@ func (m *hunyuanProvider) OnRequestBody(ctx wrapper.HttpContext, apiName ApiName
 
 		// 因为手动插入了context内容，这里需要重新计算签名
 		hunyuanBody, _ := json.Marshal(hunyuanRequest)
-		authorizedValueNew := GetTC3Authorizationcode(m.config.hunyuanAuthId, m.config.hunyuanAuthKey, timestamp, hunyuanDomain, hunyuanChatCompletionTCAction, string(hunyuanBody))
+		authorizedValueNew := GetTC3Authorizationcode(m.config.hunyuanAuthId, m.config.hunyuanAuthKey, timestamp, hunyuanDomain, hunyuanTCActionForApiName(apiName), string(hunyuanBody))
 		_ = util.OverwriteRequestAuthorization(authorizedValueNew)
 
 		if err := replaceJsonRequestBody(hunyuanRequest); err != nil {
