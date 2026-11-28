@@ -924,6 +924,11 @@ func (h kvHandler) handle(host, path string, kvs map[string][]string, mapSourceD
 			// rename: 若指定 oldKey 不存在则无操作；否则将 oldKey 的值追加给 newKey，并删除 oldKey:value
 			for _, rename := range kvtOp.renameKvtGroup {
 				oldKey, newKey := rename.oldKey, rename.newKey
+				if oldKey == newKey {
+					// 同名 rename 必须是无操作：先追加到自身再删除，会把字段整个删掉。
+					// header 名在解析时已统一小写，因此仅调整大小写的 rename 也落到这里。
+					continue
+				}
 				if ovs, ok := kvs[oldKey]; ok {
 					kvs[newKey] = append(kvs[newKey], ovs...)
 					delete(kvs, oldKey)
@@ -1067,11 +1072,17 @@ func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map
 			// rename: 若指定 oldKey 不存在则无操作；否则将 oldKey 的值追加给 newKey，并删除 oldKey:value
 			for _, rename := range kvtOp.renameKvtGroup {
 				oldKey, newKey := rename.oldKey, rename.newKey
+				if oldKey == newKey {
+					// 同路径 rename 是无操作，避免写回后再删除同一路径。
+					continue
+				}
 				value := gjson.GetBytes(data, oldKey)
 				if !value.Exists() {
 					continue
 				}
-				if data, err = sjson.SetBytes(data, newKey, value.Value()); err != nil {
+				// 用 Raw 原样写回：Value() 会把 JSON 数字转成 float64，
+				// 超出 2^53 的整数（如业务 ID）会被静默舍入（#5381）。
+				if data, err = sjson.SetRawBytes(data, newKey, []byte(value.Raw)); err != nil {
 					return nil, errors.Wrap(err, errRename.Error())
 				}
 				if data, err = sjson.DeleteBytes(data, oldKey); err != nil {
@@ -1191,7 +1202,8 @@ func (h jsonHandler) handle(host, path string, oriData []byte, mapSourceData map
 						proxywasm.LogDebugf("map key:%s to key:%s success, value is: %v", fromKey, toKey, fromValue)
 					case "bodyJson":
 						if valueJson, ok := fromValue.(gjson.Result); ok {
-							if data, err = sjson.SetBytes(data, toKey, valueJson.Value()); err != nil {
+							// Raw 保留原始 JSON 表示，避免数值精度在 float64 转换中丢失。
+							if data, err = sjson.SetRawBytes(data, toKey, []byte(valueJson.Raw)); err != nil {
 								return nil, errors.Wrap(err, errMap.Error())
 							}
 							proxywasm.LogDebugf("map key:%s to key:%s success, value is: %v", fromKey, toKey, fromValue)
