@@ -383,21 +383,24 @@ func (lb ClusterEndpointLoadBalancer) adaptiveCandidateServices(nowUnixMs int64)
 }
 
 func (lb ClusterEndpointLoadBalancer) sampleAdaptiveCandidates(nowUnixMs int64) []string {
-	candidateServices := lb.adaptiveCandidateServices(nowUnixMs)
-	if len(candidateServices) <= 1 || lb.P2CChoices >= len(candidateServices) {
-		return candidateServices
-	}
-	choices := make([]string, 0, lb.P2CChoices)
-	seen := make(map[string]struct{}, lb.P2CChoices)
-	for len(choices) < lb.P2CChoices {
-		svc := candidateServices[rand.Int()%len(candidateServices)]
+	filteredServices := lb.adaptiveCandidateServices(nowUnixMs)
+	candidateServices := make([]string, 0, len(filteredServices))
+	seen := make(map[string]struct{}, len(filteredServices))
+	for _, svc := range filteredServices {
 		if _, ok := seen[svc]; ok {
 			continue
 		}
 		seen[svc] = struct{}{}
-		choices = append(choices, svc)
+		candidateServices = append(candidateServices, svc)
 	}
-	return choices
+	if len(candidateServices) <= 1 || lb.P2CChoices >= len(candidateServices) {
+		return candidateServices
+	}
+	for i := 0; i < lb.P2CChoices; i++ {
+		j := i + rand.Intn(len(candidateServices)-i)
+		candidateServices[i], candidateServices[j] = candidateServices[j], candidateServices[i]
+	}
+	return candidateServices[:lb.P2CChoices]
 }
 
 func (lb ClusterEndpointLoadBalancer) selectLowestScore(candidates []string, nowUnixMs int64) string {
