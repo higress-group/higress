@@ -259,7 +259,13 @@ func recursive(edge Edge, headers [][2]string, body []byte, depth uint32, config
 						// 还有没执行完的边
 						if nextStatus[next.Target] > 0 {
 							ctx.SetContext(WorkflowExecStatus, nextStatus)
-							return
+							// The join target is still waiting for other
+							// predecessors: defer this edge, but keep scanning
+							// the remaining outgoing edges so a sibling branch
+							// is not skipped. Returning here would drop every
+							// edge after this one, and a sibling that the join
+							// depends on would then never be dispatched.
+							continue
 						}
 						// 执行出了问题
 						if nextStatus[next.Target] < 0 {
