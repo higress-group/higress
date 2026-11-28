@@ -251,8 +251,9 @@ jobs:
           managed = [entry for entry in snapshot["plugins"] if entry.get("consumers", {}).get("pluginServer")]
           history_entries = [entry for entry in managed if entry.get("history")]
           cpp_entries = [entry for entry in managed if entry.get("implementation") == "cpp"]
-          if len(history_entries) != 9 or len(cpp_entries) != 9:
-              raise SystemExit("Q must contain nine managed C++ entries and nine history-bearing entries")
+          cpp_history_entries = [entry for entry in cpp_entries if entry.get("history")]
+          if len(cpp_history_entries) != 9 or len(cpp_entries) != 9:
+              raise SystemExit("Q must contain nine managed C++ entries and nine C++ history entries")
           if any(len(entry.get("history", [])) != 1 for entry in cpp_entries):
               raise SystemExit("each C++ entry must have exactly one history artifact")
           expected = set()

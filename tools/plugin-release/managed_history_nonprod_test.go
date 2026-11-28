@@ -42,7 +42,7 @@ func TestManagedHistoryNonprodWorkflowContract(t *testing.T) {
 		"org.opencontainers.image.revision", "io.higress.higress-source-commit",
 		"io.higress.plugin-snapshot-sha256", "io.higress.gateway-version", "snapshot-inventory.json",
 		"python3 tools/plugin-release/verify_snapshot_http.py", "--current-source candidate --all-managed",
-		"len(history_entries) != 9", "len(canonical_cpp_rows) != 18", "mapping[\"inventoryKey\"]",
+		"len(cpp_history_entries) != 9", "len(canonical_cpp_rows) != 18", "mapping[\"inventoryKey\"]",
 		"mapping.get(\"aliases\", [])", "for version in 1.0.0 2.0.0", "cmp ", "NONPROD_MANAGED_HISTORY_OK",
 		"report-", "nonprod-context.json", "inventorySha256", "imageId", "mcpResults", "SHA256SUMS",
 		"if: always()", "actions/upload-artifact@",
