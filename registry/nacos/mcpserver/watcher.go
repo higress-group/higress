@@ -413,7 +413,20 @@ func (w *watcher) processServerConfig(dataId string, services *model.Service, mc
 	}
 	// if protocol is sse, we should apply ConsistentHash policy for this service
 	// if protocol is https, we should apply tls policy for this service
-	destinationRule := generateDrForMcpServer(serviceHost, mcpServer.Protocol)
+	httpsUpstream := false
+	if mcpServer.RemoteServerConfig != nil && mcpServer.RemoteServerConfig.ServiceRef != nil &&
+		strings.EqualFold(mcpServer.RemoteServerConfig.ServiceRef.TransportProtocol, "https") {
+		httpsUpstream = true
+	}
+	if !httpsUpstream && services != nil {
+		for _, instance := range services.Hosts {
+			if instance.Metadata != nil && strings.EqualFold(instance.Metadata["protocol"], "https") {
+				httpsUpstream = true
+				break
+			}
+		}
+	}
+	destinationRule := generateDrForMcpServer(serviceHost, mcpServer.Protocol, httpsUpstream)
 	if destinationRule != nil {
 		dr := &config.Config{
 			Meta: config.Meta{
@@ -655,10 +668,10 @@ func (w *watcher) buildMcpServerForMcpServer(vs *v1alpha3.VirtualService, dataId
 	}
 }
 
-func generateDrForMcpServer(host, protocol string) *v1alpha3.DestinationRule {
+func generateDrForMcpServer(host, protocol string, httpsUpstream bool) *v1alpha3.DestinationRule {
 	switch protocol {
 	case provider.McpSSEProtocol:
-		return &v1alpha3.DestinationRule{
+		dr := &v1alpha3.DestinationRule{
 			Host: host,
 			TrafficPolicy: &v1alpha3.TrafficPolicy{
 				LoadBalancer: &v1alpha3.LoadBalancerSettings{
@@ -669,6 +682,24 @@ func generateDrForMcpServer(host, protocol string) *v1alpha3.DestinationRule {
 							},
 						},
 					},
+				},
+			},
+		}
+		if httpsUpstream {
+			dr.TrafficPolicy.Tls = &v1alpha3.ClientTLSSettings{
+				Mode: v1alpha3.ClientTLSSettings_SIMPLE,
+			}
+		}
+		return dr
+	case provider.McpStreamableProtocol:
+		if !httpsUpstream {
+			return nil
+		}
+		return &v1alpha3.DestinationRule{
+			Host: host,
+			TrafficPolicy: &v1alpha3.TrafficPolicy{
+				Tls: &v1alpha3.ClientTLSSettings{
+					Mode: v1alpha3.ClientTLSSettings_SIMPLE,
 				},
 			},
 		}

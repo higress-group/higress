@@ -130,9 +130,10 @@ type CredentialRef struct {
 }
 
 type ServiceRef struct {
-	NamespaceId string `json:"namespaceId,omitempty"`
-	GroupName   string `json:"groupName,omitempty"`
-	ServiceName string `json:"serviceName,omitempty"`
+	NamespaceId       string `json:"namespaceId,omitempty"`
+	GroupName         string `json:"groupName,omitempty"`
+	ServiceName       string `json:"serviceName,omitempty"`
+	TransportProtocol string `json:"transportProtocol,omitempty"`
 }
 
 // McpToolConfig Struct for mcp tool json unmarshal
