@@ -696,10 +696,10 @@ func (b *Builder) WithWriter(w io.Writer) {
 	b.w = w
 }
 
-// CleanupForError cleans up the temporary files and the container when an error occurs
+// CleanupForError cleans up invocation-owned temporary files and the container.
+// The output destination may contain caller-owned files, so it must be preserved.
 func (b *Builder) CleanupForError() {
 	b.Cleanup()
-	b.removeOutputDest()
 }
 
 // Cleanup cleans up the temporary files and the container
@@ -708,13 +708,6 @@ func (b *Builder) Cleanup() {
 	b.removeDockerEntrypoint()
 	b.removeBuilderContainer()
 	b.closeDockerCli()
-}
-
-func (b *Builder) removeOutputDest() {
-	if b.BuildOptions.Output.Type == "files" {
-		b.Debugf("remove output destination %q\n", b.BuildOptions.Output.Dest)
-		os.RemoveAll(b.BuildOptions.Output.Dest)
-	}
 }
 
 func (b *Builder) removeTempDir() {
