@@ -1,9 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-cache/cache"
@@ -74,8 +75,7 @@ func processCacheHit(key string, response string, stream bool, ctx wrapper.HttpC
 
 	log.Debugf("[%s] [processCacheHit] cached response for key %s: %s", PLUGIN_NAME, key, response)
 
-	// Escape the response to ensure consistent formatting
-	escapedResponse := strings.Trim(strconv.Quote(response), "\"")
+	escapedResponse := escapeCacheValue(response)
 
 	ctx.SetContext(CACHE_KEY_CONTEXT_KEY, nil)
 
@@ -87,6 +87,30 @@ func processCacheHit(key string, response string, stream bool, ctx wrapper.HttpC
 	} else {
 		proxywasm.SendHttpResponseWithDetail(200, "ai-cache.hit", [][2]string{{"content-type", "application/json; charset=utf-8"}}, []byte(fmt.Sprintf(c.ResponseTemplate, escapedResponse)), -1)
 	}
+}
+
+// escapeCacheValue escapes value so it can be embedded inside the JSON string
+// literal of the response templates. The result is the JSON string form of value
+// with the surrounding quotes removed.
+//
+// Trimming strconv.Quote output with strings.Trim(..., `"`) is not equivalent:
+// it strips every leading and trailing quote character, including an escaped
+// one, so an answer ending in a double quote produced an unterminated JSON
+// string. strconv.Quote also emits \x00-style escapes for control characters,
+// which are not valid JSON.
+//
+// HTML escaping is disabled so that printable ASCII other than the characters
+// JSON requires stays byte-identical to the previous output.
+func escapeCacheValue(value string) string {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	// Encode cannot fail for a string value, and it always writes exactly one
+	// JSON string literal followed by a single newline, so the error is not
+	// actionable and the bounds below are guaranteed.
+	_ = encoder.Encode(value)
+	quoted := strings.TrimSuffix(buf.String(), "\n")
+	return quoted[1 : len(quoted)-1]
 }
 
 // performSimilaritySearch determines the appropriate similarity search method to use.
