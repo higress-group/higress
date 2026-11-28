@@ -4,9 +4,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 )
+
+func TestInitApiTokensDoesNotRewriteIdenticalConfiguration(t *testing.T) {
+	_, reset := proxytest.NewHostEmulator(proxytest.NewEmulatorOption())
+	defer reset()
+
+	config := &ProviderConfig{
+		apiTokens: []string{"sk-a", "sk-b"},
+		failover: &failover{
+			ctxApiTokens: "test-provider-apiTokens",
+		},
+	}
+
+	assert.NoError(t, config.initApiTokens())
+	_, firstCAS, err := getApiTokens(config.failover.ctxApiTokens)
+	assert.NoError(t, err)
+
+	assert.NoError(t, config.initApiTokens())
+	tokens, secondCAS, err := getApiTokens(config.failover.ctxApiTokens)
+	assert.NoError(t, err)
+	assert.Equal(t, config.apiTokens, tokens)
+	assert.Equal(t, firstCAS, secondCAS, "identical configuration should not rewrite shared state")
+}
 
 func TestIsStatefulAPI(t *testing.T) {
 	tests := []struct {
@@ -80,6 +103,11 @@ func TestIsStatefulAPI(t *testing.T) {
 			apiName:  string(ApiNameResumeFineTuningJob),
 			expected: true,
 		},
+		{
+			name:     "anthropic_messages_api",
+			apiName:  string(ApiNameAnthropicMessages),
+			expected: false,
+		},
 		// Non-stateful APIs - should return false
 		{
 			name:     "chat_completion_api",
@@ -109,6 +137,11 @@ func TestIsStatefulAPI(t *testing.T) {
 		{
 			name:     "audio_speech_api",
 			apiName:  string(ApiNameAudioSpeech),
+			expected: false,
+		},
+		{
+			name:     "anthropic_count_tokens_api",
+			apiName:  string(ApiNameAnthropicCountTokens),
 			expected: false,
 		},
 		// Empty/unknown API - should return false

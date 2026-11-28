@@ -15,4 +15,9 @@
 
 !*/
 
+# Reproducible runtime fixtures and reviewed synthetic evidence only.
+!/test/runtime-affinity/*.py
+!/test/runtime-affinity/evidence/*.json
+!/test/runtime-affinity/evidence/*-log-excerpt.txt
+
 /out

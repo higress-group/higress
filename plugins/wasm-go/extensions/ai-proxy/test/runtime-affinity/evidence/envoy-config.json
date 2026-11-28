@@ -1,0 +1,224 @@
+{
+  "admin": {
+    "address": {
+      "socket_address": {
+        "address": "0.0.0.0",
+        "port_value": 9901
+      }
+    }
+  },
+  "static_resources": {
+    "listeners": [
+      {
+        "name": "verify",
+        "address": {
+          "socket_address": {
+            "address": "0.0.0.0",
+            "port_value": 10000
+          }
+        },
+        "filter_chains": [
+          {
+            "filters": [
+              {
+                "name": "envoy.filters.network.http_connection_manager",
+                "typed_config": {
+                  "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                  "stat_prefix": "verify",
+                  "route_config": {
+                    "name": "verify",
+                    "internal_only_headers": [
+                      "x-higress-fallback-from",
+                      "x-hi-original-auth"
+                    ],
+                    "virtual_hosts": [
+                      {
+                        "name": "verify",
+                        "domains": [
+                          "*"
+                        ],
+                        "routes": [
+                          {
+                            "match": {
+                              "prefix": "/"
+                            },
+                            "route": {
+                              "cluster": "mock",
+                              "timeout": "30s"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "http_filters": [
+                    {
+                      "name": "envoy.filters.http.custom_response",
+                      "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.custom_response.v3.CustomResponse",
+                        "custom_response_matcher": {
+                          "matcher_list": {
+                            "matchers": [
+                              {
+                                "predicate": {
+                                  "and_matcher": {
+                                    "predicate": [
+                                      {
+                                        "single_predicate": {
+                                          "input": {
+                                            "name": "retry_status",
+                                            "typed_config": {
+                                              "@type": "type.googleapis.com/envoy.type.matcher.v3.HttpResponseStatusCodeMatchInput"
+                                            }
+                                          },
+                                          "value_match": {
+                                            "exact": "299"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "single_predicate": {
+                                          "input": {
+                                            "name": "retry_header",
+                                            "typed_config": {
+                                              "@type": "type.googleapis.com/envoy.type.matcher.v3.HttpResponseHeaderMatchInput",
+                                              "header_name": "x-higress-ai-proxy-key-retry"
+                                            }
+                                          },
+                                          "value_match": {
+                                            "exact": "1"
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                "on_match": {
+                                  "action": {
+                                    "name": "affinity_retry",
+                                    "typed_config": {
+                                      "@type": "type.googleapis.com/envoy.extensions.http.custom_response.redirect_policy.v3.RedirectPolicy",
+                                      "use_original_request_uri": true,
+                                      "use_original_request_body": true,
+                                      "keep_original_response_code": false,
+                                      "only_redirect_upstream_code": true,
+                                      "max_internal_redirects": 10,
+                                      "request_headers_to_add": [
+                                        {
+                                          "header": {
+                                            "key": "x-higress-fallback-from",
+                                            "value": "ai-proxy-key-affinity"
+                                          },
+                                          "append_action": "OVERWRITE_IF_EXISTS_OR_ADD"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "envoy.filters.http.wasm",
+                      "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm",
+                        "config": {
+                          "name": "ai-proxy",
+                          "root_id": "ai-proxy",
+                          "configuration": {
+                            "@type": "type.googleapis.com/google.protobuf.StringValue",
+                            "value": "{\"activeProviderId\": \"verification\", \"providers\": [{\"id\": \"verification\", \"type\": \"openai\", \"openaiCustomUrl\": \"http://mock:8080/v1\", \"apiTokens\": [\"synthetic-A\", \"synthetic-B\", \"synthetic-C\"], \"failover\": {\"enabled\": true, \"failureThreshold\": 1, \"cooldownDuration\": 60000}, \"apiKeyAffinity\": {\"enabled\": true, \"redis\": {\"serviceName\": \"redis.static\", \"servicePort\": 80, \"timeout\": 1000}, \"bindingTTLDays\": 7, \"maxRetries\": 3, \"retryTimeout\": 10000}}]}"
+                          },
+                          "vm_config": {
+                            "vm_id": "verification",
+                            "runtime": "envoy.wasm.runtime.v8",
+                            "code": {
+                              "local": {
+                                "filename": "/tmp/plugin.wasm"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "envoy.filters.http.router",
+                      "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                      }
+                    }
+                  ],
+                  "access_log": [
+                    {
+                      "name": "envoy.access_loggers.stdout",
+                      "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "clusters": [
+      {
+        "name": "mock",
+        "connect_timeout": "2s",
+        "type": "STRICT_DNS",
+        "dns_lookup_family": "V4_ONLY",
+        "lb_policy": "ROUND_ROBIN",
+        "load_assignment": {
+          "cluster_name": "mock",
+          "endpoints": [
+            {
+              "lb_endpoints": [
+                {
+                  "endpoint": {
+                    "address": {
+                      "socket_address": {
+                        "address": "mock",
+                        "port_value": 8080
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "outbound|80||redis.static",
+        "connect_timeout": "2s",
+        "type": "STRICT_DNS",
+        "dns_lookup_family": "V4_ONLY",
+        "lb_policy": "ROUND_ROBIN",
+        "load_assignment": {
+          "cluster_name": "outbound|80||redis.static",
+          "endpoints": [
+            {
+              "lb_endpoints": [
+                {
+                  "endpoint": {
+                    "address": {
+                      "socket_address": {
+                        "address": "mock",
+                        "port_value": 6380
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
