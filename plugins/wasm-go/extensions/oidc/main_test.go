@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
+	oidc "github.com/higress-group/oauth2-proxy"
+	"github.com/higress-group/oauth2-proxy/pkg/util"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
 )
@@ -88,6 +91,61 @@ func TestOnHttpRequestHeadersAllowlistBypassesVerifierCheck(t *testing.T) {
 		}
 		if localResponse := host.GetLocalResponse(); localResponse != nil {
 			t.Fatalf("local response = %+v, want nil", localResponse)
+		}
+	})
+}
+
+func TestSessionCookiesPrefersPerRequestRecorder(t *testing.T) {
+	rw := util.NewRecorder()
+	rw.Header().Add(oidc.SetCookieHeader, "_oauth2_proxy_session=abc")
+	rw.Header().Add(oidc.SetCookieHeader, "other=1")
+
+	// A stale value left by a concurrent request on the shared handler
+	// context must be ignored when the per-request recorder is available.
+	got := sessionCookies(rw, []string{"_oauth2_proxy_session=stale-from-another-request"})
+	want := []string{"_oauth2_proxy_session=abc", "other=1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sessionCookies() = %v, want %v", got, want)
+	}
+
+	// A recorder without cookies wins over a stale legacy value: the request
+	// genuinely has no session cookies to relay.
+	emptyRw := util.NewRecorder()
+	if got := sessionCookies(emptyRw, []string{"stale=1"}); got != nil {
+		t.Fatalf("sessionCookies() = %v, want nil when the recorder has no cookies", got)
+	}
+}
+
+func TestSessionCookiesFallsBackToLegacyContext(t *testing.T) {
+	if got := sessionCookies(nil, []string{"legacy=1"}); !reflect.DeepEqual(got, []string{"legacy=1"}) {
+		t.Fatalf("sessionCookies() = %v, want the legacy context value", got)
+	}
+	if got := sessionCookies(nil, nil); got != nil {
+		t.Fatalf("sessionCookies() = %v, want nil when nothing is recorded", got)
+	}
+}
+
+func TestOnHttpResponseHeadersAfterAsyncWaitDoesNotPanic(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(oidcTestConfig(nil))
+		defer host.Reset()
+		if status != types.OnPluginStartStatusOK {
+			t.Fatalf("plugin start status = %v, want %v", status, types.OnPluginStartStatusOK)
+		}
+
+		if action := host.CallOnHttpRequestHeaders([][2]string{
+			{":scheme", "http"},
+			{":authority", "foo.bar.com"},
+			{":path", "/protected"},
+			{":method", "POST"},
+		}); action != types.ActionPause {
+			t.Fatalf("request action = %v, want %v", action, types.ActionPause)
+		}
+
+		// The response phase must relay cookies from the per-request recorder
+		// without panicking, even when no cookies were recorded.
+		if action := host.CallOnHttpResponseHeaders([][2]string{{":status", "503"}}); action != types.ActionContinue {
+			t.Fatalf("response action = %v, want %v", action, types.ActionContinue)
 		}
 	})
 }
