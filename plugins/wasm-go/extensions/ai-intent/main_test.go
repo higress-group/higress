@@ -15,13 +15,17 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	stdlog "log"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/test"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -580,5 +584,124 @@ func TestEdgeCases(t *testing.T) {
 			// 由于状态码不是200，插件不会设置任何意图类别到Property中
 			host.CompleteHttp()
 		})
+	})
+}
+
+func TestProxyURLPreservesRequestURI(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		for _, tc := range []struct {
+			name, url, want string
+		}{
+			{"relative path", "v1/chat?x=1", "/v1/chat?x=1"},
+			{"relative escaped path", "v1/a%2Fb?x=1", "/v1/a%2Fb?x=1"},
+			{"escaped slash", "https://ai.example.com/deployments/a%2Fb/chat?version=1", "/deployments/a%2Fb/chat?version=1"},
+			{"escaped space", "https://ai.example.com/a%20b?tag=x%2Fy", "/a%20b?tag=x%2Fy"},
+			{"plain path", "https://ai.example.com/v1/chat/completions", "/v1/chat/completions"},
+			{"API version", "https://ai.example.com/openai/deployments/model/chat/completions?api-version=2024-10-21", "/openai/deployments/model/chat/completions?api-version=2024-10-21"},
+			{"raw query", "https://ai.example.com/v1/chat/completions?tag=a%2Fb&tag=c+d&empty=", "/v1/chat/completions?tag=a%2Fb&tag=c+d&empty="},
+			{"query only", "https://ai.example.com?version=1", "/?version=1"},
+			{"empty path", "https://ai.example.com", "/"},
+			{"fragment excluded", "https://ai.example.com/v1/chat/completions?version=1#local", "/v1/chat/completions?version=1"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				configJSON, err := json.Marshal(map[string]interface{}{
+					"scene": map[string]interface{}{"category": "test"},
+					"llm": map[string]interface{}{
+						"proxyServiceName": "ai-service",
+						"proxyUrl":         tc.url,
+					},
+				})
+				require.NoError(t, err)
+				host, status := test.NewTestHost(configJSON)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				contextID := host.InitializeHttpContext()
+				host.CallOnRequestHeaders(contextID, [][2]string{
+					{":authority", "example.com"}, {":path", "/api/chat"},
+					{":method", "POST"}, {"content-type", "application/json"},
+				}, false)
+				require.Equal(t, types.ActionPause, host.CallOnRequestBody(contextID, []byte(`{"messages":[{"role":"user","content":"hello"}]}`), true))
+				callouts := host.GetCalloutAttributesFromContext(contextID)
+				require.Len(t, callouts, 1)
+				var requestURI string
+				for _, header := range callouts[0].Headers {
+					if header[0] == ":path" {
+						requestURI = header[1]
+					}
+				}
+				require.Equal(t, tc.want, requestURI)
+				host.CallOnHttpCallResponse(callouts[0].CalloutID, [][2]string{{":status", "200"}}, nil, []byte(`{"choices":[{"message":{"content":"test"}}]}`))
+				require.Equal(t, types.ActionContinue, host.GetCurrentHttpStreamAction(contextID))
+				host.CompleteHttpContext(contextID)
+			})
+		}
+	})
+}
+
+func TestParseConfigDoesNotLogProxyURLQuery(t *testing.T) {
+	const queryValue = "fixture-query-value-must-not-be-logged"
+	configJSON, err := json.Marshal(map[string]interface{}{
+		"scene": map[string]interface{}{"category": "test"},
+		"llm": map[string]interface{}{
+			"proxyServiceName": "ai-service",
+			"proxyUrl":         "https://ai.example.com/v1/chat/completions?custom=" + queryValue,
+		},
+	})
+	require.NoError(t, err)
+	logger := &recordingConfigLog{}
+	config := &PluginConfig{}
+	require.NoError(t, parseConfig(gjson.ParseBytes(configJSON), config, logger))
+	require.Equal(t, "/v1/chat/completions?custom="+queryValue, config.LLMInfo.ProxyPath)
+	require.NotContains(t, strings.Join(logger.entries, "\n"), queryValue)
+}
+
+func TestPostIntentRequestHostContract(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		for _, tc := range []struct {
+			name, domain, authority string
+			headers                 [][2]string
+			status                  int
+		}{
+			{"fallback", "", "ai-service", [][2]string{{":status", "201"}, {"x-repeat", "one"}, {"x-repeat", "two"}}, 201},
+			{"override", "override.example", "override.example", [][2]string{{":status", "200"}}, 200},
+			{"missing status", "", "ai-service", [][2]string{{"x-other", "value"}}, 502},
+			{"invalid status", "", "ai-service", [][2]string{{":status", "invalid"}}, 500},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				host, status := test.NewTestHost(basicIntentConfig)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+				id := host.InitializeHttpContext()
+				host.CallOnRequestHeaders(id, [][2]string{{":authority", "example.com"}, {":path", "/api"}, {":method", "POST"}}, false)
+				var captured bytes.Buffer
+				oldWriter := stdlog.Writer()
+				stdlog.SetOutput(&captured)
+				defer stdlog.SetOutput(oldWriter)
+				called := false
+				llm := LLMInfo{ProxyServiceName: "ai-service", ProxyDomain: tc.domain, ProxyClient: wrapper.NewClusterClient(wrapper.FQDNCluster{FQDN: "ai-service", Port: 8443})}
+				err := postIntentRequest(llm, "v1/a%2Fb?x=1", [][2]string{{"content-type", "application/json"}}, []byte("request"), func(code int, headers http.Header, body []byte) {
+					called = true
+					require.Equal(t, tc.status, code)
+					require.Equal(t, "reply", string(body))
+					if tc.name == "fallback" {
+						require.Equal(t, []string{"one", "two"}, headers.Values("x-repeat"))
+					}
+				}, 4321)
+				require.NoError(t, err)
+				calls := host.GetCalloutAttributesFromContext(id)
+				require.Len(t, calls, 1)
+				require.Equal(t, "outbound|8443||ai-service", calls[0].Upstream)
+				require.Equal(t, []byte("request"), calls[0].Body)
+				require.Contains(t, calls[0].Headers, [2]string{":authority", tc.authority})
+				require.Contains(t, calls[0].Headers, [2]string{":path", "/v1/a%2Fb?x=1"})
+				require.Contains(t, calls[0].Headers, [2]string{":method", "POST"})
+				// This SDK records timeout in the host log, not HttpCalloutAttribute.
+				require.Contains(t, captured.String(), "timeout: 4321")
+				host.CallOnHttpCallResponse(calls[0].CalloutID, tc.headers, nil, []byte("reply"))
+				require.True(t, called)
+				host.CompleteHttpContext(id)
+			})
+		}
 	})
 }
