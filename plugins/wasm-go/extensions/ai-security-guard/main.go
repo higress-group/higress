@@ -1,9 +1,12 @@
 package main
 
 import (
+	"net/http"
+
 	cfg "github.com/alibaba/higress/plugins/wasm-go/extensions/ai-security-guard/config"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-security-guard/lvwang/multi_modal_guard"
 	"github.com/alibaba/higress/plugins/wasm-go/extensions/ai-security-guard/lvwang/text_moderation_plus"
+	"github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -42,6 +45,21 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config cfg.AISecurityConfig) 
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config cfg.AISecurityConfig, body []byte) types.Action {
 	log.Debugf("checking request body...")
+	// The text moderated below is extracted with gjson from the first occurrence
+	// of the configured JSON path (default messages.@reverse.0.content), while the
+	// upstream parser keeps the last occurrence of a duplicated member: a body
+	// that declares "messages" twice would be moderated on the first conversation
+	// and served the last one, bypassing the check. Reject the ambiguous body
+	// before any moderation call.
+	if duplicate, err := jsonbody.DuplicateTopLevelMember(body, "messages"); err != nil {
+		log.Debugf("skip duplicate messages member check: %v", err)
+	} else if duplicate {
+		message := jsonbody.DuplicateMemberMessage("messages")
+		log.Warnf("rejecting request: %s", message)
+		_ = proxywasm.SendHttpResponseWithDetail(http.StatusBadRequest, "duplicate_messages_member",
+			[][2]string{{"content-type", "text/plain"}}, []byte(message), -1)
+		return types.ActionPause
+	}
 	switch config.Action {
 	case cfg.MultiModalGuard:
 		return multi_modal_guard.OnHttpRequestBody(ctx, config, body)
