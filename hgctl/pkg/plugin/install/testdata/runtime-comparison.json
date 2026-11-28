@@ -1,0 +1,146 @@
+[
+  {
+    "variant": "baseline",
+    "case": "explicit",
+    "wanted": "custom-ns",
+    "actual": [
+      "higress-system"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-baseline-explicit\" has invalid namespace, automatically modified: \"custom-ns\" -> \"higress-system\"\nInstalled wasm plugin \"higress-system/hgctl-5229-baseline-explicit\"\n",
+    "stderr": "",
+    "binary_sha256": "6b0ccc5c2525ea03a8c55b51cda0c98939f99e25096fc47ea7dce37ef876c648"
+  },
+  {
+    "variant": "baseline",
+    "case": "omitted-manifest",
+    "wanted": "custom-ns",
+    "actual": [
+      "higress-system"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-baseline-omitted-manifest\" has invalid namespace, automatically modified: \"\" -> \"higress-system\"\nInstalled wasm plugin \"higress-system/hgctl-5229-baseline-omitted-manifest\"\n",
+    "stderr": "",
+    "binary_sha256": "6b0ccc5c2525ea03a8c55b51cda0c98939f99e25096fc47ea7dce37ef876c648"
+  },
+  {
+    "variant": "baseline",
+    "case": "mismatched-manifest",
+    "wanted": "custom-ns",
+    "actual": [
+      "higress-system"
+    ],
+    "exit_code": 0,
+    "stdout": "Installed wasm plugin \"higress-system/hgctl-5229-baseline-mismatched-manifest\"\n",
+    "stderr": "",
+    "binary_sha256": "6b0ccc5c2525ea03a8c55b51cda0c98939f99e25096fc47ea7dce37ef876c648"
+  },
+  {
+    "variant": "baseline",
+    "case": "option-file",
+    "wanted": "custom-ns",
+    "actual": [
+      "higress-system"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-baseline-option-file\" has invalid namespace, automatically modified: \"\" -> \"higress-system\"\nInstalled wasm plugin \"higress-system/hgctl-5229-baseline-option-file\"\n",
+    "stderr": "",
+    "binary_sha256": "6b0ccc5c2525ea03a8c55b51cda0c98939f99e25096fc47ea7dce37ef876c648"
+  },
+  {
+    "variant": "baseline",
+    "case": "flag-overrides-option",
+    "wanted": "custom-ns",
+    "actual": [
+      "higress-system"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-baseline-flag-overrides-option\" has invalid namespace, automatically modified: \"\" -> \"higress-system\"\nInstalled wasm plugin \"higress-system/hgctl-5229-baseline-flag-overrides-option\"\n",
+    "stderr": "",
+    "binary_sha256": "6b0ccc5c2525ea03a8c55b51cda0c98939f99e25096fc47ea7dce37ef876c648"
+  },
+  {
+    "variant": "baseline",
+    "case": "default",
+    "wanted": "higress-system",
+    "actual": [
+      "higress-system"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-baseline-default\" has invalid namespace, automatically modified: \"\" -> \"higress-system\"\nInstalled wasm plugin \"higress-system/hgctl-5229-baseline-default\"\n",
+    "stderr": "",
+    "binary_sha256": "6b0ccc5c2525ea03a8c55b51cda0c98939f99e25096fc47ea7dce37ef876c648"
+  },
+  {
+    "variant": "fixed",
+    "case": "explicit",
+    "wanted": "custom-ns",
+    "actual": [
+      "custom-ns"
+    ],
+    "exit_code": 0,
+    "stdout": "Installed wasm plugin \"custom-ns/hgctl-5229-fixed-explicit\"\n",
+    "stderr": "",
+    "binary_sha256": "fda16175221f353cb7994109d8b69d9489a099afb516b172c4f2e7e8dfe01277"
+  },
+  {
+    "variant": "fixed",
+    "case": "omitted-manifest",
+    "wanted": "custom-ns",
+    "actual": [
+      "custom-ns"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-fixed-omitted-manifest\" has invalid namespace, automatically modified: \"\" -> \"custom-ns\"\nInstalled wasm plugin \"custom-ns/hgctl-5229-fixed-omitted-manifest\"\n",
+    "stderr": "",
+    "binary_sha256": "fda16175221f353cb7994109d8b69d9489a099afb516b172c4f2e7e8dfe01277"
+  },
+  {
+    "variant": "fixed",
+    "case": "mismatched-manifest",
+    "wanted": "custom-ns",
+    "actual": [
+      "custom-ns"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-fixed-mismatched-manifest\" has invalid namespace, automatically modified: \"higress-system\" -> \"custom-ns\"\nInstalled wasm plugin \"custom-ns/hgctl-5229-fixed-mismatched-manifest\"\n",
+    "stderr": "",
+    "binary_sha256": "fda16175221f353cb7994109d8b69d9489a099afb516b172c4f2e7e8dfe01277"
+  },
+  {
+    "variant": "fixed",
+    "case": "option-file",
+    "wanted": "custom-ns",
+    "actual": [
+      "custom-ns"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-fixed-option-file\" has invalid namespace, automatically modified: \"\" -> \"custom-ns\"\nInstalled wasm plugin \"custom-ns/hgctl-5229-fixed-option-file\"\n",
+    "stderr": "",
+    "binary_sha256": "fda16175221f353cb7994109d8b69d9489a099afb516b172c4f2e7e8dfe01277"
+  },
+  {
+    "variant": "fixed",
+    "case": "flag-overrides-option",
+    "wanted": "custom-ns",
+    "actual": [
+      "custom-ns"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-fixed-flag-overrides-option\" has invalid namespace, automatically modified: \"\" -> \"custom-ns\"\nInstalled wasm plugin \"custom-ns/hgctl-5229-fixed-flag-overrides-option\"\n",
+    "stderr": "",
+    "binary_sha256": "fda16175221f353cb7994109d8b69d9489a099afb516b172c4f2e7e8dfe01277"
+  },
+  {
+    "variant": "fixed",
+    "case": "default",
+    "wanted": "higress-system",
+    "actual": [
+      "higress-system"
+    ],
+    "exit_code": 0,
+    "stdout": "Warning: wasm plugin \"hgctl-5229-fixed-default\" has invalid namespace, automatically modified: \"\" -> \"higress-system\"\nInstalled wasm plugin \"higress-system/hgctl-5229-fixed-default\"\n",
+    "stderr": "",
+    "binary_sha256": "fda16175221f353cb7994109d8b69d9489a099afb516b172c4f2e7e8dfe01277"
+  }
+]

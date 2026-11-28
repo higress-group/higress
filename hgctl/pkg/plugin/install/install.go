@@ -250,10 +250,14 @@ func (ins *installer) doInstall(validate bool) error {
 			obj.GetName(), obj.GetKind(), k8s.WasmPluginKind)
 		obj.SetKind(k8s.WasmPluginKind)
 	}
-	if !isValidNamespace(obj) {
+	namespace := ins.insOpts.Namespace
+	if namespace == "" {
+		namespace = k8s.HigressNamespace
+	}
+	if obj.GetNamespace() != namespace {
 		fmt.Fprintf(ins.w, "Warning: wasm plugin %q has invalid namespace, automatically modified: %q -> %q\n",
-			obj.GetName(), obj.GetNamespace(), k8s.HigressNamespace)
-		obj.SetNamespace(k8s.HigressNamespace)
+			obj.GetName(), obj.GetNamespace(), namespace)
+		obj.SetNamespace(namespace)
 	}
 
 	// validate wasm plugin config
@@ -268,7 +272,7 @@ func (ins *installer) doInstall(validate bool) error {
 		ins.Debugln("successfully validated wasm plugin config")
 	}
 
-	result, err := ins.cli.Create(context.TODO(), obj)
+	result, err := ins.cli.CreateInNamespace(context.TODO(), namespace, obj)
 	if err != nil {
 		if k8serr.IsAlreadyExists(err) {
 			fmt.Fprintf(ins.w, "wasm plugin %q already exists\n",
@@ -290,10 +294,6 @@ func isValidAPIVersion(obj *unstructured.Unstructured) bool {
 
 func isValidKind(obj *unstructured.Unstructured) bool {
 	return obj.GetKind() == k8s.WasmPluginKind
-}
-
-func isValidNamespace(obj *unstructured.Unstructured) bool {
-	return obj.GetNamespace() == k8s.HigressNamespace
 }
 
 func (ins *installer) validateWasmPluginConfig(wps map[string]interface{}) error {

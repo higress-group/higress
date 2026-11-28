@@ -1,0 +1,12 @@
+--- FAIL: TestInstallUsesSelectedNamespace (0.01s)
+    --- FAIL: TestInstallUsesSelectedNamespace/explicit (0.00s)
+        install_test.go:74: unexpected path=/apis/extensions.higress.io/v1alpha1/namespaces/higress-system/wasmplugins objectNamespace=higress-system
+    --- FAIL: TestInstallUsesSelectedNamespace/missing_manifest_namespace (0.00s)
+        install_test.go:74: unexpected path=/apis/extensions.higress.io/v1alpha1/namespaces/higress-system/wasmplugins objectNamespace=higress-system
+    --- FAIL: TestInstallUsesSelectedNamespace/mismatched_manifest_namespace (0.00s)
+        install_test.go:74: unexpected path=/apis/extensions.higress.io/v1alpha1/namespaces/higress-system/wasmplugins objectNamespace=higress-system
+    --- FAIL: TestInstallUsesSelectedNamespace/second_custom_namespace (0.00s)
+        install_test.go:74: unexpected path=/apis/extensions.higress.io/v1alpha1/namespaces/higress-system/wasmplugins objectNamespace=higress-system
+FAIL
+FAIL	github.com/alibaba/higress/hgctl/pkg/plugin/install	0.035s
+FAIL
