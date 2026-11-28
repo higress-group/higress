@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody v0.0.0
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/tetratelabs/wazero v1.7.2 // indirect
@@ -25,3 +26,5 @@ require (
 	github.com/tidwall/resp v0.1.1 // indirect
 	github.com/tidwall/sjson v1.2.5
 )
+
+replace github.com/alibaba/higress/plugins/wasm-go/pkg/jsonbody => ../../pkg/jsonbody
