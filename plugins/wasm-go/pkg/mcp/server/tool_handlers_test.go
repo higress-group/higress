@@ -217,6 +217,57 @@ func TestModernRegisteredToolFailureIsToolExecutionError(t *testing.T) {
 	assert.Equal(t, 1, counters.call)
 }
 
+func TestRESTToolTemplatesExposeResolvedUpstreamRequest(t *testing.T) {
+	savedGlobalContext := globalContext
+	globalContext = Context{servers: make(map[string]Server)}
+	Initialize()
+	t.Cleanup(func() { globalContext = savedGlobalContext })
+
+	config := json.RawMessage(`{
+		"server":{"name":"rest"},
+		"tools":[{
+			"name":"lookup",
+			"description":"lookup",
+			"args":[
+				{"name":"id","description":"id","type":"string","required":true,"position":"path"},
+				{"name":"q","description":"q","type":"string","required":true,"position":"query"},
+				{"name":"extra","description":"extra","type":"string","required":true}
+			],
+			"requestTemplate":{
+				"url":"http://backend.example/items/{id}?fixed=1",
+				"method":"POST",
+				"argsToUrlParam":true,
+				"body":"uri={{.request.uri}}&method={{.request.method}}",
+				"headers":[
+					{"key":"X-Upstream-URI","value":"{{.request.uri}}"},
+					{"key":"X-Upstream-URL","value":"{{.request.url}}"},
+					{"key":"X-Upstream-Path","value":"{{.request.path}}"},
+					{"key":"X-Upstream-Query","value":"{{.request.query}}"},
+					{"key":"X-Upstream-Method","value":"{{.request.method}}"},
+					{"key":"X-Upstream-Host","value":"{{.request.host}}"}
+				]
+			}
+		}]
+	}`)
+	host := newValidationHost(t, config)
+
+	require.Equal(t, types.ActionPause, host.CallOnHttpRequestHeaders(modernToolHeaders("lookup")))
+	require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody(modernToolCallBody("lookup", `{"id":"42","q":"hello world","extra":"x"}`)))
+
+	const resolvedURI = "/items/42?extra=x&fixed=1&q=hello+world"
+	requestHeaders := host.GetRequestHeaders()
+	assert.Equal(t, resolvedURI, mustHeaderValue(t, requestHeaders, ":path"))
+	assert.Equal(t, "POST", mustHeaderValue(t, requestHeaders, ":method"))
+	assert.Equal(t, "backend.example", mustHeaderValue(t, requestHeaders, ":authority"))
+	assert.Equal(t, resolvedURI, mustHeaderValue(t, requestHeaders, "X-Upstream-URI"))
+	assert.Equal(t, "http://backend.example"+resolvedURI, mustHeaderValue(t, requestHeaders, "X-Upstream-URL"))
+	assert.Equal(t, "/items/42", mustHeaderValue(t, requestHeaders, "X-Upstream-Path"))
+	assert.Equal(t, "extra=x&fixed=1&q=hello+world", mustHeaderValue(t, requestHeaders, "X-Upstream-Query"))
+	assert.Equal(t, "POST", mustHeaderValue(t, requestHeaders, "X-Upstream-Method"))
+	assert.Equal(t, "backend.example", mustHeaderValue(t, requestHeaders, "X-Upstream-Host"))
+	assert.Equal(t, "uri="+resolvedURI+"&method=POST", string(host.GetRequestBody()))
+}
+
 func TestRESTAsyncResultAdapterPreservesToolResultShapes(t *testing.T) {
 	transport := protocol.Transport{
 		Method:          "POST",
